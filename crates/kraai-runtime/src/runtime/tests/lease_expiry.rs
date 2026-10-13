@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use color_eyre::eyre::Result;
 
+use super::harness::FullHistory as _;
 use super::harness::{
     RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
 };

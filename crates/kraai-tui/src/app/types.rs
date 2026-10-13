@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use kraai_runtime::{
     AgentProfileCatalog, Model, ProviderDefinition, Session, SessionSnapshot, SettingsDocument,
 };
-use kraai_types::{ImageAttachment, Message, MessageContent, MessageId, SessionId, TokenUsage};
+use kraai_types::{ImageAttachment, MessageContent, MessageId, SessionId, TokenUsage};
 
 use super::auth::ProviderAuthStatus;
 
@@ -189,13 +189,11 @@ pub(super) enum RuntimeRequest {
     SaveSettings {
         settings: SettingsDocument,
     },
-    GetChatHistory {
+    GetHistoryPage {
         session_id: SessionId,
+        from: MessageId,
     },
     GetSessionSnapshot {
-        session_id: SessionId,
-    },
-    GetCurrentTip {
         session_id: SessionId,
     },
     UndoLastUserMessage {
@@ -272,18 +270,14 @@ pub(super) enum RuntimeResponse {
         result: RuntimeResult<Option<ImageAttachment>>,
     },
     SaveSettings(RuntimeResult<()>),
-    ChatHistory {
+    HistoryPage {
         session_id: SessionId,
-        result: RuntimeResult<BTreeMap<MessageId, Message>>,
+        result: RuntimeResult<kraai_runtime::HistoryPage>,
     },
     SessionSnapshot {
         session_id: SessionId,
         model_save_id: u64,
         result: Box<RuntimeResult<SessionSnapshot>>,
-    },
-    CurrentTip {
-        session_id: SessionId,
-        result: RuntimeResult<Option<String>>,
     },
     UndoLastUserMessage {
         session_id: SessionId,

@@ -419,7 +419,7 @@ path = \"inherit\"\n",
         let (command_tx, command_rx) = mpsc::channel(32);
         let event_tx = RuntimeEventSender::new(1024);
         let (startup_tx, startup_rx) =
-            tokio::sync::watch::channel(crate::RuntimeStartupState::Ready);
+            tokio::sync::watch::channel(crate::RuntimeStartupState::ready());
         let handle = RuntimeHandle {
             command_tx: command_tx.clone(),
             event_tx: event_tx.clone(),
@@ -719,5 +719,52 @@ impl RuntimeCore {
             })),
         );
         result.await.expect("session actor ran the hook")
+    }
+}
+
+/// The assistant text an event streamed for `session`.
+pub(super) fn streamed_text<'a>(event: &'a Event, session: &SessionId) -> Option<&'a str> {
+    match event {
+        Event::ItemStarted {
+            session_id,
+            item: kraai_types::AssistantItem::Text { text, .. },
+            ..
+        }
+        | Event::ItemDelta {
+            session_id,
+            delta: text,
+            ..
+        } if session_id == session => Some(text),
+        _ => None,
+    }
+}
+
+/// Reads a session's whole history page by page, as a client would.
+pub(super) trait FullHistory {
+    async fn get_chat_history(
+        &self,
+        session_id: SessionId,
+    ) -> crate::RuntimeResult<
+        std::collections::BTreeMap<kraai_types::MessageId, kraai_types::Message>,
+    >;
+}
+
+impl FullHistory for RuntimeHandle {
+    async fn get_chat_history(
+        &self,
+        session_id: SessionId,
+    ) -> crate::RuntimeResult<
+        std::collections::BTreeMap<kraai_types::MessageId, kraai_types::Message>,
+    > {
+        let mut history = std::collections::BTreeMap::new();
+        let mut from = None;
+        loop {
+            let page = self.get_history_page(session_id.clone(), from, 2).await?;
+            history.extend(page.messages);
+            match page.older_history {
+                Some(older) => from = Some(older),
+                None => return Ok(history),
+            }
+        }
     }
 }

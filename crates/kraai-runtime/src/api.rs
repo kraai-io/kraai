@@ -120,13 +120,25 @@ pub enum ContinueSessionOutcome {
     NothingToContinue,
 }
 
+/// The version of the command and event protocol, raised on any incompatible change.
+pub const PROTOCOL_VERSION: u32 = 1;
+
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeStartupState {
     Starting,
-    Ready,
+    Ready { protocol_version: u32 },
     Failed(String),
+}
+
+impl RuntimeStartupState {
+    #[must_use]
+    pub fn ready() -> Self {
+        Self::Ready {
+            protocol_version: PROTOCOL_VERSION,
+        }
+    }
 }
 
 /// Model information
@@ -200,6 +212,7 @@ impl Session {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingScriptInfo {
     pub execution_id: String,
+    pub call_id: String,
     pub source: String,
     pub requested_capabilities: Vec<String>,
     pub capability_additions: Vec<String>,
@@ -247,6 +260,16 @@ pub enum SessionActivity {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HistoryPage {
+    /// Messages without opaque reasoning payloads.
+    pub messages: BTreeMap<MessageId, Message>,
+    /// Where the next older page starts; `None` once the page reaches the first message.
+    pub older_history: Option<MessageId>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSnapshot {
     pub requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
     pub turn_timer: crate::TurnTimer,
@@ -255,7 +278,10 @@ pub struct SessionSnapshot {
     /// session and service events still need to be handled.
     pub event_sequence: u64,
     pub session: Session,
+    /// The latest messages on the session's history, without opaque reasoning payloads.
     pub history: BTreeMap<MessageId, Message>,
+    /// Where the next older page of history starts when `history` holds only the latest part.
+    pub older_history: Option<MessageId>,
     pub context_usage: Option<SessionContextUsage>,
     pub pending_script: Option<PendingScriptInfo>,
     pub profiles: kraai_types::AgentProfilesState,
@@ -314,18 +340,27 @@ pub enum Event {
         session_id: SessionId,
         message_id: String,
     },
-    /// Chunk received for a streaming message
-    StreamChunk {
+    /// A streaming message gained the item at `item_index`, without opaque reasoning payloads.
+    ItemStarted {
         session_id: SessionId,
         message_id: String,
-        chunk: String,
+        item_index: usize,
+        item: kraai_types::AssistantItem,
     },
-    ScriptCall {
+    /// Text was appended to the text item at `item_index` of a streaming message.
+    ItemDelta {
         session_id: SessionId,
         message_id: String,
-        call_id: kraai_types::ToolCallId,
-        name: String,
-        input: String,
+        item_index: usize,
+        delta: String,
+    },
+    /// Readable reasoning while the model thinks. It is for display only and is not kept in
+    /// history.
+    ReasoningDelta {
+        session_id: SessionId,
+        message_id: String,
+        item_id: String,
+        delta: String,
     },
     /// Stream completed for a message
     StreamComplete {
@@ -380,8 +415,24 @@ pub enum Event {
         error: String,
     },
 
+    /// The session started or stopped running, streaming or waiting on a script.
+    SessionStateChanged {
+        session_id: SessionId,
+        activity: SessionActivity,
+        is_running: bool,
+    },
     // History events
-    /// Chat history was updated
+    /// A message was added to or changed in the session's history.
+    MessageUpserted {
+        session_id: SessionId,
+        message: Box<Message>,
+    },
+    /// Messages left the session's history.
+    MessagesRemoved {
+        session_id: SessionId,
+        message_ids: Vec<MessageId>,
+    },
+    /// The session changed outside this runtime; reload it from a snapshot.
     HistoryUpdated {
         session_id: SessionId,
     },
@@ -404,8 +455,9 @@ impl Event {
             | Self::TurnTimingChanged { session_id, .. }
             | Self::SessionError { session_id, .. }
             | Self::StreamStart { session_id, .. }
-            | Self::StreamChunk { session_id, .. }
-            | Self::ScriptCall { session_id, .. }
+            | Self::ItemStarted { session_id, .. }
+            | Self::ItemDelta { session_id, .. }
+            | Self::ReasoningDelta { session_id, .. }
             | Self::StreamComplete { session_id, .. }
             | Self::StreamError { session_id, .. }
             | Self::StreamCancelled { session_id, .. }
@@ -415,6 +467,9 @@ impl Event {
             | Self::ScriptResultReady { session_id, .. }
             | Self::ContextStateChanged { session_id, .. }
             | Self::ContinuationFailed { session_id, .. }
+            | Self::SessionStateChanged { session_id, .. }
+            | Self::MessageUpserted { session_id, .. }
+            | Self::MessagesRemoved { session_id, .. }
             | Self::HistoryUpdated { session_id } => Some(session_id),
             Self::ConfigLoaded
             | Self::ModelsUpdated

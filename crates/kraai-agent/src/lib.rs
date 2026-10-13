@@ -12,6 +12,7 @@ pub use compaction::{CompactionOutcome, ContextCompaction};
 pub use skills::discover_skill_read_roots;
 
 pub use manager::{
-    AgentManager, CancelledStreamResult, PendingStreamRequest, ScriptTurnContext,
-    SessionContextUsage, SessionSnapshotData, SessionSnapshotReader,
+    AgentManager, CancelledStreamResult, HistoryChange, HistoryObserver, PendingStreamRequest,
+    ScriptTurnContext, SessionContextUsage, SessionSnapshotData, SessionSnapshotReader,
+    StreamedItem,
 };

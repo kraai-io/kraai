@@ -117,7 +117,14 @@ impl Benchmark for Case {
                         .await
                         .ok_or_eyre("Streamed chunk was rejected")?,
                 );
-                visible_text_matches &= visible == delta;
+                visible_text_matches &= match visible {
+                    kraai_agent::StreamedItem::Started {
+                        item: kraai_types::AssistantItem::Text { text, .. },
+                        ..
+                    } => text == delta,
+                    kraai_agent::StreamedItem::Delta { delta: text, .. } => text == delta,
+                    kraai_agent::StreamedItem::Started { .. } => false,
+                };
                 chunks += 1;
                 if chunks % SNAPSHOT_INTERVAL == 0 {
                     manager.publish_streaming_snapshots().await?;

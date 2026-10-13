@@ -58,6 +58,12 @@ pub enum ProviderStreamEvent {
     Reasoning {
         payload: serde_json::Value,
     },
+    /// Readable reasoning text for display while the model thinks. The opaque `Reasoning` item,
+    /// not these deltas, is what later requests replay.
+    ReasoningDelta {
+        item_id: String,
+        delta: String,
+    },
     TextDelta {
         item_id: String,
         phase: AssistantPhase,

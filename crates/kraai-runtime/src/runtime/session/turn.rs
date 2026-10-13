@@ -409,9 +409,6 @@ impl SessionActor {
                         if !intercepted {
                             self.drain().await;
                         }
-                        self.runtime.send_event(Event::HistoryUpdated {
-                            session_id: self.session_id.clone(),
-                        });
                         match response {
                             Some(response) => {
                                 let _ = response.send(Err(RuntimeError::from_report(error)));

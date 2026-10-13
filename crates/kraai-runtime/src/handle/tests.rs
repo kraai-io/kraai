@@ -8,7 +8,7 @@ use super::*;
 
 fn handle() -> (RuntimeHandle, mpsc::Receiver<Command>) {
     let (command_tx, command_rx) = mpsc::channel(1);
-    let (_startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Ready);
+    let (_startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::ready());
     (
         RuntimeHandle {
             command_tx,

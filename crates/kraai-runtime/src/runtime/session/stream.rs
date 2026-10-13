@@ -24,6 +24,10 @@ pub(crate) enum StreamEvent {
         provider_id: kraai_types::ProviderId,
         payload: serde_json::Value,
     },
+    ReasoningDelta {
+        item_id: String,
+        delta: String,
+    },
     ScriptCall {
         call_id: ToolCallId,
         name: String,
@@ -189,9 +193,6 @@ impl SessionActor {
                 )],
             });
         }
-        self.runtime.send_event(Event::HistoryUpdated {
-            session_id: self.session_id.clone(),
-        });
         self.process_completed_stream_output(
             message_id,
             call_id,
@@ -220,14 +221,7 @@ impl SessionActor {
             "runtime error"
         };
         match self.abort_stream_for_recovery(&message_id).await {
-            Ok(true) => {
-                self.drain().await;
-                if before_start && kind == StreamKind::Continuation {
-                    self.runtime.send_event(Event::HistoryUpdated {
-                        session_id: self.session_id.clone(),
-                    });
-                }
-            }
+            Ok(true) => self.drain().await,
             Ok(false) => self.runtime.send_session_error(
                 &self.session_id,
                 format!("Failed to recover {recovery_target} {message_id} after {moment}"),
@@ -301,9 +295,6 @@ impl SessionActor {
             Ok(Some(_)) => {
                 self.finish_turn().await;
                 self.drain().await;
-                self.runtime.send_event(Event::HistoryUpdated {
-                    session_id: self.session_id.clone(),
-                });
             }
             Ok(None) => self.runtime.send_session_error(
                 &self.session_id,
@@ -341,6 +332,32 @@ impl SessionActor {
     }
 }
 
+fn send_streamed_item(
+    runtime: &RuntimeCore,
+    session_id: &SessionId,
+    message_id: &MessageId,
+    streamed: Option<kraai_agent::StreamedItem>,
+) {
+    let event = match streamed {
+        Some(kraai_agent::StreamedItem::Started { index, item }) => Event::ItemStarted {
+            session_id: session_id.clone(),
+            message_id: message_id.to_string(),
+            item_index: index,
+            item: super::super::client_view::client_item(item),
+        },
+        Some(kraai_agent::StreamedItem::Delta { index, delta }) if !delta.is_empty() => {
+            Event::ItemDelta {
+                session_id: session_id.clone(),
+                message_id: message_id.to_string(),
+                item_index: index,
+                delta,
+            }
+        }
+        Some(kraai_agent::StreamedItem::Delta { .. }) | None => return,
+    };
+    runtime.send_event(event);
+}
+
 /// Applies one forwarded provider event to the streaming message, returning a failure that
 /// ends the stream.
 pub(in crate::runtime) async fn apply_stream_event(
@@ -356,26 +373,29 @@ pub(in crate::runtime) async fn apply_stream_event(
             phase,
             delta,
         } => {
-            if let Some(visible) = agent
+            let streamed = agent
                 .append_text_chunk(message_id, &item_id, phase, &delta)
-                .await
-                && !visible.is_empty()
-            {
-                runtime.send_event(Event::StreamChunk {
-                    session_id: session_id.clone(),
-                    message_id: message_id.to_string(),
-                    chunk: visible,
-                });
-            }
+                .await;
+            send_streamed_item(runtime, session_id, message_id, streamed);
             None
         }
         StreamEvent::Reasoning {
             provider_id,
             payload,
         } => {
-            agent
+            let streamed = agent
                 .append_reasoning(message_id, provider_id, payload)
                 .await;
+            send_streamed_item(runtime, session_id, message_id, streamed);
+            None
+        }
+        StreamEvent::ReasoningDelta { item_id, delta } => {
+            runtime.send_event(Event::ReasoningDelta {
+                session_id: session_id.clone(),
+                message_id: message_id.to_string(),
+                item_id,
+                delta,
+            });
             None
         }
         StreamEvent::ScriptCall {
@@ -383,19 +403,10 @@ pub(in crate::runtime) async fn apply_stream_event(
             name,
             input,
         } => {
-            if agent
-                .append_script_call(message_id, call_id.clone(), name.clone(), input.clone())
-                .await
-                .is_some()
-            {
-                runtime.send_event(Event::ScriptCall {
-                    session_id: session_id.clone(),
-                    message_id: message_id.to_string(),
-                    call_id,
-                    name,
-                    input,
-                });
-            }
+            let streamed = agent
+                .append_script_call(message_id, call_id, name, input)
+                .await;
+            send_streamed_item(runtime, session_id, message_id, streamed);
             None
         }
         StreamEvent::Usage(usage) => {

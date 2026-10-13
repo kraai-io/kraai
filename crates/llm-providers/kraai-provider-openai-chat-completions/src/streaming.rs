@@ -108,6 +108,12 @@ impl Completion {
             if let Some(refusal) = choice.delta.refusal.filter(|text| !text.is_empty()) {
                 return Err(eyre!("Provider refused the request: {refusal}"));
             }
+            if let Some(delta) = choice.delta.reasoning.display_text() {
+                pending.push_back(ProviderStreamEvent::ReasoningDelta {
+                    item_id: String::from("chat-completions-reasoning"),
+                    delta: delta.to_string(),
+                });
+            }
             self.reasoning.append(choice.delta.reasoning)?;
             if let Some(delta) = choice.delta.content.filter(|text| !text.is_empty()) {
                 pending.push_back(ProviderStreamEvent::TextDelta {

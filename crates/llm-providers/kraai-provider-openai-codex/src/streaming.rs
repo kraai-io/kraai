@@ -63,6 +63,14 @@ impl Completion {
                         .insert(item_id, parse_phase(item.phase.as_deref()));
                 }
             }
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+                if let Some(delta) = event.delta.filter(|delta| !delta.is_empty()) {
+                    let item_id = event
+                        .item_id
+                        .ok_or_else(|| eyre!("OpenAI reasoning delta omitted item_id"))?;
+                    pending.push_back(ProviderStreamEvent::ReasoningDelta { item_id, delta });
+                }
+            }
             "response.output_text.delta" => {
                 if let Some(delta) = event.delta {
                     let item_id = event
@@ -303,6 +311,25 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, Ok(ProviderStreamEvent::TextDelta { delta, .. }) if delta == "partial"))
         );
+    }
+
+    #[tokio::test]
+    async fn reasoning_summaries_stream_as_display_deltas() {
+        let source = stream::iter(vec![
+            Ok(SseEvent::Data(r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs-1","delta":"Thinking"}"#.into())),
+            Ok(SseEvent::Data(r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs-1","delta":""}"#.into())),
+        ]).boxed();
+        let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
+        let deltas: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Ok(ProviderStreamEvent::ReasoningDelta { item_id, delta }) => {
+                    Some((item_id.as_str(), delta.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas, [("rs-1", "Thinking")]);
     }
 
     #[test]

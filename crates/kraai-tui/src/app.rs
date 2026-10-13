@@ -9,8 +9,8 @@ use kraai_runtime::{
     ProviderSettings, RuntimeHandle, SettingsValue,
 };
 use kraai_types::{
-    AssistantItem, AssistantPhase, ChatRole, ConversationItem, ImageAttachment, MessageContent,
-    MessageId, MessageStatus, SessionId,
+    AssistantItem, ChatRole, ConversationItem, ImageAttachment, MessageContent, MessageId,
+    MessageStatus, SessionId,
 };
 use ratatui::crossterm::event::{
     self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
@@ -117,9 +117,9 @@ pub struct App {
     startup_message_sent: bool,
     startup_sync: StartupSync,
     ci_error: Option<String>,
-    stream_event_content: HashMap<MessageId, StreamEventContent>,
+    /// Items of each message that CI output already showed.
+    ci_shown_items: HashMap<String, std::collections::HashSet<usize>>,
     state: AppState,
-    last_stream_history_request: Option<Instant>,
     last_statusline_animation_tick: Option<Instant>,
     last_runtime_event_sequence: u64,
     last_session_event_sequences: HashMap<SessionId, u64>,
@@ -131,26 +131,7 @@ pub struct App {
 }
 
 const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);
-const STREAM_HISTORY_SYNC_FALLBACK_INTERVAL: Duration = Duration::from_millis(50);
 const INPUT_HISTORY_LIMIT: usize = 100;
-
-#[derive(Default)]
-struct StreamEventContent {
-    text: String,
-    script_call: Option<AssistantItem>,
-}
-
-impl StreamEventContent {
-    fn merge_into(&self, content: &mut ConversationItem) {
-        merge_newer_streaming_prefix(content, &self.text);
-        if let Some(call @ AssistantItem::ScriptCall { call_id, .. }) = &self.script_call
-            && let ConversationItem::Assistant { items } = content
-            && !items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { call_id: existing, .. } if existing == call_id))
-        {
-            items.push(call.clone());
-        }
-    }
-}
 
 #[cfg(test)]
 #[expect(
@@ -222,151 +203,155 @@ impl App {
     }
 
     pub(super) fn discard_streamed_content(&mut self, message_id: &str) {
-        let message_id = MessageId::new(message_id);
-        self.stream_event_content
-            .insert(message_id.clone(), StreamEventContent::default());
-        if let Some(message) = self.state.chat_history.get_mut(&message_id)
+        self.ci_shown_items.remove(message_id);
+        if let Some(message) = self.state.chat_history.get_mut(&MessageId::new(message_id))
             && matches!(message.status, MessageStatus::Streaming { .. })
         {
-            message.content = kraai_types::ConversationItem::Assistant { items: Vec::new() };
+            message.content = ConversationItem::Assistant { items: Vec::new() };
             self.invalidate_chat_cache();
             self.clamp_chat_scroll();
         }
     }
 
-    pub(super) fn append_stream_chunk_to_cached_message(
+    /// Adds a streamed item to the cached message; false when the cache cannot take it and
+    /// needs a snapshot.
+    pub(super) fn apply_item_started(
         &mut self,
         message_id: &str,
-        chunk: &str,
+        index: usize,
+        item: AssistantItem,
     ) -> bool {
-        let message_id = MessageId::new(message_id);
-        if self
-            .state
-            .chat_history
-            .get(&message_id)
-            .is_some_and(|message| !matches!(message.status, MessageStatus::Streaming { .. }))
-        {
-            return true;
-        }
-
-        let event_content = self
-            .stream_event_content
-            .entry(message_id.clone())
-            .or_default();
-        event_content.text.push_str(chunk);
-
-        let Some(message) = self.state.chat_history.get_mut(&message_id) else {
+        let Some(items) = self.streaming_items(message_id) else {
             return false;
         };
-        let changed = merge_stream_chunk_into_cached_content(
-            &mut message.content,
-            &mut event_content.text,
-            chunk,
-        );
-        if changed {
-            self.invalidate_chat_cache();
-            self.clamp_chat_scroll();
+        match index.cmp(&items.len()) {
+            std::cmp::Ordering::Less => {
+                if let Some(existing) = items.get_mut(index) {
+                    *existing = item;
+                }
+            }
+            std::cmp::Ordering::Equal => items.push(item),
+            std::cmp::Ordering::Greater => return false,
         }
+        self.invalidate_chat_cache();
+        self.clamp_chat_scroll();
         true
     }
 
-    pub(super) fn request_stream_history_sync(&mut self, session_id: &SessionId, now: Instant) {
-        let should_request = self
-            .last_stream_history_request
-            .is_none_or(|last| now.duration_since(last) >= STREAM_HISTORY_SYNC_FALLBACK_INTERVAL);
-        if !should_request {
-            return;
-        }
-
-        self.last_stream_history_request = Some(now);
-        self.request(RuntimeRequest::GetCurrentTip {
-            session_id: session_id.clone(),
-        });
-        self.request(RuntimeRequest::GetChatHistory {
-            session_id: session_id.clone(),
-        });
+    /// Appends streamed text to a cached item; false when the cache cannot take it.
+    pub(super) fn apply_item_delta(&mut self, message_id: &str, index: usize, delta: &str) -> bool {
+        let Some(items) = self.streaming_items(message_id) else {
+            return false;
+        };
+        let Some(AssistantItem::Text { text, .. }) = items.get_mut(index) else {
+            return false;
+        };
+        text.push_str(delta);
+        self.invalidate_chat_cache();
+        self.clamp_chat_scroll();
+        true
     }
 
-    pub(super) fn merge_local_streaming_content(
-        &mut self,
-        history: &mut std::collections::BTreeMap<MessageId, kraai_types::Message>,
-    ) {
-        for (message_id, incoming) in history {
-            if !matches!(incoming.status, MessageStatus::Streaming { .. }) {
-                self.stream_event_content.remove(message_id);
-                continue;
-            }
+    fn streaming_items(&mut self, message_id: &str) -> Option<&mut Vec<AssistantItem>> {
+        let message = self
+            .state
+            .chat_history
+            .get_mut(&MessageId::new(message_id))?;
+        if !matches!(message.status, MessageStatus::Streaming { .. }) {
+            return None;
+        }
+        match &mut message.content {
+            ConversationItem::Assistant { items } => Some(items),
+            _ => None,
+        }
+    }
 
-            if let Some(current) = self.state.chat_history.get(message_id)
-                && matches!(current.status, MessageStatus::Streaming { .. })
-            {
-                if matches!(&current.content, ConversationItem::Assistant { items } if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { .. })))
-                    && !matches!(&incoming.content, ConversationItem::Assistant { items } if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { .. })))
-                {
-                    incoming.content = current.content.clone();
-                } else {
-                    merge_newer_streaming_prefix(
-                        &mut incoming.content,
-                        &current.content.display_text(),
-                    );
+    /// CI output for streamed text of the item at `index`, starting a paragraph when an earlier
+    /// item of the message already showed.
+    pub(super) fn ci_text(&mut self, message_id: &str, index: usize, text: &str) -> String {
+        if text.is_empty() {
+            return String::new();
+        }
+        let earlier = self
+            .ci_shown_items
+            .get(message_id)
+            .is_some_and(|items| items.iter().any(|shown| *shown != index));
+        let first = self
+            .ci_shown_items
+            .entry(message_id.to_string())
+            .or_default()
+            .insert(index);
+        if first && earlier {
+            format!("\n\n{text}")
+        } else {
+            text.to_string()
+        }
+    }
+
+    /// Installs the latest history from a snapshot, keeping older messages already loaded.
+    pub(super) fn install_latest_history(
+        &mut self,
+        session_id: &SessionId,
+        latest: std::collections::BTreeMap<MessageId, kraai_types::Message>,
+        older: Option<MessageId>,
+    ) {
+        match older {
+            None => self.state.chat_history = latest,
+            Some(older) => {
+                if let Some(oldest) = latest.keys().next() {
+                    self.state.chat_history.retain(|id, _| id < oldest);
+                }
+                self.state.chat_history.extend(latest);
+                if !self.state.chat_history.contains_key(&older) {
+                    self.request(RuntimeRequest::GetHistoryPage {
+                        session_id: session_id.clone(),
+                        from: older,
+                    });
                 }
             }
-
-            if let Some(event_content) = self.stream_event_content.get(message_id) {
-                event_content.merge_into(&mut incoming.content);
-            }
         }
     }
-}
 
-fn merge_newer_streaming_prefix(incoming_content: &mut ConversationItem, candidate_content: &str) {
-    let incoming_display = incoming_content.display_text();
-    if candidate_content.len() > incoming_display.len()
-        && candidate_content.starts_with(incoming_display.as_ref())
-    {
-        replace_streaming_display(incoming_content, candidate_content.to_string());
-    }
-}
-
-fn merge_stream_chunk_into_cached_content(
-    cached_content: &mut ConversationItem,
-    event_content: &mut String,
-    chunk: &str,
-) -> bool {
-    let cached_display = cached_content.display_text();
-    if cached_display.starts_with(event_content.as_str()) {
-        return false;
-    }
-
-    if let Some(suffix) = event_content.strip_prefix(cached_display.as_ref()) {
-        if let ConversationItem::Assistant { items } = cached_content
-            && let [AssistantItem::Text { phase, text }] = items.as_mut_slice()
+    pub(super) fn install_older_history(
+        &mut self,
+        session_id: &SessionId,
+        page: kraai_runtime::HistoryPage,
+    ) {
+        self.accumulate_exit_usage_from_history(&page.messages);
+        for (id, message) in page.messages {
+            self.state.chat_history.entry(id).or_insert(message);
+        }
+        if let Some(older) = page.older_history
+            && !self.state.chat_history.contains_key(&older)
         {
-            *phase = AssistantPhase::FinalAnswer;
-            text.push_str(suffix);
-        } else {
-            replace_streaming_display(cached_content, event_content.clone());
+            self.request(RuntimeRequest::GetHistoryPage {
+                session_id: session_id.clone(),
+                from: older,
+            });
         }
-        return true;
+        self.invalidate_chat_cache();
+        self.reconcile_optimistic_messages();
+        self.clamp_chat_scroll();
     }
 
-    if cached_display.ends_with(chunk) {
-        cached_display.as_ref().clone_into(event_content);
-        return false;
+    pub(super) fn upsert_message(&mut self, message: kraai_types::Message) {
+        let completed = message.status == MessageStatus::Complete;
+        let mut history = std::collections::BTreeMap::new();
+        history.insert(message.id.clone(), message);
+        if completed {
+            self.accumulate_exit_usage_from_history(&history);
+        }
+        self.state.chat_history.extend(history);
+        self.invalidate_chat_cache();
+        self.reconcile_optimistic_messages();
+        self.clamp_chat_scroll();
     }
 
-    let mut merged = cached_display.into_owned();
-    merged.push_str(chunk);
-    event_content.clone_from(&merged);
-    replace_streaming_display(cached_content, merged);
-    true
-}
-
-fn replace_streaming_display(content: &mut ConversationItem, text: String) {
-    *content = ConversationItem::Assistant {
-        items: vec![AssistantItem::Text {
-            phase: AssistantPhase::FinalAnswer,
-            text,
-        }],
-    };
+    pub(super) fn remove_messages(&mut self, message_ids: &[MessageId]) {
+        for id in message_ids {
+            self.state.chat_history.remove(id);
+        }
+        self.invalidate_chat_cache();
+        self.clamp_chat_scroll();
+    }
 }

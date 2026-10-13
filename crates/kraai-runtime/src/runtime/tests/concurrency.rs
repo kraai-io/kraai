@@ -255,7 +255,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         .events
         .wait_for("script call before usage drain completes", |events| {
             events.iter().any(|event| {
-                matches!(event, Event::ScriptCall { session_id: id, .. } if id == &session_id)
+                matches!(event, Event::ItemStarted { session_id: id, item: kraai_types::AssistantItem::ScriptCall { .. }, .. } if id == &session_id)
             })
         })
         .await;

@@ -28,7 +28,7 @@ fn initial_config_and_lag_share_one_startup_batch_then_reloads_sync_again() {
     harness
         .app
         .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::StartupComplete(Ok(
-            RuntimeStartupState::Ready,
+            RuntimeStartupState::ready(),
         )));
     assert_startup_batch(&harness.drain_requests());
     assert_eq!(harness.app.startup_sync, StartupSync::Synchronizing);
@@ -59,7 +59,7 @@ fn catalog_changes_refresh_models_without_reloading_session_state() {
 #[test]
 fn missed_initial_config_and_failed_startup_still_finish_synchronizing() {
     for state in [
-        RuntimeStartupState::Ready,
+        RuntimeStartupState::ready(),
         RuntimeStartupState::Failed(String::from("initial failure")),
     ] {
         let mut harness = test_harness();

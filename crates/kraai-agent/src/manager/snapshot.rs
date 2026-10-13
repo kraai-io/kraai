@@ -84,6 +84,20 @@ impl AgentManager {
             .await
     }
 
+    /// Reads up to `limit` messages ending at `from`, newest first, and where the next older
+    /// page starts.
+    pub async fn history_page(
+        &self,
+        from: &MessageId,
+        limit: usize,
+    ) -> Result<(Vec<Message>, Option<MessageId>)> {
+        let in_flight = self.capture_in_flight_messages(None).await;
+        HistoryCursor::new(self.message_store.as_ref(), Some(from.clone()))
+            .with_overlay(&in_flight)
+            .read_page(limit)
+            .await
+    }
+
     pub async fn get_session_context_usage(
         &self,
         session_id: &SessionId,

@@ -7,6 +7,7 @@ use kraai_provider_core::{Provider, ProviderManager, ProviderRequest, ProviderSt
 use kraai_types::{AssistantPhase, ModelId, ProviderId, ScriptExecutionId, ScriptExecutionStatus};
 use tokio::sync::{Mutex, mpsc};
 
+use super::harness::FullHistory as _;
 use super::harness::{
     RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
 };
@@ -217,7 +218,14 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
         phase: AssistantPhase::FinalAnswer,
         delta: "second request is running".into(),
     }))?;
-    owner.events.wait_for("queued request", |events| events.iter().any(|event| matches!(event, Event::StreamChunk { session_id, chunk, .. } if session_id == &session && chunk == "second request is running"))).await;
+    owner
+        .events
+        .wait_for("queued request", |events| {
+            events.iter().any(|event| {
+                super::harness::streamed_text(event, &session) == Some("second request is running")
+            })
+        })
+        .await;
     assert!(owner.runtime.session_store.owns_turn(&session).await?);
     assert!(
         observer

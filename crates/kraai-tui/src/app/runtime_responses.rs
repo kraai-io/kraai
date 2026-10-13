@@ -359,27 +359,13 @@ impl App {
                     .collect();
                 self.set_error(format!("Failed saving settings: {err}"));
             }
-            RuntimeResponse::ChatHistory { session_id, result } => {
-                match result {
-                    Ok(mut history) => {
-                        self.merge_local_streaming_content(&mut history);
-                        self.accumulate_exit_usage_from_history(&history);
-                        if self.state.current_session_id.as_ref() == Some(&session_id) {
-                            self.state.chat_history = history;
-                            self.invalidate_chat_cache();
-                            self.reconcile_optimistic_messages();
-                            self.clamp_chat_scroll();
-                        }
-                    }
-                    Err(err) => {
-                        if self.state.current_session_id.as_ref() == Some(&session_id) {
-                            self.set_error(format!("Failed loading history: {err}"));
-                        }
-                    }
+            RuntimeResponse::HistoryPage { session_id, result } => {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
+                    return;
                 }
-                if self.state.current_session_id.as_ref() == Some(&session_id) {
-                    self.ci_metrics_history_pending = false;
-                    self.maybe_finish_ci_run();
+                match result {
+                    Ok(page) => self.install_older_history(&session_id, page),
+                    Err(err) => self.set_error(format!("Failed loading history: {err}")),
                 }
             }
             RuntimeResponse::SessionSnapshot {
@@ -388,7 +374,7 @@ impl App {
                 result,
             } => {
                 match *result {
-                    Ok(mut snapshot) => {
+                    Ok(snapshot) => {
                         if self
                             .last_session_event_sequences
                             .get(&session_id)
@@ -403,7 +389,6 @@ impl App {
                         }
                         self.session_snapshot_sequences
                             .insert(session_id.clone(), snapshot.event_sequence);
-                        self.merge_local_streaming_content(&mut snapshot.history);
                         self.accumulate_exit_usage_from_history(&snapshot.history);
                         self.observe_session_model_snapshot(&session_id, model_save_id, &snapshot);
                         self.update_costs(&session_id, snapshot.requests);
@@ -411,7 +396,11 @@ impl App {
                         if self.state.current_session_id.as_ref() == Some(&session_id) {
                             self.state.turn_timer = snapshot.turn_timer;
                             self.state.current_tip_id = snapshot.session.tip_id.clone();
-                            self.state.chat_history = snapshot.history;
+                            self.install_latest_history(
+                                &session_id,
+                                snapshot.history,
+                                snapshot.older_history,
+                            );
                             self.state.context_usage = snapshot.context_usage;
                             if self
                                 .state
@@ -472,25 +461,6 @@ impl App {
                     self.ci_metrics_history_pending = false;
                     self.ci_metrics_context_pending = false;
                     self.maybe_finish_ci_run();
-                }
-            }
-            RuntimeResponse::CurrentTip { session_id, result } => {
-                if self.state.current_session_id.as_ref() != Some(&session_id) {
-                    return;
-                }
-
-                match result {
-                    Ok(tip) => {
-                        if self.state.current_tip_id != tip {
-                            self.state.current_tip_id = tip;
-                            self.invalidate_chat_cache();
-                            self.reconcile_optimistic_messages();
-                            self.clamp_chat_scroll();
-                        }
-                    }
-                    Err(err) => {
-                        self.set_error(format!("Failed loading tip: {err}"));
-                    }
                 }
             }
             RuntimeResponse::UndoLastUserMessage { session_id, result } => {

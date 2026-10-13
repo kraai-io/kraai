@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::{ContinueSessionOutcome, Event, PendingScriptInfo, RuntimeHandle};
-use kraai_types::SessionId;
+use kraai_types::{AssistantItem, ConversationItem, MessageId, SessionId};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -91,17 +91,22 @@ async fn finish_prompt(
             .await
             .map_err(error::runtime)?;
         loop {
-            let event = match events.try_recv() {
-                Ok(event) => event,
-                Err(broadcast::error::TryRecvError::Empty) => break,
-                Err(error) => {
-                    return Err(crate::error::internal(format!(
-                        "Runtime event stream interrupted: {error}"
-                    )));
+            match events.try_recv() {
+                Ok(event) => {
+                    if event.event.session_id() == Some(&output.session_id) {
+                        output.event(runtime, event.event).await?;
+                    }
                 }
-            };
-            if event.event.session_id() == Some(&output.session_id) {
-                output.event(runtime, event.event).await?;
+                Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                    output.resync(runtime).await?;
+                    break;
+                }
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(broadcast::error::TryRecvError::Closed) => {
+                    return Err(crate::error::internal(
+                        "Runtime event stream interrupted: closed",
+                    ));
+                }
             }
         }
     }
@@ -116,10 +121,24 @@ async fn drive(
     cancelled: &CancellationToken,
 ) -> Result<acp::StopReason> {
     loop {
-        let event = tokio::select! {
+        let received = tokio::select! {
             biased;
             () = cancelled.cancelled() => return Ok(acp::StopReason::Cancelled),
-            event = events.recv() => event.map_err(|error| crate::error::internal(format!("Runtime event stream interrupted: {error}")))?.event,
+            received = events.recv() => received,
+        };
+        let event = match received {
+            Ok(event) => event.event,
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                if let Some(reason) = output.catch_up(runtime, cancelled).await? {
+                    return Ok(reason);
+                }
+                continue;
+            }
+            Err(broadcast::error::RecvError::Closed) => {
+                return Err(crate::error::internal(
+                    "Runtime event stream interrupted: closed",
+                ));
+            }
         };
         if let Event::ServiceError { error } = event {
             return Err(crate::error::runtime(error));
@@ -137,13 +156,14 @@ async fn drive(
                 output.event(runtime, event).await?;
                 return Ok(acp::StopReason::Cancelled);
             }
+            Event::HistoryUpdated { .. } => {
+                if let Some(reason) = output.catch_up(runtime, cancelled).await? {
+                    return Ok(reason);
+                }
+            }
             Event::ScriptApprovalRequested { script, .. } => {
-                tokio::select! {
-                    biased;
-                    () = cancelled.cancelled() => return Ok(acp::StopReason::Cancelled),
-                    result = output.permission(runtime, script) => {
-                        if !result? { cancelled.cancel(); }
-                    }
+                if !output.approve(runtime, script, cancelled).await? {
+                    return Ok(acp::StopReason::Cancelled);
                 }
             }
             event => output.event(runtime, event).await?,
@@ -156,6 +176,15 @@ struct Output {
     session_id: SessionId,
     connection: Connection,
     executions: HashMap<String, String>,
+    /// Bytes of each assistant text item already sent, by message and item index.
+    sent: HashMap<(String, usize), usize>,
+    /// Messages that already showed an item, so their next text starts a new paragraph.
+    shown: HashSet<String>,
+    /// Tool calls announced to the client, and those still waiting for a result.
+    announced: HashSet<String>,
+    open: HashSet<String>,
+    /// Messages created after this id belong to the prompt.
+    started_after: MessageId,
 }
 
 impl Output {
@@ -165,6 +194,11 @@ impl Output {
             session_id,
             connection,
             executions: HashMap::new(),
+            sent: HashMap::new(),
+            shown: HashSet::new(),
+            announced: HashSet::new(),
+            open: HashSet::new(),
+            started_after: MessageId::new(ulid::Ulid::generate()),
         }
     }
 
@@ -182,18 +216,89 @@ impl Output {
         ))
     }
 
+    /// Sends `text` appended to the text item at `index`, starting a paragraph for a new item.
+    fn item_text(&mut self, message_id: &str, index: usize, text: &str) -> Result<()> {
+        let sent = self
+            .sent
+            .entry((message_id.to_string(), index))
+            .or_insert(0);
+        let paragraph = *sent == 0 && !text.is_empty() && self.shown.contains(message_id);
+        *sent += text.len();
+        if !text.is_empty() {
+            self.shown.insert(message_id.to_string());
+        }
+        let text = if paragraph {
+            format!("\n\n{text}")
+        } else {
+            text.to_string()
+        };
+        self.text(message_id, text)
+    }
+
+    fn announce(&mut self, call_id: String, input: String) -> Result<()> {
+        if !self.announced.insert(call_id.clone()) {
+            return Ok(());
+        }
+        self.open.insert(call_id.clone());
+        self.update(acp::SessionUpdate::ToolCall(
+            acp::ToolCall::new(call_id, "Run Nushell script")
+                .kind(acp::ToolKind::Execute)
+                .status(acp::ToolCallStatus::Pending)
+                .raw_input(serde_json::Value::String(input)),
+        ))
+    }
+
+    async fn result(
+        &mut self,
+        runtime: &RuntimeHandle,
+        call_id: String,
+        output: &kraai_types::MessageContent,
+        outcome: kraai_types::ScriptExecutionOutcome,
+    ) -> Result<()> {
+        if self.open.remove(&call_id) || !self.announced.contains(&call_id) {
+            self.announced.insert(call_id.clone());
+            self.update(content::tool_result(runtime, call_id, output, outcome).await?)?;
+        }
+        Ok(())
+    }
+
     async fn event(&mut self, runtime: &RuntimeHandle, event: Event) -> Result<()> {
         match event {
-            Event::StreamChunk {
-                message_id, chunk, ..
+            Event::ItemStarted {
+                message_id,
+                item_index,
+                item,
+                ..
+            } => match item {
+                AssistantItem::Text { text, .. } => {
+                    self.item_text(&message_id, item_index, &text)?;
+                }
+                AssistantItem::ScriptCall { .. } => {
+                    self.shown.insert(message_id);
+                }
+                AssistantItem::Reasoning { .. } => {}
+            },
+            Event::ItemDelta {
+                message_id,
+                item_index,
+                delta,
+                ..
+            } => self.item_text(&message_id, item_index, &delta)?,
+            Event::ReasoningDelta {
+                message_id, delta, ..
             } => {
-                self.text(&message_id, chunk)?;
+                self.update(acp::SessionUpdate::AgentThoughtChunk(
+                    acp::ContentChunk::new(content::text(delta))
+                        .message_id(acp::MessageId::new(message_id)),
+                ))?;
             }
             Event::StreamRestarted { message_id, .. } => {
+                self.sent.retain(|(id, _), _| id != &message_id);
                 self.text(
                     &message_id,
                     String::from("\n\n[Provider stream failed; retrying the response.]\n\n"),
                 )?;
+                self.shown.remove(&message_id);
             }
             Event::ScriptPrepared {
                 execution_id,
@@ -202,12 +307,7 @@ impl Output {
                 ..
             } => {
                 self.executions.insert(execution_id, call_id.clone());
-                self.update(acp::SessionUpdate::ToolCall(
-                    acp::ToolCall::new(call_id, "Run Nushell script")
-                        .kind(acp::ToolKind::Execute)
-                        .status(acp::ToolCallStatus::Pending)
-                        .raw_input(serde_json::Value::String(source)),
-                ))?;
+                self.announce(call_id, source)?;
             }
             Event::ScriptStarted { call_id, .. } => {
                 self.update(acp::SessionUpdate::ToolCallUpdate(
@@ -225,11 +325,94 @@ impl Output {
                 ..
             } => {
                 self.executions.remove(&execution_id);
-                self.update(content::tool_result(runtime, call_id, &output, outcome).await?)?;
+                self.result(runtime, call_id, &output, outcome).await?;
             }
             _ => {}
         }
         Ok(())
+    }
+
+    /// Sends whatever this prompt's messages gained that the client has not seen, after
+    /// events were missed.
+    async fn resync(&mut self, runtime: &RuntimeHandle) -> Result<kraai_runtime::SessionSnapshot> {
+        let snapshot = runtime
+            .get_session_snapshot(self.session_id.clone())
+            .await
+            .map_err(error::runtime)?;
+        for message in snapshot.history.values() {
+            if message.id <= self.started_after {
+                continue;
+            }
+            let id = message.id.to_string();
+            match &message.content {
+                ConversationItem::Assistant { items } => {
+                    for (index, item) in items.iter().enumerate() {
+                        match item {
+                            AssistantItem::Text { text, .. } => {
+                                let sent =
+                                    self.sent.get(&(id.clone(), index)).copied().unwrap_or(0);
+                                let missing = text.get(sent..).unwrap_or_default();
+                                self.item_text(&id, index, missing)?;
+                            }
+                            AssistantItem::ScriptCall { call_id, input, .. } => {
+                                self.shown.insert(id.clone());
+                                self.announce(call_id.to_string(), input.clone())?;
+                            }
+                            AssistantItem::Reasoning { .. } => {}
+                        }
+                    }
+                }
+                ConversationItem::ScriptResult {
+                    call_id,
+                    output,
+                    outcome,
+                } => {
+                    self.result(runtime, call_id.to_string(), output, *outcome)
+                        .await?;
+                }
+                _ => {}
+            }
+        }
+        Ok(snapshot)
+    }
+
+    /// Recovers from missed events and returns the stop reason if the turn already ended.
+    async fn catch_up(
+        &mut self,
+        runtime: &RuntimeHandle,
+        cancelled: &CancellationToken,
+    ) -> Result<Option<acp::StopReason>> {
+        let snapshot = self.resync(runtime).await?;
+        if let Some(script) = snapshot.pending_script {
+            if !self.approve(runtime, script, cancelled).await? {
+                return Ok(Some(acp::StopReason::Cancelled));
+            }
+            return Ok(None);
+        }
+        Ok((!snapshot.session.is_running).then_some(acp::StopReason::EndTurn))
+    }
+
+    /// Asks the client about a pending script; returns false when the prompt was cancelled.
+    async fn approve(
+        &mut self,
+        runtime: &RuntimeHandle,
+        script: PendingScriptInfo,
+        cancelled: &CancellationToken,
+    ) -> Result<bool> {
+        self.executions
+            .insert(script.execution_id.clone(), script.call_id.clone());
+        self.announce(script.call_id.clone(), script.source.clone())?;
+        tokio::select! {
+            biased;
+            () = cancelled.cancelled() => Ok(false),
+            result = self.permission(runtime, script) => {
+                if !result? {
+                    cancelled.cancel();
+                    return Ok(false);
+                }
+                Ok(true)
+            }
+        }
     }
 
     async fn permission(&self, runtime: &RuntimeHandle, script: PendingScriptInfo) -> Result<bool> {

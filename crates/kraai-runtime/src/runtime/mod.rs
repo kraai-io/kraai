@@ -1,5 +1,6 @@
 mod builder;
 mod cache_warming;
+mod client_view;
 mod config;
 mod core;
 mod dispatch;

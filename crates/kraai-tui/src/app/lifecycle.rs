@@ -67,9 +67,8 @@ impl App {
             startup_message_sent: false,
             startup_sync: StartupSync::WaitingForRuntime,
             ci_error: None,
-            stream_event_content: HashMap::new(),
+            ci_shown_items: HashMap::new(),
             state,
-            last_stream_history_request: None,
             last_statusline_animation_tick: None,
             last_runtime_event_sequence: 0,
             last_session_event_sequences: HashMap::new(),
@@ -349,8 +348,7 @@ impl App {
                 self.event_lag_session_resync_pending = true;
                 self.event_lag_script_resync_pending = true;
                 self.state.retry_waiting = false;
-                self.last_stream_history_request = None;
-                self.stream_event_content.clear();
+                self.ci_shown_items.clear();
                 self.state.status =
                     format!("Missed {skipped} runtime event(s); resynchronizing session state");
                 if self.startup_sync != StartupSync::WaitingForRuntime {

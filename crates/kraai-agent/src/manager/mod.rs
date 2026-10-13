@@ -25,6 +25,7 @@ use ulid::Ulid;
 use crate::profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 
 mod ancestry;
+mod history_changes;
 mod intercepted;
 mod mcp;
 mod model_context;
@@ -35,6 +36,7 @@ mod stream_requests;
 mod streaming;
 mod usage;
 
+pub use history_changes::{HistoryChange, HistoryObserver, StreamedItem};
 pub use snapshot::{SessionSnapshotData, SessionSnapshotReader};
 
 #[cfg(test)]
@@ -202,6 +204,7 @@ pub struct AgentManager {
     /// Messages currently being streamed (not yet persisted).
     streaming_messages: RwLock<BTreeMap<MessageId, StreamingMessageState>>,
     streaming_persistence: Mutex<()>,
+    history_observer: StdRwLock<Option<HistoryObserver>>,
 }
 
 impl AgentManager {

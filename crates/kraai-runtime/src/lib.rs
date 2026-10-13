@@ -10,10 +10,10 @@ pub use timing::TurnTimer;
 
 pub use api::{
     AgentProfileCatalog, ContinueSessionOutcome, CreateSessionRequest, Event, EventCallback,
-    FieldViolation, Model, OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin,
-    PendingDeviceCodeLogin, PendingScriptInfo, RuntimeError, RuntimeErrorKind, RuntimeEvent,
-    RuntimeResult, RuntimeStartupState, Session, SessionActivity, SessionContextUsage,
-    SessionSnapshot, SubmitMessageOutcome, WorkspaceState,
+    FieldViolation, HistoryPage, Model, OpenAiCodexAuthStatus, OpenAiCodexLoginState,
+    PROTOCOL_VERSION, PendingBrowserLogin, PendingDeviceCodeLogin, PendingScriptInfo, RuntimeError,
+    RuntimeErrorKind, RuntimeEvent, RuntimeResult, RuntimeStartupState, Session, SessionActivity,
+    SessionContextUsage, SessionSnapshot, SubmitMessageOutcome, WorkspaceState,
 };
 pub use handle::RuntimeHandle;
 pub use kraai_mcp::{McpAuthState, McpAuthStatus};

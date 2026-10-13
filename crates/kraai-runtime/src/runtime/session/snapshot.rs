@@ -1,6 +1,10 @@
 use color_eyre::eyre::Result;
 use kraai_agent::SessionSnapshotReader;
-use kraai_types::{MessageStatus, ScriptExecutionPhase};
+use std::collections::BTreeMap;
+
+use kraai_types::{Message, MessageId, MessageStatus, ScriptExecutionPhase};
+
+use super::super::client_view::client_message;
 
 use super::actor::{Responder, SessionActor, TurnState};
 use crate::api::{
@@ -75,6 +79,25 @@ impl SessionActor {
     }
 }
 
+/// How many of the latest messages a snapshot carries; clients page through older ones.
+pub(crate) const SNAPSHOT_HISTORY_LIMIT: usize = 200;
+
+/// The latest messages on the chain ending at `tip`, and where the older ones continue.
+fn latest_history(
+    mut history: BTreeMap<MessageId, Message>,
+    tip: Option<&MessageId>,
+) -> (BTreeMap<MessageId, Message>, Option<MessageId>) {
+    let mut latest = BTreeMap::new();
+    let mut cursor = tip.cloned();
+    while latest.len() < SNAPSHOT_HISTORY_LIMIT
+        && let Some(message) = cursor.as_ref().and_then(|id| history.remove(id))
+    {
+        cursor = message.parent_id.clone();
+        latest.insert(message.id.clone(), client_message(message));
+    }
+    (latest, cursor)
+}
+
 async fn finish_snapshot(
     captured: CapturedSnapshot,
     execution_store: std::sync::Arc<dyn kraai_persistence::ScriptExecutionStore>,
@@ -133,12 +156,15 @@ async fn finish_snapshot(
         is_running,
         ..Session::from_session_meta(data.session)
     };
+    let tip = session.tip_id.clone().map(MessageId::new);
+    let (history, older_history) = latest_history(data.history, tip.as_ref());
     Ok(SessionSnapshot {
         requests: data.requests,
         turn_timer,
         event_sequence,
         session,
-        history: data.history,
+        history,
+        older_history,
         context_usage,
         pending_script,
         profiles: data.profiles,

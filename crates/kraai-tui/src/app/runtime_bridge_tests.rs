@@ -31,7 +31,7 @@ async fn buffered_config_events_precede_startup_and_later_reloads_are_forwarded(
     let mut forwarding = Box::pin(forward_runtime_events(
         receiver,
         sender,
-        ready(Ok(RuntimeStartupState::Ready)),
+        ready(Ok(RuntimeStartupState::ready())),
     ));
     poll_pending(forwarding.as_mut()).await;
     assert!(matches!(
@@ -40,7 +40,7 @@ async fn buffered_config_events_precede_startup_and_later_reloads_are_forwarded(
     ));
     assert!(matches!(
         messages.try_recv()?,
-        RuntimeEventBridgeMessage::StartupComplete(Ok(RuntimeStartupState::Ready))
+        RuntimeEventBridgeMessage::StartupComplete(Ok(RuntimeStartupState::Ready { .. }))
     ));
     updates.send(config_event(2))?;
     poll_pending(forwarding.as_mut()).await;
@@ -58,7 +58,7 @@ async fn buffered_config_events_precede_startup_and_later_reloads_are_forwarded(
 async fn retained_startup_result_covers_late_subscribers_and_failure()
 -> Result<(), Box<dyn std::error::Error>> {
     for state in [
-        RuntimeStartupState::Ready,
+        RuntimeStartupState::ready(),
         RuntimeStartupState::Failed(String::from("initial failure")),
     ] {
         let (updates, receiver) = broadcast::channel(8);
@@ -93,7 +93,7 @@ async fn startup_lag_is_reported_before_the_completion_marker()
     let mut forwarding = Box::pin(forward_runtime_events(
         receiver,
         sender,
-        ready(Ok(RuntimeStartupState::Ready)),
+        ready(Ok(RuntimeStartupState::ready())),
     ));
     poll_pending(forwarding.as_mut()).await;
     assert!(matches!(
@@ -108,7 +108,7 @@ async fn startup_lag_is_reported_before_the_completion_marker()
     }
     assert!(matches!(
         messages.try_recv()?,
-        RuntimeEventBridgeMessage::StartupComplete(Ok(RuntimeStartupState::Ready))
+        RuntimeEventBridgeMessage::StartupComplete(Ok(RuntimeStartupState::Ready { .. }))
     ));
     drop(updates);
     forwarding.await;
@@ -149,11 +149,11 @@ async fn runtime_events_remain_live_while_startup_is_pending()
         RuntimeEventBridgeMessage::Event(RuntimeEvent { sequence: 1, .. })
     ));
     assert!(messages.is_empty());
-    assert!(started.send(RuntimeStartupState::Ready).is_ok());
+    assert!(started.send(RuntimeStartupState::ready()).is_ok());
     poll_pending(forwarding.as_mut()).await;
     assert!(matches!(
         messages.try_recv()?,
-        RuntimeEventBridgeMessage::StartupComplete(Ok(RuntimeStartupState::Ready))
+        RuntimeEventBridgeMessage::StartupComplete(Ok(RuntimeStartupState::Ready { .. }))
     ));
     drop(updates);
     forwarding.await;

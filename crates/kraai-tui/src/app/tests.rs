@@ -1,71 +1,6 @@
 use std::collections::HashMap;
 
 #[test]
-fn streaming_prefix_extension_preserves_phase_normalization_and_buffer() {
-    use kraai_types::{AssistantItem, AssistantPhase, ConversationItem};
-
-    let mut text = String::with_capacity(128);
-    text.push('é');
-    let pointer = text.as_ptr();
-    let mut cached = ConversationItem::Assistant {
-        items: vec![AssistantItem::Text {
-            phase: AssistantPhase::Commentary,
-            text,
-        }],
-    };
-    let mut events = String::from("é\nnext");
-    assert!(super::merge_stream_chunk_into_cached_content(
-        &mut cached,
-        &mut events,
-        "\nnext",
-    ));
-    assert!(matches!(
-        &cached,
-        ConversationItem::Assistant { items }
-            if matches!(items.as_slice(), [AssistantItem::Text { phase, text }]
-                if *phase == AssistantPhase::FinalAnswer
-                    && text == "é\nnext"
-                    && text.as_ptr() == pointer)
-    ));
-    assert!(!super::merge_stream_chunk_into_cached_content(
-        &mut cached,
-        &mut events,
-        "\nnext",
-    ));
-    assert_eq!(events, "é\nnext");
-}
-
-#[test]
-fn streaming_prefix_extension_still_collapses_multiple_items() {
-    use kraai_types::{AssistantItem, AssistantPhase, ConversationItem};
-
-    let mut cached = ConversationItem::Assistant {
-        items: ["", "é", ""]
-            .into_iter()
-            .map(|text| AssistantItem::Text {
-                phase: AssistantPhase::Commentary,
-                text: text.into(),
-            })
-            .collect(),
-    };
-    let mut events = String::from("é\nnext");
-    assert!(super::merge_stream_chunk_into_cached_content(
-        &mut cached,
-        &mut events,
-        "\nnext",
-    ));
-    assert_eq!(
-        cached,
-        ConversationItem::Assistant {
-            items: vec![AssistantItem::Text {
-                phase: AssistantPhase::FinalAnswer,
-                text: "é\nnext".into(),
-            }],
-        }
-    );
-}
-
-#[test]
 fn wheel_scrolling_moves_three_lines_and_resumes_following_at_bottom() {
     use super::{KeyModifiers, MouseEvent, MouseEventKind};
 
@@ -169,9 +104,8 @@ fn test_harness() -> TestHarness {
             startup_message_sent: false,
             startup_sync: super::StartupSync::Complete,
             ci_error: None,
-            stream_event_content: HashMap::new(),
+            ci_shown_items: HashMap::new(),
             state: AppState::default(),
-            last_stream_history_request: None,
             last_statusline_animation_tick: None,
             last_runtime_event_sequence: 0,
             last_session_event_sequences: HashMap::new(),
@@ -198,6 +132,7 @@ impl TestHarness {
 fn pending_script(execution_id: &str) -> PendingScriptInfo {
     PendingScriptInfo {
         execution_id: execution_id.to_string(),
+        call_id: String::from("call"),
         source: String::from("^cargo test"),
         requested_capabilities: vec![String::from("workspace-write")],
         capability_additions: vec![String::from("workspace-write")],
@@ -237,6 +172,7 @@ fn session_snapshot_at(
             is_running: pending_script.is_some(),
         },
         history: std::collections::BTreeMap::new(),
+        older_history: None,
         context_usage: None,
         pending_script,
         profiles: AgentProfilesState {

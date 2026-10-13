@@ -19,6 +19,41 @@ fn respond<T>(response: oneshot::Sender<RuntimeResult<T>>, result: Result<T>) {
 }
 
 impl RuntimeCore {
+    /// Reads a page of history ending at `from`, or at the session's latest message.
+    async fn history_page(
+        &self,
+        session_id: &kraai_types::SessionId,
+        from: Option<kraai_types::MessageId>,
+        limit: usize,
+    ) -> Result<crate::HistoryPage> {
+        let from = match from {
+            Some(from) => Some(from),
+            None => self.agent_manager.get_tip(session_id).await?,
+        };
+        let Some(from) = from else {
+            return Ok(crate::HistoryPage {
+                messages: std::collections::BTreeMap::new(),
+                older_history: None,
+            });
+        };
+        let (messages, older_history) = self
+            .agent_manager
+            .history_page(&from, limit.min(super::session::SNAPSHOT_HISTORY_LIMIT))
+            .await?;
+        Ok(crate::HistoryPage {
+            messages: messages
+                .into_iter()
+                .map(|message| {
+                    (
+                        message.id.clone(),
+                        super::client_view::client_message(message),
+                    )
+                })
+                .collect(),
+            older_history,
+        })
+    }
+
     /// Routes session commands to their session's actor in arrival order and runs every
     /// other command concurrently.
     pub(crate) fn dispatch(&self, command: Command) {
@@ -345,13 +380,12 @@ impl RuntimeCore {
                     .map(|tip_id| tip_id.map(|id| id.to_string()));
                 respond(response, tip_id);
             }
-            Command::GetChatHistory {
+            Command::GetHistoryPage {
                 session_id,
+                from,
+                limit,
                 response,
-            } => {
-                let history = self.agent_manager.get_chat_history(&session_id).await;
-                respond(response, history);
-            }
+            } => respond(response, self.history_page(&session_id, from, limit).await),
             Command::GetSessionContextUsage {
                 session_id,
                 response,

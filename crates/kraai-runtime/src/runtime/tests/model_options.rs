@@ -9,6 +9,7 @@ use kraai_types::{
 };
 use tokio::sync::{Mutex, mpsc};
 
+use super::harness::FullHistory as _;
 use super::harness::{RuntimeTestHarness, TEST_TIMEOUT, create_session_with_profile};
 use crate::{RuntimeErrorKind, SubmitMessageOutcome};
 

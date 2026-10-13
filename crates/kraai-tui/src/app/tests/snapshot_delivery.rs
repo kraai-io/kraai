@@ -28,6 +28,22 @@ fn stream_event(sequence: u64, event: Event) -> RuntimeEventBridgeMessage {
     RuntimeEventBridgeMessage::Event(RuntimeEvent { sequence, event })
 }
 
+fn text_started(message_id: &str, text: &str) -> Event {
+    text_started_at(message_id, 0, text)
+}
+
+fn text_started_at(message_id: &str, index: usize, text: &str) -> Event {
+    Event::ItemStarted {
+        session_id: SessionId::new("session"),
+        message_id: message_id.into(),
+        item_index: index,
+        item: kraai_types::AssistantItem::Text {
+            phase: kraai_types::AssistantPhase::FinalAnswer,
+            text: text.into(),
+        },
+    }
+}
+
 fn snapshot_with_message(sequence: u64, complete: bool) -> SessionSnapshot {
     let mut snapshot = session_snapshot_at(sequence, None);
     let id = MessageId::new("answer");
@@ -103,11 +119,7 @@ fn snapshot_cannot_swallow_ci_stream_output() {
         .app
         .handle_runtime_event_bridge_message(stream_event(
             2,
-            Event::StreamChunk {
-                session_id: SessionId::new("session"),
-                message_id: String::from("answer"),
-                chunk: String::from("answer text"),
-            },
+            text_started("answer", "answer text"),
         ));
 
     assert_eq!(
@@ -248,11 +260,7 @@ fn ci_waits_for_the_entire_snapshot_event_backlog() {
                 session_id,
                 message_id,
             },
-            1 => Event::StreamChunk {
-                session_id,
-                chunk: message_id.clone(),
-                message_id,
-            },
+            1 => text_started(&message_id, &message_id),
             _ => Event::StreamComplete {
                 session_id,
                 message_id,
@@ -322,11 +330,7 @@ fn duplicate_covered_events_do_not_repeat_output_or_completion_requests() {
             .app
             .handle_runtime_event_bridge_message(stream_event(
                 2,
-                Event::StreamChunk {
-                    session_id: SessionId::new("session"),
-                    message_id: String::from("answer"),
-                    chunk: String::from("answer text"),
-                },
+                text_started("answer", "answer text"),
             ));
     }
     harness
@@ -432,85 +436,71 @@ fn snapshot_cannot_swallow_a_ci_approval_failure() {
 }
 
 #[test]
-fn live_script_calls_remain_structured_across_duplicate_events_and_stale_history() {
+fn item_events_build_the_streaming_message_and_gaps_request_a_snapshot() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.chat_history = snapshot_with_message(1, false).history;
-    let event = Event::ScriptCall {
+    harness.app.handle_runtime_event(Event::ItemDelta {
         session_id: SessionId::new("session"),
         message_id: "answer".into(),
-        call_id: kraai_types::ToolCallId::new("call"),
-        name: "kraai_nushell".into(),
-        input: "# timeout=1sec\nprint '</tool_call>'".into(),
+        item_index: 0,
+        delta: " continued".into(),
+    });
+    let call = Event::ItemStarted {
+        session_id: SessionId::new("session"),
+        message_id: "answer".into(),
+        item_index: 1,
+        item: kraai_types::AssistantItem::ScriptCall {
+            call_id: kraai_types::ToolCallId::new("call"),
+            name: "kraai_nushell".into(),
+            input: "# timeout=1sec
+print '</tool_call>'"
+                .into(),
+        },
     };
-    harness.app.handle_runtime_event(event.clone());
-    harness.app.handle_runtime_event(event);
-    let mut stale = snapshot_with_message(1, false).history;
-    harness.app.merge_local_streaming_content(&mut stale);
-    assert!(
-        matches!(stale.get(&MessageId::new("answer")).map(|message| &message.content),
-        Some(ConversationItem::Assistant { items }) if matches!(items.as_slice(),
-            [kraai_types::AssistantItem::Text { .. }, kraai_types::AssistantItem::ScriptCall { input, .. }]
-            if input == "# timeout=1sec\nprint '</tool_call>'"))
-    );
+    harness.app.handle_runtime_event(call.clone());
+    harness.app.handle_runtime_event(call);
+    assert!(matches!(
+        &harness.app.state.chat_history.get(&MessageId::new("answer")).unwrap().content,
+        ConversationItem::Assistant { items }
+            if matches!(items.as_slice(),
+                [kraai_types::AssistantItem::Text { text, .. }, kraai_types::AssistantItem::ScriptCall { input, .. }]
+                if text == "answer text continued" && input == "# timeout=1sec\nprint '</tool_call>'")
+    ));
+    harness.drain_requests();
+    harness
+        .app
+        .handle_runtime_event(text_started_at("answer", 5, "lost"));
+    assert!(harness.drain_requests().iter().any(|request| matches!(
+        request,
+        RuntimeRequest::GetSessionSnapshot { session_id } if session_id.as_str() == "session"
+    )));
 }
 
 #[test]
-fn script_calls_before_history_preserve_buffered_text_and_survive_stale_snapshots() {
+fn history_events_upsert_and_remove_messages() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.handle_runtime_event(Event::StreamStart {
-        session_id: SessionId::new("session"),
-        message_id: "answer".into(),
-    });
-    harness.app.handle_runtime_event(Event::StreamChunk {
-        session_id: SessionId::new("session"),
-        message_id: "answer".into(),
-        chunk: "answer text".into(),
-    });
-    let call = Event::ScriptCall {
-        session_id: SessionId::new("session"),
-        message_id: "answer".into(),
-        call_id: kraai_types::ToolCallId::new("call"),
-        name: "kraai_nushell".into(),
-        input: "# timeout=1sec\nls".into(),
-    };
-    harness.app.handle_runtime_event(call.clone());
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::ChatHistory {
-            session_id: SessionId::new("session"),
-            result: Ok(Default::default()),
-        });
-
-    let mut stale = snapshot_with_message(1, false);
-    stale
+    let message = snapshot_with_message(1, true)
         .history
-        .get_mut(&MessageId::new("answer"))
-        .unwrap()
-        .content = ConversationItem::Assistant {
-        items: vec![kraai_types::AssistantItem::Text {
-            phase: kraai_types::AssistantPhase::FinalAnswer,
-            text: "answer".into(),
-        }],
-    };
-    for _ in 0..2 {
+        .remove(&MessageId::new("answer"))
+        .unwrap();
+    harness.app.handle_runtime_event(Event::MessageUpserted {
+        session_id: SessionId::new("session"),
+        message: Box::new(message),
+    });
+    assert!(
         harness
             .app
-            .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-                model_save_id: 0,
-                session_id: SessionId::new("session"),
-                result: Box::new(Ok(stale.clone())),
-            });
-        assert!(matches!(
-            &harness.app.state.chat_history.get(&MessageId::new("answer")).unwrap().content,
-            ConversationItem::Assistant { items }
-                if matches!(items.as_slice(),
-                    [kraai_types::AssistantItem::Text { text, .. }, kraai_types::AssistantItem::ScriptCall { call_id, input, .. }]
-                    if text == "answer text" && call_id.as_str() == "call" && input == "# timeout=1sec\nls")
-        ));
-        harness.app.handle_runtime_event(call.clone());
-    }
+            .state
+            .chat_history
+            .contains_key(&MessageId::new("answer"))
+    );
+    harness.app.handle_runtime_event(Event::MessagesRemoved {
+        session_id: SessionId::new("session"),
+        message_ids: vec![MessageId::new("answer")],
+    });
+    assert!(harness.app.state.chat_history.is_empty());
 }
 
 #[test]

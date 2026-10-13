@@ -56,9 +56,6 @@ impl SessionActor {
                 let cancelled = active || discarded;
                 if cancelled {
                     self.finish_turn().await;
-                    self.runtime.send_event(Event::HistoryUpdated {
-                        session_id: self.session_id.clone(),
-                    });
                     self.drain().await;
                 }
                 answer(response, Ok(cancelled));
@@ -141,11 +138,8 @@ impl SessionActor {
             return;
         };
         self.runtime.send_event(Event::StreamCancelled {
-            session_id: cancelled.session_id.clone(),
-            message_id: cancelled.message_id.to_string(),
-        });
-        self.runtime.send_event(Event::HistoryUpdated {
             session_id: cancelled.session_id,
+            message_id: cancelled.message_id.to_string(),
         });
         self.drain().await;
         answer(response, Ok(true));

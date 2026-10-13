@@ -6,6 +6,7 @@ use kraai_types::{
 };
 
 use super::super::stream_driver::POST_BOUNDARY_DRAIN_YIELD_INTERVAL;
+use super::harness::FullHistory as _;
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
 
@@ -99,7 +100,18 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
         .expect("assistant items");
     assert!(matches!(
         items.first(),
-        Some(AssistantItem::Reasoning { provider_id, payload }) if provider_id.as_str() == "mock-native" && payload == &reasoning
+        Some(AssistantItem::Reasoning { provider_id, payload }) if provider_id.as_str() == "mock-native" && payload.is_null()
+    ));
+    let stored = harness
+        .runtime
+        .agent_manager
+        .get_chat_history(&session_id)
+        .await?
+        .remove(&assistant.id)
+        .expect("stored assistant message");
+    assert!(matches!(
+        stored.content.assistant_items().and_then(<[_]>::first),
+        Some(AssistantItem::Reasoning { payload, .. }) if payload == &reasoning
     ));
     assert!(
         !assistant

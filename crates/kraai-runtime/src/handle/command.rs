@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use kraai_provider_core::ProviderDefinition;
 use kraai_types::{
@@ -108,9 +108,11 @@ pub(crate) enum Command {
         session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<Option<kraai_types::MessageContent>>>,
     },
-    GetChatHistory {
+    GetHistoryPage {
         session_id: SessionId,
-        response: oneshot::Sender<RuntimeResult<BTreeMap<MessageId, kraai_types::Message>>>,
+        from: Option<MessageId>,
+        limit: usize,
+        response: oneshot::Sender<RuntimeResult<crate::HistoryPage>>,
     },
     GetSessionSnapshot {
         session_id: SessionId,

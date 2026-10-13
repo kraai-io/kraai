@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use kraai_provider_core::ProviderDefinition;
@@ -262,13 +262,18 @@ impl RuntimeHandle {
         .await
     }
 
-    /// Get the chat history as a tree
-    pub async fn get_chat_history(
+    /// Reads up to `limit` messages of the session's history ending at `from`, or at the latest
+    /// message when `from` is `None`.
+    pub async fn get_history_page(
         &self,
         session_id: SessionId,
-    ) -> RuntimeResult<BTreeMap<MessageId, kraai_types::Message>> {
-        self.request(|response| Command::GetChatHistory {
+        from: Option<MessageId>,
+        limit: usize,
+    ) -> RuntimeResult<crate::HistoryPage> {
+        self.request(|response| Command::GetHistoryPage {
             session_id,
+            from,
+            limit,
             response,
         })
         .await

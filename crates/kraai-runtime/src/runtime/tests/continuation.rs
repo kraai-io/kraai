@@ -8,6 +8,7 @@ use kraai_provider_core::{
 use kraai_types::{AssistantPhase, ChatRole, ModelId, ProviderId};
 use tokio::sync::mpsc;
 
+use super::harness::FullHistory as _;
 use super::harness::{RuntimeTestHarness, TEST_TIMEOUT, create_session_with_profile};
 use crate::ContinueSessionOutcome;
 

@@ -78,7 +78,7 @@ provider_id = "mock"
             .build_on(&tokio::runtime::Handle::current());
         assert_eq!(
             runtime.wait_for_startup().await?,
-            RuntimeStartupState::Ready
+            RuntimeStartupState::ready()
         );
         let session = runtime.create_session().await?;
         let fixture = Self {

@@ -73,7 +73,10 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() -> Result<()> 
             ),
         )
         .await?;
-        assert_eq!(chunk.as_deref(), Some("new chunk"));
+        assert_eq!(
+            super::common::streamed_text(chunk).as_deref(),
+            Some("new chunk")
+        );
         let finishing = async {
             match terminal {
                 "complete" => {

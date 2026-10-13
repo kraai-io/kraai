@@ -100,9 +100,14 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
             })
         })
         .await;
-    harness.events.wait_for("queued response", |events| events.iter().any(|event| matches!(event,
-        Event::StreamChunk { session_id: id, chunk, .. } if id == &session_id && chunk == "Queued message handled"
-    ))).await;
+    harness
+        .events
+        .wait_for("queued response", |events| {
+            events.iter().any(|event| {
+                super::harness::streamed_text(event, &session_id) == Some("Queued message handled")
+            })
+        })
+        .await;
     harness.shutdown().await;
     Ok(())
 }

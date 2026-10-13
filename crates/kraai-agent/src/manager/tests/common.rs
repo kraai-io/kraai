@@ -102,3 +102,15 @@ pub(super) fn corrupt_message(data_dir: &Path, id: &MessageId, data: &str) -> Re
     )?;
     Ok(())
 }
+
+/// The text a streamed append added, whether it started an item or extended one.
+pub(super) fn streamed_text(streamed: Option<StreamedItem>) -> Option<String> {
+    match streamed? {
+        StreamedItem::Started {
+            item: AssistantItem::Text { text, .. },
+            ..
+        }
+        | StreamedItem::Delta { delta: text, .. } => Some(text),
+        StreamedItem::Started { .. } => None,
+    }
+}

@@ -58,6 +58,7 @@ impl AgentManager {
             last_used_profile_id: StdMutex::default(),
             streaming_messages: RwLock::new(BTreeMap::new()),
             streaming_persistence: Mutex::new(()),
+            history_observer: StdRwLock::new(None),
         }
     }
 
@@ -227,6 +228,7 @@ impl AgentManager {
         {
             parent.status = MessageStatus::Complete;
             self.message_store.save(&parent).await?;
+            self.history_upserted(&session.id, &parent);
         }
         if !matches!(tip.status, MessageStatus::Streaming { .. }) {
             return Ok(session);
@@ -240,6 +242,7 @@ impl AgentManager {
                 session.title.clone(),
             )
             .await?;
+        self.history_removed(&session.id, vec![tip_id]);
         session.tip_id = tip.parent_id.clone();
         Ok(session)
     }

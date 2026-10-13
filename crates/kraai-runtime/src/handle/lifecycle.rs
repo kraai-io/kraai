@@ -124,7 +124,7 @@ mod tests {
         watch::Receiver<bool>,
     ) {
         let (command_tx, command_rx) = mpsc::channel(1);
-        let (_startup_tx, startup_rx) = watch::channel(RuntimeStartupState::Ready);
+        let (_startup_tx, startup_rx) = watch::channel(RuntimeStartupState::ready());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         (
             RuntimeHandle {

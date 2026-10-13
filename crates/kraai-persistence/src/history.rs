@@ -97,6 +97,13 @@ impl<'a> HistoryCursor<'a> {
         Ok(Some(self.finish_page(page)))
     }
 
+    /// Reads up to `limit` messages, tip first, and returns where the next older page starts.
+    pub async fn read_page(mut self, limit: usize) -> Result<(Vec<Message>, Option<MessageId>)> {
+        self.page_size = limit.max(1);
+        let page = self.next_page().await?.unwrap_or_default();
+        Ok((page, self.next))
+    }
+
     pub async fn read_to_root(mut self) -> Result<Vec<Message>> {
         self.page_size = usize::MAX;
         let mut history = Vec::new();

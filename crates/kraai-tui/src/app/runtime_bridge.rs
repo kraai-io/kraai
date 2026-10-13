@@ -7,6 +7,8 @@ use tokio::sync::broadcast;
 use super::auth::map_openai_codex_auth_status;
 use super::{RuntimeRequest, RuntimeResponse};
 
+const HISTORY_PAGE: usize = 200;
+
 #[derive(Debug)]
 pub(super) enum RuntimeEventBridgeMessage {
     Event(RuntimeEvent),
@@ -337,9 +339,11 @@ impl RequestBridge {
                 let result = self.execute(|runtime| runtime.save_settings(settings));
                 RuntimeResponse::SaveSettings(result)
             }
-            RuntimeRequest::GetChatHistory { session_id } => {
-                let result = self.execute(|runtime| runtime.get_chat_history(session_id.clone()));
-                RuntimeResponse::ChatHistory { session_id, result }
+            RuntimeRequest::GetHistoryPage { session_id, from } => {
+                let result = self.execute(|runtime| {
+                    runtime.get_history_page(session_id.clone(), Some(from.clone()), HISTORY_PAGE)
+                });
+                RuntimeResponse::HistoryPage { session_id, result }
             }
             RuntimeRequest::GetSessionSnapshot { session_id } => {
                 let result =
@@ -349,10 +353,6 @@ impl RequestBridge {
                     session_id,
                     result: Box::new(result),
                 }
-            }
-            RuntimeRequest::GetCurrentTip { session_id } => {
-                let result = self.execute(|runtime| runtime.get_tip(session_id.clone()));
-                RuntimeResponse::CurrentTip { session_id, result }
             }
             RuntimeRequest::UndoLastUserMessage { session_id } => {
                 let result =

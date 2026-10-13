@@ -406,6 +406,12 @@ impl StreamReader {
                         "Unexpected compaction item in a conversation response".into(),
                     );
                 }
+                Ok(ProviderStreamEvent::ReasoningDelta { item_id, delta }) => {
+                    if draining {
+                        continue;
+                    }
+                    self.forward(StreamEvent::ReasoningDelta { item_id, delta })
+                }
                 Ok(ProviderStreamEvent::Reasoning { payload }) => {
                     self.forward(StreamEvent::Reasoning {
                         provider_id: provider_id.clone(),

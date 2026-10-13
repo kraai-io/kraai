@@ -58,9 +58,9 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
     old_owner
         .events
         .wait_for("old stream started", |events| {
-            events.iter().any(|event| {
-                matches!(event, Event::StreamChunk { session_id, .. } if session_id == &session)
-            })
+            events
+                .iter()
+                .any(|event| super::harness::streamed_text(event, &session).is_some())
         })
         .await;
     old_owner

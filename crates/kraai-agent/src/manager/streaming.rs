@@ -44,6 +44,9 @@ impl AgentManager {
                 },
             )
             .await?;
+        if append.linked_now {
+            self.history_upserted(session_id, &append.message);
+        }
         Ok(append.linked_now)
     }
 
@@ -144,6 +147,9 @@ impl AgentManager {
                 input.consumed_queue_through,
             )
             .await?;
+        for message in &appended.messages {
+            self.history_upserted(session_id, message);
+        }
         let message = appended
             .messages
             .pop()
@@ -201,27 +207,19 @@ impl AgentManager {
         item_id: &str,
         phase: AssistantPhase,
         chunk: &str,
-    ) -> Option<String> {
+    ) -> Option<StreamedItem> {
         let mut streaming = self.streaming_messages.write().await;
         let state = streaming.get_mut(message_id)?;
         let ConversationItem::Assistant { items } = &state.message.content else {
             return None;
         };
-
-        let mut visible = String::new();
-        let index = if let Some(index) = state.text_item_ids.get(item_id).copied() {
-            index
-        } else {
-            if items
-                .iter()
-                .any(|item| !matches!(item, AssistantItem::Reasoning { .. }))
-                && !chunk.is_empty()
-            {
-                visible.push_str("\n\n");
+        let (index, started) = match state.text_item_ids.get(item_id).copied() {
+            Some(index) => (index, false),
+            None => {
+                let index = items.len();
+                state.text_item_ids.insert(item_id.to_string(), index);
+                (index, true)
             }
-            let index = items.len();
-            state.text_item_ids.insert(item_id.to_string(), index);
-            index
         };
         state
             .record(kraai_persistence::StreamDelta::Text {
@@ -231,8 +229,20 @@ impl AgentManager {
             })
             .ok()?;
         drop(streaming);
-        visible.push_str(chunk);
-        Some(visible)
+        Some(if started {
+            StreamedItem::Started {
+                index,
+                item: AssistantItem::Text {
+                    phase,
+                    text: chunk.to_string(),
+                },
+            }
+        } else {
+            StreamedItem::Delta {
+                index,
+                delta: chunk.to_string(),
+            }
+        })
     }
 
     pub async fn append_reasoning(
@@ -240,19 +250,16 @@ impl AgentManager {
         message_id: &MessageId,
         provider_id: ProviderId,
         payload: serde_json::Value,
-    ) -> Option<()> {
-        let mut streaming = self.streaming_messages.write().await;
-        let state = streaming.get_mut(message_id)?;
-        state
-            .record(kraai_persistence::StreamDelta::Item {
-                item: AssistantItem::Reasoning {
-                    provider_id,
-                    payload,
-                },
-            })
-            .ok()?;
-        drop(streaming);
-        Some(())
+    ) -> Option<StreamedItem> {
+        self.append_item(
+            message_id,
+            AssistantItem::Reasoning {
+                provider_id,
+                payload,
+            },
+            |_| true,
+        )
+        .await
     }
 
     pub async fn append_script_call(
@@ -261,29 +268,39 @@ impl AgentManager {
         call_id: ToolCallId,
         name: String,
         input: String,
-    ) -> Option<()> {
+    ) -> Option<StreamedItem> {
+        let call = AssistantItem::ScriptCall {
+            call_id,
+            name,
+            input,
+        };
+        self.append_item(message_id, call, |items| {
+            !items
+                .iter()
+                .any(|item| matches!(item, AssistantItem::ScriptCall { .. }))
+        })
+        .await
+    }
+
+    /// Appends `item` when `allowed` accepts the message's current items.
+    async fn append_item(
+        &self,
+        message_id: &MessageId,
+        item: AssistantItem,
+        allowed: impl FnOnce(&[AssistantItem]) -> bool,
+    ) -> Option<StreamedItem> {
         let mut streaming = self.streaming_messages.write().await;
         let state = streaming.get_mut(message_id)?;
-        if state
-            .message
-            .content
-            .assistant_items()?
-            .iter()
-            .any(|item| matches!(item, AssistantItem::ScriptCall { .. }))
-        {
+        let items = state.message.content.assistant_items()?;
+        if !allowed(items) {
             return None;
         }
+        let index = items.len();
         state
-            .record(kraai_persistence::StreamDelta::Item {
-                item: AssistantItem::ScriptCall {
-                    call_id,
-                    name,
-                    input,
-                },
-            })
+            .record(kraai_persistence::StreamDelta::Item { item: item.clone() })
             .ok()?;
         drop(streaming);
-        Some(())
+        Some(StreamedItem::Started { index, item })
     }
 
     pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<SessionId>> {
@@ -301,6 +318,7 @@ impl AgentManager {
                 .insert(message_id.clone(), state);
             return Err(error);
         }
+        self.history_upserted(&state.session_id, &state.message);
         Ok(Some(state.session_id))
     }
 
@@ -329,6 +347,7 @@ impl AgentManager {
                 .insert(message_id.clone(), state);
             return Err(error);
         }
+        self.history_removed(&state.session_id, vec![message_id.clone()]);
         Ok(Some(state.session_id))
     }
 
@@ -367,7 +386,8 @@ impl AgentManager {
                         .cancellation_result_id
                         .get_or_insert_with(|| MessageId::new(Ulid::generate()))
                         .clone();
-                    self.conversation_store
+                    let result = self
+                        .conversation_store
                         .append_message_idempotent(
                             result_id,
                             AppendMessageRequest {
@@ -387,6 +407,9 @@ impl AgentManager {
                             },
                         )
                         .await?;
+                    if result.linked_now {
+                        self.history_upserted(&state.session_id, &result.message);
+                    }
                 }
                 state.message.status = MessageStatus::Complete;
                 self.message_store.save(&state.message).await
@@ -409,6 +432,11 @@ impl AgentManager {
                 .await
                 .insert(message_id.clone(), state);
             return Err(error);
+        }
+        if persisted {
+            self.history_upserted(&state.session_id, &state.message);
+        } else {
+            self.history_removed(&state.session_id, vec![message_id.clone()]);
         }
 
         Ok(Some(CancelledStreamResult {
@@ -493,6 +521,7 @@ impl AgentManager {
                         "Session changed while undoing a message"
                     )));
                 }
+                self.history_removed(session_id, removed.clone());
                 for id in removed {
                     if let Err(error) = self
                         .session_store

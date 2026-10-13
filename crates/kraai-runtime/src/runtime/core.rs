@@ -103,7 +103,7 @@ impl RuntimeCore {
         ];
         match self.load_providers_config_and_emit().await {
             Ok(()) => {
-                self.startup_tx.send_replace(RuntimeStartupState::Ready);
+                self.startup_tx.send_replace(RuntimeStartupState::ready());
             }
             Err(error) => {
                 let error = format!("Failed to load config: {error}");
@@ -122,11 +122,37 @@ impl RuntimeCore {
 
     /// Recovers abandoned sessions, then dispatches commands until shutdown and stops all
     /// session work before answering the shutdown request.
+    /// Reports every durable history change to clients as it happens.
+    fn observe_history(&self) {
+        let event_tx = self.event_tx.clone();
+        self.agent_manager
+            .set_history_observer(Arc::new(move |change| {
+                let event = match change {
+                    kraai_agent::HistoryChange::Upserted {
+                        session_id,
+                        message,
+                    } => Event::MessageUpserted {
+                        session_id,
+                        message: Box::new(super::client_view::client_message(*message)),
+                    },
+                    kraai_agent::HistoryChange::Removed {
+                        session_id,
+                        message_ids,
+                    } => Event::MessagesRemoved {
+                        session_id,
+                        message_ids,
+                    },
+                };
+                emit_event(&event_tx, event);
+            }));
+    }
+
     pub(crate) async fn serve(
         &self,
         mut command_rx: mpsc::Receiver<Command>,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
+        self.observe_history();
         self.sweep_expired_leases().await;
         let mut shutdown_response = None;
         loop {

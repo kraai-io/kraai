@@ -21,15 +21,20 @@ async function consume() {
   if (event.type === 'event') {
     const sequence: number = event.value.sequence;
     void sequence;
-    if (typeof event.value.event === 'object' && 'StreamChunk' in event.value.event) {
-      const chunk: string = event.value.event.StreamChunk.chunk;
-      void chunk;
+    if (typeof event.value.event === 'object' && 'ItemDelta' in event.value.event) {
+      const delta: string = event.value.event.ItemDelta.delta;
+      const index: number = event.value.event.ItemDelta.item_index;
+      void delta;
+      void index;
     }
-    if (typeof event.value.event === 'object' && 'ScriptCall' in event.value.event) {
-      const input: string = event.value.event.ScriptCall.input;
-      const callId: string = event.value.event.ScriptCall.call_id;
-      void input;
-      void callId;
+    if (typeof event.value.event === 'object' && 'ItemStarted' in event.value.event) {
+      const item = event.value.event.ItemStarted.item;
+      if (item.type === 'script_call') {
+        const input: string = item.input;
+        const callId: string = item.call_id;
+        void input;
+        void callId;
+      }
     }
   } else if (event.type === 'lagged') {
     const skipped: number = event.skipped;

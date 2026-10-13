@@ -6,6 +6,8 @@ use kraai_types::{AssistantItem, ConversationItem};
 
 use crate::{content, error};
 
+const HISTORY_PAGE: usize = 200;
+
 pub(crate) async fn replay(
     runtime: &RuntimeHandle,
     snapshot: &SessionSnapshot,
@@ -16,14 +18,23 @@ pub(crate) async fn replay(
         .tip_id
         .as_ref()
         .map(|id| kraai_types::MessageId::new(id.clone()));
+    let mut history = snapshot.history.clone();
+    let mut older = snapshot.older_history.clone();
+    while let Some(from) = older {
+        let page = runtime
+            .get_history_page(snapshot.session.id.clone(), Some(from), HISTORY_PAGE)
+            .await
+            .map_err(error::runtime)?;
+        history.extend(page.messages);
+        older = page.older_history;
+    }
     let mut seen = HashSet::new();
     let mut messages = Vec::new();
     while let Some(id) = tip {
         if !seen.insert(id.clone()) {
             return Err(error::internal("Conversation history contains a cycle"));
         }
-        let message = snapshot
-            .history
+        let message = history
             .get(&id)
             .ok_or_else(|| error::internal("Conversation history is incomplete"))?;
         messages.push(message);
@@ -121,7 +132,7 @@ mod tests {
             .build_on(&tokio::runtime::Handle::current());
         assert_eq!(
             runtime.wait_for_startup().await?,
-            kraai_runtime::RuntimeStartupState::Ready
+            kraai_runtime::RuntimeStartupState::ready()
         );
         let outcomes = [
             (

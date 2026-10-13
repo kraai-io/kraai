@@ -3,7 +3,7 @@ use kraai_runtime::*;
 use kraai_types::{MessageId, SessionId};
 use napi_derive::napi;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 macro_rules! runtime_methods {
     ($($name:ident($($arg:ident: $ty:ty),* $(,)?) -> $out:ty;)*) => {
@@ -96,7 +96,7 @@ runtime_methods! {
     import_image(bytes: Vec<u8>) -> kraai_types::ImageAttachment;
     send_content(session_id: SessionId, message: kraai_types::MessageContent, model_id: String, provider_id: String, options: kraai_types::ModelOptionValues) -> SubmitMessageOutcome;
     send_message(session_id: SessionId, message: String, model_id: String, provider_id: String, options: kraai_types::ModelOptionValues) -> SubmitMessageOutcome;
-    get_chat_history(session_id: SessionId) -> BTreeMap<MessageId, kraai_types::Message>;
+    get_history_page(session_id: SessionId, from: Option<MessageId>, limit: usize) -> HistoryPage;
     get_session_snapshot(session_id: SessionId) -> SessionSnapshot;
     get_session_context_usage(session_id: SessionId) -> Option<SessionContextUsage>;
     load_session(session_id: SessionId) -> bool;

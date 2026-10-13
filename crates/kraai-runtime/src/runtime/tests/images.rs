@@ -1,3 +1,4 @@
+use super::harness::FullHistory as _;
 use super::script_recovery::{completed_script_with_image, reopen_agent};
 use color_eyre::eyre::{Result, eyre};
 use kraai_nushell_runtime::ImageAttachmentHandler;

@@ -51,9 +51,6 @@ impl SessionActor {
                     session_id: self.session_id.clone(),
                 });
                 self.drain().await;
-                self.runtime.send_event(Event::HistoryUpdated {
-                    session_id: self.session_id.clone(),
-                });
                 return;
             }
             None => {
@@ -297,9 +294,6 @@ impl SessionActor {
         } else {
             self.continue_turn().await;
         }
-        self.runtime.send_event(Event::HistoryUpdated {
-            session_id: self.session_id.clone(),
-        });
         Ok(())
     }
 
@@ -442,6 +436,7 @@ impl SessionActor {
 fn pending_script_info(pending: &PendingScriptApproval) -> PendingScriptInfo {
     PendingScriptInfo {
         execution_id: pending.request.id.to_string(),
+        call_id: pending.request.call_id.to_string(),
         source: String::from_utf8_lossy(&pending.request.source).into_owned(),
         requested_capabilities: capability_names(
             &pending

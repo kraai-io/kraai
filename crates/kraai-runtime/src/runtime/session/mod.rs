@@ -20,6 +20,7 @@ use tokio_util::task::TaskTracker;
 #[cfg(test)]
 pub(in crate::runtime) use actor::SessionActor;
 pub(crate) use actor::{ActivityKind, SessionMessage};
+pub(crate) use snapshot::SNAPSHOT_HISTORY_LIMIT;
 pub(super) use stream::StreamEvent;
 #[cfg(test)]
 pub(in crate::runtime) use stream::apply_stream_event;

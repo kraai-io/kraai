@@ -20,7 +20,7 @@ use tokio_util::task::AbortOnDropHandle;
 use super::*;
 
 #[tokio::test]
-async fn own_session_overflow_cancels_durably_and_accepts_next_prompt() -> Result<()> {
+async fn own_session_lag_resyncs_without_cancelling_the_turn() -> Result<()> {
     let root = tempfile::tempdir()?;
     let requests = Arc::new(AtomicUsize::new(0));
     let seen = requests.clone();
@@ -69,7 +69,7 @@ provider_id = "mock"
         .build_on(&tokio::runtime::Handle::current());
     let startup = runtime.wait_for_startup().await?;
     ensure!(
-        startup == RuntimeStartupState::Ready,
+        startup == RuntimeStartupState::ready(),
         "Runtime fixture did not become ready: {startup:?}"
     );
     let (id, session) = crate::session::create(
@@ -84,7 +84,13 @@ provider_id = "mock"
         Arc::default(),
     )
     .await?;
-    let sink = futures::sink::unfold((), async |(), _line: String| Ok::<_, std::io::Error>(()));
+    let lines = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = futures::sink::unfold(lines.clone(), async |lines, line: String| {
+        if let Ok(mut captured) = lines.lock() {
+            captured.push(line);
+        }
+        Ok::<_, std::io::Error>(lines)
+    });
     let transport = Lines::new(sink, stream::pending::<std::io::Result<String>>());
     let (connection_tx, connection_rx) = tokio::sync::oneshot::channel();
     let _protocol = AbortOnDropHandle::new(tokio::spawn(Agent.builder().connect_with(
@@ -99,19 +105,23 @@ provider_id = "mock"
     let inner = connection_rx.await?;
     tokio::time::timeout(
         Duration::from_secs(10),
-        check_overflow(runtime, id, session, inner, requests),
+        check_lag(runtime, id, session, inner, requests, lines),
     )
     .await?
 }
 
-async fn check_overflow(
+async fn check_lag(
     runtime: kraai_runtime::RuntimeHandle,
     id: SessionId,
     session: Arc<crate::session::Session>,
     inner: ConnectionTo<Client>,
     requests: Arc<AtomicUsize>,
+    lines: Arc<std::sync::Mutex<Vec<String>>>,
 ) -> Result<()> {
-    let connection = Connection::new(inner.clone(), crate::Stdio::new().budget);
+    let output = Output::new(
+        id.clone(),
+        Connection::new(inner.clone(), crate::Stdio::new().budget),
+    );
     let turn = session.begin_turn()?;
     let mut actual_events = runtime.subscribe_session(&id);
     runtime
@@ -124,10 +134,12 @@ async fn check_overflow(
         )
         .await?;
     let partial_id = loop {
-        if let Event::StreamChunk {
-            message_id, chunk, ..
+        if let Event::ItemStarted {
+            message_id,
+            item: kraai_types::AssistantItem::Text { text, .. },
+            ..
         } = actual_events.recv().await?.event
-            && chunk == "partial"
+            && text == "partial"
         {
             break message_id;
         }
@@ -141,23 +153,38 @@ async fn check_overflow(
             },
         })?;
     }
-    let failure = finish_prompt(
-        &runtime,
-        &mut lagged,
-        Output::new(id.clone(), connection),
-        &turn.token,
-    )
-    .await;
-    let error = failure
-        .err()
-        .ok_or_else(|| eyre!("overflow unexpectedly succeeded"))?;
-    assert!(
-        error
-            .to_string()
-            .contains("Runtime event stream interrupted"),
-        "{error}"
-    );
+    let stop_reason = {
+        let prompt = finish_prompt(&runtime, &mut lagged, output, &turn.token);
+        tokio::pin!(prompt);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut prompt)
+                .await
+                .is_err(),
+            "missed events ended the prompt"
+        );
+        assert!(
+            runtime
+                .get_session_snapshot(id.clone())
+                .await?
+                .session
+                .is_running
+        );
+        turn.token.cancel();
+        prompt.await?.stop_reason
+    };
+    assert_eq!(stop_reason, acp::StopReason::Cancelled);
+    drop(sender);
     drop(turn);
+    let partial_lines = lines
+        .lock()
+        .map_err(|error| eyre!("{error}"))?
+        .iter()
+        .filter(|line| line.contains("agent_message_chunk") && line.contains("\"partial\""))
+        .count();
+    assert_eq!(
+        partial_lines, 1,
+        "resync must send missed text exactly once"
+    );
     let snapshot = runtime.get_session_snapshot(id.clone()).await?;
     assert!(!snapshot.session.is_running);
     let partial = snapshot

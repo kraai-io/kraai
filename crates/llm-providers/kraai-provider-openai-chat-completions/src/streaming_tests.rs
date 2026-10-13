@@ -275,11 +275,23 @@ async fn reasoning_is_assembled_for_replay_before_the_tool_call() -> Result<()> 
     .await
     .into_iter()
     .collect::<Result<Vec<_>>>()?;
+    let deltas: String = events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderStreamEvent::ReasoningDelta { delta, .. } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deltas, "Inspect the files.");
+    let rest: Vec<_> = events
+        .iter()
+        .filter(|event| !matches!(event, ProviderStreamEvent::ReasoningDelta { .. }))
+        .collect();
     assert!(
-        matches!(events.first(), Some(ProviderStreamEvent::Reasoning { payload }) if payload == &json!({"reasoning_content":"Inspect the files."}))
+        matches!(rest.first(), Some(ProviderStreamEvent::Reasoning { payload }) if payload == &json!({"reasoning_content":"Inspect the files."}))
     );
     assert!(matches!(
-        events.get(1),
+        rest.get(1),
         Some(ProviderStreamEvent::ScriptCall { .. })
     ));
     Ok(())

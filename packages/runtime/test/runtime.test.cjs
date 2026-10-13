@@ -25,7 +25,7 @@ test('sessions, settings, structured errors, subscriptions and shutdown', { time
   const { directory, create } = fixture(t);
   writeFileSync(join(directory, 'agents.toml'), '[[profiles]]\nid = "isolated"\nextends = "coding"\n');
   const runtime = create();
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   const settings = unwrap(await runtime.getSettings());
   assert.deepEqual(settings, { providers: [], models: [] });
   unwrap(await runtime.saveSettings(settings));
@@ -69,7 +69,7 @@ test('startup failures remain observable and can be shut down', { timeout: 30000
 
 test('MCP auth methods return statuses and structured errors', { timeout: 30000 }, async t => {
   const runtime = fixture(t).create();
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   assert.deepEqual(unwrap(await runtime.getMcpAuthStatuses()), []);
   for (const method of ['startMcpLogin', 'cancelMcpLogin', 'logoutMcp']) {
     const result = await runtime[method]('missing-server');
@@ -93,7 +93,7 @@ transport = { type = "http", url = "https://example.test/mcp" }
 `);
   writeFileSync(join(directory, 'mcp-auth'), 'blocks credential directory creation');
   const runtime = create();
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   for (const method of ['startMcpLogin', 'cancelMcpLogin', 'logoutMcp']) {
     assert.equal((await runtime[method]('disabled')).Err.kind, 'not_found');
     for (const server of ['local', 'static']) {
@@ -109,7 +109,7 @@ test('streams a reply from a local provider and persists the conversation', { ti
   const { directory, create } = fixture(t);
   const provider = await localProvider(t, ['Hello from Rust']);
   const runtime = create();
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   unwrap(await runtime.saveSettings(provider.settings));
   const session = unwrap(await runtime.createSessionWith({ workspace_dir: directory, profile_id: null }));
   const events = runtime.subscribe();
@@ -125,11 +125,12 @@ test('streams a reply from a local provider and persists the conversation', { ti
     const event = read.value.event;
     if (typeof event !== 'object') continue;
     assert.ok(!('StreamError' in event), JSON.stringify(event));
-    if ('StreamChunk' in event) chunks += event.StreamChunk.chunk;
+    if ('ItemStarted' in event && event.ItemStarted.item.type === 'text') chunks += event.ItemStarted.item.text;
+    if ('ItemDelta' in event) chunks += event.ItemDelta.delta;
     if ('StreamComplete' in event) break;
   }
   assert.equal(chunks, 'Hello from Rust');
-  const history = unwrap(await runtime.getChatHistory(session));
+  const history = unwrap(await runtime.getHistoryPage(session, null, 200)).messages;
   assert.ok(Object.values(history).some(message => message.content.type === 'assistant'));
   const snapshot = unwrap(await runtime.getSessionSnapshot(session));
   const request = Object.values(snapshot.requests).find(value => value.model_id === 'test-model');
@@ -154,7 +155,7 @@ test('native methods reject invalid and wrong-class receivers', { timeout: 30000
       await assert.rejects(async () => instance[asyncMethod].call(receiver));
     }
   }
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   events.close();
   assert.deepEqual(await events.next(), { type: 'closed' });
 });
@@ -248,6 +249,6 @@ test('storage roots must be absolute and may be created at startup', { timeout: 
   const { directory, create } = fixture(t);
   const storage_root = join(directory, 'new-storage');
   const runtime = create({ storage_root });
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   assert.deepEqual(unwrap(await runtime.listSessions()), []);
 });

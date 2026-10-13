@@ -319,7 +319,7 @@ impl App {
         self.state.context_usage = None;
         self.restore_session_cost();
         self.state.optimistic_messages.clear();
-        self.stream_event_content.clear();
+        self.ci_shown_items.clear();
         self.state.pending_script = None;
         if has_session {
             self.state.agent_profiles.clear();
@@ -339,7 +339,6 @@ impl App {
         self.state.feedback = super::feedback::VisualFeedback::default();
         self.state.statusline_animation_frame = 0;
         self.last_statusline_animation_tick = None;
-        self.last_stream_history_request = None;
         self.state.auto_scroll = true;
         self.state.scroll = 0;
         self.state.status = status.to_string();
@@ -488,7 +487,7 @@ impl App {
         self.state.pending_session_load_id = None;
         self.state.optimistic_messages.clear();
         self.state.pending_script = None;
-        self.stream_event_content.clear();
+        self.ci_shown_items.clear();
         self.state.is_streaming = false;
         self.state.retry_waiting = false;
         self.state.profile_locked = false;
@@ -496,7 +495,6 @@ impl App {
         self.state.script_phase = ScriptPhase::Idle;
         self.state.statusline_animation_frame = 0;
         self.last_statusline_animation_tick = None;
-        self.last_stream_history_request = None;
         self.event_lag_session_resync_pending = false;
         self.event_lag_script_resync_pending = false;
         self.state.profile_lock_stale_after_terminal_event = false;

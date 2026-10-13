@@ -12,9 +12,10 @@ use super::super::core::RuntimeCore;
 use super::super::script_execution::{CompletedScriptExecution, PendingScriptApproval};
 use super::super::stream_driver::StreamDriveResult;
 use super::stream::StreamEvent;
+use crate::api::Event;
 use crate::{
-    ContinueSessionOutcome, PendingScriptInfo, RuntimeError, RuntimeResult, SessionSnapshot,
-    SubmitMessageOutcome,
+    ContinueSessionOutcome, PendingScriptInfo, RuntimeError, RuntimeResult, SessionActivity,
+    SessionSnapshot, SubmitMessageOutcome,
 };
 
 pub(in crate::runtime) type Responder<T> = oneshot::Sender<RuntimeResult<T>>;
@@ -178,6 +179,17 @@ pub(super) enum TurnState {
     RunningScript(ScriptJob),
 }
 
+impl From<ActivityKind> for SessionActivity {
+    fn from(activity: ActivityKind) -> Self {
+        match activity {
+            ActivityKind::Idle | ActivityKind::Preparing => Self::Idle,
+            ActivityKind::Streaming => Self::Streaming,
+            ActivityKind::AwaitingApproval => Self::AwaitingApproval,
+            ActivityKind::RunningScript => Self::ExecutingScript,
+        }
+    }
+}
+
 impl TurnState {
     pub(super) fn kind(&self) -> ActivityKind {
         match self {
@@ -200,6 +212,8 @@ pub(in crate::runtime) struct SessionActor {
     pub(super) deferred: VecDeque<SessionMessage>,
     pub(super) stopping: bool,
     stopped: Vec<oneshot::Sender<()>>,
+    /// The state clients last heard about.
+    published: (ActivityKind, bool),
 }
 
 pub(super) fn spawn(
@@ -217,6 +231,7 @@ pub(super) fn spawn(
         deferred: VecDeque::new(),
         stopping: false,
         stopped: Vec::new(),
+        published: (ActivityKind::Idle, false),
     };
     tasks.spawn(actor.run(receiver));
     sender
@@ -232,9 +247,7 @@ impl SessionActor {
             {
                 exit = self.handle(message).await;
             }
-            self.runtime
-                .sessions
-                .publish_activity(&self.session_id, self.state.kind());
+            self.publish_state();
             if exit || (self.stopping && !self.has_child()) {
                 break;
             }
@@ -332,6 +345,26 @@ impl SessionActor {
             SessionMessage::Hook(hook) => hook(self).await,
         }
         false
+    }
+
+    fn publish_state(&mut self) {
+        let activity = self.state.kind();
+        self.runtime
+            .sessions
+            .publish_activity(&self.session_id, activity);
+        let state = (
+            activity,
+            self.runtime.agent_manager.is_turn_active(&self.session_id),
+        );
+        if state == self.published {
+            return;
+        }
+        self.published = state;
+        self.runtime.send_event(Event::SessionStateChanged {
+            session_id: self.session_id.clone(),
+            activity: activity.into(),
+            is_running: state.1,
+        });
     }
 
     pub(super) fn generation(&mut self) -> u64 {

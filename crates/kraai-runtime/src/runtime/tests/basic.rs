@@ -5,6 +5,7 @@ use kraai_provider_core::ProviderManager;
 use kraai_types::{ChatRole, ProviderId, SessionId, TokenUsage};
 use tokio::sync::broadcast;
 
+use super::harness::FullHistory as _;
 use super::harness::{
     RetryNotifyingProvider, RuntimeTestHarness, ScriptedChunk, create_session_with_profile,
 };
@@ -293,14 +294,7 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
             )
         }));
         assert!(events.iter().any(|event| {
-            matches!(
-                &event.event,
-                Event::StreamChunk {
-                    session_id: chunk_session,
-                    chunk,
-                    ..
-                } if chunk_session == &session_id && chunk == "shared event stream"
-            )
+            super::harness::streamed_text(&event.event, &session_id) == Some("shared event stream")
         }));
         assert!(events.iter().any(|event| {
             matches!(

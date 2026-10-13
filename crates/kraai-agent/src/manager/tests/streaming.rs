@@ -30,7 +30,16 @@ async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<(
             "Answer",
         )
         .await;
-    assert_eq!(visible.as_deref(), Some("Answer"));
+    assert_eq!(
+        visible,
+        Some(StreamedItem::Started {
+            index: 1,
+            item: AssistantItem::Text {
+                phase: AssistantPhase::FinalAnswer,
+                text: String::from("Answer"),
+            },
+        })
+    );
     manager.complete_message(&request.message_id).await?;
     manager.clear_active_turn(&session);
     let stored = kraai_persistence::SqliteMessageStore::new(&data_dir)
@@ -142,15 +151,17 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
     assert_eq!(restored.generation, original.generation);
     assert_eq!(restored.parent_id, original.parent_id);
     assert_eq!(
-        manager
-            .append_text_chunk(
-                &request.message_id,
-                "answer",
-                AssistantPhase::FinalAnswer,
-                " output",
-            )
-            .await
-            .as_deref(),
+        super::common::streamed_text(
+            manager
+                .append_text_chunk(
+                    &request.message_id,
+                    "answer",
+                    AssistantPhase::FinalAnswer,
+                    " output",
+                )
+                .await
+        )
+        .as_deref(),
         Some(" output")
     );
     manager.complete_message(&request.message_id).await?;
@@ -396,15 +407,17 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
         )
         .await?;
     assert_eq!(
-        manager
-            .append_text_chunk(
-                &first.message_id,
-                "commentary-1",
-                AssistantPhase::Commentary,
-                "I am partway through.",
-            )
-            .await
-            .as_deref(),
+        super::common::streamed_text(
+            manager
+                .append_text_chunk(
+                    &first.message_id,
+                    "commentary-1",
+                    AssistantPhase::Commentary,
+                    "I am partway through.",
+                )
+                .await
+        )
+        .as_deref(),
         Some("I am partway through.")
     );
     manager

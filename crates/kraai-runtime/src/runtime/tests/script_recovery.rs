@@ -8,6 +8,7 @@ use kraai_persistence::{
 };
 use kraai_types::{ConversationItem, MessageStatus, ScriptExecutionStatus, SessionId};
 
+use super::harness::FullHistory as _;
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
 use crate::runtime::script_execution::CompletedScriptExecution;

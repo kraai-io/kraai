@@ -9984,6 +9984,10 @@ rec {
             packageId = "tracing-subscriber";
             features = [ "env-filter" "fmt" ];
           }
+          {
+            name = "ulid";
+            packageId = "ulid";
+          }
         ];
         devDependencies = [
           {

@@ -170,10 +170,11 @@ mod tests {
         let mut first = sender.subscribe_session(&SessionId::new("first"));
         let mut second = sender.subscribe_session(&SessionId::new("second"));
         for _ in 0..1025 {
-            sender.send(Event::StreamChunk {
+            sender.send(Event::ItemDelta {
                 session_id: SessionId::new("second"),
                 message_id: "message".into(),
-                chunk: "text".into(),
+                item_index: 0,
+                delta: "text".into(),
             });
         }
         assert!(matches!(
@@ -204,10 +205,11 @@ mod tests {
         let sender = RuntimeEventSender::new(4);
         let mut first = sender.subscribe_session(&SessionId::new("first"));
         let mut global = sender.subscribe();
-        sender.send(Event::StreamChunk {
+        sender.send(Event::ItemDelta {
             session_id: SessionId::new("first"),
             message_id: "message".into(),
-            chunk: "text".into(),
+            item_index: 0,
+            delta: "text".into(),
         });
         assert_eq!(first.try_recv()?.sequence, global.try_recv()?.sequence);
         drop(first);
