@@ -181,3 +181,49 @@ fn entry_limit_preserves_cleanup_of_partial_grants() -> Result<(), Box<dyn std::
     std::fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "regression tests assert permission boundaries"
+)]
+fn persistent_grants_are_applied_once_and_kept() -> Result<(), Box<dyn std::error::Error>> {
+    let _fixtures = lock_fixtures()?;
+    let identity = super::super::identity::Identity::create()?;
+    let root = std::env::temp_dir().join(format!(
+        "kraai-acl-persistent-{:032x}",
+        rand::random::<u128>()
+    ));
+    std::fs::create_dir(&root)?;
+    std::fs::write(root.join("file"), b"content")?;
+    let pinned = || -> Result<File, Box<dyn std::error::Error>> {
+        Ok(super::handle::open_by_id(&super::open(&root)?)?)
+    };
+    let mut grants = Grants::new(identity.sid.bytes());
+    assert!(!super::mutation::grants(
+        &pinned()?,
+        &grants.sid,
+        Access::Read
+    )?);
+    grants.grant_persistent(&root, Access::Read)?;
+    assert!(grants.files.is_empty());
+    assert!(super::mutation::grants(
+        &pinned()?,
+        &grants.sid,
+        Access::Read
+    )?);
+    assert!(!super::mutation::grants(
+        &pinned()?,
+        &grants.sid,
+        Access::Write
+    )?);
+    grants.grant_persistent(&root, Access::Read)?;
+    grants.cleanup()?;
+    assert!(super::mutation::grants(
+        &pinned()?,
+        &grants.sid,
+        Access::Read
+    )?);
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}

@@ -55,6 +55,31 @@ impl Grants {
         self.grant_with_limit(path, access, MAX_ACL_ENTRIES)
     }
 
+    /// Grants `access` below `path` for good: skipped when `path` already carries the inheritable
+    /// entry, and not revoked at cleanup. Files created later inherit the entry.
+    pub(super) fn grant_persistent(
+        &mut self,
+        path: &Path,
+        access: Access,
+    ) -> Result<(), SandboxError> {
+        let _lock = super::mutation_lock::Lock::acquire()?;
+        let root =
+            handle::open_by_id(&open(path)?).map_err(|error| failure(path, &error.to_string()))?;
+        if mutation::grants(&root, &self.sid, access)? {
+            return Ok(());
+        }
+        let mut entries = 0;
+        visit_tree(path, |file| {
+            if entries >= MAX_ACL_ENTRIES {
+                return Err(entry_limit(path, MAX_ACL_ENTRIES));
+            }
+            entries += 1;
+            handle::ensure_single_link(&file).map_err(|error| failure(path, &error.to_string()))?;
+            mutation::update(&file, &self.sid, Some(access))
+                .map_err(|error| failure(path, &error.to_string()))
+        })
+    }
+
     fn grant_with_limit(
         &mut self,
         path: &Path,

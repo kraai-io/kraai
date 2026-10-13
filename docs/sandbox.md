@@ -14,6 +14,10 @@ Windows has two limitations:
   remain blocked. This differs from Linux and macOS.
 
 Runtime roots on Windows must permit Kraai to update their access-control entries.
+Each workspace gets one AppContainer identity per access level. Its grants on the
+workspace and runtime roots are inheritable and kept, so only the first run in a
+workspace walks its files; files moved in later with their own explicit permissions
+are not covered.
 `no-sandbox` disables sandbox enforcement; Kraai never selects it automatically
 when a capability is unsupported.
 
