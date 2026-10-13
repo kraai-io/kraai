@@ -511,7 +511,8 @@ async fn session_snapshot_waits_for_state_event_boundary() -> Result<()> {
         return Ok(());
     };
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let mutation_guard = harness.runtime.session_state_barrier.read().await;
+    let barrier = harness.runtime.sessions.barrier(&session_id);
+    let mutation_guard = barrier.read().await;
     let mut snapshot_task = tokio::spawn({
         let handle = harness.handle.clone();
         let session_id = session_id.clone();

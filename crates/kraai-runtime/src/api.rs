@@ -81,7 +81,7 @@ impl RuntimeError {
 
     pub(crate) fn from_report(error: color_eyre::Report) -> Self {
         let Some(domain_error) = error.downcast_ref::<DomainError>() else {
-            return Self::internal(error);
+            return Self::internal(format!("{error:#}"));
         };
         let kind = match domain_error.kind() {
             DomainErrorKind::InvalidArgument => RuntimeErrorKind::InvalidArgument,

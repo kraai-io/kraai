@@ -67,14 +67,11 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
             .await?;
         (request, agent.cloned_provider_manager())
     };
-    let result = super::super::core::RuntimeCore::drive_stream(
+    let result = super::harness::drive_stream(
+        harness.runtime.clone(),
         session_id.clone(),
-        request,
         providers,
-        harness.runtime.agent_manager.clone(),
-        harness.runtime.event_tx.clone(),
-        harness.runtime.session_state_barrier.clone(),
-        harness.runtime.stream_tasks.session_token(&session_id),
+        request,
     )
     .await;
     let super::super::stream_driver::StreamDriveResult::FailedToStart { error } = result else {
@@ -277,15 +274,13 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
             .await?;
         (request, agent.cloned_provider_manager())
     };
-    let snapshot_guard = harness.runtime.session_state_barrier.write().await;
-    let task = tokio::spawn(super::super::core::RuntimeCore::drive_stream(
+    let barrier = harness.runtime.sessions.barrier(&session_id);
+    let snapshot_guard = barrier.write().await;
+    let task = tokio::spawn(super::harness::drive_stream(
+        harness.runtime.clone(),
         session_id.clone(),
-        request,
         providers,
-        harness.runtime.agent_manager.clone(),
-        harness.runtime.event_tx.clone(),
-        harness.runtime.session_state_barrier.clone(),
-        harness.runtime.stream_tasks.session_token(&session_id),
+        request,
     ));
     harness.events.wait_for("compaction preparation", |events| {
         events.iter().any(|event| matches!(event, Event::ContextStateChanged { session_id: id, .. } if id == &session_id))

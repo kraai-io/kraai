@@ -5,17 +5,15 @@ mod core;
 mod dispatch;
 mod model_catalog;
 mod nushell_host;
-mod queue;
 mod request_usage;
 mod script_environment;
 mod script_execution;
 mod script_recovery;
-mod scripts;
+mod session;
 mod session_maintenance;
 mod state_effects;
 mod stream_driver;
 mod stream_tasks;
-mod streaming;
 
 pub use builder::RuntimeBuilder;
 

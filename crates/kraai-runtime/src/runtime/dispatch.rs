@@ -1,4 +1,3 @@
-use kraai_types::SessionId;
 use std::collections::HashMap;
 
 use color_eyre::eyre::{Result, eyre};
@@ -6,117 +5,148 @@ use tokio::sync::oneshot;
 
 use super::config::canonicalize_workspace_dir;
 use super::core::RuntimeCore;
+use super::session::{ActivityKind, SessionMessage};
 use crate::api::{
-    AgentProfileCatalog, Model, RuntimeError, RuntimeResult, Session, SessionActivity,
-    SessionContextUsage, SessionSnapshot, WorkspaceState,
+    AgentProfileCatalog, Model, RuntimeError, RuntimeResult, Session, SessionContextUsage,
+    WorkspaceState,
 };
 use crate::handle::Command;
 use crate::settings::read_settings_document;
+use kraai_types::ModelSelection;
 
 fn respond<T>(response: oneshot::Sender<RuntimeResult<T>>, result: Result<T>) {
     let _ = response.send(result.map_err(RuntimeError::from_report));
 }
 
 impl RuntimeCore {
-    pub(super) async fn build_session_snapshot(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<SessionSnapshot> {
-        let observation = self.session_store.observe(session_id).await?;
-        if let Some(observation) = observation {
-            self.observed_sessions
-                .lock()
-                .await
-                .insert(session_id.clone(), observation);
+    /// Routes session commands to their session's actor in arrival order and runs every
+    /// other command concurrently.
+    pub(crate) fn dispatch(&self, command: Command) {
+        let (session_id, message) = match command {
+            Command::SendMessage {
+                session_id,
+                message,
+                model_id,
+                provider_id,
+                options,
+                response,
+            } => (
+                session_id,
+                SessionMessage::Send {
+                    message,
+                    selection: ModelSelection {
+                        provider_id,
+                        model_id,
+                        options,
+                    },
+                    response,
+                },
+            ),
+            Command::ContinueSession {
+                session_id,
+                model_id,
+                provider_id,
+                options,
+                wait_for_preparation,
+                response,
+            } => (
+                session_id,
+                SessionMessage::Continue {
+                    selection: Some(ModelSelection {
+                        provider_id,
+                        model_id,
+                        options,
+                    }),
+                    wait_for_preparation,
+                    response,
+                },
+            ),
+            Command::CancelStream {
+                session_id,
+                response,
+            } => (
+                session_id,
+                SessionMessage::Cancel {
+                    discard_queue: false,
+                    expected_lease: None,
+                    response: Some(response),
+                },
+            ),
+            Command::CancelTurn {
+                session_id,
+                response,
+            } => (
+                session_id,
+                SessionMessage::Cancel {
+                    discard_queue: true,
+                    expected_lease: None,
+                    response: Some(response),
+                },
+            ),
+            Command::ApproveScript {
+                session_id,
+                execution_id,
+                response,
+            } => (
+                session_id,
+                SessionMessage::Approve {
+                    execution_id,
+                    response,
+                },
+            ),
+            Command::DenyScript {
+                session_id,
+                execution_id,
+                response,
+            } => (
+                session_id,
+                SessionMessage::Deny {
+                    execution_id,
+                    response,
+                },
+            ),
+            Command::GetPendingScript {
+                session_id,
+                response,
+            } => (session_id, SessionMessage::PendingScript { response }),
+            Command::GetSessionSnapshot {
+                session_id,
+                response,
+            } => (session_id, SessionMessage::Snapshot { response }),
+            Command::SetSessionMcpServers {
+                session_id,
+                config,
+                response,
+            } => (
+                session_id,
+                SessionMessage::SetMcpServers { config, response },
+            ),
+            Command::UndoLastUserMessage {
+                session_id,
+                response,
+            } => (session_id, SessionMessage::Undo { response }),
+            Command::DeleteSession {
+                session_id,
+                response,
+            } => (session_id, SessionMessage::Delete { response }),
+            command => {
+                let runtime = self.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = runtime.handle_command(command).await {
+                        runtime.send_service_error(error);
+                    }
+                });
+                return;
+            }
+        };
+        if self.is_stopping() {
+            message.reject();
+        } else {
+            self.sessions.send(self, &session_id, message);
         }
-        let foreign_owner = observation.is_some_and(|observation| observation.lease_active)
-            && !self.session_store.owns_turn(session_id).await?;
-        let snapshot_guard = self.session_state_barrier.write().await;
-        let pending_script = self.get_pending_script(session_id).await;
-        let executing_script = self.has_active_script_tasks(session_id).await;
-        let queued_messages = self.session_store.queued_messages(session_id).await?.len();
-        let active_stream = self.active_streams.lock().await.contains_key(session_id);
-
-        let agent = &self.agent_manager;
-        let reader = agent.capture_session_snapshot(session_id).await?;
-        let is_running = agent.is_turn_active(session_id) || foreign_owner;
-        // Capture the sequence alongside mutable state. History loading below follows the
-        // captured tip and uses copied in-flight messages, never later stream contents.
-        let (event_sequence, turn_timer) = self.event_tx.timer_snapshot(session_id);
-        drop(snapshot_guard);
-
-        let mut data = reader.load().await?;
-        data.profiles.profile_locked |= foreign_owner;
-        let context_usage = data.context_usage.map(|usage| SessionContextUsage {
-            provider_id: usage.provider_id.to_string(),
-            model_id: usage.model_id.to_string(),
-            max_context: usage.max_context,
-            usage: usage.usage,
-        });
-        let foreign_records = if foreign_owner {
-            self.execution_store.list_for_session(session_id).await?
-        } else {
-            Vec::new()
-        };
-        let foreign_approval = foreign_records
-            .iter()
-            .any(|record| record.phase == kraai_types::ScriptExecutionPhase::AwaitingApproval);
-        let foreign_script = foreign_records
-            .iter()
-            .any(|record| record.phase == kraai_types::ScriptExecutionPhase::Running);
-        let streaming = active_stream
-            || data.streaming
-            || (foreign_owner
-                && data.history.values().any(|message| {
-                    matches!(message.status, kraai_types::MessageStatus::Streaming { .. })
-                }));
-
-        let activity = if pending_script.is_some() || foreign_approval {
-            SessionActivity::AwaitingApproval
-        } else if executing_script || foreign_script {
-            SessionActivity::ExecutingScript
-        } else if streaming {
-            SessionActivity::Streaming
-        } else {
-            SessionActivity::Idle
-        };
-        let session = Session {
-            profile_locked: data.profile_locked || foreign_owner,
-            waiting_for_approval: pending_script.is_some() || foreign_approval,
-            is_streaming: streaming,
-            is_running,
-            ..Session::from_session_meta(data.session)
-        };
-
-        Ok(SessionSnapshot {
-            requests: data.requests,
-            turn_timer,
-            event_sequence,
-            session,
-            history: data.history,
-            context_usage,
-            pending_script,
-            profiles: data.profiles,
-            activity,
-            queued_messages,
-        })
     }
 
     pub(crate) async fn handle_command(&self, command: Command) -> Result<()> {
-        let _state_guard = if matches!(
-            &command,
-            Command::GetSessionSnapshot { .. }
-                | Command::CancelStream { .. }
-                | Command::CancelTurn { .. }
-                | Command::ContinueSession {
-                    wait_for_preparation: true,
-                    ..
-                }
-        ) {
-            None
-        } else {
-            Some(self.session_state_barrier.read().await)
-        };
         match command {
             Command::ListModels { response } => {
                 let models_map = self.agent_manager.list_models().await;
@@ -228,22 +258,6 @@ impl RuntimeCore {
             Command::ReadImage { image, response } => {
                 respond(response, self.image_store.read(&image).await);
             }
-            Command::SendMessage {
-                session_id,
-                message,
-                model_id,
-                provider_id,
-                options,
-                response,
-            } => {
-                let result = self
-                    .handle_send_message(session_id, message, model_id, provider_id, options)
-                    .await;
-                let _ = response.send(result);
-            }
-            Command::StartQueuedMessages { session_id } => {
-                self.handle_start_queued_messages(session_id).await;
-            }
             Command::LoadSession {
                 session_id,
                 response,
@@ -258,13 +272,6 @@ impl RuntimeCore {
             }
             Command::ListSessions { response } => {
                 let result = async {
-                    let pending_approvals = self
-                        .pending_script_approvals
-                        .lock()
-                        .await
-                        .keys()
-                        .cloned()
-                        .collect::<std::collections::HashSet<_>>();
                     let agent = &self.agent_manager;
                     let sessions = agent.list_sessions().await?;
                     let streaming_sessions = agent.streaming_session_ids().await;
@@ -272,7 +279,8 @@ impl RuntimeCore {
                         .into_iter()
                         .map(|session| Session {
                             profile_locked: agent.is_profile_locked(&session.id),
-                            waiting_for_approval: pending_approvals.contains(&session.id),
+                            waiting_for_approval: self.sessions.activity(&session.id)
+                                == ActivityKind::AwaitingApproval,
                             is_streaming: streaming_sessions.contains(&session.id),
                             is_running: agent.is_turn_active(&session.id),
                             ..Session::from_session_meta(session)
@@ -295,35 +303,6 @@ impl RuntimeCore {
             Command::ListUserInputHistory { limit, response } => {
                 let history = self.agent_manager.list_user_input_history(limit).await;
                 respond(response, history);
-            }
-            Command::DeleteSession {
-                session_id,
-                response,
-            } => {
-                let _preparation = self.session_preparations.begin(&session_id).await;
-                if self.has_active_script_tasks(&session_id).await
-                    || self
-                        .pending_script_approvals
-                        .lock()
-                        .await
-                        .contains_key(&session_id)
-                {
-                    let _ = response.send(Err(RuntimeError::conflict(format!(
-                        "Cannot delete session {session_id} while a script is active"
-                    ))));
-                    return Ok(());
-                }
-                if let Some(active_stream) = self.take_active_stream(&session_id).await {
-                    active_stream.abort_handle.abort();
-                }
-                self.stream_tasks.wait_session(&session_id).await;
-                let result = self.agent_manager.delete_session(&session_id).await;
-                if result.is_ok() {
-                    self.release_turn(&session_id).await;
-                    self.observed_sessions.lock().await.remove(&session_id);
-                    self.event_tx.remove_timer(&session_id);
-                }
-                respond(response, result);
             }
             Command::GetWorkspaceState {
                 session_id,
@@ -366,29 +345,12 @@ impl RuntimeCore {
                     .map(|tip_id| tip_id.map(|id| id.to_string()));
                 respond(response, tip_id);
             }
-            Command::UndoLastUserMessage {
-                session_id,
-                response,
-            } => {
-                let restored_message = self.agent_manager.undo_last_user_message(&session_id).await;
-                respond(response, restored_message);
-            }
             Command::GetChatHistory {
                 session_id,
                 response,
             } => {
                 let history = self.agent_manager.get_chat_history(&session_id).await;
                 respond(response, history);
-            }
-            Command::GetSessionSnapshot {
-                session_id,
-                response,
-            } => {
-                let runtime = self.clone();
-                tokio::spawn(async move {
-                    let result = runtime.build_session_snapshot(&session_id).await;
-                    respond(response, result);
-                });
             }
             Command::GetSessionContextUsage {
                 session_id,
@@ -429,82 +391,6 @@ impl RuntimeCore {
                         .await,
                 );
             }
-            Command::SetSessionMcpServers {
-                session_id,
-                config,
-                response,
-            } => {
-                respond(
-                    response,
-                    self.set_session_mcp_servers(&session_id, config).await,
-                );
-            }
-            Command::GetPendingScript {
-                session_id,
-                response,
-            } => {
-                let result = self.get_pending_script(&session_id).await;
-                let _ = response.send(Ok(result));
-            }
-            Command::ApproveScript {
-                session_id,
-                execution_id,
-                response,
-            } => {
-                let result = self.approve_pending_script(session_id, execution_id).await;
-                respond(response, result);
-            }
-            Command::DenyScript {
-                session_id,
-                execution_id,
-                response,
-            } => {
-                let result = self.deny_pending_script(session_id, execution_id).await;
-                respond(response, result);
-            }
-            Command::CancelStream {
-                session_id,
-                response,
-            } => {
-                let cancelled = self.cancel_stream(session_id).await;
-                respond(response, cancelled);
-            }
-            Command::CancelTurn {
-                session_id,
-                response,
-            } => {
-                let cancelled = self.cancel_turn(session_id).await;
-                respond(response, cancelled);
-            }
-            Command::ContinueSession {
-                session_id,
-                model_id,
-                provider_id,
-                options,
-                wait_for_preparation,
-                response,
-            } => {
-                if wait_for_preparation {
-                    let runtime = self.clone();
-                    tokio::spawn(async move {
-                        let _state_guard = runtime.session_state_barrier.read().await;
-                        let result = runtime
-                            .start_continuation_when_ready(
-                                session_id,
-                                model_id,
-                                provider_id,
-                                options,
-                            )
-                            .await;
-                        let _ = response.send(result);
-                    });
-                } else {
-                    let result = self
-                        .start_continuation(session_id, model_id, provider_id, options)
-                        .await;
-                    let _ = response.send(result);
-                }
-            }
             Command::GetOpenAiCodexAuthStatus { response } => {
                 let _ = response.send(Ok(self.openai_codex_auth.get_status().await));
             }
@@ -540,8 +426,19 @@ impl RuntimeCore {
                 let result = self.openai_codex_auth.logout().await;
                 respond(response, result.map(|_| ()).map_err(Into::into));
             }
-            Command::Shutdown { .. } => {
-                return Err(eyre!("Shutdown command reached normal dispatch"));
+            Command::Shutdown { .. }
+            | Command::SendMessage { .. }
+            | Command::ContinueSession { .. }
+            | Command::CancelStream { .. }
+            | Command::CancelTurn { .. }
+            | Command::ApproveScript { .. }
+            | Command::DenyScript { .. }
+            | Command::GetPendingScript { .. }
+            | Command::GetSessionSnapshot { .. }
+            | Command::SetSessionMcpServers { .. }
+            | Command::UndoLastUserMessage { .. }
+            | Command::DeleteSession { .. } => {
+                return Err(eyre!("Session command reached global dispatch"));
             }
         }
 

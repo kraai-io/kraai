@@ -64,13 +64,7 @@ pub(super) async fn completed_script_with_image(
     harness.events.wait_for("script approval", |events| {
         events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id: id, .. } if id == &session_id))
     }).await;
-    let pending = harness
-        .runtime
-        .pending_script_approvals
-        .lock()
-        .await
-        .remove(&session_id)
-        .expect("pending script");
+    let pending = super::harness::take_pending_approval(&harness.runtime, &session_id).await;
     harness
         .runtime
         .execution_store

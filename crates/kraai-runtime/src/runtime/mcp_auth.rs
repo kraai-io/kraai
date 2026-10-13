@@ -5,7 +5,7 @@ use super::core::RuntimeCore;
 use crate::Event;
 
 impl RuntimeCore {
-    pub(crate) async fn spawn_mcp_auth_forwarder(&self) -> JoinHandle<()> {
+    pub(crate) fn spawn_mcp_auth_forwarder(&self) -> JoinHandle<()> {
         let manager = self.agent_manager.mcp();
         let mut updates = manager.subscribe_auth();
         let events = self.event_tx.clone();

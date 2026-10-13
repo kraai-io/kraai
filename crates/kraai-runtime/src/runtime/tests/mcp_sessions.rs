@@ -110,11 +110,7 @@ async fn attachments_reject_preparing_and_queued_sessions_without_waiting() -> R
         .await
         .expect("runtime fixture");
     let session = harness.handle.create_session().await?;
-    let preparation = harness
-        .runtime
-        .session_preparations
-        .try_begin(&session)
-        .expect("preparation guard");
+    super::harness::hold_preparation(&harness.runtime, &session).await;
     let busy = tokio::time::timeout(
         Duration::from_secs(1),
         harness
@@ -123,7 +119,7 @@ async fn attachments_reject_preparing_and_queued_sessions_without_waiting() -> R
     )
     .await?;
     assert_eq!(busy.unwrap_err().kind, RuntimeErrorKind::Conflict);
-    drop(preparation);
+    super::harness::release_preparation(&harness.runtime, &session).await;
     super::harness::enqueue(
         &harness.runtime,
         &session,

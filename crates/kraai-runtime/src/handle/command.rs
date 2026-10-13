@@ -75,9 +75,6 @@ pub(crate) enum Command {
         image: kraai_types::ImageAttachment,
         response: oneshot::Sender<RuntimeResult<Vec<u8>>>,
     },
-    StartQueuedMessages {
-        session_id: SessionId,
-    },
     LoadConfig,
     LoadSession {
         session_id: SessionId,

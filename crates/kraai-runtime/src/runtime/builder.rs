@@ -9,7 +9,7 @@ use kraai_provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenA
 use kraai_provider_openai_codex::{
     OpenAiCodexAuthController, OpenAiCodexAuthControllerOptions, OpenAiCodexFactory,
 };
-use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio::sync::mpsc;
 
 use super::core::{RuntimeConfig, RuntimeCore, emit_event};
 use crate::api::Event;
@@ -321,19 +321,15 @@ impl RuntimeBuilder {
             observed_sessions: Arc::default(),
             session_store,
             image_store,
-            queue_drains: Arc::default(),
-            session_preparations: Arc::default(),
+            sessions: Arc::default(),
             event_tx,
             command_tx,
             agent_manager,
             execution_store,
             context_state_store,
             provider_registry: registry,
-            active_streams: Arc::new(Mutex::new(std::collections::HashMap::new())),
             stream_tasks: Default::default(),
-            active_script_tasks: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            pending_script_approvals: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            session_state_barrier: Arc::new(RwLock::new(())),
+            config_reload: Arc::default(),
             stopping: Arc::default(),
             openai_codex_auth,
             config: Arc::new(RuntimeConfig {

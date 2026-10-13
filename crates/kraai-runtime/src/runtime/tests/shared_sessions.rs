@@ -381,56 +381,26 @@ async fn delayed_lease_cancellation_does_not_cancel_a_replacement_turn() -> Resu
         .await
         .expect("owner fixture");
     let session = create_session_with_profile(&owner.handle, "test-profile").await?;
-    owner.runtime.session_store.claim_turn(&session).await?;
-    let expected = owner
-        .runtime
-        .session_store
-        .observe(&session)
-        .await?
-        .expect("owned session")
-        .lease_expires_at;
-    let preparation = owner.runtime.session_preparations.begin(&session).await;
-    let runtime = owner.runtime.clone();
-    let cancellation = runtime.cancel_turn_if_lease_matches(session.clone(), expected);
-    tokio::pin!(cancellation);
-    assert!(futures::poll!(&mut cancellation).is_pending());
-    owner.runtime.session_store.release_turn(&session).await?;
-    owner.runtime.session_store.claim_turn(&session).await?;
-    let (providers, request) = {
-        let agent = &owner.runtime.agent_manager;
-        let request = agent
-            .prepare_start_stream(
-                &session,
-                "replacement turn".into(),
-                ModelId::new("mock-model"),
-                ProviderId::new("mock"),
-                Default::default(),
-            )
-            .await?;
-        (agent.cloned_provider_manager(), request)
-    };
-    let guard = owner.runtime.session_state_barrier.read().await;
+    let store = &owner.runtime.session_store;
+    store.claim_turn(&session).await?;
+    let (_, stale_token) = store
+        .owned_turns()
+        .into_iter()
+        .find(|(id, _)| id == &session)
+        .expect("owned session");
+    store.release_turn(&session).await?;
     owner
-        .runtime
-        .start_stream_job(
-            super::super::streaming::StreamJobKind::Initial,
+        .handle
+        .send_message(
             session.clone(),
-            providers,
-            request,
+            "replacement turn".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
         )
-        .await;
-    drop(guard);
-    drop(preparation);
-    assert!(!cancellation.await?);
+        .await?;
+    assert!(!super::harness::cancel_if_lease_matches(&owner.runtime, &session, stale_token).await?);
     assert!(owner.runtime.session_store.owns_turn(&session).await?);
-    assert!(
-        owner
-            .runtime
-            .active_streams
-            .lock()
-            .await
-            .contains_key(&session)
-    );
     assert!(owner.runtime.agent_manager.is_turn_active(&session));
     drop(sender);
     owner.events.wait_for("replacement completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id, .. } if session_id == &session))).await;
@@ -518,12 +488,7 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
                 .is_err()
         );
     }
-    owner
-        .runtime
-        .pending_script_approvals
-        .lock()
-        .await
-        .remove(&session);
+    super::harness::take_pending_approval(&owner.runtime, &session).await;
     owner
         .runtime
         .execution_store

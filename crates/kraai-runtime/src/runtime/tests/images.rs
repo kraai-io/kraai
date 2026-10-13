@@ -96,11 +96,7 @@ async fn image_only_queued_input_keeps_references_and_undo_restores_them() -> Re
     image::DynamicImage::new_rgb8(2, 3).write_to(&mut bytes, image::ImageFormat::Png)?;
     let image = harness.handle.import_image(bytes.into_inner()).await?;
     let content = MessageContent(vec![ContentPart::Image { image }]);
-    let preparation = harness
-        .runtime
-        .session_preparations
-        .try_begin(&session_id)
-        .ok_or_else(|| eyre!("missing preparation"))?;
+    super::harness::hold_preparation(&harness.runtime, &session_id).await;
     let result = harness
         .handle
         .send_content(
@@ -120,7 +116,7 @@ async fn image_only_queued_input_keeps_references_and_undo_restores_them() -> Re
         queued.first().map(|message| &message.content),
         Some(&content)
     );
-    drop(preparation);
+    super::harness::release_preparation(&harness.runtime, &session_id).await;
     let pending = harness
         .runtime
         .agent_manager

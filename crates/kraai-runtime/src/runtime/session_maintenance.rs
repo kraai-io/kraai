@@ -55,11 +55,23 @@ impl RuntimeCore {
                             format!("Session lease renewal failed: {error}"),
                         );
                         cancelling.insert(session.clone());
-                        let cancellation_runtime = runtime.clone();
+                        let (response, cancelled) = tokio::sync::oneshot::channel();
+                        runtime.sessions.send(
+                            &runtime,
+                            &session,
+                            super::session::SessionMessage::Cancel {
+                                discard_queue: true,
+                                expected_lease: Some(expected),
+                                response: Some(response),
+                            },
+                        );
                         cancellations.spawn(async move {
-                            let result = cancellation_runtime
-                                .cancel_turn_if_lease_matches(session.clone(), expected)
-                                .await;
+                            let result = match cancelled.await {
+                                Ok(result) => {
+                                    result.map_err(|error| color_eyre::eyre::eyre!(error))
+                                }
+                                Err(_) => Ok(false),
+                            };
                             (session, result)
                         });
                     }
@@ -75,12 +87,8 @@ impl RuntimeCore {
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
-                {
-                    let _state_guard = runtime.session_state_barrier.read().await;
-                    let agent = &runtime.agent_manager;
-                    if let Err(error) = agent.publish_streaming_snapshots().await {
-                        runtime.send_service_error(error);
-                    }
+                if let Err(error) = runtime.agent_manager.publish_streaming_snapshots().await {
+                    runtime.send_service_error(error);
                 }
                 let watched: Vec<_> = runtime
                     .observed_sessions

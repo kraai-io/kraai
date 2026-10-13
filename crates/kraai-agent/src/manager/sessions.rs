@@ -524,7 +524,9 @@ impl AgentManager {
                 state.pending_workspace_dir = None;
             }
         }
-        update(state)
+        let result = update(state);
+        drop(states);
+        result
     }
 
     pub(super) fn resolve_profiles_for_workspace(&self, workspace_dir: &Path) -> ResolvedProfiles {
@@ -573,9 +575,11 @@ impl AgentManager {
                 "Session has no active turn: {session_id}"
             )))
         })?;
-        Ok(ScriptTurnContext {
+        let context = ScriptTurnContext {
             workspace_dir: state.active_workspace_dir.clone(),
             profile: profile.snapshot(),
-        })
+        };
+        drop(states);
+        Ok(context)
     }
 }

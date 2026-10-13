@@ -15,7 +15,7 @@ use kraai_types::{
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
-use super::super::{core::RuntimeCore, stream_driver::StreamDriveResult};
+use super::super::stream_driver::StreamDriveResult;
 use super::harness::{RuntimeTestHarness, create_session_with_profile};
 
 #[derive(Clone, Copy)]
@@ -186,16 +186,9 @@ async fn warming_discards_outputs_and_accounts_separately_before_the_real_reques
     let (harness, session, request, calls, _, _) = fixture(WarmResult::Success).await?;
     let message_id = request.message_id.clone();
     let providers = harness.runtime.agent_manager.cloned_provider_manager();
-    let result = RuntimeCore::drive_stream(
-        session.clone(),
-        request,
-        providers,
-        harness.runtime.agent_manager.clone(),
-        harness.runtime.event_tx.clone(),
-        harness.runtime.session_state_barrier.clone(),
-        harness.runtime.stream_tasks.session_token(&session),
-    )
-    .await;
+    let result =
+        super::harness::drive_stream(harness.runtime.clone(), session.clone(), providers, request)
+            .await;
     assert!(matches!(result, StreamDriveResult::Completed(output) if output.call_id.is_none()));
     {
         let calls = calls.lock().unwrap();
@@ -248,14 +241,11 @@ async fn warming_errors_and_missing_usage_still_send_the_real_request() -> Resul
     ] {
         let (harness, session, request, calls, _, _) = fixture(mode).await?;
         let providers = harness.runtime.agent_manager.cloned_provider_manager();
-        let result = RuntimeCore::drive_stream(
+        let result = super::harness::drive_stream(
+            harness.runtime.clone(),
             session.clone(),
-            request,
             providers,
-            harness.runtime.agent_manager.clone(),
-            harness.runtime.event_tx.clone(),
-            harness.runtime.session_state_barrier.clone(),
-            harness.runtime.stream_tasks.session_token(&session),
+            request,
         )
         .await;
         assert!(matches!(result, StreamDriveResult::Completed(_)));
@@ -277,14 +267,11 @@ async fn cancelling_warming_does_not_start_the_real_request_or_lose_accounting()
     let (harness, session, request, calls, entered, _) =
         fixture(WarmResult::WaitForCancellation).await?;
     let providers = harness.runtime.agent_manager.cloned_provider_manager();
-    let task = tokio::spawn(RuntimeCore::drive_stream(
+    let task = tokio::spawn(super::harness::drive_stream(
+        harness.runtime.clone(),
         session.clone(),
-        request,
         providers,
-        harness.runtime.agent_manager.clone(),
-        harness.runtime.event_tx.clone(),
-        harness.runtime.session_state_barrier.clone(),
-        harness.runtime.stream_tasks.session_token(&session),
+        request,
     ));
     entered.cancelled().await;
     task.abort();
@@ -302,16 +289,9 @@ async fn cancelling_warming_does_not_start_the_real_request_or_lose_accounting()
 async fn invalid_warming_policy_does_not_block_the_real_request() -> Result<()> {
     let (harness, session, request, calls, _, _) = fixture(WarmResult::InvalidPolicy).await?;
     let providers = harness.runtime.agent_manager.cloned_provider_manager();
-    let result = RuntimeCore::drive_stream(
-        session.clone(),
-        request,
-        providers,
-        harness.runtime.agent_manager.clone(),
-        harness.runtime.event_tx.clone(),
-        harness.runtime.session_state_barrier.clone(),
-        harness.runtime.stream_tasks.session_token(&session),
-    )
-    .await;
+    let result =
+        super::harness::drive_stream(harness.runtime.clone(), session.clone(), providers, request)
+            .await;
     assert!(matches!(result, StreamDriveResult::Completed(_)));
     assert_eq!(calls.lock().unwrap().len(), 1);
     harness.shutdown().await;
@@ -324,14 +304,11 @@ async fn warming_waits_for_stream_completion_and_usage_before_the_real_request()
         fixture(WarmResult::DelayedSuccess).await?;
     let providers = harness.runtime.agent_manager.cloned_provider_manager();
     let message_id = request.message_id.clone();
-    let mut task = AbortOnDropHandle::new(tokio::spawn(RuntimeCore::drive_stream(
+    let mut task = AbortOnDropHandle::new(tokio::spawn(super::harness::drive_stream(
+        harness.runtime.clone(),
         session.clone(),
-        request,
         providers,
-        harness.runtime.agent_manager.clone(),
-        harness.runtime.event_tx.clone(),
-        harness.runtime.session_state_barrier.clone(),
-        harness.runtime.stream_tasks.session_token(&session),
+        request,
     )));
     tokio::time::timeout(Duration::from_secs(30), entered.cancelled())
         .await

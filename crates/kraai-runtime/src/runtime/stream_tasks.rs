@@ -6,16 +6,11 @@ use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
+#[derive(Clone)]
 pub(super) struct SessionTaskToken {
     _all: TaskTrackerToken,
     _session: TaskTrackerToken,
     _auxiliary: Option<TaskTrackerToken>,
-}
-
-#[cfg(test)]
-struct PublicationPause {
-    entered: std::sync::Arc<tokio::sync::Notify>,
-    release: std::sync::Arc<tokio::sync::Notify>,
 }
 
 #[derive(Default)]
@@ -23,8 +18,6 @@ pub(super) struct StreamTasks {
     all: TaskTracker,
     sessions: Mutex<HashMap<SessionId, TaskTracker>>,
     auxiliary: Mutex<HashMap<SessionId, TaskTracker>>,
-    #[cfg(test)]
-    publication_pause: Mutex<Option<PublicationPause>>,
 }
 
 impl StreamTasks {
@@ -106,38 +99,6 @@ impl StreamTasks {
     #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.all.is_empty()
-    }
-
-    #[cfg(test)]
-    pub(super) fn pause_next_publication(
-        &self,
-    ) -> (
-        std::sync::Arc<tokio::sync::Notify>,
-        std::sync::Arc<tokio::sync::Notify>,
-    ) {
-        let entered = std::sync::Arc::new(tokio::sync::Notify::new());
-        let release = std::sync::Arc::new(tokio::sync::Notify::new());
-        *self
-            .publication_pause
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(PublicationPause {
-            entered: entered.clone(),
-            release: release.clone(),
-        });
-        (entered, release)
-    }
-
-    #[cfg(test)]
-    pub(super) async fn before_publication(&self) {
-        let pause = self
-            .publication_pause
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take();
-        if let Some(PublicationPause { entered, release }) = pause {
-            entered.notify_one();
-            release.notified().await;
-        }
     }
 }
 

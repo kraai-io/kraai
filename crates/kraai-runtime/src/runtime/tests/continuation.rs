@@ -118,11 +118,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
         .await;
     }
     let outcome = if wait_for_preparation {
-        let preparation = harness
-            .runtime
-            .session_preparations
-            .begin(&session_id)
-            .await;
+        super::harness::hold_preparation(&harness.runtime, &session_id).await;
         let continuation = harness.handle.continue_turn(
             session_id.clone(),
             "selected-model".into(),
@@ -131,12 +127,6 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
         );
         tokio::pin!(continuation);
         assert!(poll!(&mut continuation).is_pending());
-        tokio::time::timeout(TEST_TIMEOUT, async {
-            while harness.runtime.session_state_barrier.try_write().is_ok() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await?;
         assert_eq!(
             tokio::time::timeout(
                 TEST_TIMEOUT,
@@ -151,7 +141,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
             ContinueSessionOutcome::NothingToContinue
         );
         assert!(received.try_recv().is_err());
-        drop(preparation);
+        super::harness::release_preparation(&harness.runtime, &session_id).await;
         tokio::time::timeout(TEST_TIMEOUT, continuation).await??
     } else {
         harness

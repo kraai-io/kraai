@@ -264,13 +264,11 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
         harness.runtime.event_tx.timer_snapshot(&session_id).1,
         paused_timer
     );
-    let continuation_guard = harness.runtime.session_state_barrier.write().await;
+    let barrier = harness.runtime.sessions.barrier(&session_id);
+    let continuation_guard = barrier.write().await;
     harness
-        .runtime
-        .deny_pending_script(
-            session_id.clone(),
-            kraai_types::ScriptExecutionId::new(script.execution_id.clone()),
-        )
+        .handle
+        .deny_script(session_id.clone(), script.execution_id.clone())
         .await?;
     let delay_started = std::time::Instant::now();
     let elapsed_before_delay = harness
@@ -568,12 +566,7 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
             })
         })
         .await;
-    harness
-        .runtime
-        .pending_script_approvals
-        .lock()
-        .await
-        .remove(&session_id);
+    super::harness::take_pending_approval(&harness.runtime, &session_id).await;
 
     harness
         .runtime

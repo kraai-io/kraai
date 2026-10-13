@@ -1,14 +1,11 @@
 use color_eyre::eyre::Result;
-use futures::poll;
 use kraai_persistence::ScriptExecutionCompletion;
 use kraai_types::{ScriptExecutionStatus, SessionId};
-use tokio_util::sync::CancellationToken;
 
 use super::harness::{
     RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
 };
 use crate::Event;
-use crate::runtime::core::ActiveScriptTask;
 use crate::runtime::script_execution::CompletedScriptExecution;
 
 async fn finished_execution() -> Result<(RuntimeTestHarness, SessionId, CompletedScriptExecution)> {
@@ -32,13 +29,7 @@ async fn finished_execution() -> Result<(RuntimeTestHarness, SessionId, Complete
     harness.events.wait_for("script approval", |events| {
         events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id, .. } if session_id == &session))
     }).await;
-    let pending = harness
-        .runtime
-        .pending_script_approvals
-        .lock()
-        .await
-        .remove(&session)
-        .expect("pending script");
+    let pending = super::harness::take_pending_approval(&harness.runtime, &session).await;
     harness
         .runtime
         .execution_store
@@ -75,66 +66,52 @@ async fn finished_execution() -> Result<(RuntimeTestHarness, SessionId, Complete
 async fn cancellation_after_execution_finishes_waits_for_result_and_prevents_continuation()
 -> Result<()> {
     let (harness, session, completed) = finished_execution().await?;
-    let result_id = completed.record.result_message_id.clone();
-    let cancellation = CancellationToken::new();
-    let completion = CancellationToken::new();
-    let completion_guard = completion.clone().drop_guard();
-    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
     let runtime = harness.runtime.clone();
-    let task_session = session.clone();
-    let task = tokio::spawn(async move {
-        let _completion_guard = completion_guard;
-        finish_rx.await.expect("release finalization");
-        let _state = runtime.session_state_barrier.read().await;
-        let _preparation = runtime.session_preparations.begin(&task_session).await;
-        runtime
-            .active_script_tasks
-            .lock()
-            .await
-            .remove(&task_session);
-        runtime
-            .finalize_script_turn(&task_session, completed)
-            .await
-            .expect("persist completed result");
-    });
-    harness.runtime.active_script_tasks.lock().await.insert(
-        session.clone(),
-        ActiveScriptTask {
-            cancellation: cancellation.clone(),
-            completion: completion.clone(),
-            join_handle: task,
-        },
-    );
-    let runtime = harness.runtime.clone();
-    let cancel = runtime.cancel_stream(session.clone());
-    tokio::pin!(cancel);
-    assert!(poll!(&mut cancel).is_pending());
-    assert!(cancellation.is_cancelled());
-    assert!(!completion.is_cancelled());
+    let (generation, cancellation) = runtime
+        .with_session_actor(&session, |actor| {
+            Box::pin(async move { actor.begin_test_script() })
+        })
+        .await;
+    let handle = harness.handle.clone();
+    let cancel_session = session.clone();
+    let cancel = tokio::spawn(async move { handle.cancel_stream(cancel_session).await });
+    tokio::time::timeout(TEST_TIMEOUT, cancellation.cancelled()).await?;
     assert!(!runtime.agent_manager.is_turn_active(&session));
     let observer = kraai_persistence::Persistence::open(&harness.data_dir).await?;
     assert!(observer.sessions().claim_turn(&session).await.is_err());
-    finish_tx.send(()).expect("release finalization");
-    assert!(tokio::time::timeout(TEST_TIMEOUT, cancel).await??);
-    assert!(completion.is_cancelled());
+    assert!(!cancel.is_finished());
+    let stream_starts = || {
+        harness
+            .events
+            .snapshot()
+            .iter()
+            .filter(|event| matches!(event, Event::StreamStart { session_id, .. } if session_id == &session))
+            .count()
+    };
+    let started = stream_starts();
+    runtime.sessions.send(
+        &runtime,
+        &session,
+        crate::runtime::session::SessionMessage::ScriptEnded {
+            generation,
+            result: Ok(completed),
+        },
+    );
+    assert!(tokio::time::timeout(TEST_TIMEOUT, cancel).await???);
     assert!(!runtime.session_store.owns_turn(&session).await?);
-    let snapshot = runtime.build_session_snapshot(&session).await?;
+    let snapshot = harness.handle.get_session_snapshot(session.clone()).await?;
     assert!(!snapshot.session.is_running);
     assert!(snapshot.history.values().any(|message| matches!(
         message.content,
         kraai_types::ConversationItem::ScriptResult { .. }
     )));
-    let sequence = runtime.event_tx.latest_sequence();
-    runtime.spawn_continuation(session, result_id);
-    tokio::task::yield_now().await;
-    assert!(runtime.active_streams.lock().await.is_empty());
-    assert_eq!(runtime.event_tx.latest_sequence(), sequence);
+    assert_eq!(stream_starts(), started);
     harness.shutdown().await;
     Ok(())
 }
 
 #[tokio::test]
-async fn cancellation_waits_for_continuation_stream_registration() -> Result<()> {
+async fn cancellation_during_continuation_preparation_cancels_the_started_stream() -> Result<()> {
     let (harness, session, completed) = finished_execution().await?;
     harness
         .runtime
@@ -148,103 +125,40 @@ async fn cancellation_waits_for_continuation_stream_registration() -> Result<()>
             completed.record.outcome()?,
         )
         .await?;
-    let streams = harness.runtime.active_streams.lock().await;
-    let runtime = harness.runtime.clone();
-    let task_session = session.clone();
-    let continuation = tokio::spawn(async move {
-        runtime
-            .start_continuation(
-                task_session,
-                kraai_types::ModelId::new("mock-model"),
-                kraai_types::ProviderId::new("mock"),
-                Default::default(),
-            )
+    let (response, cancelled) = tokio::sync::oneshot::channel();
+    harness
+        .runtime
+        .with_session_actor(&session, move |actor| {
+            Box::pin(async move {
+                actor.continue_turn().await;
+                assert_eq!(
+                    actor.activity(),
+                    crate::runtime::session::ActivityKind::Preparing
+                );
+                actor.cancel(false, None, Some(response)).await;
+            })
+        })
+        .await;
+    assert!(tokio::time::timeout(TEST_TIMEOUT, cancelled).await???);
+    harness
+        .events
+        .wait_for("cancelled continuation", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::StreamCancelled { session_id, .. } if session_id == &session)
+            })
+        })
+        .await;
+    assert!(!harness.runtime.agent_manager.is_turn_active(&session));
+    assert!(
+        !harness
+            .runtime
+            .agent_manager
+            .session_has_active_stream(&session)
             .await
-    });
-    tokio::time::timeout(TEST_TIMEOUT, async {
-        loop {
-            if harness
-                .runtime
-                .agent_manager
-                .streaming_session_ids()
-                .await
-                .contains(&session)
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
-    assert!(harness.runtime.session_preparations.is_active(&session));
-    let runtime = harness.runtime.clone();
-    let cancel = runtime.cancel_stream(session.clone());
-    tokio::pin!(cancel);
-    assert!(poll!(&mut cancel).is_pending());
-    drop(streams);
-    assert_eq!(
-        tokio::time::timeout(TEST_TIMEOUT, continuation).await???,
-        crate::ContinueSessionOutcome::Started
     );
-    tokio::time::timeout(TEST_TIMEOUT, cancel).await??;
-    assert!(runtime.active_streams.lock().await.is_empty());
-    assert!(!runtime.agent_manager.is_turn_active(&session));
     harness.shutdown().await;
     Ok(())
 }
-
-#[tokio::test]
-async fn stale_continuation_cannot_resume_a_new_turn() -> Result<()> {
-    let (harness, session, completed) = finished_execution().await?;
-    harness
-        .runtime
-        .agent_manager
-        .add_script_result_to_history(
-            &session,
-            completed.record.result_message_id.clone(),
-            completed.record.profile.id.clone(),
-            completed.record.call_id.clone(),
-            completed.render_result()?,
-            completed.record.outcome()?,
-        )
-        .await?;
-    let preparation = harness.runtime.session_preparations.begin(&session).await;
-    harness
-        .runtime
-        .spawn_continuation(session.clone(), completed.record.result_message_id);
-    tokio::time::timeout(TEST_TIMEOUT, async {
-        while harness.runtime.session_state_barrier.try_write().is_ok() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
-    let agent = &harness.runtime.agent_manager;
-    agent.clear_active_turn(&session);
-    let request = agent
-        .prepare_start_stream(
-            &session,
-            "new turn".into(),
-            kraai_types::ModelId::new("mock-model"),
-            kraai_types::ProviderId::new("mock"),
-            Default::default(),
-        )
-        .await?;
-    agent.complete_message(&request.message_id).await?;
-    let sequence = harness.runtime.event_tx.latest_sequence();
-    drop(preparation);
-    let state =
-        tokio::time::timeout(TEST_TIMEOUT, harness.runtime.session_state_barrier.write()).await?;
-    assert_eq!(harness.runtime.event_tx.latest_sequence(), sequence);
-    assert!(harness.runtime.active_streams.lock().await.is_empty());
-    assert_eq!(
-        harness.runtime.agent_manager.get_tip(&session).await?,
-        Some(request.message_id)
-    );
-    drop(state);
-    harness.shutdown().await;
-    Ok(())
-}
-
 #[tokio::test]
 async fn cancel_turn_discards_prompt_queued_during_preparation() -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new())
@@ -252,7 +166,7 @@ async fn cancel_turn_discards_prompt_queued_during_preparation() -> Result<()> {
         .expect("runtime fixture");
     let session = create_session_with_profile(&harness.handle, "test-profile").await?;
     let mut events = harness.handle.subscribe();
-    let preparation = harness.runtime.session_preparations.begin(&session).await;
+    super::harness::hold_preparation(&harness.runtime, &session).await;
     let submitted = harness
         .handle
         .send_message(
@@ -270,18 +184,9 @@ async fn cancel_turn_discards_prompt_queued_during_preparation() -> Result<()> {
     let handle = harness.handle.clone();
     let task_session = session.clone();
     let cancel = tokio::spawn(async move { handle.cancel_turn(task_session).await });
-    tokio::time::timeout(TEST_TIMEOUT, async {
-        while harness.runtime.session_state_barrier.try_write().is_ok() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
-    drop(preparation);
+    tokio::task::yield_now().await;
+    super::harness::release_preparation(&harness.runtime, &session).await;
     assert!(tokio::time::timeout(TEST_TIMEOUT, cancel).await???);
-    harness
-        .runtime
-        .handle_start_queued_messages(session.clone())
-        .await;
     let snapshot = harness.handle.get_session_snapshot(session).await?;
     assert_eq!(snapshot.queued_messages, 0);
     assert!(!snapshot.session.is_running);

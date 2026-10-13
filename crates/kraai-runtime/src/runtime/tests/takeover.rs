@@ -68,15 +68,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         .agent_manager
         .publish_streaming_snapshots()
         .await?;
-    let old_message = old_owner
-        .runtime
-        .active_streams
-        .lock()
-        .await
-        .get(&session)
-        .expect("old stream")
-        .message_id
-        .clone();
+    let old_message = super::harness::started_stream(&old_owner.events.snapshot(), &session);
     let old_token = old_owner
         .runtime
         .session_store
@@ -124,10 +116,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         })
         .await;
     old_owner.runtime.stream_tasks.wait_session(&session).await;
-    old_owner
-        .runtime
-        .cancel_turn_if_lease_matches(session.clone(), old_token)
-        .await?;
+    super::harness::cancel_if_lease_matches(&old_owner.runtime, &session, old_token).await?;
     assert!(new_owner.runtime.session_store.owns_turn(&session).await?);
     takeover_sender.send(Ok(ProviderStreamEvent::TextDelta {
         item_id: "new-text".into(),

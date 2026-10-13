@@ -167,6 +167,7 @@ impl RuntimeCore {
             images: self.image_store.clone(),
             executions: self.execution_store.clone(),
         });
+        let barrier = self.sessions.barrier(&request.session_id);
         plan.state_effect_handler = Arc::new(DurableStateEffects {
             session_task: Arc::new(self.stream_tasks.session_token(&request.session_id)),
             execution_id: execution_id.clone(),
@@ -174,7 +175,7 @@ impl RuntimeCore {
             workspace_root: request.workspace_root,
             effective_capabilities: request.effective_capabilities,
             store: self.context_state_store.clone(),
-            barrier: self.session_state_barrier.clone(),
+            barrier,
         });
 
         let execution = kraai_nushell_runtime::execute(plan, cancellation).await;
