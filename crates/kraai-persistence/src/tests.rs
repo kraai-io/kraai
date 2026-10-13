@@ -428,6 +428,7 @@ async fn cancelled_waiter_does_not_interrupt_a_database_commit() -> Result<()> {
     caller.abort();
     release_tx.send(())?;
     let _ = caller.await;
+    a.sessions().database.run(|_, _| Ok(())).await?;
     ensure!(
         a.sessions()
             .observe(&SessionId::new("session"))

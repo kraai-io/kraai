@@ -340,6 +340,16 @@ supports_images = true
             )
         }
 
+    def streaming_message(self, session, text):
+        rows = self.query(
+            """SELECT records.id FROM records WHERE session_id = ? AND kind = 'message'
+            AND (instr(records.data, ?) OR EXISTS (
+                SELECT 1 FROM stream_deltas
+                WHERE message_id = records.id AND instr(stream_deltas.data, ?)))""",
+            (session, text, text),
+        )
+        return rows[0][0] if rows else None
+
     def close(self):
         for client in self.clients:
             client.close()

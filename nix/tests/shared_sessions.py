@@ -94,7 +94,7 @@ def concurrent_clients(fixture):
     started(first_reply)
     wait_for(
         "stream persisted",
-        lambda: "first-process-partial" in json.dumps(fixture.records(shared)),
+        lambda: fixture.streaming_message(shared, "first-process-partial"),
     )
     rejected(fixture, second, shared, "rejected-shared-input")
     second_reply = fixture.provider.add(text="second-process-partial", held=True)
@@ -208,14 +208,7 @@ def paused_owner(fixture):
     started(old_reply)
     old_id = wait_for(
         "old streaming placeholder",
-        lambda: next(
-            (
-                record_id
-                for record_id, record in fixture.records(session).items()
-                if "old-owner-partial" in json.dumps(record)
-            ),
-            None,
-        ),
+        lambda: fixture.streaming_message(session, "old-owner-partial"),
     )
     with contextlib.closing(sqlite3.connect(fixture.database, timeout=5)) as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -236,7 +229,7 @@ def paused_owner(fixture):
     started(new_reply)
     wait_for(
         "new owner placeholder",
-        lambda: "new-owner-partial" in json.dumps(fixture.records(session)),
+        lambda: fixture.streaming_message(session, "new-owner-partial"),
     )
     assert old_id not in fixture.records(session)
     first.process.send_signal(signal.SIGCONT)
