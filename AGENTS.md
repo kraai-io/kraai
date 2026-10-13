@@ -28,25 +28,6 @@ If a tradeoff is required, choose correctness and robustness over short-term con
 
 Long term maintainability is a core priority. If you add new functionality, first check if there are shared logic that can be extracted to a separate module. Duplicate logic across mulitple files is a code smell and should be avoided. Don't be afraid to change existing code. Don't take shortcuts by just adding local logic to solve a problem.
 
-## Architecture
-
-```
-crates/
-  kraai-agent/           - Core agent logic, profiles, prompts, and context state
-  kraai-runtime/         - Agent runtime and script execution lifecycle
-  kraai-persistence/     - Message, execution, effect, and turn persistence
-  kraai-types/           - Shared protocol, profile, policy, and execution types
-  kraai-script-protocol/ - Streaming XML envelope and result rendering
-  kraai-sandbox/         - Capability-based process sandbox and output capture
-  kraai-nushell-runtime/ - Embedded Nushell host and authenticated effect transport
-  kraai-commands/        - Native model-facing commands: metadata, host services, and Nushell implementations (`nushell` feature)
-  kraai-workspace-fs/    - Shared workspace filesystem operations
-  llm-providers/
-    kraai-provider-core/ - LLM provider trait definitions
-    kraai-provider-*/    - LLM provider implementations
-  kraai-tui/             - Terminal UI
-```
-
 ## Commands
 
 read the justfile for commands to use
