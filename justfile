@@ -43,7 +43,7 @@ generate-cargo-nix:
     crate2nix generate
 
 test:
-    cargo nextest run
+    cargo nextest run --all-features
 
 clean:
     cargo clean

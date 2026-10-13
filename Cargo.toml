@@ -31,6 +31,12 @@ edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.96.0"
 
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 codegen-units = 1 # Allows compiler to perform better optimization.
 lto = true        # Enables Link-time Optimization.
