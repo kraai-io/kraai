@@ -6,6 +6,7 @@ use kraai_persistence::{CompactionCheckpoint, SqliteCompactionStore};
 fn prompt(prefix: &str) -> prompts::TurnSystemPrompt {
     prompts::TurnSystemPrompt {
         prefix: prefix.to_string(),
+        instructions: Vec::new(),
         context_notifications: Vec::new(),
     }
 }

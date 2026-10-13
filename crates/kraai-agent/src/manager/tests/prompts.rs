@@ -16,6 +16,15 @@ fn request_prefix(request: &PendingStreamRequest) -> &str {
         .expect("request should start with its instruction prefix")
 }
 
+/// Everything the model reads as instructions: the static prefix and every context section.
+fn request_instructions(request: &PendingStreamRequest) -> String {
+    format!(
+        "{}\n{}",
+        request_prefix(request),
+        request_file_context(request)
+    )
+}
+
 fn request_file_context(request: &PendingStreamRequest) -> String {
     request
         .provider_request
@@ -231,9 +240,15 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
         &request.message_id,
         &[],
         None,
+        Vec::new(),
     )
     .await?;
-    assert!(next_refresh.notifications.is_empty());
+    assert!(
+        !next_refresh
+            .notifications
+            .iter()
+            .any(|notification| notification.contains("unpinned"))
+    );
     assert!(next_refresh.snapshots.is_empty());
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
@@ -267,7 +282,7 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
 
     let system_prompt = request_prefix(&request);
     assert!(!system_prompt.contains("Workspace Instructions"));
-    assert!(!system_prompt.contains(AGENTS_MD_FILE_NAME));
+    assert!(!request_file_context(&request).contains(AGENTS_MD_FILE_NAME));
     let Some(ConversationItem::System { text: prefix }) = request.provider_request.messages.first()
     else {
         return Err(eyre!("missing static prefix"));
@@ -275,7 +290,12 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
     assert!(prefix.contains("# Script Execution"));
     assert!(prefix.contains("# Kraai Commands"));
     assert!(matches!(
-        request.provider_request.messages.get(1),
+        request
+            .provider_request
+            .messages
+            .iter()
+            .skip(1)
+            .find(|item| !matches!(item, ConversationItem::FileContext { .. })),
         Some(ConversationItem::User { .. })
     ));
     assert!(!prefix.contains("<tool_call>"));
@@ -433,7 +453,7 @@ async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> R
         )
         .await?;
 
-    let system_prompt = request_prefix(&request);
+    let system_prompt = request_instructions(&request);
     assert!(system_prompt.contains("Workspace Instructions"));
     assert!(system_prompt.contains("# Workspace rules"));
     assert!(system_prompt.contains("Always prefer deterministic behavior."));
@@ -466,7 +486,7 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
             Default::default(),
         )
         .await?;
-    let first_system_prompt = request_prefix(&first_request);
+    let first_system_prompt = request_instructions(&first_request);
     assert!(!first_system_prompt.contains("First instructions"));
     manager.complete_message(&first_request.message_id).await?;
 
@@ -480,7 +500,7 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
         .prepare_continuation_stream(&session_id)
         .await?
         .expect("continuation request should exist");
-    let second_system_prompt = request_prefix(&second_request);
+    let second_system_prompt = request_instructions(&second_request);
     assert!(second_system_prompt.contains("First instructions"));
     manager.complete_message(&second_request.message_id).await?;
 
@@ -494,7 +514,7 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
         .prepare_continuation_stream(&session_id)
         .await?
         .expect("continuation request should exist");
-    let third_system_prompt = request_prefix(&third_request);
+    let third_system_prompt = request_instructions(&third_request);
     assert!(third_system_prompt.contains("Updated instructions"));
     assert!(!third_system_prompt.contains("First instructions"));
 
@@ -541,7 +561,7 @@ async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_p
         .prepare_continuation_stream(&session_id)
         .await?
         .expect("continuation request should exist");
-    let system_prompt = request_prefix(&continuation);
+    let system_prompt = request_instructions(&continuation);
     assert!(system_prompt.contains("Workspace A"));
     assert!(!system_prompt.contains("Workspace B"));
 
@@ -630,7 +650,7 @@ async fn skills_are_advertised_without_pinning_or_injecting_instructions() -> Re
             Default::default(),
         )
         .await?;
-    let prompt = request_prefix(&request);
+    let prompt = request_instructions(&request);
     assert!(prompt.contains("workspace:review"));
     assert!(prompt.contains("Review changes"));
     assert!(!prompt.contains("UNLOADED SKILL BODY"));
@@ -644,8 +664,8 @@ async fn skills_are_advertised_without_pinning_or_injecting_instructions() -> Re
     manager.complete_message(&request.message_id).await?;
     let continuation = manager.prepare_continuation_stream(&session_id).await?;
     let continuation = continuation.ok_or_else(|| eyre!("missing continuation"))?;
-    assert!(request_prefix(&continuation).contains("workspace:review"));
-    assert!(!request_prefix(&continuation).contains("UNLOADED SKILL BODY"));
+    assert!(request_instructions(&continuation).contains("workspace:review"));
+    assert!(!request_instructions(&continuation).contains("UNLOADED SKILL BODY"));
     tokio::fs::remove_dir_all(workspace_dir).await?;
     cleanup_dir(data_dir).await;
     Ok(())
@@ -675,7 +695,7 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
             Default::default(),
         )
         .await?;
-    let prompt = request_prefix(&request);
+    let prompt = request_instructions(&request);
     assert!(prompt.contains(user_path.to_string_lossy().as_ref()));
     assert!(
         prompt.find("Global working agreements").unwrap()
@@ -695,7 +715,7 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
             .prepare_continuation_stream(&session_id)
             .await?
             .unwrap();
-        let prompt = request_prefix(&request);
+        let prompt = request_instructions(&request);
         assert!(!prompt.contains("Global working agreements"));
         assert!(prompt.contains("Project agreements"));
         assert_eq!(
@@ -712,8 +732,8 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
         .prepare_continuation_stream(&session_id)
         .await?
         .unwrap();
-    assert!(!request_prefix(&request).contains("User Instructions"));
-    assert!(!request_prefix(&request).contains("Restored global agreements"));
+    assert!(!request_instructions(&request).contains("User Instructions"));
+    assert!(!request_instructions(&request).contains("Restored global agreements"));
     cleanup_dir(data_dir).await;
     Ok(())
 }
@@ -738,8 +758,8 @@ async fn user_agents_md_loads_without_workspace_instructions_and_reports_read_er
             Default::default(),
         )
         .await?;
-    assert!(request_prefix(&request).contains("Global instructions only"));
-    assert!(!request_prefix(&request).contains("Workspace Instructions"));
+    assert!(request_instructions(&request).contains("Global instructions only"));
+    assert!(!request_instructions(&request).contains("Workspace Instructions"));
     manager.complete_message(&request.message_id).await?;
     tokio::fs::write(&user_path, [0xff]).await?;
     let error = manager

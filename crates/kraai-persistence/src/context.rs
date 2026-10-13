@@ -13,6 +13,8 @@ pub struct ContextStateDocument {
     pub events: Vec<ContextStateEvent>,
     #[serde(default)]
     pub snapshots: Vec<FileContextSnapshot>,
+    #[serde(default)]
+    pub instructions: Vec<InstructionSnapshot>,
 }
 
 impl ContextStateDocument {
@@ -36,6 +38,16 @@ pub struct FileContextSnapshot {
     pub path: PathBuf,
     pub opened_event: String,
     pub anchor: MessageId,
+    pub text: String,
+}
+
+/// One instruction section, such as an AGENTS.md file, placed in the conversation like a pinned file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstructionSnapshot {
+    pub key: String,
+    pub label: String,
+    /// The message this version follows; `None` places it before the whole conversation.
+    pub anchor: Option<MessageId>,
     pub text: String,
 }
 
@@ -74,6 +86,12 @@ pub trait ContextStateStore: Send + Sync {
         through_event: Option<&str>,
         snapshots: Vec<FileContextSnapshot>,
         removals: Vec<ContextStateMutation>,
+    ) -> Result<()>;
+
+    async fn save_instructions(
+        &self,
+        session_id: &SessionId,
+        instructions: Vec<InstructionSnapshot>,
     ) -> Result<()>;
 
     async fn delete(&self, session_id: &SessionId) -> Result<()>;
@@ -203,6 +221,33 @@ impl ContextStateStore for SqliteContextStateStore {
                         mutations: removals,
                     });
                 }
+                write_record(
+                    transaction,
+                    "context",
+                    session.as_str(),
+                    Some(&session),
+                    &document,
+                )
+            })
+            .await
+    }
+
+    async fn save_instructions(
+        &self,
+        session_id: &SessionId,
+        instructions: Vec<InstructionSnapshot>,
+    ) -> Result<()> {
+        let session = session_id.clone();
+        self.database
+            .transaction(move |transaction, leases| {
+                assert_owner(transaction, leases, &session)?;
+                let mut document =
+                    read_record::<ContextStateDocument>(transaction, "context", session.as_str())?
+                        .unwrap_or_default();
+                if document.instructions == instructions {
+                    return Ok(());
+                }
+                document.instructions = instructions;
                 write_record(
                     transaction,
                     "context",

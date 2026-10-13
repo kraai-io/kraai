@@ -1,6 +1,7 @@
 use super::*;
 use color_eyre::eyre::ensure;
 use futures::stream::{self, BoxStream};
+use kraai_persistence::FileContextSnapshot;
 use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderRequestContext, ProviderStreamEvent,
 };
@@ -94,13 +95,16 @@ impl Summarizer {
     }
 }
 
-fn snapshots(text: &str) -> Vec<FileContextSnapshot> {
-    vec![FileContextSnapshot {
-        path: "file.rs".into(),
-        opened_event: "open".into(),
-        anchor: kraai_types::MessageId::new("result"),
-        text: text.into(),
-    }]
+fn files(text: &str) -> RefreshedContextState {
+    RefreshedContextState {
+        snapshots: vec![FileContextSnapshot {
+            path: "file.rs".into(),
+            opened_event: "open".into(),
+            anchor: kraai_types::MessageId::new("result"),
+            text: text.into(),
+        }],
+        ..Default::default()
+    }
 }
 
 /// A compaction together with the request it was prepared for.
@@ -193,7 +197,7 @@ fn fixture(
     let covered_through = history.last().map(|message| message.id.clone());
     let original = assemble(
         "instructions",
-        &snapshots("pinned files"),
+        &files("pinned files"),
         None,
         history,
         Some(kraai_provider_core::ScriptToolDefinition::nushell()),
@@ -205,8 +209,7 @@ fn fixture(
             usage_store: Arc::new(kraai_persistence::SqliteRequestUsageStore::new(&root)),
             session_id: SessionId::new("session"),
             prefix: "instructions".into(),
-            snapshots: snapshots("pinned files"),
-            file_notifications: vec![],
+            context: files("pinned files"),
             covered_through,
             previous_boundary: None,
             on_usage: None,
@@ -300,7 +303,7 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
     ensure!(!saved.compatible_with(&ProviderId::new("test"), &ModelId::new("other")));
     let replay = assemble(
         "new instructions",
-        &snapshots("updated files"),
+        &files("updated files"),
         Some(&saved),
         Vec::new(),
         context.original.script_tool.clone(),
@@ -817,11 +820,11 @@ async fn file_removal_notifications_survive_compaction_without_becoming_retained
         }],
         false,
     );
-    context.file_notifications =
+    context.context.notifications =
         vec!["removed.txt was automatically unpinned because it no longer exists.".into()];
     crate::context_state::append_notifications(
         &mut context.original,
-        &context.compaction.file_notifications,
+        &context.compaction.context.notifications,
     );
     let outcome = context
         .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))

@@ -111,6 +111,7 @@ impl AgentManager {
             previous
                 .as_ref()
                 .map(|checkpoint| &checkpoint.covered_through),
+            prompt.instructions.clone(),
         )
         .await?;
         let superseded_usage: HashSet<_> = previous
@@ -134,7 +135,7 @@ impl AgentManager {
         let covered_through = history.last().map(|message| message.id.clone());
         let mut request = assemble(
             &prompt.prefix,
-            &files.snapshots,
+            &files,
             previous.as_ref(),
             history,
             script_tool,
@@ -161,13 +162,13 @@ impl AgentManager {
         let compact_first = max_context.is_some_and(|limit| {
             limit > 0 && (projected_tokens as u128) * 100 >= (limit as u128) * 80
         });
+        let notifications = files.notifications.clone();
         let compaction = covered_through.is_some().then(|| ContextCompaction {
             store,
             usage_store: self.usage_store.clone(),
             session_id: session_id.clone(),
             prefix: prompt.prefix.clone(),
-            snapshots: files.snapshots,
-            file_notifications: files.notifications.clone(),
+            context: files,
             covered_through,
             previous_boundary: previous.map(|checkpoint| checkpoint.covered_through),
             on_usage: None,
@@ -178,7 +179,7 @@ impl AgentManager {
             request,
             compaction,
             compact_first,
-            notifications: files.notifications,
+            notifications,
         })
     }
 }

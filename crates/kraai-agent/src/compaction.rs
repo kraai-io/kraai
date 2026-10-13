@@ -2,13 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use color_eyre::eyre::{Result, eyre};
-use kraai_persistence::{
-    CompactionCheckpoint, FileContextSnapshot, RequestUsageStore, SqliteCompactionStore,
-};
+use kraai_persistence::{CompactionCheckpoint, RequestUsageStore, SqliteCompactionStore};
 use kraai_provider_core::{ProviderManager, ProviderRequest};
 use kraai_types::{
     ConversationItem, Message, MessageId, ModelId, ProviderId, RequestUsage, SessionId,
 };
+
+use crate::context_state::RefreshedContextState;
 
 mod summary;
 #[cfg(test)]
@@ -20,8 +20,7 @@ pub struct ContextCompaction {
     pub(crate) usage_store: Arc<dyn RequestUsageStore>,
     pub(crate) session_id: SessionId,
     pub(crate) prefix: String,
-    pub(crate) snapshots: Vec<FileContextSnapshot>,
-    pub(crate) file_notifications: Vec<String>,
+    pub(crate) context: RefreshedContextState,
     pub(crate) covered_through: Option<MessageId>,
     pub(crate) previous_boundary: Option<MessageId>,
     pub(crate) on_usage: Option<Arc<dyn Fn(RequestUsage) + Send + Sync>>,
@@ -45,7 +44,7 @@ pub struct CompactionOutcome {
 
 pub(crate) fn assemble(
     prefix: &str,
-    snapshots: &[FileContextSnapshot],
+    context: &RefreshedContextState,
     previous: Option<&CompactionCheckpoint>,
     history: Vec<Message>,
     tool: Option<kraai_provider_core::ScriptToolDefinition>,
@@ -59,7 +58,20 @@ pub(crate) fn assemble(
     }
     let retained: HashSet<_> = history.iter().map(|message| &message.id).collect();
     let mut anchored: HashMap<_, Vec<_>> = HashMap::new();
-    for snapshot in snapshots {
+    for instruction in &context.instructions {
+        let item = ConversationItem::FileContext {
+            text: instruction.text.clone(),
+        };
+        match instruction
+            .anchor
+            .as_ref()
+            .filter(|anchor| retained.contains(anchor))
+        {
+            Some(anchor) => anchored.entry(anchor).or_default().push(item),
+            None => messages.push(item),
+        }
+    }
+    for snapshot in &context.snapshots {
         let item = ConversationItem::FileContext {
             text: snapshot.text.clone(),
         };
@@ -151,13 +163,13 @@ impl ContextCompaction {
         }
         let mut request = assemble(
             &self.prefix,
-            &self.snapshots,
+            &self.context,
             Some(&checkpoint),
             Vec::new(),
             original.script_tool.clone(),
             &original.options,
         );
-        crate::context_state::append_notifications(&mut request, &self.file_notifications);
+        crate::context_state::append_notifications(&mut request, &self.context.notifications);
         Ok(CompactionOutcome {
             request,
             notification: "Conversation context compacted.".into(),

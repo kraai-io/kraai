@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use color_eyre::eyre::Result;
 use kraai_io::fs::{ScopedReadError, read_regular_text_file, read_scoped_text_file};
-use kraai_persistence::{ContextStateStore, FileContextSnapshot};
+use kraai_persistence::{ContextStateStore, FileContextSnapshot, InstructionSnapshot};
 use kraai_types::{ContextStateEvent, ContextStateMutation, MessageId, PinnedFileScope, SessionId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,7 +22,16 @@ struct ContextState {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RefreshedContextState {
     pub(crate) snapshots: Vec<FileContextSnapshot>,
+    pub(crate) instructions: Vec<InstructionSnapshot>,
     pub(crate) notifications: Vec<String>,
+}
+
+/// The current version of one instruction section, such as an AGENTS.md file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InstructionSection {
+    pub(crate) key: &'static str,
+    pub(crate) label: String,
+    pub(crate) text: String,
 }
 
 pub(crate) fn append_notifications(
@@ -44,11 +53,13 @@ pub(crate) async fn refresh_context_state(
     latest: &MessageId,
     history: &[kraai_types::Message],
     compacted: Option<&MessageId>,
+    instructions: Vec<InstructionSection>,
 ) -> Result<RefreshedContextState> {
     let document = store.load(session_id).await?;
     let events = document.events;
     let through_event = events.last().map(|event| event.id.clone());
     let previous = document.snapshots;
+    let previous_instructions = document.instructions;
     let anchor = latest.clone();
     let (mut refreshed, removals) =
         tokio::task::spawn_blocking(move || refresh_pinned_files(events, &anchor)).await?;
@@ -81,7 +92,77 @@ pub(crate) async fn refresh_context_state(
             removals,
         )
         .await?;
+    refreshed.instructions = refresh_instructions(
+        &previous_instructions,
+        instructions,
+        latest,
+        &retained,
+        history,
+        &mut refreshed.notifications,
+    );
+    if refreshed.instructions != previous_instructions {
+        store
+            .save_instructions(session_id, refreshed.instructions.clone())
+            .await?;
+    }
     Ok(refreshed)
+}
+
+/// Keeps each unchanged section where the conversation first saw it and places changed or
+/// added sections after `latest`, so a change leaves the earlier conversation untouched.
+fn refresh_instructions(
+    previous: &[InstructionSnapshot],
+    current: Vec<InstructionSection>,
+    latest: &MessageId,
+    retained: &HashSet<&MessageId>,
+    history: &[kraai_types::Message],
+    notifications: &mut Vec<String>,
+) -> Vec<InstructionSnapshot> {
+    let first_request = !history.iter().any(|message| {
+        matches!(
+            message.content,
+            kraai_types::ConversationItem::Assistant { .. }
+        )
+    });
+    for removed in previous
+        .iter()
+        .filter(|old| !current.iter().any(|section| section.key == old.key))
+    {
+        notifications.push(format!(
+            "{} was removed; its instructions no longer apply.",
+            removed.label
+        ));
+    }
+    current
+        .into_iter()
+        .map(|section| {
+            let old = previous.iter().find(|old| old.key == section.key);
+            let anchor = match old {
+                Some(old) if old.text == section.text => old
+                    .anchor
+                    .clone()
+                    .filter(|anchor| retained.contains(anchor)),
+                Some(_) => {
+                    notifications.push(format!(
+                        "{} changed; the version below replaces the earlier one.",
+                        section.label
+                    ));
+                    Some(latest.clone())
+                }
+                None if first_request => None,
+                None => {
+                    notifications.push(format!("{} was added.", section.label));
+                    Some(latest.clone())
+                }
+            };
+            InstructionSnapshot {
+                key: section.key.into(),
+                label: section.label,
+                anchor,
+                text: section.text,
+            }
+        })
+        .collect()
 }
 
 fn refresh_pinned_files(
@@ -294,5 +375,97 @@ mod tests {
             ContextStateMutation::UnpinFile { path, reason: None },
         );
         assert!(state.opened_files.is_empty());
+    }
+    fn message(id: &str, content: kraai_types::ConversationItem) -> kraai_types::Message {
+        kraai_types::Message {
+            id: MessageId::new(id),
+            parent_id: None,
+            content,
+            status: kraai_types::MessageStatus::Complete,
+            agent_profile_id: None,
+            generation: None,
+        }
+    }
+
+    fn section(key: &'static str, text: &str) -> InstructionSection {
+        InstructionSection {
+            key,
+            label: format!("{key} label"),
+            text: text.into(),
+        }
+    }
+
+    fn snapshot(key: &str, anchor: Option<&str>, text: &str) -> InstructionSnapshot {
+        InstructionSnapshot {
+            key: key.into(),
+            label: format!("{key} label"),
+            anchor: anchor.map(MessageId::new),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn instructions_stay_in_place_until_they_change_and_report_every_change() {
+        let user = || kraai_types::ConversationItem::User {
+            content: "request".into(),
+        };
+        let first_turn = [message("user", user())];
+        let mut notifications = Vec::new();
+        let refreshed = refresh_instructions(
+            &[],
+            vec![section("agents", "rules")],
+            &MessageId::new("user"),
+            &first_turn.iter().map(|message| &message.id).collect(),
+            &first_turn,
+            &mut notifications,
+        );
+        assert_eq!(refreshed, [snapshot("agents", None, "rules")]);
+        assert!(notifications.is_empty());
+
+        let history = [
+            message("user", user()),
+            message(
+                "reply",
+                kraai_types::ConversationItem::Assistant { items: Vec::new() },
+            ),
+            message("next", user()),
+        ];
+        let retained = history.iter().map(|message| &message.id).collect();
+        let previous = [
+            snapshot("kept", Some("reply"), "same"),
+            snapshot("compacted", Some("gone"), "same"),
+            snapshot("changed", Some("user"), "old"),
+            snapshot("removed", None, "old"),
+        ];
+        let refreshed = refresh_instructions(
+            &previous,
+            vec![
+                section("kept", "same"),
+                section("compacted", "same"),
+                section("changed", "new"),
+                section("added", "new"),
+            ],
+            &MessageId::new("next"),
+            &retained,
+            &history,
+            &mut notifications,
+        );
+        assert_eq!(
+            refreshed,
+            [
+                snapshot("kept", Some("reply"), "same"),
+                snapshot("compacted", None, "same"),
+                snapshot("changed", Some("next"), "new"),
+                snapshot("added", Some("next"), "new"),
+            ]
+        );
+        assert_eq!(
+            notifications,
+            [
+                "removed label was removed; its instructions no longer apply.",
+                "changed label changed; the version below replaces the earlier one.",
+                "added label was added.",
+            ]
+        );
     }
 }

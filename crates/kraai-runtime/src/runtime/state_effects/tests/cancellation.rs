@@ -62,6 +62,14 @@ impl ContextStateStore for PausedContextStore {
             .await
     }
 
+    async fn save_instructions(
+        &self,
+        session_id: &SessionId,
+        instructions: Vec<kraai_persistence::InstructionSnapshot>,
+    ) -> Result<()> {
+        self.inner.save_instructions(session_id, instructions).await
+    }
+
     async fn delete(&self, session_id: &SessionId) -> Result<()> {
         self.inner.delete(session_id).await
     }

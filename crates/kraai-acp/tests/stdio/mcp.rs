@@ -102,16 +102,16 @@ async fn http_attachments_call_tools_with_headers_and_remain_session_scoped() ->
     let replacement_prompt = payloads
         .get(4)
         .ok_or_else(|| eyre!("missing replacement prompt"))?;
-    let system = replacement_prompt
+    let mcp_instructions = replacement_prompt
         .get("messages")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|message| message.get("role") == Some(&json!("system")))
         .map(Value::to_string)
+        .filter(|message| message.contains("Available MCP"))
         .collect::<String>();
-    assert!(system.contains("ACP replacement HTTP echo"));
-    assert!(!system.contains("ACP first HTTP echo"));
+    assert!(mcp_instructions.contains("ACP replacement HTTP echo"));
+    assert!(!mcp_instructions.contains("ACP first HTTP echo"));
     load(&mut harness, &attached, json!([])).await?;
     assert!(tool_status(
         &execute(&mut harness, &attached).await?,
