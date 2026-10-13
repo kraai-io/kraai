@@ -33,7 +33,9 @@ mod test_support;
 
 pub use config::{DynamicConfig, DynamicValue, ModelConfig, ProviderConfig, ProviderManagerConfig};
 pub use definition::{FieldDefinition, FieldValueKind, ProviderDefinition, ValidationError};
-pub use error::{ProviderError, ProviderModelCacheRefreshError, is_transient_error};
+pub use error::{
+    ProviderError, ProviderModelCacheRefreshError, is_context_overflow_error, is_transient_error,
+};
 
 pub use http_retry::{
     DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, ProviderCooldown, parse_retry_after,

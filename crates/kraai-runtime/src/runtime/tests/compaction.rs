@@ -304,3 +304,175 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
     harness.shutdown().await;
     Ok(())
 }
+
+/// Rejects conversation requests that were not compacted yet as too large for the context.
+struct OverflowingProvider {
+    requests: std::sync::Mutex<Vec<&'static str>>,
+    in_stream: bool,
+    always_overflow: bool,
+}
+
+impl OverflowingProvider {
+    fn overflow() -> color_eyre::Report {
+        kraai_provider_core::ProviderError::ContextWindowExceeded(String::from("too long")).into()
+    }
+}
+
+#[async_trait]
+impl Provider for OverflowingProvider {
+    fn get_provider_id(&self) -> ProviderId {
+        ProviderId::new("mock")
+    }
+
+    async fn list_models(&self) -> Vec<Model> {
+        vec![super::harness::mock_model()]
+    }
+
+    async fn cache_models(&self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
+        Ok(())
+    }
+
+    async fn generate_reply_stream(
+        &self,
+        _model_id: &ModelId,
+        request: ProviderRequest,
+        _request_context: &ProviderRequestContext,
+    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
+        let text = serde_json::to_string(&request.messages)?;
+        let kind = if text.contains("CONTEXT CHECKPOINT COMPACTION") {
+            "summary"
+        } else if text.contains("summary of the work") {
+            "compacted"
+        } else {
+            "original"
+        };
+        self.requests
+            .lock()
+            .map_err(|error| color_eyre::eyre::eyre!("{error}"))?
+            .push(kind);
+        let delta = |text: &str| {
+            Ok(ProviderStreamEvent::TextDelta {
+                item_id: String::from("answer"),
+                phase: AssistantPhase::FinalAnswer,
+                delta: text.into(),
+            })
+        };
+        match kind {
+            "summary" => Ok(Box::pin(stream::iter([delta("summary of the work")]))),
+            "compacted" if !self.always_overflow => Ok(Box::pin(stream::iter([delta("done")]))),
+            _ if self.in_stream => Ok(Box::pin(stream::iter([
+                delta("partial"),
+                Err(Self::overflow()),
+            ]))),
+            _ => Err(Self::overflow()),
+        }
+    }
+}
+
+async fn drive_overflowing(
+    in_stream: bool,
+    always_overflow: bool,
+) -> Result<(
+    super::super::stream_driver::StreamDriveResult,
+    Vec<&'static str>,
+)> {
+    let provider = std::sync::Arc::new(OverflowingProvider {
+        requests: std::sync::Mutex::default(),
+        in_stream,
+        always_overflow,
+    });
+    let mut providers = ProviderManager::new();
+    providers.register_provider(
+        ProviderId::new("mock"),
+        Box::new(SharedProvider(provider.clone())),
+    );
+    let harness = RuntimeTestHarness::new_with_parts(providers)
+        .await
+        .expect("runtime regression fixture must initialize");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let agent = &harness.runtime.agent_manager;
+    let request = agent
+        .prepare_start_stream(
+            &session_id,
+            "hello".into(),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+            Default::default(),
+        )
+        .await?;
+    assert!(!request.compact_first);
+    let result = super::harness::drive_stream(
+        harness.runtime.clone(),
+        session_id,
+        agent.cloned_provider_manager(),
+        request,
+    )
+    .await;
+    harness.shutdown().await;
+    let requests = provider
+        .requests
+        .lock()
+        .map_err(|error| color_eyre::eyre::eyre!("{error}"))?
+        .clone();
+    Ok((result, requests))
+}
+
+struct SharedProvider(std::sync::Arc<OverflowingProvider>);
+
+#[async_trait]
+impl Provider for SharedProvider {
+    fn get_provider_id(&self) -> ProviderId {
+        self.0.get_provider_id()
+    }
+
+    async fn list_models(&self) -> Vec<Model> {
+        self.0.list_models().await
+    }
+
+    async fn cache_models(&self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
+        Ok(())
+    }
+
+    async fn generate_reply_stream(
+        &self,
+        model_id: &ModelId,
+        request: ProviderRequest,
+        request_context: &ProviderRequestContext,
+    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
+        self.0
+            .generate_reply_stream(model_id, request, request_context)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn context_overflow_compacts_once_and_retries_the_request() -> Result<()> {
+    for in_stream in [false, true] {
+        let (result, requests) = drive_overflowing(in_stream, false).await?;
+        assert!(
+            matches!(
+                result,
+                super::super::stream_driver::StreamDriveResult::Completed(_)
+            ),
+            "{result:?}"
+        );
+        assert_eq!(requests, ["original", "summary", "compacted"]);
+    }
+    let (result, requests) = drive_overflowing(false, true).await?;
+    let super::super::stream_driver::StreamDriveResult::FailedToStart { error } = result else {
+        return Err(color_eyre::eyre::eyre!(
+            "expected the second overflow to fail, got {result:?}"
+        ));
+    };
+    assert!(error.contains("too long"));
+    assert_eq!(requests, ["original", "summary", "compacted"]);
+    Ok(())
+}

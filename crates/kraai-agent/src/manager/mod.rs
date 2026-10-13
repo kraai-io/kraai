@@ -87,7 +87,10 @@ pub struct PendingStreamRequest {
     pub model_id: ModelId,
     pub provider_request: ProviderRequest,
     pub context_notifications: Vec<String>,
+    /// Summarizes older history; runs before the request when `compact_first` is set, and
+    /// after the provider reports that the request overflowed the model's context window.
     pub context_compaction: Option<crate::ContextCompaction>,
+    pub compact_first: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

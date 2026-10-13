@@ -157,6 +157,16 @@ impl ProviderError {
     }
 }
 
+/// Whether the request was too large for the model's context window.
+pub fn is_context_overflow_error(report: &color_eyre::Report) -> bool {
+    report.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<ProviderError>(),
+            Some(ProviderError::ContextWindowExceeded(_))
+        )
+    })
+}
+
 /// Whether a provider failure anywhere in `report`'s chain may succeed on an identical retry.
 pub fn is_transient_error(report: &color_eyre::Report) -> bool {
     report.chain().any(|cause| {

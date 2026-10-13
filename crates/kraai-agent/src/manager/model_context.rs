@@ -1,6 +1,22 @@
 use super::*;
 use crate::compaction::{ContextCompaction, assemble};
 
+pub(super) struct ModelContext {
+    pub(super) request: ProviderRequest,
+    /// Present whenever there is history to summarize.
+    pub(super) compaction: Option<ContextCompaction>,
+    /// Whether the request is projected to fill most of the model's context window.
+    pub(super) compact_first: bool,
+    pub(super) notifications: Vec<String>,
+}
+
+impl ModelContext {
+    #[cfg(test)]
+    pub(super) fn due_compaction(self) -> Option<ContextCompaction> {
+        self.compaction.filter(|_| self.compact_first)
+    }
+}
+
 impl AgentManager {
     pub(super) async fn get_model_history(
         &self,
@@ -50,7 +66,7 @@ impl AgentManager {
         script_tool: Option<ScriptToolDefinition>,
         max_context: Option<usize>,
         selection: &kraai_types::ModelSelection,
-    ) -> Result<(ProviderRequest, Option<ContextCompaction>, Vec<String>)> {
+    ) -> Result<ModelContext> {
         let store = self.persistence.compactions().clone();
         let mut checkpoints = store
             .compatible_checkpoints(
@@ -101,12 +117,20 @@ impl AgentManager {
             .iter()
             .flat_map(|checkpoint| &checkpoint.superseded_usage)
             .collect();
-        let used_context_tokens = history
+        let reported = history
             .iter()
+            .enumerate()
             .rev()
-            .filter(|message| !superseded_usage.contains(&message.id))
-            .find_map(snapshot::message_context_usage)
-            .map(|context| context.usage.used_context_tokens());
+            .filter(|(_, message)| !superseded_usage.contains(&message.id))
+            .find_map(|(index, message)| {
+                snapshot::message_context_usage(message)
+                    .map(|context| (index, context.usage.used_context_tokens()))
+            });
+        let unreported_tokens: usize = history
+            .iter()
+            .skip(reported.map_or(0, |(index, _)| index + 1))
+            .map(|message| message.content.estimated_tokens())
+            .sum();
         let covered_through = history.last().map(|message| message.id.clone());
         let mut request = assemble(
             &prompt.prefix,
@@ -126,26 +150,35 @@ impl AgentManager {
             request.messages.insert(1, user.clone());
         }
         crate::context_state::append_notifications(&mut request, &files.notifications);
-        let compaction = max_context
-            .filter(|limit| {
-                *limit > 0
-                    && used_context_tokens
-                        .is_some_and(|used| (used as u128) * 100 >= (*limit as u128) * 80)
-            })
-            .map(|_| ContextCompaction {
-                store,
-                usage_store: self.usage_store.clone(),
-                session_id: session_id.clone(),
-                original: request.clone(),
-                prefix: prompt.prefix.clone(),
-                snapshots: files.snapshots,
-                file_notifications: files.notifications.clone(),
-                covered_through,
-                previous_boundary: previous.map(|checkpoint| checkpoint.covered_through),
-                on_usage: None,
-                usage_barrier: None,
-                image_resolver: None,
-            });
-        Ok((request, compaction, files.notifications))
+        let request_tokens: usize = request
+            .messages
+            .iter()
+            .map(ConversationItem::estimated_tokens)
+            .sum();
+        let projected_tokens = reported
+            .map_or(0, |(_, used)| used.saturating_add(unreported_tokens))
+            .max(request_tokens);
+        let compact_first = max_context.is_some_and(|limit| {
+            limit > 0 && (projected_tokens as u128) * 100 >= (limit as u128) * 80
+        });
+        let compaction = covered_through.is_some().then(|| ContextCompaction {
+            store,
+            usage_store: self.usage_store.clone(),
+            session_id: session_id.clone(),
+            prefix: prompt.prefix.clone(),
+            snapshots: files.snapshots,
+            file_notifications: files.notifications.clone(),
+            covered_through,
+            previous_boundary: previous.map(|checkpoint| checkpoint.covered_through),
+            on_usage: None,
+            usage_barrier: None,
+            image_resolver: None,
+        });
+        Ok(ModelContext {
+            request,
+            compaction,
+            compact_first,
+            notifications: files.notifications,
+        })
     }
 }

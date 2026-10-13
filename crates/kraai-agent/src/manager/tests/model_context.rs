@@ -102,7 +102,7 @@ async fn model_switches_use_current_context_limits_after_restarting() -> Result<
                 selection.options,
             )
             .await?;
-        assert_eq!(request.context_compaction.is_some(), compact);
+        assert_eq!(request.compact_first, compact);
         let generation = manager
             .get_chat_history(&session)
             .await?

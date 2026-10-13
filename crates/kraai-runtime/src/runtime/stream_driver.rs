@@ -82,6 +82,8 @@ struct ResponseRequest {
     model_id: ModelId,
     provider_request: ProviderRequest,
     context: ProviderRequestContext,
+    /// Used once if the provider reports that the request overflowed the context window.
+    compaction: Option<ContextCompaction>,
 }
 
 impl StreamReader {
@@ -93,21 +95,22 @@ impl StreamReader {
             provider_request,
             context_notifications: _,
             context_compaction,
+            compact_first,
         } = request;
         let on_auxiliary_usage = auxiliary_usage_observer(
             self.event_tx.clone(),
             self.session_id.clone(),
             self.auxiliary_usage_task.clone(),
         );
-        let provider_request = match context_compaction {
+        let mut compaction = context_compaction.map(|compaction| {
+            compaction
+                .observe_usage(self.barrier.clone(), on_auxiliary_usage.clone())
+                .with_image_resolver(self.image_resolver())
+        });
+        let provider_request = match compaction.take_if(|_| compact_first) {
             Some(compaction) => {
                 match self
-                    .compact(
-                        compaction,
-                        &provider_id,
-                        &model_id,
-                        on_auxiliary_usage.clone(),
-                    )
+                    .compact(&compaction, &provider_request, &provider_id, &model_id)
                     .await
                 {
                     Ok(request) => request,
@@ -146,6 +149,7 @@ impl StreamReader {
             model_id,
             provider_request,
             context,
+            compaction,
         })
         .await
     }
@@ -178,16 +182,16 @@ impl StreamReader {
 
     async fn compact(
         &self,
-        compaction: ContextCompaction,
+        compaction: &ContextCompaction,
+        original: &ProviderRequest,
         provider_id: &ProviderId,
         model_id: &ModelId,
-        on_auxiliary_usage: Arc<dyn Fn(kraai_types::RequestUsage) + Send + Sync>,
     ) -> Result<ProviderRequest, String> {
-        let compaction = compaction
-            .observe_usage(self.barrier.clone(), on_auxiliary_usage)
-            .with_image_resolver(self.image_resolver());
         self.notify(String::from("Compacting conversation context."));
-        match compaction.run(&self.providers, provider_id, model_id).await {
+        match compaction
+            .run(original, &self.providers, provider_id, model_id)
+            .await
+        {
             Ok(outcome) => {
                 self.notify(outcome.notification);
                 Ok(outcome.request)
@@ -262,8 +266,9 @@ impl StreamReader {
             message_id,
             provider_id,
             model_id,
-            provider_request,
+            mut provider_request,
             context,
+            mut compaction,
         } = request;
         let mut response = ResponseState::default();
         let mut reissues = 0_u32;
@@ -281,6 +286,20 @@ impl StreamReader {
             {
                 Ok(stream) => stream,
                 Err(error) => {
+                    if kraai_provider_core::is_context_overflow_error(&error)
+                        && let Some(compaction) = compaction.take()
+                    {
+                        match self
+                            .compact(&compaction, &provider_request, &provider_id, &model_id)
+                            .await
+                        {
+                            Ok(compacted) => {
+                                provider_request = compacted;
+                                continue;
+                            }
+                            Err(error) => return StreamDriveResult::FailedToStart { error },
+                        }
+                    }
                     let error = format!(
                         "Provider request {message_id} failed to start after {} ms: {error:#}",
                         started.elapsed().as_millis()
@@ -300,7 +319,11 @@ impl StreamReader {
                 ResponseEnd::Failed(error) => {
                     return StreamDriveResult::FailedDuringStream { error };
                 }
-                ResponseEnd::Interrupted { error, transient } => {
+                ResponseEnd::Interrupted {
+                    error,
+                    transient,
+                    overflow,
+                } => {
                     let error = format!(
                         "Provider request {message_id} stream failed after {} ms: {error}",
                         started.elapsed().as_millis()
@@ -310,6 +333,20 @@ impl StreamReader {
                         completed_script = response.boundary.is_some(), "Provider stream failed");
                     if response.boundary.is_some() {
                         return response.finish();
+                    }
+                    if overflow && let Some(compaction) = compaction.take() {
+                        if !self.forward(StreamEvent::Restart { reason: error }) {
+                            return StreamDriveResult::Stopped;
+                        }
+                        response = ResponseState::default();
+                        match self
+                            .compact(&compaction, &provider_request, &provider_id, &model_id)
+                            .await
+                        {
+                            Ok(compacted) => provider_request = compacted,
+                            Err(error) => return StreamDriveResult::FailedDuringStream { error },
+                        }
+                        continue;
                     }
                     if !transient || reissues >= MAX_STREAM_REISSUES {
                         return StreamDriveResult::FailedDuringStream { error };
@@ -360,6 +397,7 @@ impl StreamReader {
                 Err(error) => {
                     return ResponseEnd::Interrupted {
                         transient: kraai_provider_core::is_transient_error(&error),
+                        overflow: kraai_provider_core::is_context_overflow_error(&error),
                         error: format!("{error:#}"),
                     };
                 }
@@ -473,7 +511,12 @@ enum ResponseEnd {
     Finished,
     Stopped,
     Failed(String),
-    Interrupted { error: String, transient: bool },
+    Interrupted {
+        error: String,
+        transient: bool,
+        /// The request did not fit the model's context window.
+        overflow: bool,
+    },
 }
 
 fn protocol_boundary(call_id: ToolCallId, input: &str) -> CompletedProtocolBoundary {

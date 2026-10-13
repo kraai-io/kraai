@@ -43,7 +43,7 @@ async fn request(manager: &AgentManager, session: &SessionId) -> Result<Provider
     let history = manager
         .get_model_history(&tip, (&provider, &model), false)
         .await?;
-    let (request, _, _) = manager
+    let request = manager
         .build_model_context(
             session,
             history,
@@ -59,7 +59,8 @@ async fn request(manager: &AgentManager, session: &SessionId) -> Result<Provider
                 options: Default::default(),
             },
         )
-        .await?;
+        .await?
+        .request;
     assert!(request.cacheable_messages.is_none());
     Ok(request)
 }

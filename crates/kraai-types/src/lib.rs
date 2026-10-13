@@ -81,6 +81,8 @@ pub use conversation::{
     AssistantItem, AssistantPhase, ContentPart, ConversationItem, MessageContent,
 };
 mod conversation;
+mod token_estimate;
+pub use token_estimate::{BYTES_PER_TOKEN, estimate_text_tokens};
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]

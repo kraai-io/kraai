@@ -12,13 +12,14 @@ const SUMMARY_PREFIX: &str = "Another language model worked on this task and pro
 impl ContextCompaction {
     pub(super) async fn summarize(
         &self,
+        original: &ProviderRequest,
         providers: &ProviderManager,
         provider_id: &ProviderId,
         model_id: &ModelId,
         native: bool,
         requests: &mut Vec<RequestUsage>,
     ) -> Result<ConversationItem> {
-        let mut request = self.original.clone();
+        let mut request = original.clone();
         request
             .messages
             .retain(|item| !matches!(item, ConversationItem::FileContext { .. }));

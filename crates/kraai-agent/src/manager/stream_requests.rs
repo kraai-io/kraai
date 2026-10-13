@@ -136,7 +136,12 @@ impl AgentManager {
         let max_context = self
             .resolve_model_max_context(&provider_id, &model_id)
             .await;
-        let (provider_request, context_compaction, notifications) = self
+        let model_context::ModelContext {
+            request: provider_request,
+            compaction: context_compaction,
+            compact_first,
+            notifications,
+        } = self
             .build_model_context(
                 session_id,
                 context,
@@ -172,6 +177,7 @@ impl AgentManager {
             model_id,
             provider_request,
             context_compaction,
+            compact_first,
             context_notifications: system_prompt.context_notifications,
         }))
     }

@@ -19,7 +19,6 @@ pub struct ContextCompaction {
     pub(crate) store: SqliteCompactionStore,
     pub(crate) usage_store: Arc<dyn RequestUsageStore>,
     pub(crate) session_id: SessionId,
-    pub(crate) original: ProviderRequest,
     pub(crate) prefix: String,
     pub(crate) snapshots: Vec<FileContextSnapshot>,
     pub(crate) file_notifications: Vec<String>,
@@ -106,8 +105,10 @@ impl ContextCompaction {
         self
     }
 
+    /// Summarizes `original`, which must be the request this compaction was prepared with.
     pub async fn run(
         &self,
+        original: &ProviderRequest,
         providers: &ProviderManager,
         provider_id: &ProviderId,
         model_id: &ModelId,
@@ -119,12 +120,17 @@ impl ContextCompaction {
         let native = providers.supports_native_compaction(provider_id, model_id)?;
         let mut requests = Vec::new();
         let summary = self
-            .summarize(providers, provider_id, model_id, native, &mut requests)
+            .summarize(
+                original,
+                providers,
+                provider_id,
+                model_id,
+                native,
+                &mut requests,
+            )
             .await?;
-        let mut replacement = retained_users(
-            &self.original.messages,
-            if native { 64_000 } else { 20_000 },
-        );
+        let mut replacement =
+            retained_users(&original.messages, if native { 64_000 } else { 20_000 });
         replacement.push(summary);
         let checkpoint = CompactionCheckpoint {
             covered_through: covered.clone(),
@@ -148,8 +154,8 @@ impl ContextCompaction {
             &self.snapshots,
             Some(&checkpoint),
             Vec::new(),
-            self.original.script_tool.clone(),
-            &self.original.options,
+            original.script_tool.clone(),
+            &original.options,
         );
         crate::context_state::append_notifications(&mut request, &self.file_notifications);
         Ok(CompactionOutcome {
@@ -161,7 +167,7 @@ impl ContextCompaction {
 }
 
 fn retained_users(messages: &[ConversationItem], token_budget: usize) -> Vec<ConversationItem> {
-    let mut remaining = token_budget.saturating_mul(4);
+    let mut remaining = token_budget.saturating_mul(kraai_types::BYTES_PER_TOKEN);
     let mut retained = Vec::new();
     for item in messages.iter().rev() {
         let ConversationItem::User { content } = item else {
