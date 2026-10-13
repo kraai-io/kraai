@@ -22,8 +22,8 @@ impl AgentManager {
             .collect()
     }
 
-    pub async fn get_message(&self, id: &MessageId) -> Result<Option<Message>> {
-        self.message_store.get(id).await
+    pub async fn get_message(&self, id: &MessageId) -> AgentResult<Option<Message>> {
+        Ok(self.message_store.get(id).await?)
     }
 
     pub fn shared_session_store(&self) -> Arc<kraai_persistence::SqliteSessionStore> {
@@ -62,7 +62,7 @@ impl AgentManager {
         }
     }
 
-    pub async fn create_session(&self) -> Result<SessionId> {
+    pub async fn create_session(&self) -> AgentResult<SessionId> {
         self.create_session_with(None, None).await
     }
 
@@ -70,7 +70,7 @@ impl AgentManager {
         &self,
         workspace_dir: Option<PathBuf>,
         profile_id: Option<String>,
-    ) -> Result<SessionId> {
+    ) -> AgentResult<SessionId> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or(std::time::Duration::ZERO)
@@ -86,9 +86,9 @@ impl AgentManager {
             .iter()
             .any(|profile| profile.id == selected_profile_id)
         {
-            return Err(eyre!(kraai_types::DomainError::not_found(format!(
+            return Err(AgentError::not_found(format!(
                 "Unknown profile: {selected_profile_id}"
-            ))));
+            )));
         }
         let session = SessionMeta {
             revision: 0,
@@ -140,7 +140,7 @@ impl AgentManager {
             .unwrap_or_else(|| DEFAULT_AGENT_PROFILE_ID.to_string())
     }
 
-    pub async fn prepare_session(&self, session_id: &SessionId) -> Result<bool> {
+    pub async fn prepare_session(&self, session_id: &SessionId) -> AgentResult<bool> {
         match self.session_store.get(session_id).await? {
             Some(session) => {
                 self.with_runtime_state(session_id, &session.workspace_dir, |_| ());
@@ -155,7 +155,7 @@ impl AgentManager {
         &self,
         session_id: &SessionId,
         source_message_id: &MessageId,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         let source = self
             .message_store
             .get(source_message_id)
@@ -172,9 +172,9 @@ impl AgentManager {
         )
         .await?;
         if !self.prepare_session(session_id).await? {
-            return Err(eyre!(kraai_types::DomainError::not_found(format!(
+            return Err(AgentError::not_found(format!(
                 "Session not found: {session_id}"
-            ))));
+            )));
         }
         let session = self.require_session(session_id).await?;
         let profile = self.resolve_selected_profile(&session)?;
@@ -188,7 +188,7 @@ impl AgentManager {
     }
 
     /// Rolls back a streaming placeholder left by a stopped runtime; requires the session lease.
-    pub async fn recover_interrupted_session(&self, session_id: &SessionId) -> Result<()> {
+    pub async fn recover_interrupted_session(&self, session_id: &SessionId) -> AgentResult<()> {
         let session = self.require_session(session_id).await?;
         self.recover_interrupted_stream(session).await?;
         Ok(())
@@ -202,7 +202,7 @@ impl AgentManager {
     pub(super) async fn recover_interrupted_stream(
         &self,
         mut session: SessionMeta,
-    ) -> Result<SessionMeta> {
+    ) -> AgentResult<SessionMeta> {
         // A loaded background session can legitimately have a streaming tip. Only recover a
         // placeholder when this process has no corresponding active stream.
         if !self.persistence.sessions().owns_turn(&session.id).await? {
@@ -247,7 +247,7 @@ impl AgentManager {
 
     /// For a script result at the tip, the first result of its response and the assistant
     /// message that made the call it answers.
-    async fn answered_response(&self, tip: &Message) -> Result<Option<(Message, Message)>> {
+    async fn answered_response(&self, tip: &Message) -> AgentResult<Option<(Message, Message)>> {
         let mut result = tip.clone();
         loop {
             let ConversationItem::ScriptResult { call_id, .. } = &result.content else {
@@ -271,22 +271,25 @@ impl AgentManager {
         }
     }
 
-    pub(super) async fn validate_history_for_session(&self, session: &SessionMeta) -> Result<()> {
+    pub(super) async fn validate_history_for_session(
+        &self,
+        session: &SessionMeta,
+    ) -> AgentResult<()> {
         HistoryCursor::new(self.message_store.as_ref(), session.tip_id.clone())
             .read_to_root()
             .await?;
         Ok(())
     }
 
-    pub async fn list_sessions(&self) -> Result<Vec<SessionMeta>> {
-        self.session_store.list().await
+    pub async fn list_sessions(&self) -> AgentResult<Vec<SessionMeta>> {
+        Ok(self.session_store.list().await?)
     }
 
-    pub async fn list_session_ids(&self) -> Result<HashSet<SessionId>> {
-        self.session_store.list_ids().await
+    pub async fn list_session_ids(&self) -> AgentResult<HashSet<SessionId>> {
+        Ok(self.session_store.list_ids().await?)
     }
 
-    pub async fn list_user_input_history(&self, limit: usize) -> Result<Vec<String>> {
+    pub async fn list_user_input_history(&self, limit: usize) -> AgentResult<Vec<String>> {
         let mut history = Vec::new();
         if limit == 0 {
             return Ok(history);
@@ -312,7 +315,7 @@ impl AgentManager {
         Ok(history)
     }
 
-    pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
+    pub async fn delete_session(&self, session_id: &SessionId) -> AgentResult<()> {
         self.persistence
             .sessions()
             .ensure_writable(session_id)
@@ -324,14 +327,14 @@ impl AgentManager {
             mcp.shutdown().await;
         }
         lock(&self.session_states).remove(session_id);
-        self.persistence.delete_session(session_id).await
+        Ok(self.persistence.delete_session(session_id).await?)
     }
 
     pub async fn set_workspace_dir(
         &self,
         session_id: &SessionId,
         workspace_dir: PathBuf,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         let mut session = self.require_session(session_id).await?;
         session.workspace_dir = workspace_dir.clone();
         session.updated_at = current_unix_timestamp();
@@ -343,7 +346,10 @@ impl AgentManager {
         Ok(())
     }
 
-    pub async fn list_agent_profiles(&self, session_id: &SessionId) -> Result<AgentProfilesState> {
+    pub async fn list_agent_profiles(
+        &self,
+        session_id: &SessionId,
+    ) -> AgentResult<AgentProfilesState> {
         let session = self.require_session(session_id).await?;
         let resolved = self.resolve_profiles_for_workspace(&session.workspace_dir);
         let profile_locked = self.is_profile_locked(session_id);
@@ -363,11 +369,11 @@ impl AgentManager {
         &self,
         session_id: &SessionId,
         profile_id: String,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         if self.is_profile_locked(session_id) {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "Cannot change profile while the current turn is active"
-            )));
+            return Err(AgentError::conflict(
+                "Cannot change profile while the current turn is active",
+            ));
         }
 
         let mut session = self.require_session(session_id).await?;
@@ -377,9 +383,9 @@ impl AgentManager {
             .iter()
             .any(|profile| profile.id == profile_id);
         if !exists {
-            return Err(eyre!(kraai_types::DomainError::not_found(format!(
+            return Err(AgentError::not_found(format!(
                 "Unknown profile: {profile_id}"
-            ))));
+            )));
         }
 
         session.selected_profile_id = Some(profile_id);
@@ -391,7 +397,7 @@ impl AgentManager {
     pub async fn get_session_model(
         &self,
         session_id: &SessionId,
-    ) -> Result<Option<kraai_types::ModelSelection>> {
+    ) -> AgentResult<Option<kraai_types::ModelSelection>> {
         Ok(self.require_session(session_id).await?.selected_model)
     }
 
@@ -399,11 +405,11 @@ impl AgentManager {
         &self,
         session_id: &SessionId,
         selection: kraai_types::ModelSelection,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         if self.is_turn_active(session_id) {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "Cannot change model while the current turn is active"
-            )));
+            return Err(AgentError::conflict(
+                "Cannot change model while the current turn is active",
+            ));
         }
         self.require_session(session_id).await?;
         self.validate_model_options(
@@ -420,7 +426,7 @@ impl AgentManager {
         &self,
         session_id: &SessionId,
         selection: &kraai_types::ModelSelection,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         let mut session = self.require_session(session_id).await?;
         if session.selected_model.as_ref() != Some(selection) {
             session.selected_model = Some(selection.clone());
@@ -436,43 +442,33 @@ impl AgentManager {
         model_id: &ModelId,
         options: &ModelOptionValues,
         require_all: bool,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         let provider = read(&self.providers)
             .get_provider(provider_id)
-            .ok_or_else(|| {
-                eyre!(kraai_types::DomainError::not_found(format!(
-                    "Unknown provider: {provider_id}"
-                )))
-            })?;
-        let model = provider.get_model(model_id).await.ok_or_else(|| {
-            eyre!(kraai_types::DomainError::not_found(format!(
-                "Unknown model: {model_id}"
-            )))
-        })?;
+            .ok_or_else(|| AgentError::not_found(format!("Unknown provider: {provider_id}")))?;
+        let model = provider
+            .get_model(model_id)
+            .await
+            .ok_or_else(|| AgentError::not_found(format!("Unknown model: {model_id}")))?;
         kraai_types::validate_model_option_values(&model.options, options, require_all).map_err(
             |errors| {
-                eyre!(kraai_types::DomainError::invalid_argument(
+                AgentError::invalid_argument(
                     errors
                         .into_iter()
                         .map(|error| format!("{}: {}", error.option, error.message))
                         .collect::<Vec<_>>()
-                        .join("; ")
-                ))
+                        .join("; "),
+                )
             },
         )?;
-        kraai_provider_core::validate_model_option_effects(&model.options, options).map_err(
-            |error| {
-                eyre!(kraai_types::DomainError::invalid_argument(
-                    error.to_string()
-                ))
-            },
-        )
+        kraai_provider_core::validate_model_option_effects(&model.options, options)
+            .map_err(|error| AgentError::invalid_argument(error.to_string()))
     }
 
     pub async fn get_workspace_dir_state(
         &self,
         session_id: &SessionId,
-    ) -> Result<Option<(PathBuf, bool)>> {
+    ) -> AgentResult<Option<(PathBuf, bool)>> {
         let Some(session) = self.session_store.get(session_id).await? else {
             return Ok(None);
         };
@@ -497,18 +493,18 @@ impl AgentManager {
         &self,
         config: ProviderManagerConfig,
         registry: ProviderRegistry,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         let mut providers = self.cloned_provider_manager();
         let result = providers.load_config(config, registry).await;
         *write(&self.providers) = providers;
-        result
+        Ok(result?)
     }
 
     pub async fn list_models(&self) -> HashMap<ProviderId, Vec<Model>> {
         self.cloned_provider_manager().list_all_models().await
     }
 
-    pub async fn get_tip(&self, session_id: &SessionId) -> Result<Option<MessageId>> {
+    pub async fn get_tip(&self, session_id: &SessionId) -> AgentResult<Option<MessageId>> {
         Ok(self
             .session_store
             .get(session_id)
@@ -521,7 +517,7 @@ impl AgentManager {
         &self,
         session_id: &SessionId,
         new_tip: Option<MessageId>,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         if let Some(mut session) = self.session_store.get(session_id).await? {
             session.tip_id = new_tip;
             session.updated_at = current_unix_timestamp();
@@ -564,11 +560,12 @@ impl AgentManager {
         )
     }
 
-    pub(super) fn resolve_selected_profile(&self, session: &SessionMeta) -> Result<AgentProfile> {
+    pub(super) fn resolve_selected_profile(
+        &self,
+        session: &SessionMeta,
+    ) -> AgentResult<AgentProfile> {
         let Some(profile_id) = session.selected_profile_id.as_ref() else {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "No profile selected for this session"
-            )));
+            return Err(AgentError::conflict("No profile selected for this session"));
         };
 
         self.resolve_profiles_for_workspace(&session.workspace_dir)
@@ -576,31 +573,26 @@ impl AgentManager {
             .into_iter()
             .find(|profile| &profile.id == profile_id)
             .ok_or_else(|| {
-                eyre!(kraai_types::DomainError::not_found(format!(
-                    "Selected profile is unavailable: {profile_id}"
-                )))
+                AgentError::not_found(format!("Selected profile is unavailable: {profile_id}"))
             })
     }
 
-    pub(super) async fn require_session(&self, session_id: &SessionId) -> Result<SessionMeta> {
-        self.session_store.get(session_id).await?.ok_or_else(|| {
-            eyre!(kraai_types::DomainError::not_found(format!(
-                "Session not found: {session_id}"
-            )))
-        })
+    pub(super) async fn require_session(&self, session_id: &SessionId) -> AgentResult<SessionMeta> {
+        self.session_store
+            .get(session_id)
+            .await?
+            .ok_or_else(|| AgentError::not_found(format!("Session not found: {session_id}")))
     }
 
-    pub fn script_turn_context(&self, session_id: &SessionId) -> Result<ScriptTurnContext> {
+    pub fn script_turn_context(&self, session_id: &SessionId) -> AgentResult<ScriptTurnContext> {
         let states = lock(&self.session_states);
         let state = states.get(session_id).ok_or_else(|| {
-            eyre!(kraai_types::DomainError::not_found(format!(
+            AgentError::not_found(format!(
                 "Session runtime state is unavailable: {session_id}"
-            )))
+            ))
         })?;
         let profile = state.active_turn_profile.as_ref().ok_or_else(|| {
-            eyre!(kraai_types::DomainError::conflict(format!(
-                "Session has no active turn: {session_id}"
-            )))
+            AgentError::conflict(format!("Session has no active turn: {session_id}"))
         })?;
         let context = ScriptTurnContext {
             workspace_dir: state.active_workspace_dir.clone(),

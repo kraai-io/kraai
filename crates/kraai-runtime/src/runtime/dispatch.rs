@@ -14,8 +14,11 @@ use crate::handle::Command;
 use crate::settings::read_settings_document;
 use kraai_types::ModelSelection;
 
-fn respond<T>(response: oneshot::Sender<RuntimeResult<T>>, result: Result<T>) {
-    let _ = response.send(result.map_err(RuntimeError::from_report));
+fn respond<T, E: Into<RuntimeError>>(
+    response: oneshot::Sender<RuntimeResult<T>>,
+    result: std::result::Result<T, E>,
+) {
+    let _ = response.send(result.map_err(Into::into));
 }
 
 impl RuntimeCore {
@@ -254,7 +257,7 @@ impl RuntimeCore {
                         .selected_profile_id
                         .clone()
                         .ok_or_else(|| eyre!("Agent profile catalog has no default profile"))?;
-                    Ok(AgentProfileCatalog {
+                    Ok::<_, color_eyre::Report>(AgentProfileCatalog {
                         workspace_dir: workspace_dir.display().to_string(),
                         default_profile_id,
                         profiles: profiles.profiles,
@@ -345,7 +348,7 @@ impl RuntimeCore {
                             session.is_streaming = activity.streaming;
                         }
                     }
-                    Ok(sessions)
+                    Ok::<_, RuntimeError>(sessions)
                 }
                 .await;
                 respond(response, result);

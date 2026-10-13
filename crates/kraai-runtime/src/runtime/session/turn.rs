@@ -48,7 +48,7 @@ impl SessionActor {
         {
             Ok(queued) => queued,
             Err(error) => {
-                let _ = response.send(Err(RuntimeError::from_report(error)));
+                let _ = response.send(Err(RuntimeError::from(error)));
                 return;
             }
         };
@@ -75,13 +75,13 @@ impl SessionActor {
                     }
                 }
                 Err(error) => {
-                    let _ = response.send(Err(RuntimeError::from_report(error)));
+                    let _ = response.send(Err(RuntimeError::from(error)));
                 }
             }
             return;
         }
         if let Err(error) = self.ensure_lease().await {
-            let _ = response.send(Err(RuntimeError::from_report(error)));
+            let _ = response.send(Err(RuntimeError::from(error)));
             return;
         }
         self.begin_preparation(
@@ -136,7 +136,7 @@ impl SessionActor {
                 true,
             )
             .await
-            .map_err(RuntimeError::from_report)
+            .map_err(RuntimeError::from)
     }
 
     async fn validate_submission(
@@ -186,7 +186,7 @@ impl SessionActor {
         let queued = match prepared {
             Ok(queued) => queued,
             Err(error) => {
-                origin.fail(RuntimeError::from_report(error));
+                origin.fail(RuntimeError::from(error));
                 return;
             }
         };
@@ -338,7 +338,7 @@ impl SessionActor {
     pub(super) async fn prepared(
         &mut self,
         generation: u64,
-        outcome: Result<Option<(ProviderManager, PendingStreamRequest)>>,
+        outcome: kraai_agent::AgentResult<Option<(ProviderManager, PendingStreamRequest)>>,
     ) {
         let preparation = match std::mem::replace(&mut self.state, TurnState::Idle) {
             TurnState::Preparing(preparation) if preparation.generation == generation => {
@@ -389,7 +389,7 @@ impl SessionActor {
             Err(error) => {
                 if let Some(cancel) = cancel {
                     self.finish_turn().await;
-                    origin.fail(RuntimeError::from_report(error));
+                    origin.fail(RuntimeError::from(error));
                     cancel.answer(true);
                     return;
                 }
@@ -411,7 +411,7 @@ impl SessionActor {
                         }
                         match response {
                             Some(response) => {
-                                let _ = response.send(Err(RuntimeError::from_report(error)));
+                                let _ = response.send(Err(RuntimeError::from(error)));
                             }
                             None => self.runtime.send_event(Event::ContinuationFailed {
                                 session_id: self.session_id.clone(),
@@ -421,7 +421,7 @@ impl SessionActor {
                     }
                     PreparationOrigin::Send(response) => {
                         self.finish_turn().await;
-                        let _ = response.send(Err(RuntimeError::from_report(error)));
+                        let _ = response.send(Err(RuntimeError::from(error)));
                     }
                     PreparationOrigin::Queue => {
                         self.finish_turn().await;

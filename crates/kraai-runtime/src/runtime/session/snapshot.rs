@@ -29,7 +29,7 @@ impl SessionActor {
         let captured = match self.capture_snapshot().await {
             Ok(captured) => captured,
             Err(error) => {
-                let _ = response.send(Err(RuntimeError::from_report(error)));
+                let _ = response.send(Err(RuntimeError::from(error)));
                 return;
             }
         };
@@ -37,7 +37,7 @@ impl SessionActor {
         let session_id = self.session_id.clone();
         tokio::spawn(async move {
             let result = finish_snapshot(captured, execution_store, &session_id).await;
-            let _ = response.send(result.map_err(RuntimeError::from_report));
+            let _ = response.send(result.map_err(RuntimeError::from));
         });
     }
 

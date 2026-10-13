@@ -38,13 +38,13 @@ async fn context(manager: &AgentManager, session: &SessionId) -> Result<Vec<Mess
         .get_tip(session)
         .await?
         .ok_or_else(|| eyre!("missing tip"))?;
-    manager
+    Ok(manager
         .get_model_history(
             &tip,
             (&ProviderId::new("mock"), &ModelId::new("mock-model")),
             false,
         )
-        .await
+        .await?)
 }
 
 #[tokio::test]

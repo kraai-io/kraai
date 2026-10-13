@@ -65,7 +65,7 @@ pub(crate) enum SessionMessage {
     },
     Prepared {
         generation: u64,
-        outcome: color_eyre::Result<Option<(ProviderManager, PendingStreamRequest)>>,
+        outcome: kraai_agent::AgentResult<Option<(ProviderManager, PendingStreamRequest)>>,
     },
     Stream {
         generation: u64,
@@ -298,14 +298,14 @@ impl SessionActor {
                 response,
             } => {
                 let result = self.approve(&execution_id);
-                let _ = response.send(result.map_err(RuntimeError::from_report));
+                let _ = response.send(result.map_err(RuntimeError::from));
             }
             SessionMessage::Deny {
                 execution_id,
                 response,
             } => {
                 let result = self.deny(&execution_id).await;
-                let _ = response.send(result.map_err(RuntimeError::from_report));
+                let _ = response.send(result.map_err(RuntimeError::from));
             }
             SessionMessage::PendingScript { response } => {
                 let _ = response.send(Ok(self.pending_script_info()));
@@ -313,7 +313,7 @@ impl SessionActor {
             SessionMessage::Snapshot { response } => self.snapshot(response).await,
             SessionMessage::SetMcpServers { config, response } => {
                 let result = self.set_mcp_servers(config).await;
-                let _ = response.send(result.map_err(RuntimeError::from_report));
+                let _ = response.send(result.map_err(RuntimeError::from));
             }
             SessionMessage::Undo { response } => {
                 let result = self
@@ -321,7 +321,7 @@ impl SessionActor {
                     .agent_manager
                     .undo_last_user_message(&self.session_id)
                     .await;
-                let _ = response.send(result.map_err(RuntimeError::from_report));
+                let _ = response.send(result.map_err(RuntimeError::from));
             }
             SessionMessage::Delete { response } => return self.delete(response).await,
             SessionMessage::Stop { response } => {

@@ -79,17 +79,32 @@ impl RuntimeError {
     pub(crate) fn internal(error: impl std::fmt::Display) -> Self {
         Self::new(RuntimeErrorKind::Internal, error.to_string())
     }
+}
 
-    pub(crate) fn from_report(error: color_eyre::Report) -> Self {
-        let Some(domain_error) = error.downcast_ref::<DomainError>() else {
-            return Self::internal(format!("{error:#}"));
-        };
-        let kind = match domain_error.kind() {
+impl From<DomainError> for RuntimeError {
+    fn from(error: DomainError) -> Self {
+        let kind = match error.kind() {
             DomainErrorKind::InvalidArgument => RuntimeErrorKind::InvalidArgument,
             DomainErrorKind::NotFound => RuntimeErrorKind::NotFound,
             DomainErrorKind::Conflict => RuntimeErrorKind::Conflict,
         };
-        Self::new(kind, domain_error.message())
+        Self::new(kind, error.message())
+    }
+}
+
+impl From<kraai_agent::AgentError> for RuntimeError {
+    fn from(error: kraai_agent::AgentError) -> Self {
+        match error {
+            kraai_agent::AgentError::Domain(error) => error.into(),
+            kraai_agent::AgentError::Internal(report) => Self::internal(format!("{report:#}")),
+        }
+    }
+}
+
+/// Runtime work that fails with an `eyre` report is classified the same way agent failures are.
+impl From<color_eyre::Report> for RuntimeError {
+    fn from(report: color_eyre::Report) -> Self {
+        kraai_agent::AgentError::from(report).into()
     }
 }
 

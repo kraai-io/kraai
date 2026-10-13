@@ -12,22 +12,22 @@ impl AgentManager {
         &self,
         session_id: &SessionId,
         config: kraai_mcp::McpConfig,
-    ) -> Result<Option<Arc<kraai_mcp::McpManager>>> {
+    ) -> AgentResult<Option<Arc<kraai_mcp::McpManager>>> {
         self.require_session(session_id).await?;
         self.persistence
             .sessions()
             .ensure_writable(session_id)
             .await?;
         if self.is_turn_active(session_id) {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "Cannot change MCP servers while the current turn is active"
-            )));
+            return Err(AgentError::conflict(
+                "Cannot change MCP servers while the current turn is active",
+            ));
         }
         let empty = config.servers.is_empty();
         let mcp = self
             .mcp()
             .with_session_servers(config)
-            .map_err(|error| eyre!(kraai_types::DomainError::invalid_argument(error)))?;
+            .map_err(AgentError::invalid_argument)?;
         Ok(if empty {
             lock(&self.session_mcp).remove(session_id)
         } else {

@@ -77,11 +77,11 @@ impl RuntimeCore {
     pub(crate) fn send_session_report_error(
         &self,
         session_id: &SessionId,
-        error: color_eyre::Report,
+        error: impl Into<crate::RuntimeError>,
     ) {
         self.send_event(Event::SessionError {
             session_id: session_id.clone(),
-            error: crate::RuntimeError::from_report(error),
+            error: error.into(),
         });
     }
 

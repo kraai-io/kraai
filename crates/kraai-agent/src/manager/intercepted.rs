@@ -8,7 +8,7 @@ impl AgentManager {
         model_id: ModelId,
         provider_id: ProviderId,
         options: ModelOptionValues,
-    ) -> Result<Option<PendingStreamRequest>> {
+    ) -> AgentResult<Option<PendingStreamRequest>> {
         let selection = kraai_types::ModelSelection {
             provider_id,
             model_id,
@@ -24,7 +24,7 @@ impl AgentManager {
         session_id: &SessionId,
         queued: Vec<kraai_persistence::QueuedEntry>,
         selection: kraai_types::ModelSelection,
-    ) -> Result<Option<PendingStreamRequest>> {
+    ) -> AgentResult<Option<PendingStreamRequest>> {
         let consumed_queue_through = queued.last().map(|entry| entry.sequence);
         let messages = queued
             .into_iter()
@@ -40,7 +40,7 @@ impl AgentManager {
         messages: Vec<kraai_types::MessageContent>,
         selection: kraai_types::ModelSelection,
         consumed_queue_through: Option<i64>,
-    ) -> Result<Option<PendingStreamRequest>> {
+    ) -> AgentResult<Option<PendingStreamRequest>> {
         self.validate_model_options(
             &selection.provider_id,
             &selection.model_id,
@@ -77,7 +77,7 @@ impl AgentManager {
         messages: Vec<kraai_types::MessageContent>,
         selection: kraai_types::ModelSelection,
         consumed_queue_through: Option<i64>,
-    ) -> Result<Option<PendingStreamRequest>> {
+    ) -> AgentResult<Option<PendingStreamRequest>> {
         if self.session_has_active_stream(session_id).await {
             return Ok(None);
         }

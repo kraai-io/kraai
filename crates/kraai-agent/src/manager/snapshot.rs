@@ -5,7 +5,7 @@ use color_eyre::eyre::Result;
 use kraai_persistence::{HistoryCursor, MessageStore, SessionMeta};
 use kraai_types::{AgentProfilesState, ChatRole, Message, MessageId, MessageStatus, SessionId};
 
-use super::{AgentManager, SessionContextUsage};
+use super::{AgentManager, AgentResult, SessionContextUsage};
 
 /// Captures mutable session state before loading its persisted history.
 /// Completed messages are immutable in the manager. In-flight messages must be
@@ -39,7 +39,7 @@ impl AgentManager {
     pub async fn capture_session_snapshot(
         &self,
         session_id: &SessionId,
-    ) -> Result<SessionSnapshotReader> {
+    ) -> AgentResult<SessionSnapshotReader> {
         let persisted = self.message_store.read_conversation(session_id).await?;
         let (session, persisted_history, requests) = match persisted {
             Some(snapshot) => (snapshot.session, Some(snapshot.history), snapshot.requests),
@@ -76,12 +76,14 @@ impl AgentManager {
         in_flight
     }
 
-    pub(super) async fn history_context(&self, from: &MessageId) -> Result<Vec<Message>> {
+    pub(super) async fn history_context(&self, from: &MessageId) -> AgentResult<Vec<Message>> {
         let in_flight = self.capture_in_flight_messages(None).await;
-        HistoryCursor::new(self.message_store.as_ref(), Some(from.clone()))
-            .with_overlay(&in_flight)
-            .read_to_root()
-            .await
+        Ok(
+            HistoryCursor::new(self.message_store.as_ref(), Some(from.clone()))
+                .with_overlay(&in_flight)
+                .read_to_root()
+                .await?,
+        )
     }
 
     /// Reads up to `limit` messages ending at `from`, newest first, and where the next older
@@ -90,18 +92,20 @@ impl AgentManager {
         &self,
         from: &MessageId,
         limit: usize,
-    ) -> Result<(Vec<Message>, Option<MessageId>)> {
+    ) -> AgentResult<(Vec<Message>, Option<MessageId>)> {
         let in_flight = self.capture_in_flight_messages(None).await;
-        HistoryCursor::new(self.message_store.as_ref(), Some(from.clone()))
-            .with_overlay(&in_flight)
-            .read_page(limit)
-            .await
+        Ok(
+            HistoryCursor::new(self.message_store.as_ref(), Some(from.clone()))
+                .with_overlay(&in_flight)
+                .read_page(limit)
+                .await?,
+        )
     }
 
     pub async fn get_session_context_usage(
         &self,
         session_id: &SessionId,
-    ) -> Result<Option<SessionContextUsage>> {
+    ) -> AgentResult<Option<SessionContextUsage>> {
         let Some(tip_id) = self.get_tip(session_id).await? else {
             return Ok(None);
         };

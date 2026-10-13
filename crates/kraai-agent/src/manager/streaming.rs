@@ -10,7 +10,7 @@ impl AgentManager {
         role: ChatRole,
         content: kraai_types::MessageContent,
         agent_profile_id: Option<String>,
-    ) -> Result<MessageId> {
+    ) -> AgentResult<MessageId> {
         Ok(self
             .append_message(session_id, role, content, agent_profile_id)
             .await?
@@ -26,7 +26,7 @@ impl AgentManager {
         call_id: ToolCallId,
         content: kraai_types::MessageContent,
         outcome: kraai_types::ScriptExecutionOutcome,
-    ) -> Result<bool> {
+    ) -> AgentResult<bool> {
         self.require_session(session_id).await?;
         let append = self
             .conversation_store
@@ -61,7 +61,7 @@ impl AgentManager {
         role: ChatRole,
         content: kraai_types::MessageContent,
         agent_profile_id: Option<String>,
-    ) -> Result<kraai_persistence::AppendedMessage> {
+    ) -> AgentResult<kraai_persistence::AppendedMessage> {
         let title_if_first_message = if role == ChatRole::User {
             title_from_user_prompt(&content.display_text())
         } else {
@@ -81,7 +81,8 @@ impl AgentManager {
             ChatRole::ToolCallResult => {
                 return Err(eyre!(
                     "script results require add_script_result_to_history and a call id"
-                ));
+                )
+                .into());
             }
         };
 
@@ -115,13 +116,13 @@ impl AgentManager {
         stream_id: StreamId,
         agent_profile_id: Option<String>,
         generation: Option<MessageGeneration>,
-    ) -> Result<MessageId> {
+    ) -> AgentResult<MessageId> {
         self.require_session(session_id).await?;
 
         if self.session_has_active_stream(session_id).await {
-            return Err(eyre!(kraai_types::DomainError::conflict(format!(
+            return Err(AgentError::conflict(format!(
                 "Session already has an active stream: {session_id}"
-            ))));
+            )));
         }
 
         let subscription = generation.as_ref().is_some_and(|generation| {
@@ -315,7 +316,7 @@ impl AgentManager {
         &self,
         session_id: &SessionId,
         result: &Message,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         let ConversationItem::ScriptResult { call_id, .. } = &result.content else {
             return Ok(());
         };
@@ -386,7 +387,7 @@ impl AgentManager {
         Ok(())
     }
 
-    pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<SessionId>> {
+    pub async fn complete_message(&self, message_id: &MessageId) -> AgentResult<Option<SessionId>> {
         let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(mut state) = state else {
@@ -399,7 +400,7 @@ impl AgentManager {
                 .write()
                 .await
                 .insert(message_id.clone(), state);
-            return Err(error);
+            return Err(error.into());
         }
         self.history_upserted(&state.session_id, &state.message);
         Ok(Some(state.session_id))
@@ -408,7 +409,7 @@ impl AgentManager {
     pub async fn abort_streaming_message(
         &self,
         message_id: &MessageId,
-    ) -> Result<Option<SessionId>> {
+    ) -> AgentResult<Option<SessionId>> {
         let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(state) = state else {
@@ -428,7 +429,7 @@ impl AgentManager {
                 .write()
                 .await
                 .insert(message_id.clone(), state);
-            return Err(error);
+            return Err(error.into());
         }
         self.history_removed(&state.session_id, vec![message_id.clone()]);
         Ok(Some(state.session_id))
@@ -438,7 +439,7 @@ impl AgentManager {
         &self,
         message_id: &MessageId,
         cancelled_script_output: &str,
-    ) -> Result<Option<CancelledStreamResult>> {
+    ) -> AgentResult<Option<CancelledStreamResult>> {
         let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(mut state) = state else {
@@ -516,7 +517,7 @@ impl AgentManager {
                 .write()
                 .await
                 .insert(message_id.clone(), state);
-            return Err(error);
+            return Err(error.into());
         }
         if persisted {
             self.history_upserted(&state.session_id, &state.message);
@@ -534,7 +535,7 @@ impl AgentManager {
     pub(super) async fn abort_streaming_messages_for_session(
         &self,
         session_id: &SessionId,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         let to_abort: Vec<MessageId> = {
             let streaming = self.streaming_messages.read().await;
             streaming
@@ -555,7 +556,7 @@ impl AgentManager {
     pub async fn get_chat_history(
         &self,
         session_id: &SessionId,
-    ) -> Result<BTreeMap<MessageId, Message>> {
+    ) -> AgentResult<BTreeMap<MessageId, Message>> {
         let Some(tip_id) = self.get_tip(session_id).await? else {
             return Ok(BTreeMap::new());
         };
@@ -578,11 +579,11 @@ impl AgentManager {
     pub async fn undo_last_user_message(
         &self,
         session_id: &SessionId,
-    ) -> Result<Option<kraai_types::MessageContent>> {
+    ) -> AgentResult<Option<kraai_types::MessageContent>> {
         if self.is_turn_active(session_id) {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "Cannot undo while the current turn is active"
-            )));
+            return Err(AgentError::conflict(
+                "Cannot undo while the current turn is active",
+            ));
         }
 
         let mut session = self.require_session(session_id).await?;
@@ -602,9 +603,9 @@ impl AgentManager {
                     .save_if_tip_matches(&session, expected_tip.as_ref())
                     .await?
                 {
-                    return Err(eyre!(kraai_types::DomainError::conflict(
-                        "Session changed while undoing a message"
-                    )));
+                    return Err(AgentError::conflict(
+                        "Session changed while undoing a message",
+                    ));
                 }
                 self.history_removed(session_id, removed.clone());
                 for id in removed {
@@ -633,7 +634,7 @@ impl AgentManager {
 }
 
 impl AgentManager {
-    pub async fn publish_streaming_snapshots(&self) -> Result<()> {
+    pub async fn publish_streaming_snapshots(&self) -> AgentResult<()> {
         let _persistence = self.streaming_persistence.lock().await;
         let batches: Vec<_> = self
             .streaming_messages

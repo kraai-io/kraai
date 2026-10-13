@@ -26,7 +26,7 @@ impl AgentManager {
         session_id: &SessionId,
         profile: &AgentProfile,
         workspace_dir: &Path,
-    ) -> Result<TurnSystemPrompt> {
+    ) -> AgentResult<TurnSystemPrompt> {
         let execution_context = format!(
             "# Execution Context\n{}",
             serde_json::json!({

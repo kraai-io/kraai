@@ -120,7 +120,7 @@ impl SessionActor {
                     answer(response, Ok(true));
                 } else {
                     self.state = TurnState::Streaming(job);
-                    answer(response, Err(error));
+                    answer(response, Err(error.into()));
                 }
                 return;
             }
@@ -194,7 +194,7 @@ impl SessionActor {
                 );
             }
         }
-        let _ = response.send(result.map_err(RuntimeError::from_report));
+        let _ = response.send(result.map_err(RuntimeError::from));
         deleted
     }
 
@@ -224,6 +224,6 @@ impl SessionActor {
 
 fn answer(response: Option<Responder<bool>>, result: Result<bool>) {
     if let Some(response) = response {
-        let _ = response.send(result.map_err(RuntimeError::from_report));
+        let _ = response.send(result.map_err(RuntimeError::from));
     }
 }

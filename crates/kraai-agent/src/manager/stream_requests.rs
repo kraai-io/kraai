@@ -16,21 +16,21 @@ impl AgentManager {
         model_id: ModelId,
         provider_id: ProviderId,
         options: ModelOptionValues,
-    ) -> Result<PendingStreamRequest> {
+    ) -> AgentResult<PendingStreamRequest> {
         if self.is_turn_active(session_id) {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "Cannot send a new message while the current turn is active"
-            )));
+            return Err(AgentError::conflict(
+                "Cannot send a new message while the current turn is active",
+            ));
         }
         self.prepare_messages_stream(session_id, vec![message], model_id, provider_id, options)
             .await?
-            .ok_or_else(|| eyre!("Failed to prepare a new message stream"))
+            .ok_or_else(|| eyre!("Failed to prepare a new message stream").into())
     }
 
     pub async fn prepare_continuation_stream(
         &self,
         session_id: &SessionId,
-    ) -> Result<Option<PendingStreamRequest>> {
+    ) -> AgentResult<Option<PendingStreamRequest>> {
         self.prepare_turn_stream(session_id, Vec::new(), None).await
     }
 
@@ -39,7 +39,7 @@ impl AgentManager {
         session_id: &SessionId,
         users: Vec<kraai_types::MessageContent>,
         consumed_queue_through: Option<i64>,
-    ) -> Result<Option<PendingStreamRequest>> {
+    ) -> AgentResult<Option<PendingStreamRequest>> {
         let selection = lock(&self.session_states)
             .get(session_id)
             .and_then(|state| {

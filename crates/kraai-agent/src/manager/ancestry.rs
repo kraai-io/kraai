@@ -5,7 +5,7 @@ impl AgentManager {
         &self,
         session_id: &SessionId,
         mut candidates: HashSet<MessageId>,
-    ) -> Result<HashSet<MessageId>> {
+    ) -> AgentResult<HashSet<MessageId>> {
         let mut reachable = HashSet::new();
         if candidates.is_empty() {
             return Ok(reachable);

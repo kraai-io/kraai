@@ -23,7 +23,7 @@ impl AgentManager {
         from: &MessageId,
         identity: (&ProviderId, &ModelId),
         latest_user_pending: bool,
-    ) -> Result<Vec<Message>> {
+    ) -> AgentResult<Vec<Message>> {
         let store = self.persistence.compactions().clone();
         let mut cursor = HistoryCursor::new(self.message_store.as_ref(), Some(from.clone()));
         let mut history = Vec::new();
@@ -66,7 +66,7 @@ impl AgentManager {
         script_tool: Option<ScriptToolDefinition>,
         max_context: Option<usize>,
         selection: &kraai_types::ModelSelection,
-    ) -> Result<ModelContext> {
+    ) -> AgentResult<ModelContext> {
         let store = self.persistence.compactions().clone();
         let mut checkpoints = store
             .compatible_checkpoints(

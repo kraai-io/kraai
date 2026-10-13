@@ -22,6 +22,7 @@ use kraai_types::{
 use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;
 
+use crate::error::{AgentError, AgentResult};
 use crate::profiles::{AgentProfile, ResolvedProfiles, resolve_profiles};
 
 mod ancestry;

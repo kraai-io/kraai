@@ -20,7 +20,7 @@ impl AgentManager {
     pub async fn record_request_started(
         &self,
         message_id: &MessageId,
-    ) -> Result<Option<kraai_types::RequestUsage>> {
+    ) -> AgentResult<Option<kraai_types::RequestUsage>> {
         let streaming = self.streaming_messages.read().await;
         let state = streaming
             .get(message_id)
@@ -37,7 +37,7 @@ impl AgentManager {
         &self,
         message_id: &MessageId,
         unpriced_attempts: u32,
-    ) -> Result<Option<kraai_types::RequestUsage>> {
+    ) -> AgentResult<Option<kraai_types::RequestUsage>> {
         let mut streaming = self.streaming_messages.write().await;
         let state = streaming
             .get_mut(message_id)
@@ -58,7 +58,7 @@ impl AgentManager {
     pub async fn reset_streaming_message(
         &self,
         message_id: &MessageId,
-    ) -> Result<Option<Option<kraai_types::RequestUsage>>> {
+    ) -> AgentResult<Option<Option<kraai_types::RequestUsage>>> {
         let mut streaming = self.streaming_messages.write().await;
         let Some(state) = streaming.get_mut(message_id) else {
             return Ok(None);
@@ -79,7 +79,7 @@ impl AgentManager {
         &self,
         message_id: &MessageId,
         usage: TokenUsage,
-    ) -> Result<Option<kraai_types::RequestUsage>> {
+    ) -> AgentResult<Option<kraai_types::RequestUsage>> {
         let mut streaming = self.streaming_messages.write().await;
         if let Some(state) = streaming.get_mut(message_id)
             && let Some(request) = Self::request_usage(state, Some(usage.clone()))

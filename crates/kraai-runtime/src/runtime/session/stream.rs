@@ -176,7 +176,7 @@ impl SessionActor {
             Ok(Some(_)) => {}
             Ok(None) => return,
             Err(error) => {
-                self.completion_persistence_failed(kind, message_id, error)
+                self.completion_persistence_failed(kind, message_id, error.into())
                     .await;
                 return;
             }
@@ -275,7 +275,7 @@ impl SessionActor {
                     self.finish_turn().await;
                     return Ok(true);
                 }
-                Err(error)
+                Err(error.into())
             }
         }
     }
