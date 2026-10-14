@@ -694,6 +694,51 @@ async fn transient_pre_boundary_failure_reissues_the_request() -> Result<()> {
 }
 
 #[tokio::test]
+async fn a_runtime_that_lost_the_session_does_not_reissue_the_request() -> Result<()> {
+    let harness = RuntimeTestHarness::new(vec![
+        vec![
+            ScriptedChunk::plain("partial answer"),
+            ScriptedChunk::interrupted("connection reset"),
+        ],
+        vec![ScriptedChunk::plain("answer for the new owner")],
+    ])
+    .await
+    .expect("runtime fixture");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let agent = &harness.runtime.agent_manager;
+    let request = agent
+        .prepare_start_stream(
+            &session_id,
+            String::from("answer").into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+            Default::default(),
+        )
+        .await?;
+    let store = &harness.runtime.session_store;
+    if !store.owns_turn(&session_id).await? {
+        store.claim_turn(&session_id).await?;
+    }
+    store.release_turn(&session_id).await?;
+    let result = super::harness::drive_stream(
+        harness.runtime.clone(),
+        session_id.clone(),
+        agent.cloned_provider_manager(),
+        request,
+    )
+    .await;
+    let super::super::stream_driver::StreamDriveResult::FailedDuringStream { error } = result
+    else {
+        return Err(color_eyre::eyre::eyre!(
+            "a deposed runtime reissued the request: {result:?}"
+        ));
+    };
+    assert!(error.contains("owned by another instance"), "{error}");
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn long_script_output_is_excerpted_and_saved_where_scripts_can_read_it() -> Result<()> {
     let harness = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::native_call(

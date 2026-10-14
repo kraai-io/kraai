@@ -358,3 +358,10 @@ supports_images = true
     def logs(self):
         for path in self.root.glob("*.log"):
             print(f"{path}:\n{path.read_text()[-12000:]}", flush=True)
+        for index, request in enumerate(self.provider.requests):
+            last = request.get("messages", [{}])[-1]
+            print(
+                f"model request {index}: {last.get('role')}: {str(last.get('content'))[:200]}",
+                flush=True,
+            )
+        print(f"provider errors: {self.provider.errors}", flush=True)

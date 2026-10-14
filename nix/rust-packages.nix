@@ -62,6 +62,15 @@
           pkgs.defaultCrateOverrides
           // {
             rmcp = _: {CARGO_CRATE_NAME = "rmcp";};
+            # Its macro emits items in HashMap order, so every build of a parser crate gets a
+            # different crate hash and cached dependents stop linking against a rebuilt copy.
+            pest_consume_macros = _: {
+              postPatch = ''
+                substituteInPlace src/make_parser.rs --replace-fail \
+                  'use std::collections::HashMap;' \
+                  'use std::collections::BTreeMap as HashMap;'
+              '';
+            };
           };
       };
     mkCargoNix = release:

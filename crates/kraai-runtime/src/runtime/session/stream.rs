@@ -55,6 +55,7 @@ impl SessionActor {
             session_id: self.session_id.clone(),
             providers,
             agent_manager: self.runtime.agent_manager.clone(),
+            session_store: self.runtime.session_store.clone(),
             event_tx: self.runtime.event_tx.clone(),
             barrier: self.runtime.sessions.barrier(&self.session_id),
             auxiliary_usage_task: self.runtime.stream_tasks.auxiliary_token(&self.session_id),

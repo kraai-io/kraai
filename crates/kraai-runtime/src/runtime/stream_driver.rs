@@ -70,6 +70,7 @@ pub(super) struct StreamReader {
     pub(super) session_id: SessionId,
     pub(super) providers: ProviderManager,
     pub(super) agent_manager: Arc<kraai_agent::AgentManager>,
+    pub(super) session_store: Arc<kraai_persistence::SqliteSessionStore>,
     pub(super) event_tx: RuntimeEventSender,
     pub(super) barrier: Arc<RwLock<()>>,
     pub(super) auxiliary_usage_task: super::stream_tasks::SessionTaskToken,
@@ -290,6 +291,9 @@ impl StreamReader {
                     if kraai_provider_core::is_context_overflow_error(&error)
                         && let Some(compaction) = compaction.take()
                     {
+                        if let Err(error) = self.ensure_turn_owned().await {
+                            return StreamDriveResult::FailedToStart { error };
+                        }
                         match self
                             .compact(&compaction, &provider_request, &provider_id, &model_id)
                             .await
@@ -336,6 +340,9 @@ impl StreamReader {
                         return response.finish();
                     }
                     if overflow && let Some(compaction) = compaction.take() {
+                        if let Err(error) = self.ensure_turn_owned().await {
+                            return StreamDriveResult::FailedDuringStream { error };
+                        }
                         if !self.forward(StreamEvent::Restart { reason: error }) {
                             return StreamDriveResult::Stopped;
                         }
@@ -352,6 +359,9 @@ impl StreamReader {
                     if !transient || reissues >= MAX_STREAM_REISSUES {
                         return StreamDriveResult::FailedDuringStream { error };
                     }
+                    if let Err(error) = self.ensure_turn_owned().await {
+                        return StreamDriveResult::FailedDuringStream { error };
+                    }
                     reissues += 1;
                     response = ResponseState::default();
                     if !self.forward(StreamEvent::Restart { reason: error }) {
@@ -359,6 +369,21 @@ impl StreamReader {
                     }
                 }
             }
+        }
+    }
+
+    /// A runtime that lost the session to another instance must not issue model requests for it.
+    async fn ensure_turn_owned(&self) -> Result<(), String> {
+        match self.session_store.owns_turn(&self.session_id).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!(
+                "Session {} is owned by another instance; not reissuing the model request",
+                self.session_id
+            )),
+            Err(error) => Err(format!(
+                "Could not confirm ownership of session {} before reissuing the model request: {error:#}",
+                self.session_id
+            )),
         }
     }
 

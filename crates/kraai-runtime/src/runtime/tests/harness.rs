@@ -663,6 +663,7 @@ pub(super) async fn drive_stream(
         session_id: session.clone(),
         providers,
         agent_manager: runtime.agent_manager.clone(),
+        session_store: runtime.session_store.clone(),
         event_tx: runtime.event_tx.clone(),
         barrier: runtime.sessions.barrier(&session),
         auxiliary_usage_task: runtime.stream_tasks.auxiliary_token(&session),
