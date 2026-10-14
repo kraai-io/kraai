@@ -1,5 +1,5 @@
 use super::super::*;
-use super::common::{cleanup_dir, test_manager};
+use super::common::{cleanup_dir, open_persistence, test_manager};
 use kraai_persistence::{CompactionCheckpoint, SqliteCompactionStore};
 use kraai_types::{ContextStateMutation, PinnedFileScope};
 
@@ -159,7 +159,7 @@ async fn snapshot_anchors_survive_manager_restart() -> Result<()> {
     let before = request(&manager, &session).await?;
     let providers = manager.cloned_provider_manager();
     drop(manager);
-    let persistence = kraai_persistence::Persistence::open(&root).await?;
+    let persistence = open_persistence(&root).await?;
     let manager = AgentManager::new(providers, root.clone(), persistence, root.clone());
     assert_eq!(request(&manager, &session).await?.messages, before.messages);
     cleanup_dir(root).await;

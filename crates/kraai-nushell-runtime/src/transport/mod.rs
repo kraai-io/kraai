@@ -78,6 +78,8 @@ async fn read_greeting(transport: &mut (impl tokio::io::AsyncRead + Unpin)) -> i
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::future::Future;
+    use std::task::Poll;
     use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
@@ -87,21 +89,27 @@ mod tests {
         let path = directory.path().ok_or("missing private temp")?;
         let listener = Listener::bind(path)?;
         let (spawned_tx, spawned_rx) = tokio::sync::oneshot::channel();
-        let startup_timeout = Duration::from_millis(250);
+        let startup_timeout = kraai_test_support::HANG_TIMEOUT * 2;
+        tokio::time::pause();
+        let server = accept(listener, spawned_rx, startup_timeout);
+        tokio::pin!(server);
+        let polled = std::future::poll_fn(|cx| Poll::Ready(server.as_mut().poll(cx))).await;
+        if polled.is_ready() {
+            return Err("handshake finished before the host was spawned".into());
+        }
+        tokio::time::advance(startup_timeout * 2).await;
+        spawned_tx
+            .send(tokio::time::Instant::now())
+            .map_err(|_instant| io::Error::other("handshake stopped before spawn"))?;
+        tokio::time::resume();
         let client = async {
-            tokio::time::sleep(startup_timeout + Duration::from_millis(100)).await;
-            spawned_tx
-                .send(tokio::time::Instant::now())
-                .map_err(|_instant| io::Error::other("handshake stopped before spawn"))?;
             let mut stream = tokio::net::UnixStream::connect(path.join("host.sock")).await?;
             stream.write_u8(HOST_READY).await?;
             stream.write_u32(HOST_PROTOCOL_VERSION).await?;
             Ok::<_, io::Error>(stream)
         };
-        let (server, client) = kraai_test_support::hang_guard(async {
-            tokio::join!(accept(listener, spawned_rx, startup_timeout), client)
-        })
-        .await?;
+        let (server, client) =
+            kraai_test_support::hang_guard(async { tokio::join!(server, client) }).await?;
         let _server = server?;
         let _client = client?;
         Ok(())

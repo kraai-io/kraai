@@ -71,6 +71,7 @@ impl App {
             event_lag_script_resync_pending: false,
             runtime_bridge_connected: true,
             runtime_bridge_error: None,
+            runtime_event_batch_budget: RUNTIME_EVENT_BATCH_BUDGET,
         }
     }
 
@@ -200,8 +201,10 @@ impl App {
     ) -> Result<bool> {
         let mut changed = false;
         let started = Instant::now();
+        let budget = self.runtime_event_batch_budget;
+        let budget_spent = |changed: bool| changed && started.elapsed() >= budget;
         for _ in 0..RUNTIME_EVENT_BATCH_ROUNDS {
-            if started.elapsed() >= RUNTIME_EVENT_BATCH_BUDGET || input_pending()? {
+            if budget_spent(changed) || input_pending()? {
                 break;
             }
             let mut received = false;
@@ -210,7 +213,7 @@ impl App {
                 changed = true;
                 received = true;
             }
-            if started.elapsed() >= RUNTIME_EVENT_BATCH_BUDGET || input_pending()? {
+            if budget_spent(changed) || input_pending()? {
                 break;
             }
             match self.runtime_rx.try_recv() {

@@ -19,6 +19,7 @@ use ts_rs::TS;
 use crate::{OAuthConfig, server::Server};
 pub(crate) use client::OAuthClient;
 use store::FileStore;
+pub(crate) use store::{DEFAULT_LOCK_TIMEOUT, Storage};
 
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[ts(export_to = "types.d.ts")]
@@ -54,7 +55,7 @@ struct Control {
 pub(crate) struct Auth {
     url: String,
     config: OAuthConfig,
-    root: Option<Arc<kraai_io::fs::DirectoryBootstrap>>,
+    root: Option<Arc<Storage>>,
     filename: String,
     server: Weak<Server>,
     control: Mutex<Control>,
@@ -69,7 +70,7 @@ impl Auth {
         name: String,
         url: String,
         config: OAuthConfig,
-        root: Option<Arc<kraai_io::fs::DirectoryBootstrap>>,
+        root: Option<Arc<Storage>>,
         server: Weak<Server>,
         events: broadcast::Sender<McpAuthStatus>,
     ) -> Self {

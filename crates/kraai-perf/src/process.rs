@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Context, Result, bail, ensure};
 
+pub(crate) const TERMINATION_GRACE: Duration = Duration::from_secs(2);
+
 pub(crate) struct Interrupt {
     pub flag: Arc<AtomicBool>,
     handlers: Vec<signal_hook::SigId>,
@@ -67,6 +69,7 @@ impl IsolatedWorkspace {
 pub(crate) fn run(
     command: &mut Command,
     timeout: Duration,
+    termination_grace: Duration,
     interrupted: &AtomicBool,
     stdout: &Path,
     stderr: &Path,
@@ -81,7 +84,8 @@ pub(crate) fn run(
         .stdout(File::create(stdout)?)
         .stderr(File::create(stderr)?);
     let result = (|| {
-        let mut worker = Worker::spawn(command).wrap_err_with(|| format!("start {program}"))?;
+        let mut worker = Worker::spawn(command, termination_grace)
+            .wrap_err_with(|| format!("start {program}"))?;
         worker.wait(timeout, interrupted)
     })();
     match result {
@@ -103,16 +107,22 @@ pub(crate) fn read_error(path: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-struct Worker(Child);
+struct Worker {
+    child: Child,
+    termination_grace: Duration,
+}
 
 impl Worker {
-    fn spawn(command: &mut Command) -> std::io::Result<Self> {
+    fn spawn(command: &mut Command, termination_grace: Duration) -> std::io::Result<Self> {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        command.spawn().map(Self)
+        command.spawn().map(|child| Self {
+            child,
+            termination_grace,
+        })
     }
 
     fn wait(&mut self, timeout: Duration, interrupted: &AtomicBool) -> Result<ExitStatus> {
@@ -122,7 +132,7 @@ impl Worker {
                 !interrupted.load(Ordering::Relaxed),
                 "performance run interrupted"
             );
-            if let Some(status) = self.0.try_wait()? {
+            if let Some(status) = self.child.try_wait()? {
                 return Ok(status);
             }
             ensure!(
@@ -138,7 +148,7 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         #[cfg(unix)]
-        if let Ok(pid) = i32::try_from(self.0.id()) {
+        if let Ok(pid) = i32::try_from(self.child.id()) {
             use nix::errno::Errno;
             use nix::sys::signal::{Signal, killpg};
             use nix::unistd::Pid;
@@ -146,8 +156,8 @@ impl Drop for Worker {
             let group = Pid::from_raw(pid);
             let _ = killpg(group, Signal::SIGTERM);
             let started = Instant::now();
-            while started.elapsed() < Duration::from_secs(2) {
-                let reaped = matches!(self.0.try_wait(), Ok(Some(_)));
+            while started.elapsed() < self.termination_grace {
+                let reaped = matches!(self.child.try_wait(), Ok(Some(_)));
                 let group_exited = matches!(killpg(group, None), Err(Errno::ESRCH));
                 if reaped && group_exited {
                     return;
@@ -156,9 +166,9 @@ impl Drop for Worker {
             }
             let _ = killpg(group, Signal::SIGKILL);
         }
-        if !matches!(self.0.try_wait(), Ok(Some(_))) {
-            let _ = self.0.kill();
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = self.child.kill();
         }
-        let _ = self.0.wait();
+        let _ = self.child.wait();
     }
 }

@@ -8,8 +8,12 @@ use kraai_types::{
     ContextStateMutation, ConversationItem, MessageId, MessageStatus, PinnedFileScope, SessionId,
     ToolCallId,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+async fn open_persistence(data_dir: &Path) -> Result<Persistence> {
+    Persistence::open_with_turn_lease(data_dir, kraai_test_support::OUTLIVES_ANY_TEST).await
+}
 
 fn session(id: &str) -> SessionMeta {
     SessionMeta {
@@ -62,8 +66,8 @@ fn execution(session: &str) -> NewScriptExecution {
 #[tokio::test]
 async fn independent_clients_keep_changes_to_different_sessions() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     let first_session = session("a");
     let second_session = session("b");
     let (first, second) = tokio::join!(
@@ -90,9 +94,9 @@ async fn independent_clients_keep_changes_to_different_sessions() -> Result<()> 
 #[tokio::test]
 async fn only_one_simultaneous_claim_succeeds() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     let id = SessionId::new("session");
     let (first, second) = tokio::join!(a.sessions().claim_turn(&id), b.sessions().claim_turn(&id));
     ensure!(first.is_ok() != second.is_ok());
@@ -122,7 +126,7 @@ async fn only_one_simultaneous_claim_succeeds() -> Result<()> {
 #[tokio::test]
 async fn expired_owner_cannot_write_renew_or_release_a_new_claim() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     a.sessions()
         .claim_turn_for(&SessionId::new("session"), Duration::from_millis(1))
@@ -132,7 +136,7 @@ async fn expired_owner_cannot_write_renew_or_release_a_new_claim() -> Result<()>
         .append_message(request("session", "old"))
         .await?;
     tokio::time::sleep(Duration::from_millis(5)).await;
-    let b = Persistence::open(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     b.sessions().claim_turn(&SessionId::new("session")).await?;
     ensure!(a.messages().save(&old.message).await.is_err());
     ensure!(
@@ -154,9 +158,9 @@ async fn expired_owner_cannot_write_renew_or_release_a_new_claim() -> Result<()>
 #[tokio::test]
 async fn release_allows_immediate_submission_without_reusing_the_expiry() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     a.sessions().claim_turn(&SessionId::new("session")).await?;
     let before = a
         .sessions()
@@ -179,14 +183,14 @@ async fn release_allows_immediate_submission_without_reusing_the_expiry() -> Res
 #[tokio::test]
 async fn renewal_changes_the_token_and_prevents_takeover() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     a.sessions()
         .claim_turn_for(&SessionId::new("session"), Duration::from_millis(1))
         .await?;
     a.sessions().renew_turn(&SessionId::new("session")).await?;
     tokio::time::sleep(Duration::from_millis(5)).await;
-    let b = Persistence::open(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     ensure!(
         b.sessions()
             .claim_turn(&SessionId::new("session"))
@@ -202,9 +206,9 @@ async fn renewal_changes_the_token_and_prevents_takeover() -> Result<()> {
 #[tokio::test]
 async fn stale_metadata_is_rejected_instead_of_overwriting_another_client() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     let mut stale = b
         .sessions()
         .get(&SessionId::new("session"))
@@ -230,7 +234,7 @@ async fn legacy_json_and_deletion_markers_are_ignored() -> Result<()> {
         directory.path().join("session-deletions/session.json"),
         b"invalid marker",
     )?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     ensure!(persistence.sessions().list().await?.is_empty());
     ensure!(std::fs::read(directory.path().join("sessions.json"))? == b"invalid legacy JSON");
     Ok(())
@@ -239,7 +243,7 @@ async fn legacy_json_and_deletion_markers_are_ignored() -> Result<()> {
 #[tokio::test]
 async fn opening_an_observer_does_not_delete_unlinked_messages() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
     let message = kraai_types::Message {
         id: MessageId::new("unlinked"),
         parent_id: None,
@@ -251,7 +255,7 @@ async fn opening_an_observer_does_not_delete_unlinked_messages() -> Result<()> {
         generation: None,
     };
     a.messages().save(&message).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     ensure!(b.messages().get(&message.id).await?.is_some());
     Ok(())
 }
@@ -259,7 +263,7 @@ async fn opening_an_observer_does_not_delete_unlinked_messages() -> Result<()> {
 #[tokio::test]
 async fn rollback_preserves_shared_history_and_deletion_removes_associated_state() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
     a.sessions().save(&session("a")).await?;
     let root = a
         .conversations()
@@ -286,8 +290,8 @@ async fn rollback_preserves_shared_history_and_deletion_removes_associated_state
 #[tokio::test]
 async fn context_mutations_are_serialized_across_connections() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     let mutation = |name: &str| {
         vec![ContextStateMutation::PinFile {
@@ -318,7 +322,7 @@ async fn context_mutations_are_serialized_across_connections() -> Result<()> {
 #[tokio::test]
 async fn expired_script_lease_allows_takeover_and_rejects_old_execution_writes() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     a.sessions()
         .claim_turn_for(&SessionId::new("session"), Duration::from_millis(1))
@@ -326,7 +330,7 @@ async fn expired_script_lease_allows_takeover_and_rejects_old_execution_writes()
     let record = a.executions().create(execution("session")).await?;
     a.executions().mark_running(&record.id).await?;
     tokio::time::sleep(Duration::from_millis(5)).await;
-    let b = Persistence::open(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     b.sessions().claim_turn(&SessionId::new("session")).await?;
     ensure!(
         a.sessions()
@@ -359,7 +363,7 @@ async fn expired_script_lease_allows_takeover_and_rejects_old_execution_writes()
 #[tokio::test]
 async fn execution_sources_output_and_terminal_outcomes_survive_reopen() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     let record = a.executions().create(execution("session")).await?;
     a.executions().mark_running(&record.id).await?;
@@ -375,7 +379,7 @@ async fn execution_sources_output_and_terminal_outcomes_survive_reopen() -> Resu
             vec![(ScriptOutputStream::Stderr, b"error".to_vec())],
         )
         .await?;
-    let b = Persistence::open(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     ensure!(b.executions().read_output(&record.id).await?.stdout == b"prefix");
     a.executions()
         .finish(
@@ -406,7 +410,7 @@ async fn execution_sources_output_and_terminal_outcomes_survive_reopen() -> Resu
 #[tokio::test]
 async fn cancelled_waiter_does_not_interrupt_a_database_commit() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     let database = a.sessions().database.clone();
     let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();

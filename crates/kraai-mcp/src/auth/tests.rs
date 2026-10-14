@@ -3,9 +3,10 @@
     reason = "OAuth storage fixtures assert credential isolation"
 )]
 
+use kraai_test_support::HANG_TIMEOUT;
 use rmcp::transport::auth::{CredentialStore, StoredCredentials};
 
-use super::{flow::validate_url, store::FileStore};
+use super::{Storage, flow::validate_url, store::FileStore};
 
 #[tokio::test]
 async fn logout_invalidates_old_stores_and_atomic_writes_are_private() {
@@ -13,9 +14,12 @@ async fn logout_invalidates_old_stores_and_atomic_writes_are_private() {
     let path = directory.path().join("auth/credentials.json");
     let old = FileStore::current(
         path.clone(),
-        std::sync::Arc::new(kraai_io::fs::DirectoryBootstrap::new(
-            directory.path().to_path_buf(),
-            directory.path().join("auth"),
+        std::sync::Arc::new(Storage::new(
+            kraai_io::fs::DirectoryBootstrap::new(
+                directory.path().to_path_buf(),
+                directory.path().join("auth"),
+            ),
+            HANG_TIMEOUT,
         )),
     )
     .unwrap()
@@ -79,9 +83,12 @@ async fn old_connection_cannot_overwrite_new_login_status() {
         "fixture".into(),
         "https://example.com/mcp".into(),
         Default::default(),
-        Some(std::sync::Arc::new(kraai_io::fs::DirectoryBootstrap::new(
-            directory.path().to_path_buf(),
-            directory.path().to_path_buf(),
+        Some(std::sync::Arc::new(Storage::new(
+            kraai_io::fs::DirectoryBootstrap::new(
+                directory.path().to_path_buf(),
+                directory.path().to_path_buf(),
+            ),
+            HANG_TIMEOUT,
         ))),
         std::sync::Weak::new(),
         tokio::sync::broadcast::channel(8).0,

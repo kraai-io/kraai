@@ -106,6 +106,7 @@ fn test_harness() -> TestHarness {
             event_lag_script_resync_pending: false,
             runtime_bridge_connected: true,
             runtime_bridge_error: None,
+            runtime_event_batch_budget: std::time::Duration::MAX,
         },
         requests_rx,
     }

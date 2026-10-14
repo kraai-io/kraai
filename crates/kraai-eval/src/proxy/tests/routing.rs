@@ -120,6 +120,7 @@ async fn exercise_routing_round_trip(log_path: PathBuf) -> Result<()> {
         base_path: String::from("/v1"),
         log_path: log_path.clone(),
         max_requests: 2,
+        shutdown_drain_timeout: kraai_test_support::HANG_TIMEOUT,
     })?;
     let client = Client::builder()
         .timeout(kraai_test_support::HANG_TIMEOUT)

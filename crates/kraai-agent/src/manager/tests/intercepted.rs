@@ -1,12 +1,12 @@
 use super::super::*;
-use super::common::{cleanup_dir, test_manager};
+use super::common::{cleanup_dir, open_persistence, test_manager};
 
 #[tokio::test]
 async fn empty_interception_releases_only_its_newly_claimed_turn() -> Result<()> {
     for already_owned in [false, true] {
         let (manager, data_dir) = test_manager().await;
         let session = manager.create_session().await?;
-        let observer = kraai_persistence::Persistence::open(&data_dir).await?;
+        let observer = open_persistence(&data_dir).await?;
         if already_owned {
             manager.persistence.sessions().claim_turn(&session).await?;
         }
@@ -62,7 +62,7 @@ async fn failed_profile_resolution_releases_a_newly_claimed_turn() -> Result<()>
             .is_err()
     );
     assert!(!manager.persistence.sessions().owns_turn(&session).await?);
-    let observer = kraai_persistence::Persistence::open(&data_dir).await?;
+    let observer = open_persistence(&data_dir).await?;
     observer.sessions().claim_turn(&session).await?;
     assert!(manager.get_chat_history(&session).await?.is_empty());
     cleanup_dir(data_dir).await;

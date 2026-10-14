@@ -50,3 +50,4 @@ path = "src/bin/kraai-nushell-host.rs"
 [dev-dependencies]
 async-trait.workspace = true
 kraai-test-support = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

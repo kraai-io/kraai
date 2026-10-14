@@ -1,5 +1,5 @@
 use super::super::*;
-use super::common::{cleanup_dir, test_manager};
+use super::common::{cleanup_dir, open_persistence, test_manager};
 use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{CompactionCheckpoint, SqliteCompactionStore};
 
@@ -70,7 +70,7 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
         .await?;
     let providers = manager.cloned_provider_manager();
     drop(manager);
-    let persistence = kraai_persistence::Persistence::open(&data_dir).await?;
+    let persistence = open_persistence(&data_dir).await?;
     let reopened = AgentManager::new(providers, data_dir.clone(), persistence, data_dir.clone());
     for prefix in ["current instructions", "new instructions"] {
         let built = reopened

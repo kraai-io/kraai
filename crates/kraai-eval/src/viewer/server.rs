@@ -14,16 +14,19 @@ use tokio::sync::Mutex;
 
 use super::catalog::Catalog;
 
+const CATALOG_REFRESH_COOLDOWN: Duration = Duration::from_secs(4);
+
 #[derive(Clone)]
 struct AppState {
     root: PathBuf,
     assets: PathBuf,
     catalog: Arc<Mutex<Option<CachedCatalog>>>,
+    refresh_cooldown: Duration,
 }
 
 struct CachedCatalog {
     value: Arc<Catalog>,
-    loaded_at: Instant,
+    fresh_until: Instant,
     refresh_error: Option<String>,
 }
 
@@ -31,7 +34,7 @@ impl AppState {
     async fn snapshot(&self) -> Result<(Arc<Catalog>, Option<String>), ApiError> {
         let mut saved = self.catalog.lock().await;
         if let Some(cached) = saved.as_ref()
-            && cached.loaded_at.elapsed() < Duration::from_secs(4)
+            && Instant::now() < cached.fresh_until
         {
             return Ok((cached.value.clone(), cached.refresh_error.clone()));
         }
@@ -44,7 +47,7 @@ impl AppState {
             Ok(catalog) => Arc::new(catalog),
             Err(error) => {
                 if let Some(cached) = saved.as_mut() {
-                    cached.loaded_at = Instant::now();
+                    cached.fresh_until = Instant::now() + self.refresh_cooldown;
                     cached.refresh_error = Some(format!(
                         "Showing saved results; refresh failed: {}",
                         error.1
@@ -56,7 +59,7 @@ impl AppState {
         };
         *saved = Some(CachedCatalog {
             value: value.clone(),
-            loaded_at: Instant::now(),
+            fresh_until: Instant::now() + self.refresh_cooldown,
             refresh_error: None,
         });
         drop(saved);
@@ -69,6 +72,7 @@ pub(super) fn router(root: PathBuf, assets: PathBuf) -> Router {
         root,
         assets,
         catalog: Arc::new(Mutex::new(None)),
+        refresh_cooldown: CATALOG_REFRESH_COOLDOWN,
     };
     Router::new()
         .route("/api/catalog", get(catalog))

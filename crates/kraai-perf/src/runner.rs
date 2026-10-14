@@ -66,6 +66,7 @@ fn sample(
     process::run(
         &mut command,
         timeout,
+        process::TERMINATION_GRACE,
         interrupted,
         stdout.path(),
         stderr.path(),

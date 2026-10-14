@@ -198,6 +198,7 @@ async fn failed_refresh_keeps_previous_results_and_recovers_after_a_cooldown() -
         root: server.root.join("cache"),
         assets: server.root.join("assets"),
         catalog: Arc::new(Mutex::new(None)),
+        refresh_cooldown: kraai_test_support::HANG_TIMEOUT,
     };
     let (original, _) = state
         .snapshot()
@@ -237,6 +238,6 @@ async fn failed_refresh_keeps_previous_results_and_recovers_after_a_cooldown() -
 
 async fn expire(state: &AppState) {
     if let Some(cached) = state.catalog.lock().await.as_mut() {
-        cached.loaded_at = Instant::now() - Duration::from_secs(5);
+        cached.fresh_until = Instant::now();
     }
 }

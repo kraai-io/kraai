@@ -122,6 +122,7 @@ impl ModelProxyRequest {
             credentials,
             log_path,
             max_requests: self.max_requests,
+            shutdown_drain_timeout: SHUTDOWN_DRAIN_TIMEOUT,
         })?;
         proxy.pricing = pricing;
         Ok(proxy)
@@ -177,9 +178,7 @@ impl ModelProxy {
                 tracing_fallback(&format!("{error:#}"));
             }
         });
-        let address = ready_rx
-            .recv_timeout(Duration::from_secs(5))
-            .wrap_err("model proxy did not start")??;
+        let address = ready_rx.recv().wrap_err("model proxy did not start")??;
         Ok(Self {
             address,
             log_path,
@@ -289,6 +288,7 @@ struct ProxyServerConfig {
     base_path: String,
     log_path: PathBuf,
     max_requests: u64,
+    shutdown_drain_timeout: Duration,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -373,13 +373,20 @@ async fn run_server(
         return Ok(());
     }
 
-    serve_connections(|| listener.accept(), state, shutdown).await
+    serve_connections(
+        || listener.accept(),
+        state,
+        shutdown,
+        config.shutdown_drain_timeout,
+    )
+    .await
 }
 
 async fn serve_connections<Accept, Accepted>(
     mut accept: Accept,
     state: Arc<ProxyState>,
     mut shutdown: oneshot::Receiver<()>,
+    drain_timeout: Duration,
 ) -> Result<()>
 where
     Accept: FnMut() -> Accepted,
@@ -405,10 +412,7 @@ where
         }
     };
     let drain = async { while tasks.join_next().await.is_some() {} };
-    if tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, drain)
-        .await
-        .is_err()
-    {
+    if tokio::time::timeout(drain_timeout, drain).await.is_err() {
         tasks.abort_all();
     }
     while tasks.join_next().await.is_some() {}

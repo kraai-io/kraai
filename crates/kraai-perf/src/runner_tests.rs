@@ -69,10 +69,16 @@ fn wrapper_cleanup_fixture() -> Result<()> {
     #[cfg(target_os = "linux")]
     nix::sys::prctl::set_child_subreaper(true)?;
     let directory = tempfile::tempdir()?;
+    #[cfg(target_os = "linux")]
+    let orphan = {
+        let directory = directory.path().to_path_buf();
+        std::thread::spawn(move || reap_orphan(&directory))
+    };
     let mut command = fixture_command(module_path!(), "early_exit_wrapper_fixture")?;
     command.env(FIXTURE_DIRECTORY, directory.path());
     process::run(
         &mut command,
+        HANG_TIMEOUT,
         HANG_TIMEOUT,
         &AtomicBool::new(false),
         &directory.path().join("stdout"),
@@ -84,15 +90,34 @@ fn wrapper_cleanup_fixture() -> Result<()> {
     );
     #[cfg(target_os = "linux")]
     {
-        let descendant_pid =
-            Pid::from_raw(fs::read_to_string(directory.path().join("child-pid"))?.parse()?);
-        let status = waitpid(descendant_pid, None)?;
+        let status = orphan
+            .join()
+            .map_err(|_panic_payload| color_eyre::eyre::eyre!("orphan reaper panicked"))??;
         ensure!(
             matches!(status, nix::sys::wait::WaitStatus::Exited(_, 0)),
             "orphan did not exit after graceful termination"
         );
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn reap_orphan(directory: &Path) -> Result<nix::sys::wait::WaitStatus> {
+    wait_for_file(&directory.join("child-ready"))?;
+    let pid = Pid::from_raw(fs::read_to_string(directory.join("child-pid"))?.parse()?);
+    let deadline = Instant::now() + HANG_TIMEOUT;
+    loop {
+        match waitpid(pid, None) {
+            Err(Errno::ECHILD | Errno::EINTR) => {
+                ensure!(
+                    Instant::now() < deadline,
+                    "orphan was not reparented to the subreaper"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            result => return Ok(result?),
+        }
+    }
 }
 
 #[test]
@@ -164,6 +189,7 @@ fn interrupted_process_does_not_create_output_files() -> Result<()> {
     let result = process::run(
         &mut command,
         Duration::from_secs(1),
+        process::TERMINATION_GRACE,
         &AtomicBool::new(true),
         &stdout,
         &stderr,
@@ -271,7 +297,14 @@ fn spawn_fixture(
     let stdout = directory.join(format!("{name}.stdout"));
     let stderr = directory.join(format!("{name}.stderr"));
     Ok(std::thread::spawn(move || {
-        process::run(&mut command, HANG_TIMEOUT, &interrupted, &stdout, &stderr)
+        process::run(
+            &mut command,
+            HANG_TIMEOUT,
+            HANG_TIMEOUT,
+            &interrupted,
+            &stdout,
+            &stderr,
+        )
     }))
 }
 

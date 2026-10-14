@@ -10535,6 +10535,10 @@ rec {
         ];
         devDependencies = [
           {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+          {
             name = "nix";
             packageId = "nix 0.31.3";
             target = { target, features }: (target."unix" or false);
@@ -10807,6 +10811,11 @@ rec {
           {
             name = "kraai-test-support";
             packageId = "kraai-test-support";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" "test-util" ];
           }
         ];
 

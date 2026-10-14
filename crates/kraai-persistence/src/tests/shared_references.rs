@@ -29,7 +29,7 @@ async fn ensure_revisions_advanced(persistence: &Persistence, before: Vec<i64>) 
 #[tokio::test]
 async fn shared_records_fence_and_notify_every_surviving_fork() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
     a.sessions().save(&session("original")).await?;
     let root = a
         .conversations()
@@ -59,8 +59,8 @@ async fn shared_records_fence_and_notify_every_surviving_fork() -> Result<()> {
         }
     }
     a.sessions().delete(&SessionId::new("original")).await?;
-    let b = Persistence::open(directory.path()).await?;
-    let observer = Persistence::open(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
+    let observer = open_persistence(directory.path()).await?;
     a.sessions().claim_turn(&SessionId::new("fork-b")).await?;
     b.sessions().claim_turn(&SessionId::new("fork-a")).await?;
     let before = revisions(&observer).await?;
@@ -119,7 +119,7 @@ async fn shared_records_fence_and_notify_every_surviving_fork() -> Result<()> {
 #[tokio::test]
 async fn new_unlinked_children_are_fenced_by_surviving_parent_sessions() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let owner = Persistence::open(directory.path()).await?;
+    let owner = open_persistence(directory.path()).await?;
     owner.sessions().save(&session("original")).await?;
     let mut root = owner
         .conversations()
@@ -131,7 +131,7 @@ async fn new_unlinked_children_are_fenced_by_surviving_parent_sessions() -> Resu
     owner.sessions().save(&fork).await?;
     owner.sessions().delete(&SessionId::new("original")).await?;
     owner.sessions().claim_turn(&SessionId::new("fork")).await?;
-    let observer = Persistence::open(directory.path()).await?;
+    let observer = open_persistence(directory.path()).await?;
     root.parent_id = Some(root.id.clone());
     root.id = MessageId::new("unlinked-child");
     ensure!(observer.messages().save(&root).await.is_err());
@@ -147,7 +147,7 @@ async fn new_unlinked_children_are_fenced_by_surviving_parent_sessions() -> Resu
 #[tokio::test]
 async fn deleted_original_lease_cannot_mutate_retained_history() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let stale_owner = Persistence::open(directory.path()).await?;
+    let stale_owner = open_persistence(directory.path()).await?;
     stale_owner.sessions().save(&session("original")).await?;
     stale_owner
         .sessions()
@@ -170,7 +170,7 @@ async fn deleted_original_lease_cannot_mutate_retained_history() -> Result<()> {
     };
     ensure!(stale_owner.messages().save(&root).await.is_err());
     ensure!(stale_owner.messages().delete(&root.id).await.is_err());
-    let observer = Persistence::open(directory.path()).await?;
+    let observer = open_persistence(directory.path()).await?;
     ensure!(
         observer
             .messages()

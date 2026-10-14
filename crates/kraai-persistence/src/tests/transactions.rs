@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn a_pooled_read_sees_one_commit_across_its_queries() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let path = directory.path().join("kraai.sqlite3");
     let (before, after) = persistence
@@ -35,13 +35,13 @@ async fn a_pooled_read_sees_one_commit_across_its_queries() -> Result<()> {
 #[tokio::test]
 async fn active_lease_rejection_does_not_require_the_database_write_lock() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let owner = Persistence::open(directory.path()).await?;
+    let owner = open_persistence(directory.path()).await?;
     owner.sessions().save(&session("session")).await?;
     owner
         .sessions()
         .claim_turn(&SessionId::new("session"))
         .await?;
-    let observer = Persistence::open(directory.path()).await?;
+    let observer = open_persistence(directory.path()).await?;
     observer
         .sessions()
         .sqlite_database()
@@ -78,7 +78,7 @@ async fn active_lease_rejection_does_not_require_the_database_write_lock() -> Re
 #[tokio::test]
 async fn lease_and_usage_updates_do_not_invalidate_metadata_writes() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let root = persistence
         .conversations()
@@ -150,8 +150,8 @@ async fn lease_and_usage_updates_do_not_invalidate_metadata_writes() -> Result<(
 #[tokio::test]
 async fn stale_tip_conditional_save_preserves_concurrent_metadata_changes() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     let root = a
         .conversations()
@@ -190,8 +190,8 @@ async fn stale_tip_conditional_save_preserves_concurrent_metadata_changes() -> R
 #[tokio::test]
 async fn stale_metadata_cannot_resurrect_a_deleted_session() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     a.conversations()
         .append_message(request("session", "root"))
@@ -218,8 +218,8 @@ async fn stale_metadata_cannot_resurrect_a_deleted_session() -> Result<()> {
 #[tokio::test]
 async fn stale_linked_message_does_not_overwrite_concurrent_metadata() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     let root = a
         .conversations()
@@ -265,7 +265,7 @@ async fn stale_linked_message_does_not_overwrite_concurrent_metadata() -> Result
 #[tokio::test]
 async fn failed_release_stops_renewing_the_abandoned_claim() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     persistence
         .sessions()
@@ -289,7 +289,7 @@ async fn failed_release_stops_renewing_the_abandoned_claim() -> Result<()> {
             .is_err()
     );
     tokio::time::sleep(Duration::from_millis(5)).await;
-    let observer = Persistence::open(directory.path()).await?;
+    let observer = open_persistence(directory.path()).await?;
     observer
         .sessions()
         .claim_turn(&SessionId::new("session"))
@@ -300,7 +300,7 @@ async fn failed_release_stops_renewing_the_abandoned_claim() -> Result<()> {
 #[tokio::test]
 async fn failed_tip_commit_rolls_back_the_message_and_title() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
     connection.execute_batch("CREATE TRIGGER fail_tip BEFORE UPDATE OF tip_id ON sessions BEGIN SELECT RAISE(FAIL, 'injected tip failure'); END;")?;
@@ -329,7 +329,7 @@ async fn failed_tip_commit_rolls_back_the_message_and_title() -> Result<()> {
 #[tokio::test]
 async fn failed_execution_finish_preserves_both_output_streams_and_running_phase() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let record = persistence
         .executions()
@@ -376,7 +376,7 @@ async fn failed_execution_finish_preserves_both_output_streams_and_running_phase
 #[tokio::test]
 async fn retries_link_one_stable_message_and_reject_changed_content() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let conversations = persistence.conversations();
     let id = MessageId::new("stable");
@@ -409,7 +409,7 @@ async fn retries_link_one_stable_message_and_reject_changed_content() -> Result<
 #[tokio::test]
 async fn failed_session_deletion_restores_history_and_execution_data() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let message = persistence
         .conversations()
@@ -457,7 +457,7 @@ async fn failed_session_deletion_restores_history_and_execution_data() -> Result
 #[tokio::test]
 async fn compaction_validation_preserves_the_saved_checkpoint() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let message = persistence
         .conversations()
@@ -492,7 +492,7 @@ async fn compaction_validation_preserves_the_saved_checkpoint() -> Result<()> {
     ] {
         ensure!(persistence.compactions().save(&invalid).await.is_err());
     }
-    let reopened = Persistence::open(directory.path()).await?;
+    let reopened = open_persistence(directory.path()).await?;
     ensure!(
         reopened
             .compactions()

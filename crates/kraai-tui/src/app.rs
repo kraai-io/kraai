@@ -113,7 +113,6 @@ pub struct App {
     persist_workspace_preferences: bool,
     startup_message_sent: bool,
     startup_sync: StartupSync,
-    /// Items of each message that CI output already showed.
     state: AppState,
     last_statusline_animation_tick: Option<Instant>,
     last_runtime_event_sequence: u64,
@@ -123,6 +122,7 @@ pub struct App {
     event_lag_script_resync_pending: bool,
     runtime_bridge_connected: bool,
     runtime_bridge_error: Option<String>,
+    runtime_event_batch_budget: Duration,
 }
 
 const STATUSLINE_ANIMATION_INTERVAL: Duration = Duration::from_millis(120);

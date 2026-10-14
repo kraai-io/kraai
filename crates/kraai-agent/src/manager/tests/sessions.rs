@@ -1,5 +1,5 @@
 use super::super::*;
-use super::common::{cleanup_dir, test_manager};
+use super::common::{cleanup_dir, open_persistence, test_manager};
 use color_eyre::eyre::Result;
 use kraai_types::MessageStatus;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ async fn a_foreign_workspace_change_refreshes_cached_state_before_the_next_turn(
     assert!(manager.prepare_session(&session_id).await?);
     let obsolete = data_dir.join("obsolete-workspace");
     manager.set_workspace_dir(&session_id, obsolete).await?;
-    let foreign = kraai_persistence::Persistence::open(&data_dir).await?;
+    let foreign = open_persistence(&data_dir).await?;
     let workspace = data_dir.join("foreign-workspace");
     tokio::fs::create_dir_all(&workspace).await?;
     let mut session = foreign.sessions().get(&session_id).await?.unwrap();

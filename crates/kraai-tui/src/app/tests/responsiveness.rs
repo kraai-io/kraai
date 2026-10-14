@@ -57,6 +57,22 @@ fn runtime_backlog_yields_before_draining_the_queue() {
 }
 
 #[test]
+fn spent_batch_budget_still_processes_one_notification() {
+    let mut harness = test_harness();
+    harness.app.runtime_event_batch_budget = std::time::Duration::ZERO;
+    let (tx, rx) = unbounded();
+    harness.app.runtime_rx = rx;
+    for _ in 0..3 {
+        assert!(
+            tx.send(RuntimeResponse::ProviderAuthStatus(Ok(Default::default())))
+                .is_ok()
+        );
+    }
+    assert!(matches!(harness.app.process_events(|| Ok(false)), Ok(true)));
+    assert_eq!(harness.app.runtime_rx.len(), 2);
+}
+
+#[test]
 fn input_arriving_during_runtime_processing_stops_the_batch() {
     let mut harness = test_harness();
     let (tx, rx) = unbounded();

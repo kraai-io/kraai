@@ -158,7 +158,13 @@ async fn fixture() -> (Arc<Fixture>, tokio::task::JoinHandle<()>) {
 
 fn manager(base: &str, directory: &std::path::Path) -> McpManager {
     let config: McpConfig = toml::from_str(&format!("[servers.fixture]\nstartup_timeout_secs = {timeout}\ncall_timeout_secs = {timeout}\ntransport = {{ type = 'http', url = '{base}/mcp', oauth = {{ scopes = ['tools'] }} }}", timeout = HANG_TIMEOUT.as_secs())).unwrap();
-    McpManager::with_auth_storage(config, directory.to_path_buf(), directory.to_path_buf()).unwrap()
+    McpManager::with_auth_storage_lock_timeout(
+        config,
+        directory.to_path_buf(),
+        directory.to_path_buf(),
+        HANG_TIMEOUT,
+    )
+    .unwrap()
 }
 
 async fn pending(manager: &McpManager) -> url::Url {

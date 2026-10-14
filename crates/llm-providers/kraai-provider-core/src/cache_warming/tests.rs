@@ -385,7 +385,7 @@ fn active_matching_prefix_does_not_expire_but_idle_prefix_does() -> Result<()> {
         .state
         .lock()
         .map_err(|error| eyre!("state lock: {error}"))?
-        .last_attempt = Some(Instant::now() - Duration::from_secs(600));
+        .last_attempt = Instant::now().checked_sub(Duration::from_secs(600));
     observer.observe(&TokenUsage {
         cache_read_tokens: 3000,
         input_tokens: 50,
@@ -396,7 +396,7 @@ fn active_matching_prefix_does_not_expire_but_idle_prefix_does() -> Result<()> {
         .state
         .lock()
         .map_err(|error| eyre!("state lock: {error}"))?
-        .last_prefix_use = Some(Instant::now() - Duration::from_secs(600));
+        .last_prefix_use = Instant::now().checked_sub(Duration::from_secs(600));
     assert!(prepare(&manager, &request())?.is_some());
     Ok(())
 }
@@ -409,7 +409,7 @@ fn session_lookup_only_cleans_expired_entries_periodically() -> Result<()> {
     let old = cache.state(&provider, &model, "old", &Default::default())?;
     old.lock()
         .map_err(|error| eyre!("state: {error}"))?
-        .last_used = Some(Instant::now() - Duration::from_secs(7200));
+        .last_used = Instant::now().checked_sub(Duration::from_secs(7200));
     drop(old);
     let _current = cache.state(&provider, &model, "current", &Default::default())?;
     {

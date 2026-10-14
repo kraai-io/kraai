@@ -1,5 +1,5 @@
 use super::super::*;
-use super::common::{cleanup_dir, test_manager};
+use super::common::{cleanup_dir, open_persistence, test_manager};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 
@@ -187,7 +187,7 @@ async fn usage_only_updates_reach_observers_and_reopened_storage() -> Result<()>
     let observer = AgentManager::new(
         manager.cloned_provider_manager(),
         data_dir.clone(),
-        kraai_persistence::Persistence::open(&data_dir).await?,
+        open_persistence(&data_dir).await?,
         data_dir.clone(),
     );
     let usage = TokenUsage {
@@ -223,7 +223,7 @@ async fn usage_only_updates_reach_observers_and_reopened_storage() -> Result<()>
         .await?
         .load()
         .await?;
-    let reopened = kraai_persistence::Persistence::open(&data_dir).await?;
+    let reopened = open_persistence(&data_dir).await?;
     let reopened = reopened
         .messages()
         .read_conversation(&session)

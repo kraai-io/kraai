@@ -147,9 +147,14 @@ async fn stalled_effect_after_host_exit(
         .into_bytes(),
         &workspace,
     );
-    if !cancel {
+    let timeout_gate = (!cancel).then(|| {
         plan.timeout = Duration::from_secs(3);
-    }
+        let (output_events, output) = tokio::sync::mpsc::unbounded_channel();
+        let (start_timeout, execution_started) = tokio::sync::oneshot::channel();
+        plan.output_events = Some(output_events);
+        plan.execution_started = Some(execution_started);
+        (output, start_timeout)
+    });
     plan.active_commands.push(String::from("kraai-open-files"));
     plan.state_effect_handler = Arc::new(StalledEffects {
         entered: entered.clone(),
@@ -164,8 +169,20 @@ async fn stalled_effect_after_host_exit(
         entered = hang_guard(entered.cancelled()) => entered?,
     }
     std::fs::write(workspace.0.join("exit-now"), "")?;
-    if cancel {
-        cancellation.cancel();
+    match timeout_gate {
+        None => cancellation.cancel(),
+        Some((mut output, start_timeout)) => {
+            let host_exited = async { while output.recv().await.is_some() {} };
+            tokio::select! {
+                result = &mut execution => {
+                    return Err(format!("execution stopped before its timeout started: {result:?}").into());
+                }
+                exited = hang_guard(host_exited) => exited?,
+            }
+            start_timeout
+                .send(tokio::time::Instant::now())
+                .map_err(|_instant| "execution stopped waiting for its timeout to start")?;
+        }
     }
     let completed = hang_guard(&mut execution).await;
     drop(execution);

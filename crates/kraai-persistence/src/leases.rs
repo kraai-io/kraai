@@ -94,7 +94,8 @@ impl SqliteSessionStore {
     }
 
     pub async fn claim_turn(&self, session_id: &SessionId) -> Result<()> {
-        self.claim_turn_for(session_id, TURN_LEASE_DURATION).await
+        self.claim_turn_for(session_id, self.turn_lease_duration)
+            .await
     }
 
     pub async fn claim_turn_for(&self, session_id: &SessionId, duration: Duration) -> Result<()> {
@@ -127,6 +128,7 @@ impl SqliteSessionStore {
             .get(session_id)
             .ok_or_else(|| eyre!("Session is not owned by this runtime"))?;
         let session = session_id.clone();
+        let duration = self.turn_lease_duration;
         self.database
             .run(move |connection, _| {
                 let updated = connection.execute(
@@ -135,7 +137,7 @@ impl SqliteSessionStore {
                     params![
                         session.as_str(),
                         expected,
-                        lease_expiry(now_nanos()?, TURN_LEASE_DURATION)?
+                        lease_expiry(now_nanos()?, duration)?
                     ],
                 )?;
                 ensure!(

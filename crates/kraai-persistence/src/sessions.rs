@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::OwnedMutexGuard;
 /// Metadata for a session, persisted to disk
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +78,7 @@ pub trait SessionStore: Send + Sync {
 pub struct SqliteSessionStore {
     pub(crate) database: Database,
     message_mutations: KeyedLocks<MessageId>,
+    pub(crate) turn_lease_duration: Duration,
 }
 
 impl SqliteSessionStore {
@@ -85,6 +87,7 @@ impl SqliteSessionStore {
             message_store
                 .sqlite_database()
                 .unwrap_or_else(|| Database::new(data_dir)),
+            crate::TURN_LEASE_DURATION,
         )
     }
 
@@ -92,10 +95,11 @@ impl SqliteSessionStore {
         self.database.clone()
     }
 
-    pub(crate) fn with_database(database: Database) -> Self {
+    pub(crate) fn with_database(database: Database, turn_lease_duration: Duration) -> Self {
         Self {
             database,
             message_mutations: KeyedLocks::default(),
+            turn_lease_duration,
         }
     }
 

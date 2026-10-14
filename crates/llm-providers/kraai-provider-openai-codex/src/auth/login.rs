@@ -72,7 +72,7 @@ pub(super) async fn run_browser_login(
 ) -> io::Result<StoredAuth> {
     loop {
         let (mut stream, _) = listener.accept().await?;
-        let request = match read_http_request(&mut stream).await {
+        let request = match read_http_request(&mut stream, CALLBACK_REQUEST_TIMEOUT).await {
             Ok(request) => request,
             Err(error) => {
                 let _ = write_http_response(
@@ -409,8 +409,11 @@ pub(super) fn generate_state() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-async fn read_http_request(stream: &mut tokio::net::TcpStream) -> io::Result<String> {
-    tokio::time::timeout(CALLBACK_REQUEST_TIMEOUT, async {
+async fn read_http_request(
+    stream: &mut tokio::net::TcpStream,
+    timeout: Duration,
+) -> io::Result<String> {
+    tokio::time::timeout(timeout, async {
         let mut request = Vec::with_capacity(1024);
         loop {
             if request.windows(4).any(|window| window == b"\r\n\r\n") {
@@ -476,6 +479,8 @@ fn parse_interval_seconds(value: &serde_json::Value) -> u64 {
     reason = "tests use direct assertions for callback fixtures"
 )]
 mod tests {
+    use kraai_test_support::HANG_TIMEOUT;
+
     use super::*;
 
     #[tokio::test]
@@ -534,7 +539,7 @@ mod tests {
         });
         let (mut server, _) = listener.accept().await.unwrap();
 
-        let request = read_http_request(&mut server).await.unwrap();
+        let request = read_http_request(&mut server, HANG_TIMEOUT).await.unwrap();
         writer.await.unwrap();
 
         assert!(request.starts_with("GET /auth/callback?code=test&state=ok HTTP/1.1"));
@@ -554,7 +559,9 @@ mod tests {
         });
         let (mut server, _) = listener.accept().await.unwrap();
 
-        let error = read_http_request(&mut server).await.unwrap_err();
+        let error = read_http_request(&mut server, HANG_TIMEOUT)
+            .await
+            .unwrap_err();
         writer.await.unwrap();
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
@@ -568,7 +575,9 @@ mod tests {
         let (mut server, _) = listener.accept().await.unwrap();
         let _client = client.await.unwrap().unwrap();
 
-        let error = read_http_request(&mut server).await.unwrap_err();
+        let error = read_http_request(&mut server, CALLBACK_REQUEST_TIMEOUT)
+            .await
+            .unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }

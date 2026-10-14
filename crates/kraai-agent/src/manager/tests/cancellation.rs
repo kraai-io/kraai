@@ -8,7 +8,7 @@ use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::MessageStore;
 
 use super::super::*;
-use super::common::{cleanup_dir, test_manager};
+use super::common::{cleanup_dir, open_persistence, test_manager};
 
 #[tokio::test]
 async fn restart_after_cancelled_result_save_failure_recovers_the_interrupted_tip() -> Result<()> {
@@ -94,7 +94,7 @@ async fn restart_after_cancellation_failure(
         .await?;
     drop(manager);
 
-    let persistence = kraai_persistence::Persistence::open(&data_dir).await?;
+    let persistence = open_persistence(&data_dir).await?;
     let reopened = AgentManager::new(
         providers,
         "/tmp/default-workspace".into(),
