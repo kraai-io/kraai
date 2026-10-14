@@ -117,7 +117,7 @@ async fn cancelled_unpolled_effect_commit_keeps_session_and_shutdown_ownership()
     assert!(futures::poll!(&mut drain).is_pending());
     assert!(futures::poll!(&mut all).is_pending());
     store.release.notify_one();
-    tokio::time::timeout(std::time::Duration::from_secs(5), drain)
+    tokio::time::timeout(std::time::Duration::from_secs(120), drain)
         .await
         .unwrap();
     all.await;

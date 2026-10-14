@@ -77,20 +77,26 @@ impl Database {
             .parent()
             .ok_or_else(|| eyre!("Database has no parent"))?;
         kraai_io::fs::create_dir_all(parent)?;
-        let connection = Connection::open(&self.path)
+        let mut connection = Connection::open(&self.path)
             .with_context(|| format!("Failed to open database {}", self.path.display()))?;
         connection.busy_timeout(Duration::from_secs(5))?;
-        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        connection.execute_batch(
+            "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;",
+        )?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version: i64 =
+            transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
         ensure!(
             (0..=SCHEMA_VERSION).contains(&version),
             "Unsupported SQLite schema version {version}"
         );
         if version == 1 {
-            connection.execute_batch(
+            transaction.execute_batch(
                 "ALTER TABLE sessions ADD COLUMN lease_token INTEGER NOT NULL DEFAULT 0",
             )?;
         }
-        connection.execute_batch(include_str!("schema.sql"))?;
+        transaction.execute_batch(include_str!("schema.sql"))?;
+        transaction.commit()?;
         Ok(connection)
     }
 
