@@ -271,7 +271,17 @@ async fn terminate_process_tree(
     child: &mut tokio::process::Child,
     process_group: &mut process_group::ProcessGroup,
 ) -> Result<(), SandboxError> {
-    process_group.kill()?;
+    if let Err(error) = process_group.kill() {
+        // Darwin refuses to signal a group whose only member is the leader that just exited and
+        // is not yet reaped. Reaping it lets any remaining members be signalled.
+        let exited = child
+            .try_wait()
+            .map_err(|error| SandboxError::Wait(error.to_string()))?;
+        if exited.is_none() {
+            return Err(error);
+        }
+        process_group.kill()?;
+    }
     child
         .kill()
         .await
