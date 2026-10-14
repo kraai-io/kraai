@@ -16,6 +16,7 @@ members = [
   "crates/kraai-perf",
   "crates/kraai-runtime",
   "crates/kraai-runtime-node",
+  "crates/kraai-test-support",
   "crates/kraai-tui",
   "crates/kraai-types",
   "crates/kraai-workspace-fs",
@@ -65,6 +66,7 @@ kraai-providers = { path = "crates/llm-providers/kraai-providers" }
 kraai-runtime = { path = "crates/kraai-runtime" }
 kraai-sandbox = { path = "crates/kraai-sandbox" }
 kraai-script-protocol = { path = "crates/kraai-script-protocol" }
+kraai-test-support = { path = "crates/kraai-test-support" }
 kraai-types = { path = "crates/kraai-types" }
 kraai-web = { path = "crates/kraai-web" }
 kraai-workspace-fs = { path = "crates/kraai-workspace-fs" }

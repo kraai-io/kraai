@@ -6,6 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, ensure};
+use kraai_test_support::HANG_TIMEOUT;
 
 struct Service {
     child: Child,
@@ -47,10 +48,7 @@ fn proxy_service_exposes_only_ephemeral_credentials_and_flushes_on_stdin_close()
             service.child.try_wait()?.is_none(),
             "proxy exited before readiness"
         );
-        ensure!(
-            started.elapsed() < Duration::from_secs(10),
-            "proxy never became ready"
-        );
+        ensure!(started.elapsed() < HANG_TIMEOUT, "proxy never became ready");
         std::thread::sleep(Duration::from_millis(10));
     }
     let bytes = fs::read(state.join("ready.json"))?;
@@ -76,7 +74,7 @@ fn proxy_service_exposes_only_ephemeral_credentials_and_flushes_on_stdin_close()
     )?;
     let mut connection =
         TcpStream::connect((Ipv4Addr::LOCALHOST, base.port().unwrap_or_default()))?;
-    connection.set_read_timeout(Some(Duration::from_secs(5)))?;
+    connection.set_read_timeout(Some(HANG_TIMEOUT))?;
     connection
         .write_all(b"GET /blocked HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
     let mut response = String::new();
@@ -90,7 +88,7 @@ fn proxy_service_exposes_only_ephemeral_credentials_and_flushes_on_stdin_close()
             break;
         }
         ensure!(
-            stopped.elapsed() < Duration::from_secs(10),
+            stopped.elapsed() < HANG_TIMEOUT,
             "proxy did not flush on EOF"
         );
         std::thread::sleep(Duration::from_millis(10));

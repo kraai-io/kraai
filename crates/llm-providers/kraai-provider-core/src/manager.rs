@@ -595,10 +595,8 @@ mod tests {
                     result = &mut loading => Err(eyre!(
                         "startup completed before pricing I/O was released: {result:?}"
                     )),
-                    result = tokio::time::timeout(
-                        Duration::from_secs(2),
-                        cache_started.notified(),
-                    ) => result.map_err(|error| eyre!("model discovery did not start: {error}")),
+                    result = kraai_test_support::hang_guard(cache_started.notified())
+                        => result.map_err(|error| eyre!("model discovery did not start: {error}")),
                 };
                 let still_pending = observed.is_ok() && futures::poll!(&mut loading).is_pending();
                 drop(loading);

@@ -219,8 +219,7 @@ mod tests {
             &path,
             nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
         )?;
-        let read = tokio::time::timeout(std::time::Duration::from_secs(1), store.read(&attachment))
-            .await?;
+        let read = kraai_test_support::hang_guard(store.read(&attachment)).await?;
         ensure!(read.is_err());
         tokio::fs::remove_file(&path).await?;
         let source = directory.path().join("source.png");

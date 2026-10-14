@@ -16,8 +16,6 @@ use super::super::core::{RuntimeConfig, RuntimeCore};
 use crate::handle::RuntimeEventSender;
 use crate::{Event, EventCallback, RuntimeHandle};
 
-pub(super) const TEST_TIMEOUT: Duration = Duration::from_secs(15);
-
 fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
     let mut current = Some(error);
     while let Some(error) = current {
@@ -264,7 +262,7 @@ impl EventCollector {
     where
         F: Fn(&[Event]) -> bool,
     {
-        let deadline = tokio::time::Instant::now() + TEST_TIMEOUT;
+        let deadline = tokio::time::Instant::now() + kraai_test_support::HANG_TIMEOUT;
         loop {
             let snapshot = self.snapshot();
             if predicate(&snapshot) {

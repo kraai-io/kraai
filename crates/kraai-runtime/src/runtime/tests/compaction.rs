@@ -7,10 +7,11 @@ use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderManager, ProviderRequest, ProviderRequestContext,
     ProviderStreamEvent,
 };
+use kraai_test_support::hang_guard;
 use kraai_types::{AssistantPhase, ConversationItem, ModelId, ProviderId};
 use tokio_util::sync::CancellationToken;
 
-use super::harness::{RuntimeTestHarness, TEST_TIMEOUT, create_session_with_profile};
+use super::harness::{RuntimeTestHarness, create_session_with_profile};
 use crate::Event;
 
 struct TestSummarizer {
@@ -189,29 +190,20 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
             Default::default(),
         )
         .await?;
-    tokio::time::timeout(TEST_TIMEOUT, entered.cancelled()).await?;
-    tokio::time::timeout(
-        TEST_TIMEOUT,
-        harness.handle.send_message(
-            other_session.clone(),
-            String::from("hello"),
-            String::from("mock-model"),
-            String::from("mock"),
-            Default::default(),
-        ),
-    )
+    hang_guard(entered.cancelled()).await?;
+    hang_guard(harness.handle.send_message(
+        other_session.clone(),
+        String::from("hello"),
+        String::from("mock-model"),
+        String::from("mock"),
+        Default::default(),
+    ))
     .await??;
     harness.events.wait_for("other session response", |events| {
         events.iter().any(|event| matches!(event, Event::StreamComplete { session_id, .. } if session_id == &other_session))
     }).await;
-    assert!(
-        tokio::time::timeout(
-            TEST_TIMEOUT,
-            harness.handle.cancel_stream(session_id.clone()),
-        )
-        .await??
-    );
-    tokio::time::timeout(TEST_TIMEOUT, dropped.cancelled()).await?;
+    assert!(hang_guard(harness.handle.cancel_stream(session_id.clone()),).await??);
+    hang_guard(dropped.cancelled()).await?;
     harness.events.wait_for("cancelled summary usage", |events| {
         events.iter().any(|event| matches!(event, Event::RequestUsageUpdated { session_id: id, request } if id == &session_id && request.message_id.as_str().starts_with("compaction-")))
     }).await;
@@ -294,13 +286,13 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
         matches!(event, Event::RequestUsageUpdated { request, .. } if request.message_id.as_str().starts_with("compaction-"))
     }));
     drop(snapshot_guard);
-    tokio::time::timeout(TEST_TIMEOUT, entered.cancelled()).await?;
+    hang_guard(entered.cancelled()).await?;
     harness.events.wait_for("summary usage after snapshot", |events| {
         events.iter().any(|event| matches!(event, Event::RequestUsageUpdated { request, .. } if request.message_id.as_str().starts_with("compaction-")))
     }).await;
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
-    tokio::time::timeout(TEST_TIMEOUT, dropped.cancelled()).await?;
+    hang_guard(dropped.cancelled()).await?;
     harness.shutdown().await;
     Ok(())
 }

@@ -23,6 +23,7 @@ tracing.workspace = true
 ulid.workspace = true
 
 [dev-dependencies]
+kraai-test-support = { workspace = true }
 tempfile.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]

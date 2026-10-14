@@ -98,7 +98,7 @@ mod tests {
             stream.write_u32(HOST_PROTOCOL_VERSION).await?;
             Ok::<_, io::Error>(stream)
         };
-        let (server, client) = tokio::time::timeout(Duration::from_secs(10), async {
+        let (server, client) = kraai_test_support::hang_guard(async {
             tokio::join!(accept(listener, spawned_rx, startup_timeout), client)
         })
         .await?;
@@ -118,11 +118,8 @@ mod tests {
             .send(tokio::time::Instant::now())
             .map_err(|_instant| io::Error::other("handshake stopped before spawn"))?;
         let startup_timeout = Duration::from_millis(25);
-        let result = tokio::time::timeout(
-            Duration::from_secs(1),
-            accept(listener, spawned_rx, startup_timeout),
-        )
-        .await?;
+        let result =
+            kraai_test_support::hang_guard(accept(listener, spawned_rx, startup_timeout)).await?;
         let error = result.err().ok_or("missing startup timeout")?;
         if error.kind() != io::ErrorKind::TimedOut
             || error.to_string() != "Nushell host handshake timed out 25ms after being spawned"

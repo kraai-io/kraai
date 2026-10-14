@@ -124,7 +124,7 @@ async fn chat_completions_compaction_replays_tools_and_resumes_with_native_calls
         }
     }
     ensure!(calls == 1);
-    let requests = tokio::time::timeout(std::time::Duration::from_secs(5), server).await???;
+    let requests = kraai_test_support::hang_guard(server).await???;
     let first = requests
         .first()
         .ok_or_else(|| eyre!("missing summary request"))?;

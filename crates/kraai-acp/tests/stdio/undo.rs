@@ -11,7 +11,7 @@ async fn undo_rewinds_persisted_context_without_reverting_files_or_the_selected_
     let mut harness = Harness::new(vec![
         "Kept answer".into(),
         Reply::Script(
-            "# timeout=10sec permissions=no-sandbox\n'persistent' | save retained.txt".into(),
+            "# timeout=10min permissions=no-sandbox\n'persistent' | save retained.txt".into(),
         ),
         "Discarded answer".into(),
         "Replacement answer".into(),

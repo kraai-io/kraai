@@ -1,7 +1,6 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_manager};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 use tokio::sync::Notify;
 
 struct ControlledSaves {
@@ -63,15 +62,12 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() -> Result<()> 
         let publication = manager.publish_streaming_snapshots();
         tokio::pin!(publication);
         assert!(futures::poll!(&mut publication).is_pending());
-        let chunk = tokio::time::timeout(
-            Duration::from_secs(15),
-            manager.append_text_chunk(
-                &request.message_id,
-                "text",
-                AssistantPhase::FinalAnswer,
-                "new chunk",
-            ),
-        )
+        let chunk = kraai_test_support::hang_guard(manager.append_text_chunk(
+            &request.message_id,
+            "text",
+            AssistantPhase::FinalAnswer,
+            "new chunk",
+        ))
         .await?;
         assert_eq!(
             super::common::streamed_text(chunk).as_deref(),

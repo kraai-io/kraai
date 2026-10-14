@@ -4,10 +4,10 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { test } = require('node:test');
 const { createRuntime } = require('..');
-const { localProvider, unwrap, readRecord } = require('./fixtures.cjs');
+const { HANG_TIMEOUT, localProvider, unwrap, readRecord } = require('./fixtures.cjs');
 
 for (const profile of ['coding', 'coding-no-sandbox']) {
-  test(`packaged host executes ${profile} with explicit asset roots and isolated instructions`, { timeout: 120000 }, async t => {
+  test(`packaged host executes ${profile} with explicit asset roots and isolated instructions`, { timeout: HANG_TIMEOUT }, async t => {
     const directory = mkdtempSync(join(tmpdir(), 'kraai-node-script-'));
     const storage = join(directory, 'storage');
     const workspace = join(directory, 'workspace');
@@ -15,7 +15,7 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
     mkdirSync(workspace);
     writeFileSync(join(storage, 'AGENTS.md'), 'Use the storage-root-only instruction.');
     const provider = await localProvider(t, [
-      { input: '# timeout=10sec permissions=workspace-read\n42' },
+      { input: '# timeout=10min permissions=workspace-read\n42' },
       'Completed',
     ]);
     const runtime = createRuntime({ storage_root: storage });
@@ -57,14 +57,14 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
 const fileContextCases = [false, true].flatMap(codex =>
   [false, true].map(symlinked => ({ codex, symlinked })));
 for (const { codex, symlinked } of fileContextCases) {
-  test(`opened files reach ${codex ? 'Codex' : 'Chat Completions'} HTTP requests after real commands${symlinked ? ' in a symlinked workspace' : ''}`, { timeout: 120000 }, async t => {
+  test(`opened files reach ${codex ? 'Codex' : 'Chat Completions'} HTTP requests after real commands${symlinked ? ' in a symlinked workspace' : ''}`, { timeout: HANG_TIMEOUT }, async t => {
     const directory = mkdtempSync(join(tmpdir(), 'kraai-file-context-'));
     const workspace = join(directory, 'workspace');
     mkdirSync(workspace);
     writeFileSync(join(workspace, 'sample.txt'), 'original\r\nsecond line\n');
     const sessionWorkspace = symlinked ? join(directory, 'workspace-link') : workspace;
     if (symlinked) symlinkSync(workspace, sessionWorkspace, process.platform === 'win32' ? 'junction' : 'dir');
-    const script = source => ({ input: `# timeout=10sec\n${source}` });
+    const script = source => ({ input: `# timeout=10min\n${source}` });
     const provider = await localProvider(t, [
       script('kraai-open-files sample.txt'),
       script('42'),

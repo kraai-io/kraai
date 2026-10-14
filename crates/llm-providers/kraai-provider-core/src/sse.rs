@@ -183,7 +183,6 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::Poll;
-    use std::time::Duration;
 
     async fn collect_chunks(payload: &[u8], chunk_size: usize) -> Vec<Result<SseEvent>> {
         let (tx, mut rx) = mpsc::channel(16);
@@ -336,7 +335,7 @@ mod tests {
         assert!(futures::poll!(&mut forwarding).is_pending());
         assert!(!dropped.load(Ordering::Acquire));
         drop(rx);
-        tokio::time::timeout(Duration::from_secs(1), forwarding).await?;
+        kraai_test_support::hang_guard(forwarding).await?;
 
         assert!(dropped.load(Ordering::Acquire));
         Ok(())
@@ -457,7 +456,7 @@ mod tests {
         )])
         .chain(stream::pending());
 
-        tokio::time::timeout(Duration::from_secs(1), forward_sse_events(source, tx)).await?;
+        kraai_test_support::hang_guard(forward_sse_events(source, tx)).await?;
 
         assert!(matches!(rx.recv().await, Some(Ok(SseEvent::Done))));
         assert!(rx.recv().await.is_none());

@@ -93,9 +93,10 @@ mod tests {
         let mut timer = TurnTimer::default();
         timer.start(now - Duration::from_secs(60));
         let restored: TurnTimer = serde_json::from_str(&serde_json::to_string(&timer)?)?;
-        let elapsed = restored.elapsed(Instant::now());
+        let checked = Instant::now();
+        let elapsed = restored.elapsed(checked);
         assert!(elapsed >= Some(Duration::from_secs(59)));
-        assert!(elapsed < Some(Duration::from_secs(62)));
+        assert!(elapsed < Some(checked.duration_since(now) + Duration::from_secs(62)));
         Ok(())
     }
 

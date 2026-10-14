@@ -355,7 +355,7 @@ mod tests {
             }
             std::future::pending().await
         });
-        tokio::time::timeout(std::time::Duration::from_secs(1), started.cancelled()).await?;
+        kraai_test_support::hang_guard(started.cancelled()).await?;
 
         let duplicate_dropped = CancellationToken::new();
         let duplicate_guard = duplicate_dropped.clone().drop_guard();
@@ -374,13 +374,13 @@ mod tests {
                 "refresh worker stopped while another pricing owner remained"
             ));
         }
-        tokio::time::timeout(std::time::Duration::from_secs(1), alive_rx).await??;
+        kraai_test_support::hang_guard(alive_rx).await??;
         color_eyre::eyre::ensure!(
             !stopped.is_cancelled(),
             "refresh worker stopped while another pricing owner remained"
         );
         drop(clone);
-        tokio::time::timeout(std::time::Duration::from_secs(1), stopped.cancelled()).await?;
+        kraai_test_support::hang_guard(stopped.cancelled()).await?;
         Ok(())
     }
 

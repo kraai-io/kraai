@@ -9,7 +9,7 @@ use crate::support::{Harness, Reply, prompt};
 #[tokio::test]
 async fn restart_after_pending_approval_waits_for_the_next_prompt() -> Result<()> {
     let mut harness = Harness::new(vec![
-        Reply::Script("# timeout=10sec permissions=no-sandbox\nprint 'must-not-run'".into()),
+        Reply::Script("# timeout=10min permissions=no-sandbox\nprint 'must-not-run'".into()),
         "After restart".into(),
     ])
     .await?;

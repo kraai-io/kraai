@@ -1,11 +1,10 @@
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
+use kraai_test_support::hang_guard;
 
 use super::harness::FullHistory as _;
-use super::harness::{
-    RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
-};
+use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
 use kraai_persistence::SessionStore;
 
@@ -72,12 +71,12 @@ async fn observers_refresh_on_expiry_without_a_revision_change_and_can_submit() 
         .expect("lease")
         .revision;
     let connection = rusqlite::Connection::open(observer.data_dir.join("kraai.sqlite3"))?;
-    connection.busy_timeout(TEST_TIMEOUT)?;
+    connection.busy_timeout(kraai_test_support::HANG_TIMEOUT)?;
     connection.execute(
         "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
         [session.as_str()],
     )?;
-    let after = tokio::time::timeout(TEST_TIMEOUT, async {
+    let after = hang_guard(async {
         loop {
             let snapshot = observer
                 .handle

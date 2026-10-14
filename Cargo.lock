@@ -3218,6 +3218,7 @@ dependencies = [
  "kraai-persistence",
  "kraai-providers",
  "kraai-runtime",
+ "kraai-test-support",
  "kraai-types",
  "serde",
  "serde_json",
@@ -3245,6 +3246,7 @@ dependencies = [
  "kraai-provider-core",
  "kraai-provider-openai-chat-completions",
  "kraai-script-protocol",
+ "kraai-test-support",
  "kraai-types",
  "kraai-workspace-fs",
  "rusqlite",
@@ -3290,6 +3292,7 @@ dependencies = [
  "kraai-provider-openai-chat-completions",
  "kraai-provider-openai-codex",
  "kraai-sandbox",
+ "kraai-test-support",
  "kraai-types",
  "reqwest 0.13.5",
  "serde",
@@ -3358,6 +3361,7 @@ dependencies = [
  "http",
  "kraai-execution-types",
  "kraai-io",
+ "kraai-test-support",
  "reqwest 0.13.5",
  "rmcp",
  "serde",
@@ -3385,6 +3389,7 @@ dependencies = [
  "kraai-io",
  "kraai-mcp",
  "kraai-sandbox",
+ "kraai-test-support",
  "kraai-web",
  "nix 0.31.3",
  "nu-cli",
@@ -3421,6 +3426,7 @@ dependencies = [
  "kraai-persistence",
  "kraai-provider-core",
  "kraai-sandbox",
+ "kraai-test-support",
  "kraai-types",
  "nix 0.31.3",
  "rustix 1.1.5",
@@ -3444,6 +3450,7 @@ dependencies = [
  "image",
  "kraai-execution-types",
  "kraai-io",
+ "kraai-test-support",
  "kraai-types",
  "nix 0.31.3",
  "rusqlite",
@@ -3468,6 +3475,7 @@ dependencies = [
  "httpdate",
  "kraai-execution-types",
  "kraai-io",
+ "kraai-test-support",
  "kraai-types",
  "rand 0.10.3",
  "reqwest 0.13.5",
@@ -3490,6 +3498,7 @@ dependencies = [
  "kraai-execution-types",
  "kraai-io",
  "kraai-provider-core",
+ "kraai-test-support",
  "kraai-types",
  "reqwest 0.13.5",
  "serde",
@@ -3508,6 +3517,7 @@ dependencies = [
  "kraai-execution-types",
  "kraai-io",
  "kraai-provider-core",
+ "kraai-test-support",
  "kraai-types",
  "rand 0.10.3",
  "reqwest 0.13.5",
@@ -3554,6 +3564,7 @@ dependencies = [
  "kraai-providers",
  "kraai-sandbox",
  "kraai-script-protocol",
+ "kraai-test-support",
  "kraai-types",
  "notify 8.2.0",
  "rusqlite",
@@ -3591,6 +3602,7 @@ name = "kraai-sandbox"
 version = "0.1.0"
 dependencies = [
  "kraai-execution-types",
+ "kraai-test-support",
  "libc",
  "nix 0.31.3",
  "rand 0.10.3",
@@ -3605,6 +3617,13 @@ name = "kraai-script-protocol"
 version = "0.1.0"
 dependencies = [
  "kraai-execution-types",
+]
+
+[[package]]
+name = "kraai-test-support"
+version = "0.1.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]
@@ -3623,6 +3642,7 @@ dependencies = [
  "kraai-providers",
  "kraai-runtime",
  "kraai-sandbox",
+ "kraai-test-support",
  "kraai-types",
  "markdown",
  "ratatui",
@@ -3655,6 +3675,7 @@ dependencies = [
  "async-trait",
  "kraai-execution-types",
  "kraai-io",
+ "kraai-test-support",
  "reqwest 0.13.5",
  "serde_json",
  "tokio",
@@ -3665,6 +3686,7 @@ name = "kraai-workspace-fs"
 version = "0.1.0"
 dependencies = [
  "kraai-io",
+ "kraai-test-support",
  "nix 0.31.3",
  "thiserror 2.0.21",
  "ulid",

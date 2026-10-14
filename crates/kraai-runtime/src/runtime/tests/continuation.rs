@@ -5,11 +5,12 @@ use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderManager, ProviderRequest, ProviderRequestContext,
     ProviderStreamEvent,
 };
+use kraai_test_support::hang_guard;
 use kraai_types::{AssistantPhase, ChatRole, ModelId, ProviderId};
 use tokio::sync::mpsc;
 
 use super::harness::FullHistory as _;
-use super::harness::{RuntimeTestHarness, TEST_TIMEOUT, create_session_with_profile};
+use super::harness::{RuntimeTestHarness, create_session_with_profile};
 use crate::ContinueSessionOutcome;
 
 struct RecordingProvider {
@@ -129,21 +130,18 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
         tokio::pin!(continuation);
         assert!(poll!(&mut continuation).is_pending());
         assert_eq!(
-            tokio::time::timeout(
-                TEST_TIMEOUT,
-                harness.handle.continue_session(
-                    session_id.clone(),
-                    "old-model".into(),
-                    "old-provider".into(),
-                    Default::default(),
-                )
-            )
+            hang_guard(harness.handle.continue_session(
+                session_id.clone(),
+                "old-model".into(),
+                "old-provider".into(),
+                Default::default(),
+            ))
             .await??,
             ContinueSessionOutcome::NothingToContinue
         );
         assert!(received.try_recv().is_err());
         super::harness::release_preparation(&harness.runtime, &session_id).await;
-        tokio::time::timeout(TEST_TIMEOUT, continuation).await??
+        hang_guard(continuation).await??
     } else {
         harness
             .handle
@@ -156,7 +154,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
             .await?
     };
     assert_eq!(outcome, ContinueSessionOutcome::Started);
-    let (model, request) = tokio::time::timeout(TEST_TIMEOUT, received.recv())
+    let (model, request) = hang_guard(received.recv())
         .await?
         .expect("provider request");
     assert_eq!(model.as_str(), "selected-model");

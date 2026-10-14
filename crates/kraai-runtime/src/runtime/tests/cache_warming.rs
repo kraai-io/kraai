@@ -9,6 +9,7 @@ use kraai_provider_core::{
     CacheWarmingPolicy, Model, ModelConfig, Provider, ProviderManager, ProviderRequest,
     ProviderRequestContext, ProviderStreamEvent,
 };
+use kraai_test_support::hang_guard;
 use kraai_types::{
     AssistantPhase, ConversationItem, ModelId, ProviderId, SessionId, TokenUsage, ToolCallId,
 };
@@ -310,7 +311,7 @@ async fn warming_waits_for_stream_completion_and_usage_before_the_real_request()
         providers,
         request,
     )));
-    tokio::time::timeout(Duration::from_secs(30), entered.cancelled())
+    hang_guard(entered.cancelled())
         .await
         .wrap_err("Cache warming stream did not reach its release gate")?;
     assert!(
@@ -324,14 +325,12 @@ async fn warming_waits_for_stream_completion_and_usage_before_the_real_request()
     assert_eq!(requests.len(), 1);
     assert!(requests.values().all(|r| r.usage.is_none()));
     release.cancel();
-    let result = tokio::time::timeout(Duration::from_secs(30), &mut task)
-        .await
-        .wrap_err_with(|| {
-            format!(
-                "Stream did not finish within 30 seconds after releasing cache warming. Provider calls: {}",
-                calls.lock().unwrap().len()
-            )
-        })??;
+    let result = hang_guard(&mut task).await.wrap_err_with(|| {
+        format!(
+            "Stream did not finish after releasing cache warming. Provider calls: {}",
+            calls.lock().unwrap().len()
+        )
+    })??;
     assert!(matches!(result, StreamDriveResult::Completed(output) if output.call_id.is_none()));
     assert_eq!(calls.lock().unwrap().len(), 2);
     let requests = store.load(&session).await?;

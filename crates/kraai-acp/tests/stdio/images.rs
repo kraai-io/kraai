@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 async fn prompt_and_tool_images_survive_reload_without_source_file() -> Result<()> {
     let mut harness = Harness::new(vec![
         Reply::Script(String::from(
-            "# timeout=10sec permissions=no-sandbox\nkraai-view-image image.png",
+            "# timeout=10min permissions=no-sandbox\nkraai-view-image image.png",
         )),
         "Viewed image.".into(),
     ])

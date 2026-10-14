@@ -183,7 +183,7 @@ async fn completed_call_does_not_wait_for_trailing_usage_or_done() -> Result<()>
         .chain(stream::pending())
         .boxed();
     let mut events = adapt_chat_completion_stream(source, Some("kraai_nushell".into()), false);
-    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.next()).await?;
+    let event = kraai_test_support::hang_guard(events.next()).await?;
     assert!(
         matches!(event, Some(Ok(ProviderStreamEvent::ScriptCall { input, .. })) if input == "ls")
     );
@@ -251,8 +251,7 @@ async fn termination_does_not_wait_for_transport_eof() -> Result<()> {
         let source = stream::iter([event, Ok(SseEvent::Done)])
             .chain(stream::pending())
             .boxed();
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
+        kraai_test_support::hang_guard(
             adapt_chat_completion_stream(source, None, false).collect::<Vec<_>>(),
         )
         .await?;

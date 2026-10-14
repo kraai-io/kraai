@@ -1,10 +1,11 @@
 use color_eyre::eyre::Result;
 use futures::poll;
 use kraai_persistence::{RequestUsageStore, SqliteRequestUsageStore};
+use kraai_test_support::hang_guard;
 use kraai_types::{ModelId, ProviderId, SessionId, TokenUsage};
 use std::sync::Arc;
 
-use super::harness::{RuntimeTestHarness, TEST_TIMEOUT, create_session_with_profile};
+use super::harness::{RuntimeTestHarness, create_session_with_profile};
 
 #[tokio::test]
 async fn cancellation_waits_for_received_usage_to_be_persisted() -> Result<()> {
@@ -54,7 +55,7 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
     assert!(poll!(&mut all).is_pending());
     assert!(barrier.try_write().is_err());
     assert!(events.try_recv().is_err());
-    tokio::time::timeout(TEST_TIMEOUT, async {
+    hang_guard(async {
         tokio::join!(session, all);
     })
     .await?;
@@ -133,14 +134,10 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
         })
         .expect("usage event");
     let cancelled = if shutdown {
-        tokio::time::timeout(TEST_TIMEOUT, harness.runtime.stop_active_work()).await?;
+        hang_guard(harness.runtime.stop_active_work()).await?;
         true
     } else {
-        tokio::time::timeout(
-            TEST_TIMEOUT,
-            harness.handle.cancel_stream(session_id.clone()),
-        )
-        .await??
+        hang_guard(harness.handle.cancel_stream(session_id.clone())).await??
     };
     assert!(cancelled);
     let requests = SqliteRequestUsageStore::new(&harness.data_dir)

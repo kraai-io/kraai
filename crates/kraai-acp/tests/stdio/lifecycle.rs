@@ -14,11 +14,7 @@ async fn eof_with_a_nonreading_client_still_terminates() -> Result<()> {
     harness
         .send(json!({"jsonrpc":"2.0","id":2,"method":"session/prompt","params":prompt(&session)}))
         .await?;
-    let buffered = tokio::time::timeout(
-        std::time::Duration::from_secs(20),
-        harness.output.fill_buf(),
-    )
-    .await??;
+    let buffered = kraai_test_support::hang_guard(harness.output.fill_buf()).await??;
     assert!(!buffered.is_empty());
     assert!(
         String::from_utf8_lossy(buffered).contains("large output"),
@@ -26,8 +22,7 @@ async fn eof_with_a_nonreading_client_still_terminates() -> Result<()> {
         String::from_utf8_lossy(buffered)
     );
     drop(harness.input.take());
-    let status =
-        tokio::time::timeout(std::time::Duration::from_secs(15), harness.child.wait()).await??;
+    let status = kraai_test_support::hang_guard(harness.child.wait()).await??;
     assert!(!status.success());
     assert_eq!(harness.model_requests.load(Ordering::SeqCst), 1);
     Ok(())
@@ -78,7 +73,7 @@ async fn eof_stops_active_stream_and_restart_does_not_resume_it() -> Result<()> 
 
 #[tokio::test]
 async fn eof_stops_an_active_embedded_script() -> Result<()> {
-    let mut harness = Harness::new(vec![Reply::Script("# timeout=60sec permissions=no-sandbox\nsleep 30sec; 'should not exist' | save marker.txt".into()), "After script EOF".into()]).await?;
+    let mut harness = Harness::new(vec![Reply::Script("# timeout=20min permissions=no-sandbox\nsleep 10min; 'should not exist' | save marker.txt".into()), "After script EOF".into()]).await?;
     harness.initialize().await?;
     let session = harness.session().await?;
     harness
@@ -124,7 +119,7 @@ async fn eof_stops_an_active_embedded_script() -> Result<()> {
 #[tokio::test]
 async fn pending_permission_is_isolated_from_other_session_traffic() -> Result<()> {
     let mut harness = Harness::new(vec![
-        Reply::Script("# timeout=10sec permissions=no-sandbox\nprint 'approved'".into()),
+        Reply::Script("# timeout=10min permissions=no-sandbox\nprint 'approved'".into()),
         Reply::Chunks(2048),
         "After approval".into(),
     ])

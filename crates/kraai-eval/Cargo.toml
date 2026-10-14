@@ -36,3 +36,6 @@ toml = { workspace = true }
 ulid = { workspace = true }
 unicode-width = { workspace = true }
 webbrowser = { workspace = true }
+
+[dev-dependencies]
+kraai-test-support = { workspace = true }

@@ -8,7 +8,6 @@
 use super::*;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use futures::{StreamExt, TryStreamExt};
 use kraai_provider_core::{ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver};
@@ -61,7 +60,10 @@ fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
 }
 
 fn test_client_or_skip() -> Option<Client> {
-    match Client::builder().timeout(Duration::from_secs(2)).build() {
+    match Client::builder()
+        .timeout(kraai_test_support::HANG_TIMEOUT)
+        .build()
+    {
         Ok(client) => Some(client),
         Err(error) if is_missing_system_ca_error(&error) => None,
         Err(error) => panic!("unexpected reqwest client build error: {error}"),

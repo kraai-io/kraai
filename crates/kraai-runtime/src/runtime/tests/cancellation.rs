@@ -1,11 +1,10 @@
 use color_eyre::eyre::Result;
 use kraai_execution_types::ScriptExecutionStatus;
 use kraai_persistence::ScriptExecutionCompletion;
+use kraai_test_support::hang_guard;
 use kraai_types::SessionId;
 
-use super::harness::{
-    RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
-};
+use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
 use crate::runtime::script_execution::CompletedScriptExecution;
 
@@ -76,7 +75,7 @@ async fn cancellation_after_execution_finishes_waits_for_result_and_prevents_con
     let handle = harness.handle.clone();
     let cancel_session = session.clone();
     let cancel = tokio::spawn(async move { handle.cancel_stream(cancel_session).await });
-    tokio::time::timeout(TEST_TIMEOUT, cancellation.cancelled()).await?;
+    hang_guard(cancellation.cancelled()).await?;
     assert!(!runtime.agent_manager.is_turn_active(&session));
     let observer = kraai_persistence::Persistence::open(&harness.data_dir).await?;
     assert!(observer.sessions().claim_turn(&session).await.is_err());
@@ -98,7 +97,7 @@ async fn cancellation_after_execution_finishes_waits_for_result_and_prevents_con
             result: Ok(completed),
         },
     );
-    assert!(tokio::time::timeout(TEST_TIMEOUT, cancel).await???);
+    assert!(hang_guard(cancel).await???);
     assert!(!runtime.session_store.owns_turn(&session).await?);
     let snapshot = harness.handle.get_session_snapshot(session.clone()).await?;
     assert!(!snapshot.session.is_running);
@@ -140,7 +139,7 @@ async fn cancellation_during_continuation_preparation_cancels_the_started_stream
             })
         })
         .await;
-    assert!(tokio::time::timeout(TEST_TIMEOUT, cancelled).await???);
+    assert!(hang_guard(cancelled).await???);
     harness
         .events
         .wait_for("cancelled continuation", |events| {
@@ -187,7 +186,7 @@ async fn cancel_turn_discards_prompt_queued_during_preparation() -> Result<()> {
     let cancel = tokio::spawn(async move { handle.cancel_turn(task_session).await });
     tokio::task::yield_now().await;
     super::harness::release_preparation(&harness.runtime, &session).await;
-    assert!(tokio::time::timeout(TEST_TIMEOUT, cancel).await???);
+    assert!(hang_guard(cancel).await???);
     let snapshot = harness.handle.get_session_snapshot(session).await?;
     assert_eq!(snapshot.queued_messages, 0);
     assert!(!snapshot.session.is_running);
@@ -224,7 +223,7 @@ async fn overlapping_cancellations_during_preparation_are_all_answered() -> Resu
     super::harness::release_preparation(&harness.runtime, &session).await;
     for answer in cancellations {
         assert!(
-            !tokio::time::timeout(TEST_TIMEOUT, answer)
+            !hang_guard(answer)
                 .await?
                 .expect("every cancellation is answered")?
         );

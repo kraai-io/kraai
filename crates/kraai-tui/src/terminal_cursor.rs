@@ -115,7 +115,7 @@ mod tests {
                 if let Some(started) = self.started.take() {
                     started.send(()).map_err(std::io::Error::other)?;
                     self.resume
-                        .recv_timeout(Duration::from_secs(5))
+                        .recv_timeout(kraai_test_support::HANG_TIMEOUT)
                         .map_err(std::io::Error::other)?;
                 }
                 self.bytes.write(bytes)
@@ -142,7 +142,7 @@ mod tests {
                 assert_eq!(output.bytes, b"\x1b[6 q");
             });
             started_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(kraai_test_support::HANG_TIMEOUT)
                 .expect("apply started");
             let restoring = scope.spawn(|| {
                 restoring_tx.send(()).expect("restore started");
@@ -152,7 +152,7 @@ mod tests {
                 assert_eq!(output, b"\x1b[0 q");
             });
             restoring_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(kraai_test_support::HANG_TIMEOUT)
                 .expect("restore worker started");
             let early_restore = restored_rx.recv_timeout(Duration::from_millis(100));
             resume_tx.send(()).expect("resume apply");
@@ -206,7 +206,7 @@ mod tests {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline = std::time::Instant::now() + kraai_test_support::HANG_TIMEOUT;
         while child.try_wait()?.is_none() {
             if std::time::Instant::now() >= deadline {
                 child.kill()?;

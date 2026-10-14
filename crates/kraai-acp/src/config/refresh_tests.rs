@@ -4,7 +4,6 @@
 )]
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::{
     Router,
@@ -246,7 +245,7 @@ async fn removing_the_final_optional_setting_does_not_block_the_next_prompt() ->
             selected.options,
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
+    kraai_test_support::hang_guard(async {
         loop {
             match events.recv().await?.event {
                 Event::TurnCompleted { .. } => return Ok::<_, color_eyre::Report>(()),

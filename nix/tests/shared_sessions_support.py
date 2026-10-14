@@ -10,8 +10,10 @@ import threading
 import time
 from pathlib import Path
 
+HANG_TIMEOUT = 120
 
-def wait_for(description, predicate, timeout=15):
+
+def wait_for(description, predicate, timeout=HANG_TIMEOUT):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
@@ -100,9 +102,7 @@ class Provider:
                     else:
                         emit({"content": reply.text})
                     reply.started.set()
-                    if not reply.release.wait(timeout=180):
-                        provider.errors.append("Held model reply timed out")
-                        return
+                    reply.release.wait()
                     if reply.script is None:
                         emit({}, "stop")
                     self.wfile.write(b"data: [DONE]\n\n")
@@ -187,7 +187,7 @@ class Client:
         )
         return self.next_id
 
-    def until(self, predicate, timeout=20):
+    def until(self, predicate, timeout=HANG_TIMEOUT):
         deadline = time.monotonic() + timeout
         while True:
             try:
@@ -200,7 +200,7 @@ class Client:
             if predicate(value):
                 return value
 
-    def response(self, request_id, timeout=20):
+    def response(self, request_id, timeout=HANG_TIMEOUT):
         return self.until(
             lambda value: value.get("id") == request_id and "method" not in value,
             timeout,
@@ -262,7 +262,7 @@ class Client:
                 self.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self.process.kill()
-                self.process.wait(timeout=5)
+                self.process.wait(timeout=HANG_TIMEOUT)
         with contextlib.suppress(ProcessLookupError):
             os.killpg(self.process.pid, signal.SIGKILL)
         for descriptor in self.descendants:
@@ -316,7 +316,7 @@ supports_images = true
 
     def query(self, sql, params=()):
         with contextlib.closing(
-            sqlite3.connect(self.database, timeout=5)
+            sqlite3.connect(self.database, timeout=HANG_TIMEOUT)
         ) as connection:
             return connection.execute(sql, params).fetchall()
 

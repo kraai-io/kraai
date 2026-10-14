@@ -16,6 +16,7 @@ use kraai_execution_types::{
 };
 use kraai_nushell_runtime::{RuntimeError, ScriptExecutionPlan, StateEffectHandler, execute};
 use kraai_sandbox::Termination;
+use kraai_test_support::{HANG_TIMEOUT, hang_guard};
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
@@ -52,8 +53,9 @@ fn plan(source: impl Into<Vec<u8>>, workspace: &TestWorkspace) -> ScriptExecutio
         source.into(),
         workspace.0.clone(),
         capabilities,
-        Duration::from_secs(30),
+        HANG_TIMEOUT * 2,
     );
+    plan.startup_timeout = HANG_TIMEOUT * 2;
     plan.environment
         .insert(String::from("TERM"), String::from("dumb"));
     plan
@@ -120,11 +122,11 @@ async fn dropping_execution_cancels_an_in_progress_state_effect()
         result = &mut execution => {
             return Err(format!("execution stopped before entering the state effect: {result:?}").into());
         }
-        entered = tokio::time::timeout(Duration::from_secs(5), entered.cancelled()) => entered?,
+        entered = hang_guard(entered.cancelled()) => entered?,
     }
 
     drop(execution);
-    tokio::time::timeout(Duration::from_secs(5), dropped.cancelled()).await?;
+    hang_guard(dropped.cancelled()).await?;
     Ok(())
 }
 
@@ -145,7 +147,9 @@ async fn stalled_effect_after_host_exit(
         .into_bytes(),
         &workspace,
     );
-    plan.timeout = Duration::from_secs(3);
+    if !cancel {
+        plan.timeout = Duration::from_secs(3);
+    }
     plan.active_commands.push(String::from("kraai-open-files"));
     plan.state_effect_handler = Arc::new(StalledEffects {
         entered: entered.clone(),
@@ -157,15 +161,15 @@ async fn stalled_effect_after_host_exit(
         result = &mut execution => {
             return Err(format!("execution stopped before entering the state effect: {result:?}").into());
         }
-        entered = tokio::time::timeout(Duration::from_secs(5), entered.cancelled()) => entered?,
+        entered = hang_guard(entered.cancelled()) => entered?,
     }
     std::fs::write(workspace.0.join("exit-now"), "")?;
     if cancel {
         cancellation.cancel();
     }
-    let completed = tokio::time::timeout(Duration::from_secs(5), &mut execution).await;
+    let completed = hang_guard(&mut execution).await;
     drop(execution);
-    tokio::time::timeout(Duration::from_secs(1), dropped.cancelled()).await?;
+    hang_guard(dropped.cancelled()).await?;
     let result =
         completed.map_err(|_elapsed| "execution ignored script timeout after host exit")??;
     assert_eq!(
@@ -258,7 +262,7 @@ async fn executes_structured_nushell_through_the_private_transport() {
 #[tokio::test]
 async fn timeout_after_a_successful_handshake_remains_a_script_timeout() {
     let workspace = TestWorkspace::new();
-    let mut execution = plan(b"sleep 10sec".to_vec(), &workspace);
+    let mut execution = plan(b"sleep 1hr".to_vec(), &workspace);
     execution.timeout = Duration::from_secs(1);
     let result = execute(execution, CancellationToken::new())
         .await
@@ -353,12 +357,9 @@ async fn a_host_that_exits_without_connecting_fails_without_waiting_forever() {
         .host_arguments
         .push("--invalid-host-argument".into());
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(2),
-        execute(execution, CancellationToken::new()),
-    )
-    .await
-    .expect("execution should not hang");
+    let result = hang_guard(execute(execution, CancellationToken::new()))
+        .await
+        .expect("execution should not hang");
     assert!(
         matches!(&result, Err(RuntimeError::Transport(_))),
         "unexpected execution result: {result:?}"
@@ -403,21 +404,13 @@ fn sandbox_runtime_roots(host: PathBuf) -> Vec<PathBuf> {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn private_transport_crosses_the_sandbox_boundary() {
     let workspace = TestWorkspace::new();
-    let capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
-        .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
-    let host = host_executable();
-    let mut execution = ScriptExecutionPlan::new(
-        kraai_execution_types::ScriptExecutionId::new(Ulid::generate()),
-        host.clone(),
+    let mut execution = plan(
         b"{transport: private, engine: embedded} | to json --raw".to_vec(),
-        workspace.0.clone(),
-        capabilities,
-        Duration::from_secs(30),
+        &workspace,
     );
-    execution
-        .environment
-        .insert(String::from("TERM"), String::from("dumb"));
-    execution.runtime_roots = sandbox_runtime_roots(host);
+    execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
+        .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
+    execution.runtime_roots = sandbox_runtime_roots(host_executable());
 
     let result = match execute(execution, CancellationToken::new()).await {
         Ok(result) => result,
@@ -442,22 +435,14 @@ async fn private_transport_crosses_the_sandbox_boundary() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn native_commands_remain_registered_when_the_sandbox_denies_the_operation() {
     let workspace = TestWorkspace::new();
-    let capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
-        .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
-    let host = host_executable();
-    let mut execution = ScriptExecutionPlan::new(
-        kraai_execution_types::ScriptExecutionId::new(Ulid::generate()),
-        host.clone(),
+    let mut execution = plan(
         b"kraai-edit-file denied.txt --create --contents 'denied'".to_vec(),
-        workspace.0.clone(),
-        capabilities,
-        Duration::from_secs(30),
+        &workspace,
     );
+    execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
+        .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
     execution.active_commands = vec![String::from("kraai-edit-file")];
-    execution
-        .environment
-        .insert(String::from("TERM"), String::from("dumb"));
-    execution.runtime_roots = sandbox_runtime_roots(host);
+    execution.runtime_roots = sandbox_runtime_roots(host_executable());
 
     let result = match execute(execution, CancellationToken::new()).await {
         Ok(result) => result,

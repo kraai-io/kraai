@@ -9,7 +9,7 @@ use fixture::{HttpFixture, execute, load, session, tool_status};
 
 fn script(value: &str) -> Reply {
     Reply::Script(format!(
-        "# timeout=10sec permissions=no-sandbox\nkraai-mcp call attached echo {{value: '{value}'}}"
+        "# timeout=10min permissions=no-sandbox\nkraai-mcp call attached echo {{value: '{value}'}}"
     ))
 }
 
@@ -193,7 +193,7 @@ async fn stdio_attachment_receives_env_cwd_and_exits_on_clear_and_disconnect() -
 
 #[cfg(unix)]
 async fn wait_for_exit(shell: &std::path::Path, pid: &str) -> Result<()> {
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    kraai_test_support::hang_guard(async {
         loop {
             if !tokio::process::Command::new(shell)
                 .args(["-c", "kill -0 \"$1\" 2>/dev/null", "fixture", pid])

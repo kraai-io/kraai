@@ -11,6 +11,7 @@ kraai-io.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+kraai-test-support = { workspace = true }
 ulid.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dev-dependencies]

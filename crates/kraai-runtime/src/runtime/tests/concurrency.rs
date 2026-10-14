@@ -8,12 +8,11 @@ use std::time::Duration;
 use color_eyre::eyre::Result;
 use futures::{StreamExt, poll};
 use kraai_persistence::{MessageStore, SqliteMessageStore};
+use kraai_test_support::hang_guard;
 use kraai_types::{Message, MessageId};
 use tokio_util::sync::CancellationToken;
 
-use super::harness::{
-    RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
-};
+use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::{ContinueSessionOutcome, Event, SessionActivity};
 
 struct HandoffProvider {
@@ -116,10 +115,10 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
             Default::default(),
         )
         .await?;
-    tokio::time::timeout(TEST_TIMEOUT, received.recv())
+    hang_guard(received.recv())
         .await?
         .expect("initial provider request");
-    tokio::time::timeout(TEST_TIMEOUT, store.entered.notified()).await?;
+    hang_guard(store.entered.notified()).await?;
 
     let handle = harness.handle.clone();
     let continuation_session = session_id.clone();
@@ -135,10 +134,10 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
     store.release.notify_one();
-    let outcome = tokio::time::timeout(TEST_TIMEOUT, continuation).await???;
+    let outcome = hang_guard(continuation).await???;
     let premature_request = if outcome == ContinueSessionOutcome::Started {
         Some(
-            tokio::time::timeout(TEST_TIMEOUT, received.recv())
+            hang_guard(received.recv())
                 .await?
                 .expect("continued provider request"),
         )
@@ -163,7 +162,7 @@ async fn continuation_cannot_overtake_script_approval_during_stream_completion()
             .handle
             .deny_script(session_id.clone(), pending.execution_id)
             .await?;
-        let request = tokio::time::timeout(TEST_TIMEOUT, received.recv())
+        let request = hang_guard(received.recv())
             .await?
             .expect("automatic continuation after denial");
         assert!(request.messages.iter().any(|message| {
@@ -248,7 +247,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
             Default::default(),
         )
         .await?;
-    tokio::time::timeout(TEST_TIMEOUT, received.recv())
+    hang_guard(received.recv())
         .await?
         .expect("first provider request");
     harness
@@ -306,7 +305,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
             Default::default(),
         )
         .await?;
-    let request = tokio::time::timeout(TEST_TIMEOUT, received.recv())
+    let request = hang_guard(received.recv())
         .await?
         .expect("provider request after cancellation");
     harness.shutdown().await;
@@ -391,16 +390,13 @@ async fn held_preparation_queues_without_blocking_another_session() -> Result<()
         crate::SubmitMessageOutcome::Queued { position: 1 }
     ));
     assert!(matches!(
-        tokio::time::timeout(
-            TEST_TIMEOUT,
-            harness.handle.send_message(
-                other_session,
-                "independent".into(),
-                "mock-model".into(),
-                "mock".into(),
-                Default::default(),
-            ),
-        )
+        hang_guard(harness.handle.send_message(
+            other_session,
+            "independent".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
+        ),)
         .await??,
         crate::SubmitMessageOutcome::Started { .. }
     ));
@@ -548,7 +544,7 @@ async fn stream_start_events_precede_a_snapshot_taken_right_after_the_stream_sta
         matches!(start.event, Event::StreamStart { message_id: actual, .. } if actual == message_id)
     );
     assert!(context.sequence < start.sequence);
-    let snapshot = tokio::time::timeout(TEST_TIMEOUT, snapshot).await???;
+    let snapshot = hang_guard(snapshot).await???;
     assert!(snapshot.event_sequence >= start.sequence);
     assert_eq!(snapshot.activity, SessionActivity::Streaming);
     assert_eq!(snapshot.turn_timer, timer);
@@ -573,7 +569,7 @@ async fn cancellation_finishes_after_a_snapshot_and_stays_active_until_finalized
     let handle = harness.handle.clone();
     let cancel_session = session_id.clone();
     let cancel = tokio::spawn(async move { handle.cancel_stream(cancel_session).await });
-    tokio::time::timeout(TEST_TIMEOUT, cancellation.cancelled()).await?;
+    hang_guard(cancellation.cancelled()).await?;
     let snapshot = harness
         .handle
         .get_session_snapshot(session_id.clone())
@@ -589,7 +585,7 @@ async fn cancellation_finishes_after_a_snapshot_and_stays_active_until_finalized
             result: Err(color_eyre::eyre::eyre!("script cancelled")),
         },
     );
-    assert!(tokio::time::timeout(TEST_TIMEOUT, cancel).await???);
+    assert!(hang_guard(cancel).await???);
     let snapshot = harness
         .handle
         .get_session_snapshot(session_id.clone())
@@ -613,7 +609,7 @@ async fn shutdown_waits_for_synchronous_stream_poll_to_return() -> Result<()> {
     let task = harness.runtime.stream_tasks.spawn(&session_id, async move {
         let mut stream = futures::stream::poll_fn(move |_| {
             task_entered.cancel();
-            let _released = release_rx.recv_timeout(Duration::from_secs(5));
+            let _released = release_rx.recv_timeout(kraai_test_support::HANG_TIMEOUT);
             task_runtime.send_event(Event::HistoryUpdated {
                 session_id: task_session.clone(),
             });
@@ -621,7 +617,7 @@ async fn shutdown_waits_for_synchronous_stream_poll_to_return() -> Result<()> {
         });
         let _ = futures::StreamExt::next(&mut stream).await;
     });
-    tokio::time::timeout(TEST_TIMEOUT, entered.cancelled()).await?;
+    hang_guard(entered.cancelled()).await?;
     let runtime = harness.runtime.clone();
     let shutdown = runtime.stop_active_work();
     tokio::pin!(shutdown);
@@ -630,9 +626,9 @@ async fn shutdown_waits_for_synchronous_stream_poll_to_return() -> Result<()> {
 
     release_tx.send(()).expect("stream poll is blocked");
     if shutdown_pending {
-        tokio::time::timeout(TEST_TIMEOUT, shutdown).await?;
+        hang_guard(shutdown).await?;
     }
-    let _task_result = tokio::time::timeout(TEST_TIMEOUT, task).await?;
+    let _task_result = hang_guard(task).await?;
     assert!(shutdown_pending);
     assert!(!stream_finished_early);
     assert!(harness.runtime.stream_tasks.is_empty());
@@ -659,14 +655,14 @@ async fn shutdown_cancels_a_running_script_and_waits_for_its_finalization() -> R
     let shutdown = runtime.stop_active_work();
     tokio::pin!(shutdown);
     assert!(poll!(&mut shutdown).is_pending());
-    tokio::time::timeout(TEST_TIMEOUT, cancellation.cancelled()).await?;
+    hang_guard(cancellation.cancelled()).await?;
     assert!(poll!(&mut shutdown).is_pending());
 
     let _ = mailbox.send(crate::runtime::session::SessionMessage::ScriptEnded {
         generation,
         result: Err(color_eyre::eyre::eyre!("script cancelled")),
     });
-    tokio::time::timeout(TEST_TIMEOUT, shutdown).await?;
+    hang_guard(shutdown).await?;
     assert!(
         std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
             event.event,
@@ -767,11 +763,11 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
         let session_id = session_id.clone();
         async move { handle.get_session_snapshot(session_id).await }
     });
-    tokio::time::timeout(TEST_TIMEOUT, store.entered.notified()).await?;
-    tokio::time::timeout(TEST_TIMEOUT, harness.handle.list_provider_definitions()).await??;
+    hang_guard(store.entered.notified()).await?;
+    hang_guard(harness.handle.list_provider_definitions()).await??;
     let guard = {
         let barrier = harness.runtime.sessions.barrier(&session_id);
-        tokio::time::timeout(TEST_TIMEOUT, barrier.read_owned()).await?
+        hang_guard(barrier.read_owned()).await?
     };
     harness
         .runtime
@@ -779,7 +775,7 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
     let later_sequence = harness.runtime.event_tx.latest_sequence();
     drop(guard);
     store.release.notify_one();
-    let snapshot = tokio::time::timeout(TEST_TIMEOUT, snapshot_task).await???;
+    let snapshot = hang_guard(snapshot_task).await???;
     assert!(snapshot.event_sequence < later_sequence);
     assert_eq!(
         snapshot

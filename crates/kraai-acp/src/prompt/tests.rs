@@ -103,11 +103,7 @@ provider_id = "mock"
         },
     )));
     let inner = connection_rx.await?;
-    tokio::time::timeout(
-        Duration::from_secs(10),
-        check_lag(runtime, id, session, inner, requests, lines),
-    )
-    .await?
+    kraai_test_support::hang_guard(check_lag(runtime, id, session, inner, requests, lines)).await?
 }
 
 async fn check_lag(

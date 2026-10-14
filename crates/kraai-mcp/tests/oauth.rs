@@ -21,6 +21,7 @@ use axum::{
 };
 use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpAuthState, McpConfig, McpHost, McpManager};
+use kraai_test_support::{HANG_TIMEOUT, hang_guard};
 use serde_json::{Value, json};
 
 struct Fixture {
@@ -37,7 +38,7 @@ struct Fixture {
 
 async fn resource(State(state): State<Arc<Fixture>>) -> Json<Value> {
     if state.slow_metadata.load(Ordering::SeqCst) {
-        tokio::time::sleep(Duration::from_secs(60)).await;
+        std::future::pending::<()>().await;
     }
     Json(
         json!({ "resource": format!("{}/mcp", state.base), "authorization_servers": [state.base], "scopes_supported": ["tools"] }),
@@ -156,12 +157,12 @@ async fn fixture() -> (Arc<Fixture>, tokio::task::JoinHandle<()>) {
 }
 
 fn manager(base: &str, directory: &std::path::Path) -> McpManager {
-    let config: McpConfig = toml::from_str(&format!("[servers.fixture]\ntransport = {{ type = 'http', url = '{base}/mcp', oauth = {{ scopes = ['tools'] }} }}")).unwrap();
+    let config: McpConfig = toml::from_str(&format!("[servers.fixture]\nstartup_timeout_secs = {timeout}\ncall_timeout_secs = {timeout}\ntransport = {{ type = 'http', url = '{base}/mcp', oauth = {{ scopes = ['tools'] }} }}", timeout = HANG_TIMEOUT.as_secs())).unwrap();
     McpManager::with_auth_storage(config, directory.to_path_buf(), directory.to_path_buf()).unwrap()
 }
 
 async fn pending(manager: &McpManager) -> url::Url {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    hang_guard(async {
         loop {
             let status = manager.auth_statuses().await.remove(0);
             match status.state {
@@ -193,7 +194,7 @@ async fn login(manager: &McpManager, base: &str) -> url::Url {
 }
 
 async fn authenticated(manager: &McpManager) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    hang_guard(async {
         loop {
             let status = manager.auth_statuses().await.remove(0);
             if matches!(status.state, McpAuthState::Authenticated) {
@@ -284,7 +285,7 @@ async fn cancelled_discovery_and_callbacks_cannot_restore_login() {
     let manager = manager(&fixture.base, directory.path());
     fixture.slow_metadata.store(true, Ordering::SeqCst);
     manager.start_login("fixture").await.unwrap();
-    tokio::time::timeout(Duration::from_secs(1), manager.cancel_login("fixture"))
+    hang_guard(manager.cancel_login("fixture"))
         .await
         .unwrap()
         .unwrap();
@@ -313,7 +314,7 @@ async fn cancelling_discovery_during_refresh_does_not_lose_rotated_token() {
     fixture.pause_refresh.store(true, Ordering::SeqCst);
     let discovering = manager.clone();
     let discovery = tokio::spawn(async move { discovering.prompt().await });
-    tokio::time::timeout(Duration::from_secs(5), fixture.refresh_started.notified())
+    hang_guard(fixture.refresh_started.notified())
         .await
         .unwrap();
     discovery.abort();
@@ -338,17 +339,13 @@ async fn logout_during_refresh_cannot_restore_credentials() {
     fixture.pause_refresh.store(true, Ordering::SeqCst);
     let discovering = manager.clone();
     let discovery = tokio::spawn(async move { discovering.prompt().await });
-    tokio::time::timeout(Duration::from_secs(5), fixture.refresh_started.notified())
+    hang_guard(fixture.refresh_started.notified())
         .await
         .unwrap();
     let logging_out = manager.clone();
     let logout = tokio::spawn(async move { logging_out.logout("fixture").await });
     fixture.release_refresh.notify_one();
-    let result = tokio::time::timeout(Duration::from_secs(5), logout)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+    let result = hang_guard(logout).await.unwrap().unwrap().unwrap();
     assert!(matches!(result.state, McpAuthState::SignedOut));
     let _ = discovery.await;
     manager.shutdown().await;

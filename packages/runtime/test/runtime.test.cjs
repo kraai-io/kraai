@@ -3,7 +3,7 @@ const { mkdtempSync, realpathSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join, toNamespacedPath } = require('node:path');
 const { test } = require('node:test');
-const { localProvider, unwrap, readRecord } = require('./fixtures.cjs');
+const { HANG_TIMEOUT, localProvider, unwrap, readRecord } = require('./fixtures.cjs');
 const { createRuntime } = require('..');
 
 function fixture(t) {
@@ -21,7 +21,7 @@ function fixture(t) {
   };
 }
 
-test('sessions, settings, structured errors, subscriptions and shutdown', { timeout: 30000 }, async (t) => {
+test('sessions, settings, structured errors, subscriptions and shutdown', { timeout: HANG_TIMEOUT }, async (t) => {
   const { directory, create } = fixture(t);
   writeFileSync(join(directory, 'agents.toml'), '[[profiles]]\nid = "isolated"\nextends = "coding"\n');
   const runtime = create();
@@ -57,7 +57,7 @@ test('sessions, settings, structured errors, subscriptions and shutdown', { time
   assert.equal((await runtime.listSessions()).Err.kind, 'unavailable');
 });
 
-test('startup failures remain observable and can be shut down', { timeout: 30000 }, async (t) => {
+test('startup failures remain observable and can be shut down', { timeout: HANG_TIMEOUT }, async (t) => {
   const { directory, create } = fixture(t);
   const config = join(directory, 'broken.toml');
   writeFileSync(config, 'not valid toml [');
@@ -67,7 +67,7 @@ test('startup failures remain observable and can be shut down', { timeout: 30000
   unwrap(await runtime.shutdown());
 });
 
-test('MCP auth methods return statuses and structured errors', { timeout: 30000 }, async t => {
+test('MCP auth methods return statuses and structured errors', { timeout: HANG_TIMEOUT }, async t => {
   const runtime = fixture(t).create();
   assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   assert.deepEqual(unwrap(await runtime.getMcpAuthStatuses()), []);
@@ -78,7 +78,7 @@ test('MCP auth methods return statuses and structured errors', { timeout: 30000 
   }
 });
 
-test('MCP auth distinguishes unsupported login from credential storage failures', { timeout: 30000 }, async t => {
+test('MCP auth distinguishes unsupported login from credential storage failures', { timeout: HANG_TIMEOUT }, async t => {
   const { directory, create } = fixture(t);
   writeFileSync(join(directory, 'mcp.toml'), `
 [servers.local]
@@ -105,7 +105,7 @@ transport = { type = "http", url = "https://example.test/mcp" }
   assert.equal((await runtime.logoutMcp('oauth')).Err.kind, 'internal');
 });
 
-test('streams a reply from a local provider and persists the conversation', { timeout: 30000 }, async (t) => {
+test('streams a reply from a local provider and persists the conversation', { timeout: HANG_TIMEOUT }, async (t) => {
   const { directory, create } = fixture(t);
   const provider = await localProvider(t, ['Hello from Rust']);
   const runtime = create();
@@ -141,7 +141,7 @@ test('streams a reply from a local provider and persists the conversation', { ti
   unwrap(await runtime.shutdown());
 });
 
-test('native methods reject invalid and wrong-class receivers', { timeout: 30000 }, async t => {
+test('native methods reject invalid and wrong-class receivers', { timeout: HANG_TIMEOUT }, async t => {
   const { create } = fixture(t);
   const runtime = create();
   const events = runtime.subscribe();
@@ -160,7 +160,7 @@ test('native methods reject invalid and wrong-class receivers', { timeout: 30000
   assert.deepEqual(await events.next(), { type: 'closed' });
 });
 
-test('model options require explicit choices and survive request persistence', { timeout: 30000 }, async t => {
+test('model options require explicit choices and survive request persistence', { timeout: HANG_TIMEOUT }, async t => {
   const { directory, create } = fixture(t);
   const provider = await localProvider(t, ['Chosen options']);
   provider.settings.models[0].options = [{
@@ -194,7 +194,7 @@ test('model options require explicit choices and survive request persistence', {
   events.close();
 });
 
-test('session model options persist before a prompt and survive restart', { timeout: 30000 }, async t => {
+test('session model options persist before a prompt and survive restart', { timeout: HANG_TIMEOUT }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'kraai-node-model-options-'));
   let runtime;
   t.after(async () => {
@@ -242,7 +242,7 @@ test('session model options persist before a prompt and survive restart', { time
   assert.equal(provider.requests.length, 0);
 });
 
-test('storage roots must be absolute and may be created at startup', { timeout: 30000 }, async t => {
+test('storage roots must be absolute and may be created at startup', { timeout: HANG_TIMEOUT }, async t => {
   for (const storage_root of ['', '.', 'relative', '../relative']) {
     assert.throws(() => createRuntime({ storage_root }), /storage_root must be a non-empty absolute path/);
   }

@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
@@ -122,7 +121,7 @@ async fn updates(
     sessions: &[&str],
     matches: impl Fn(&Value) -> bool + Send + Sync,
 ) -> Result<BTreeMap<String, Value>> {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    kraai_test_support::hang_guard(async {
         let mut updates = BTreeMap::new();
         while updates.len() < sessions.len() {
             let message = harness.read().await?;

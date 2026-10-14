@@ -1,6 +1,5 @@
-use std::time::Duration;
-
 use kraai_execution_types::SandboxCapability;
+use kraai_test_support::HANG_TIMEOUT;
 use tokio_util::sync::CancellationToken;
 
 use super::{capabilities, find_bwrap, shell_plan, temp_dir};
@@ -30,7 +29,7 @@ async fn executable_in_aliased_workspace_runs_without_host_read() {
             SandboxCapability::WorkspaceWrite,
             SandboxCapability::Network,
         ]),
-        Duration::from_secs(5),
+        HANG_TIMEOUT,
     );
     plan.executable = alias.join("tool");
     plan.args.clear();
@@ -73,7 +72,7 @@ async fn external_symlink_executable_runs_at_its_declared_runtime_root() {
         &workspace,
         "",
         capabilities([SandboxCapability::WorkspaceRead, SandboxCapability::Network]),
-        Duration::from_secs(5),
+        HANG_TIMEOUT,
     );
     plan.executable = executable.clone();
     plan.args.clear();
@@ -110,7 +109,7 @@ async fn skill_runtime_root_is_read_only_with_default_capabilities() {
         &workspace,
         "read -r text < \"$SKILL/SKILL.md\"; test \"$text\" = instructions || exit 1; read -r text < \"$SKILL/reference.txt\"; test \"$text\" = reference || exit 2; if (printf bad > \"$SKILL/SKILL.md\"); then exit 3; fi; if (read -r text < \"$SECRET\"); then exit 4; fi",
         capabilities([SandboxCapability::WorkspaceRead]),
-        Duration::from_secs(5),
+        HANG_TIMEOUT,
     );
     plan.executable = plan.executable.canonicalize().expect("resolve shell");
     plan.runtime_roots = ["/nix/store", "/usr", "/bin", "/lib", "/lib64"]
@@ -166,7 +165,7 @@ async fn check_runtime_mounts(writable: bool) {
             &workspace,
             "if (printf lock > target/debug/.cargo-build-lock); then printf writable; else printf readonly; fi; if (printf bad > ../forbidden); then exit 2; fi",
             capabilities(granted),
-            Duration::from_secs(5),
+            HANG_TIMEOUT,
         );
         plan.runtime_roots.push(match overlap {
             "nested" => build.clone(),
@@ -213,7 +212,7 @@ async fn path_finds_programs_through_unmounted_profile_symlinks() {
         &workspace,
         "profile-command -c 'printf found'",
         capabilities([SandboxCapability::WorkspaceRead, SandboxCapability::Network]),
-        Duration::from_secs(5),
+        HANG_TIMEOUT,
     );
     plan.executable = shell;
     plan.runtime_roots = ["/nix/store", "/usr", "/bin", "/lib", "/lib64"]

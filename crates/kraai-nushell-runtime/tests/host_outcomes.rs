@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use kraai_nushell_runtime::{RuntimeError, execute, request::HOST_PROTOCOL_VERSION};
 use kraai_sandbox::Termination;
+use kraai_test_support::{HANG_TIMEOUT, hang_guard};
 use support::{FakeHost, TestResult};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
@@ -19,7 +20,8 @@ async fn greet(stream: &mut tokio::net::UnixStream) -> TestResult {
 #[tokio::test]
 async fn slow_compatible_host_receives_the_full_script_timeout() -> TestResult {
     let timeout = Duration::from_millis(100);
-    let fixture = FakeHost::new(timeout, b"ignored".to_vec())?;
+    let mut fixture = FakeHost::new(timeout, b"ignored".to_vec())?;
+    fixture.plan.startup_timeout = HANG_TIMEOUT * 2;
     let client = async {
         let mut stream = support::connect(&fixture.socket).await?;
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -32,10 +34,9 @@ async fn slow_compatible_host_receives_the_full_script_timeout() -> TestResult {
         }
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     };
-    let (result, client) = tokio::time::timeout(Duration::from_secs(5), async {
-        tokio::join!(execute(fixture.plan, CancellationToken::new()), client)
-    })
-    .await?;
+    let (result, client) =
+        hang_guard(async { tokio::join!(execute(fixture.plan, CancellationToken::new()), client) })
+            .await?;
     client?;
     let result = result?;
     if result.output.termination != Termination::TimedOut {
@@ -50,7 +51,8 @@ async fn channel_failure(cancel: bool, during_request: bool) -> TestResult {
     } else {
         b"ignored".to_vec()
     };
-    let fixture = FakeHost::new(Duration::from_secs(30), source)?;
+    let mut fixture = FakeHost::new(HANG_TIMEOUT * 2, source)?;
+    fixture.plan.startup_timeout = HANG_TIMEOUT * 2;
     let cancellation = CancellationToken::new();
     let _guard = cancellation.clone().drop_guard();
     let client = async {
@@ -72,10 +74,9 @@ async fn channel_failure(cancel: bool, during_request: bool) -> TestResult {
         drop(stream);
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     };
-    let (result, client) = tokio::time::timeout(Duration::from_secs(5), async {
-        tokio::join!(execute(fixture.plan, cancellation.clone()), client)
-    })
-    .await?;
+    let (result, client) =
+        hang_guard(async { tokio::join!(execute(fixture.plan, cancellation.clone()), client) })
+            .await?;
     client?;
     if cancel {
         let result = result?;

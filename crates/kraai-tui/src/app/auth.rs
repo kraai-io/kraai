@@ -124,7 +124,7 @@ mod tests {
             marker.with_extension("ready"),
             std::process::id().to_string(),
         )?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + kraai_test_support::HANG_TIMEOUT;
         while !marker.exists() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -145,7 +145,7 @@ mod tests {
             .stderr(std::process::Stdio::null());
         let waiter = spawn_external_target(command)?;
         let ready = marker.with_extension("ready");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + kraai_test_support::HANG_TIMEOUT;
         while !ready.exists() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }

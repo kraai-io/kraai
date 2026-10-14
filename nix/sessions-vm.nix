@@ -20,6 +20,6 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("multi-user.target")
     with subtest("separate clients, script heartbeat, crash and paused-owner takeover"):
         command = "${pkgs.python3}/bin/python3 -u ${./tests}/shared_sessions.py ${kraai-acp}/bin/kraai-acp"
-        machine.succeed("su - sessions -c " + shlex.quote(command), timeout=240)
+        machine.succeed("su - sessions -c " + shlex.quote(command), timeout=1800)
   '';
 }

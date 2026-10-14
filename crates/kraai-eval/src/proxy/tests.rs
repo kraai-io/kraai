@@ -5,7 +5,7 @@ use super::forwarding::relay_response;
 
 #[tokio::test]
 async fn request_parser_preserves_header_octets_and_rejects_invalid_syntax() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(10), async {
+    kraai_test_support::hang_guard(async {
         let request = parse_raw_request(
             b"POST /v1/responses HTTP/1.1\r\nContent-Length: 2\r\nX-Codex-Turn-State:\t \xc2\xa0opaque-\xff\xc2\xa0 \t\r\n\r\n{}",
         )
@@ -177,10 +177,9 @@ async fn listener_failure_drains_tasks_and_records_failed_requests() -> Result<(
         stream.read_to_end(&mut response).await?;
         Ok::<_, color_eyre::Report>(())
     };
-    let (server, upstream, client) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::join!(server, upstream_request, client)
-    })
-    .await?;
+    let (server, upstream, client) =
+        kraai_test_support::hang_guard(async { tokio::join!(server, upstream_request, client) })
+            .await?;
     upstream?;
     client?;
     let error = server
@@ -481,7 +480,7 @@ price_output = "8"
             .as_bytes(),
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), accepted_rx).await??;
+    kraai_test_support::hang_guard(accepted_rx).await??;
 
     let metrics = tokio::task::spawn_blocking(move || proxy.finish()).await??;
     let _ = release_tx.send(());

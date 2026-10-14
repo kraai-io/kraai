@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kraai_execution_types::{SandboxCapabilities, SandboxCapability};
+use kraai_test_support::{HANG_TIMEOUT, hang_guard};
 #[cfg(unix)]
 use nix::unistd::Pid;
 use tokio_util::sync::CancellationToken;
@@ -119,7 +120,7 @@ async fn no_sandbox_captures_output_and_clears_unspecified_environment() {
         &workspace,
         "printf '%s' \"${KRAAI_UNSET-unset}\"; printf err >&2",
         capabilities([SandboxCapability::NoSandbox]),
-        Duration::from_secs(5),
+        HANG_TIMEOUT,
     );
     plan.environment.remove(OsStr::new("KRAAI_UNSET"));
 
@@ -142,7 +143,7 @@ async fn live_output_events_reconstruct_authoritative_capture() {
         &workspace,
         "printf first; printf second; printf problem >&2",
         capabilities([SandboxCapability::NoSandbox]),
-        Duration::from_secs(5),
+        HANG_TIMEOUT,
     );
     plan.output_events = Some(sender);
 
@@ -171,7 +172,7 @@ async fn private_temp_is_writable_and_removed_after_exit() {
             &workspace,
             "printf data > \"$TMPDIR/probe\"; printf %s \"$TMPDIR\"",
             capabilities([SandboxCapability::NoSandbox]),
-            Duration::from_secs(5),
+            HANG_TIMEOUT,
         ),
         CancellationToken::new(),
     )
@@ -194,20 +195,30 @@ async fn timeout_terminates_descendants_and_preserves_output() {
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let pid_path = workspace.join("grandchild.pid");
     let script = format!(
-        "printf started; sleep 60 & child=$!; echo $child > '{}'; wait $child",
+        "printf started; sleep {} & child=$!; echo $child > '{}'; wait $child",
+        (HANG_TIMEOUT * 2).as_secs(),
         pid_path.display()
     );
-    let output = run(
-        shell_plan(
-            &workspace,
-            script,
-            capabilities([SandboxCapability::NoSandbox]),
-            Duration::from_millis(100),
-        ),
-        CancellationToken::new(),
-    )
-    .await
-    .expect("timeout is a stable process outcome");
+    let mut plan = shell_plan(
+        &workspace,
+        script,
+        capabilities([SandboxCapability::NoSandbox]),
+        Duration::from_millis(100),
+    );
+    let (started, execution_started) = tokio::sync::oneshot::channel();
+    plan.execution_started = Some(execution_started);
+    let child_recorded = async {
+        hang_guard(async {
+            while !std::fs::read_to_string(&pid_path).is_ok_and(|pid| pid.ends_with('\n')) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("script recorded its child");
+        let _ = started.send(tokio::time::Instant::now());
+    };
+    let (output, ()) = tokio::join!(run(plan, CancellationToken::new()), child_recorded);
+    let output = output.expect("timeout is a stable process outcome");
 
     assert_eq!(output.termination, Termination::TimedOut);
     assert_eq!(output.stdout, b"started");
@@ -216,7 +227,7 @@ async fn timeout_terminates_descendants_and_preserves_output() {
         .trim()
         .parse::<i32>()
         .expect("parse grandchild pid");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + HANG_TIMEOUT;
     loop {
         match kill(Pid::from_raw(pid), None) {
             Err(nix::errno::Errno::ESRCH) => break,
@@ -241,9 +252,9 @@ async fn normal_exit_closes_descendant_output_pipes() {
     let output = run(
         shell_plan(
             &workspace,
-            "sleep 60 & printf done",
+            format!("sleep {} & printf done", (HANG_TIMEOUT * 2).as_secs()),
             capabilities([SandboxCapability::NoSandbox]),
-            Duration::from_secs(5),
+            HANG_TIMEOUT,
         ),
         CancellationToken::new(),
     )
@@ -260,21 +271,22 @@ async fn cancellation_returns_capture_and_kills_process() {
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let cancellation = CancellationToken::new();
     let cancel = cancellation.clone();
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let mut plan = shell_plan(
+        &workspace,
+        format!("printf before; sleep {}", (HANG_TIMEOUT * 2).as_secs()),
+        capabilities([SandboxCapability::NoSandbox]),
+        HANG_TIMEOUT,
+    );
+    plan.output_events = Some(sender);
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        cancel.cancel();
+        if events.recv().await.is_some() {
+            cancel.cancel();
+        }
     });
-    let output = run(
-        shell_plan(
-            &workspace,
-            "printf before; sleep 60",
-            capabilities([SandboxCapability::NoSandbox]),
-            Duration::from_secs(5),
-        ),
-        cancellation,
-    )
-    .await
-    .expect("cancellation is a stable process outcome");
+    let output = run(plan, cancellation)
+        .await
+        .expect("cancellation is a stable process outcome");
     assert_eq!(output.termination, Termination::Cancelled);
     assert_eq!(output.stdout, b"before");
     let _ = std::fs::remove_dir_all(workspace);
@@ -316,7 +328,11 @@ async fn bwrap_probe_times_out_instead_of_hanging() {
     let workspace = temp_dir("probe-timeout");
     std::fs::create_dir_all(&workspace).expect("create fake bwrap dir");
     let fake_bwrap = workspace.join("bwrap");
-    std::fs::write(&fake_bwrap, "#!/bin/sh\nsleep 10\n").expect("write fake bwrap");
+    std::fs::write(
+        &fake_bwrap,
+        format!("#!/bin/sh\nexec sleep {}\n", (HANG_TIMEOUT * 2).as_secs()),
+    )
+    .expect("write fake bwrap");
     let mut permissions = std::fs::metadata(&fake_bwrap)
         .expect("fake bwrap metadata")
         .permissions();
@@ -461,7 +477,7 @@ async fn workspace_write_blocks_outside_write_when_supported() {
             SandboxCapability::HostRead,
             SandboxCapability::WorkspaceWrite,
         ]),
-        Duration::from_secs(5),
+        HANG_TIMEOUT,
     );
 
     let output = match run(plan, CancellationToken::new()).await {

@@ -1,9 +1,8 @@
-use std::time::Duration;
-
 use color_eyre::eyre::Result;
+use kraai_test_support::hang_guard;
 
 use super::harness::FullHistory as _;
-use super::harness::{RuntimeTestHarness, TEST_TIMEOUT, create_session_with_profile};
+use super::harness::{RuntimeTestHarness, create_session_with_profile};
 use crate::Event;
 
 async fn drain(harness: &RuntimeTestHarness, session_id: &kraai_types::SessionId) {
@@ -105,10 +104,10 @@ async fn failed_continuation_preserves_queue_order_with_messages_queued_meanwhil
         })
         .await;
     assert_eq!(
-        tokio::time::timeout(TEST_TIMEOUT, overlapping).await???,
+        hang_guard(overlapping).await???,
         crate::ContinueSessionOutcome::NothingToContinue
     );
-    assert!(tokio::time::timeout(TEST_TIMEOUT, failed).await??.is_err());
+    assert!(hang_guard(failed).await??.is_err());
     let restored = super::harness::take_queue(&harness.runtime, &session_id).await;
     assert_eq!(
         restored
@@ -199,15 +198,12 @@ async fn rejected_continuation_preserves_turn_and_pending_workspace() -> Result<
     )
     .await;
     assert!(
-        tokio::time::timeout(
-            Duration::from_secs(1),
-            harness.handle.continue_session(
-                session_id.clone(),
-                "mock-model".into(),
-                "missing".into(),
-                Default::default(),
-            ),
-        )
+        hang_guard(harness.handle.continue_session(
+            session_id.clone(),
+            "mock-model".into(),
+            "missing".into(),
+            Default::default(),
+        ),)
         .await?
         .is_err()
     );

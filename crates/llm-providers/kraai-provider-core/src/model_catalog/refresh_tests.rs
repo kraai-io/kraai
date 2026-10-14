@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_types::{ModelId, ModelOptionValue, ModelOptionValues};
@@ -268,8 +267,7 @@ async fn concurrent_readers_rebuild_each_revision_once_and_reads_continue_during
     };
     waiting.await?;
     catalog.replace_snapshot(snapshot(8192, &["high"])?).await;
-    let during_refresh =
-        tokio::time::timeout(Duration::from_secs(1), cached_model(&cache, &catalog)).await??;
+    let during_refresh = kraai_test_support::hang_guard(cached_model(&cache, &catalog)).await??;
     assert_eq!(during_refresh.max_context, Some(8192));
     release
         .send(())

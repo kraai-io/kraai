@@ -30,4 +30,5 @@ ulid.workspace = true
 axum.workspace = true
 image.workspace = true
 kraai-persistence.workspace = true
+kraai-test-support = { workspace = true }
 tempfile.workspace = true

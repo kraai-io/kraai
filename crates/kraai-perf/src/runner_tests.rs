@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, bail, ensure};
+use kraai_test_support::HANG_TIMEOUT;
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill, raise};
 use nix::sys::wait::{WaitPidFlag, waitpid};
@@ -72,7 +73,7 @@ fn wrapper_cleanup_fixture() -> Result<()> {
     command.env(FIXTURE_DIRECTORY, directory.path());
     process::run(
         &mut command,
-        Duration::from_secs(10),
+        HANG_TIMEOUT,
         &AtomicBool::new(false),
         &directory.path().join("stdout"),
         &directory.path().join("stderr"),
@@ -114,7 +115,7 @@ fn orphan_descendant_fixture() -> Result<()> {
     signal_hook::flag::register(signal_hook::consts::SIGTERM, terminated.clone())?;
     fs::write(directory.join("child-pid"), getpid().to_string())?;
     fs::write(directory.join("child-ready"), b"ready")?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + HANG_TIMEOUT;
     while !terminated.load(Ordering::Relaxed) {
         ensure!(
             Instant::now() < deadline,
@@ -224,7 +225,7 @@ fn worker_with_child_fixture() -> Result<()> {
     wait_for_file(&directory.join("child-ready"))?;
     fs::write(directory.join("worker-pid"), getpid().to_string())?;
     fs::write(directory.join("worker-ready"), b"ready")?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG_TIMEOUT;
     while !terminated.load(Ordering::Relaxed) {
         ensure!(
             Instant::now() < deadline,
@@ -246,7 +247,7 @@ fn descendant_fixture() -> Result<()> {
     let directory = fixture_directory()?;
     fs::write(directory.join("child-pid"), getpid().to_string())?;
     fs::write(directory.join("child-ready"), b"ready")?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG_TIMEOUT;
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -270,18 +271,12 @@ fn spawn_fixture(
     let stdout = directory.join(format!("{name}.stdout"));
     let stderr = directory.join(format!("{name}.stderr"));
     Ok(std::thread::spawn(move || {
-        process::run(
-            &mut command,
-            Duration::from_secs(10),
-            &interrupted,
-            &stdout,
-            &stderr,
-        )
+        process::run(&mut command, HANG_TIMEOUT, &interrupted, &stdout, &stderr)
     }))
 }
 
 fn wait_for_file(path: &Path) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG_TIMEOUT;
     while !path.exists() {
         ensure!(
             Instant::now() < deadline,

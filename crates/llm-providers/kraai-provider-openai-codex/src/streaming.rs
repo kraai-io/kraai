@@ -267,7 +267,6 @@ fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
 mod tests {
     use super::*;
     use futures::{StreamExt, stream};
-    use std::time::Duration;
 
     #[tokio::test]
     async fn encrypted_reasoning_is_preserved_before_its_tool_call() {
@@ -388,12 +387,9 @@ mod tests {
         .chain(stream::pending())
         .boxed();
 
-        let event = tokio::time::timeout(
-            Duration::from_secs(1),
-            adapt_responses_stream(source).next(),
-        )
-        .await
-        .unwrap();
+        let event = kraai_test_support::hang_guard(adapt_responses_stream(source).next())
+            .await
+            .unwrap();
 
         assert!(event.is_some_and(|result| result.is_err()));
     }
@@ -435,7 +431,7 @@ mod tests {
         .chain(stream::pending())
         .boxed();
         let mut events = adapt_responses_stream(source);
-        let error = tokio::time::timeout(Duration::from_secs(1), events.next())
+        let error = kraai_test_support::hang_guard(events.next())
             .await
             .expect("error event must not wait for transport EOF")
             .unwrap()

@@ -1,9 +1,8 @@
-use kraai_persistence::SessionStore;
-use std::time::Duration;
-
 use color_eyre::eyre::Result;
 use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpConfig, McpHost, McpManager, ServerConfig, TransportConfig};
+use kraai_persistence::SessionStore;
+use kraai_test_support::hang_guard;
 use kraai_types::SessionId;
 use serde_json::{Value, json};
 
@@ -112,8 +111,7 @@ async fn attachments_reject_preparing_and_queued_sessions_without_waiting() -> R
         .expect("runtime fixture");
     let session = harness.handle.create_session().await?;
     super::harness::hold_preparation(&harness.runtime, &session).await;
-    let busy = tokio::time::timeout(
-        Duration::from_secs(1),
+    let busy = hang_guard(
         harness
             .handle
             .set_session_mcp_servers(session.clone(), config("attached")),

@@ -95,9 +95,7 @@ async fn cancelled_usage_commit_blocks_shutdown_until_save_and_observer_finish()
     let mut shutdown = std::pin::pin!(barrier.write());
     assert!(futures::poll!(&mut shutdown).is_pending());
     store.release.add_permits(1);
-    let completed = tokio::time::timeout(std::time::Duration::from_secs(2), shutdown)
-        .await
-        .unwrap();
+    let completed = kraai_test_support::hang_guard(shutdown).await.unwrap();
     assert!(observed.load(Ordering::SeqCst));
     assert!(observer_had_barrier.load(Ordering::SeqCst));
     let requests = store.requests.lock().await;

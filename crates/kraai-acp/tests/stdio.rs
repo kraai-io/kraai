@@ -110,7 +110,7 @@ async fn embedded_host_runs_script_and_prompt_waits_for_continuation() -> Result
 
 async fn check_script(script: &str, status: &str) -> Result<()> {
     let mut harness = Harness::new(vec![
-        Reply::Script(format!("# timeout=10sec permissions=no-sandbox\n{script}")),
+        Reply::Script(format!("# timeout=10min permissions=no-sandbox\n{script}")),
         "Finished.".into(),
     ])
     .await?;
@@ -238,7 +238,7 @@ async fn validates_model_configuration() -> Result<()> {
 #[tokio::test]
 async fn cancelling_approval_stops_without_continuation_and_accepts_next_prompt() -> Result<()> {
     let mut harness = Harness::new(vec![
-        Reply::Script("# timeout=10sec permissions=no-sandbox\nprint 'must-not-run'".into()),
+        Reply::Script("# timeout=10min permissions=no-sandbox\nprint 'must-not-run'".into()),
         "After cancellation".into(),
     ])
     .await?;

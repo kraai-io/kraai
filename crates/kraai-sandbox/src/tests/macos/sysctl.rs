@@ -1,9 +1,9 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use kraai_execution_types::SandboxCapability;
+use kraai_test_support::HANG_TIMEOUT;
 
 use super::{Fixture, capabilities, successful_run};
 use crate::LaunchPlan;
@@ -56,7 +56,7 @@ async fn sysctl_host_child() {
         executable.clone(),
         fixture.workspace(),
         capabilities([SandboxCapability::WorkspaceRead]),
-        Duration::from_secs(10),
+        HANG_TIMEOUT,
     );
     plan.args = [
         "--exact",

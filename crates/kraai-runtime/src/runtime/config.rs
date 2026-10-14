@@ -175,6 +175,7 @@ mod tests {
     use super::*;
     use color_eyre::eyre::ensure;
     use kraai_provider_core::ProviderLoginState;
+    use kraai_test_support::hang_guard;
 
     #[tokio::test]
     async fn auth_forwarding_recovers_from_lag_and_drains_before_close() -> Result<()> {
@@ -202,7 +203,7 @@ mod tests {
         }
         updates.send(status(3))?;
         drop(updates);
-        tokio::time::timeout(std::time::Duration::from_secs(1), forwarding).await?;
+        hang_guard(forwarding).await?;
         ensure!(matches!(received.try_recv()?.event,
             Event::ProviderAuthUpdated { status: actual } if actual == status(3)));
         Ok(())

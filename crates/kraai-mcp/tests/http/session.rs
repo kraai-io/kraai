@@ -7,8 +7,8 @@ fn attachment(alias: &str, fixture: &Fixture) -> McpConfig {
             ServerConfig {
                 enabled: true,
                 description: String::new(),
-                startup_timeout_secs: 2,
-                call_timeout_secs: 1,
+                startup_timeout_secs: HANG_TIMEOUT.as_secs(),
+                call_timeout_secs: HANG_TIMEOUT.as_secs(),
                 transport: TransportConfig::Http {
                     url: fixture.url.clone(),
                     headers: fixture.headers.clone(),

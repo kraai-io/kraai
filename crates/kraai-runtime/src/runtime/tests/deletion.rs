@@ -7,6 +7,7 @@ use kraai_persistence::{
     NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion, ScriptExecutionRecord,
     ScriptExecutionStore,
 };
+use kraai_test_support::hang_guard;
 use kraai_types::SessionId;
 use tokio::sync::Notify;
 
@@ -32,7 +33,7 @@ async fn deletion_waits_for_turn_preparation() -> Result<()> {
             .is_err()
     );
     super::harness::release_preparation(&harness.runtime, &session_id).await;
-    tokio::time::timeout(Duration::from_secs(5), &mut deletion).await??;
+    hang_guard(&mut deletion).await??;
     assert!(
         !harness
             .handle
@@ -84,7 +85,7 @@ impl kraai_provider_core::Provider for BlockingPollProvider {
             .expect("one blocking stream");
         Ok(Box::pin(futures::stream::poll_fn(move |_| {
             entered.cancel();
-            let _ = release.recv_timeout(Duration::from_secs(5));
+            let _ = release.recv_timeout(kraai_test_support::HANG_TIMEOUT);
             std::task::Poll::Ready(None)
         })))
     }
@@ -116,7 +117,7 @@ async fn deletion_waits_for_a_blocked_stream_to_stop_polling() -> Result<()> {
             Default::default(),
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(5), entered.cancelled()).await?;
+    hang_guard(entered.cancelled()).await?;
     let deletion = {
         let handle = harness.handle.clone();
         let session_id = session_id.clone();
@@ -129,7 +130,7 @@ async fn deletion_waits_for_a_blocked_stream_to_stop_polling() -> Result<()> {
             .is_err()
     );
     release_tx.send(())?;
-    tokio::time::timeout(Duration::from_secs(5), &mut deletion).await??;
+    hang_guard(&mut deletion).await??;
     assert!(
         !harness
             .handle
@@ -169,7 +170,7 @@ async fn deleting_during_script_preparation_cannot_leave_an_orphan_approval() ->
         response,
     });
     sent.await??;
-    tokio::time::timeout(Duration::from_secs(1), store.entered.notified()).await?;
+    hang_guard(store.entered.notified()).await?;
     harness.handle.delete_session(idle_session.clone()).await?;
     let deletion = {
         let handle = harness.handle.clone();
@@ -179,7 +180,7 @@ async fn deleting_during_script_preparation_cannot_leave_an_orphan_approval() ->
     tokio::pin!(deletion);
     assert!(futures::poll!(&mut deletion).is_pending());
     store.release.notify_one();
-    let outcome = tokio::time::timeout(Duration::from_secs(1), &mut deletion).await?;
+    let outcome = hang_guard(&mut deletion).await?;
     harness.events.wait_for("script approval", |events| {
         events.iter().any(|event| {
             matches!(event, Event::ScriptApprovalRequested { session_id: id, .. } if id == &session_id)

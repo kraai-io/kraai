@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::time::Duration;
 
 use color_eyre::eyre::Result;
 use kraai_provider_core::{ProviderManager, ProviderStreamEvent};
@@ -78,7 +77,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         .expect("old lease")
         .1;
     let connection = rusqlite::Connection::open(old_owner.data_dir.join("kraai.sqlite3"))?;
-    connection.busy_timeout(Duration::from_secs(1))?;
+    connection.busy_timeout(kraai_test_support::HANG_TIMEOUT)?;
     connection.execute(
         "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
         [session.as_str()],

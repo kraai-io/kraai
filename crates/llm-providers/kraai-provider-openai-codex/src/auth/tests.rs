@@ -132,7 +132,7 @@ async fn immediately_failing_login_does_not_leave_pending_state() {
         )
         .await;
 
-    let status = tokio::time::timeout(Duration::from_secs(1), async {
+    let status = kraai_test_support::hang_guard(async {
         loop {
             let status = controller.get_status().await;
             if status.error.is_some() {
@@ -178,7 +178,7 @@ async fn dropping_last_controller_releases_pending_browser_listener() {
     drop(controller);
 
     assert!(weak.upgrade().is_none());
-    tokio::time::timeout(Duration::from_secs(1), async {
+    kraai_test_support::hang_guard(async {
         loop {
             if TcpListener::bind(("127.0.0.1", port)).await.is_ok() {
                 break;
@@ -208,7 +208,7 @@ async fn completed_login_still_publishes_status_and_persists_auth() {
         )
         .await;
 
-    let status = tokio::time::timeout(Duration::from_secs(2), updates.recv())
+    let status = kraai_test_support::hang_guard(updates.recv())
         .await
         .unwrap()
         .unwrap();
@@ -276,7 +276,7 @@ async fn login_completion_holds_file_lock_until_memory_matches_disk() {
     assert!(state.auth.is_none());
     drop(file_lock);
 
-    tokio::time::timeout(Duration::from_secs(2), wake.0.notified())
+    kraai_test_support::hang_guard(wake.0.notified())
         .await
         .unwrap();
     assert!(
@@ -298,10 +298,8 @@ async fn login_completion_holds_file_lock_until_memory_matches_disk() {
     drop(competing_file_lock);
     drop(state);
 
-    tokio::time::timeout(Duration::from_secs(2), completion)
-        .await
-        .unwrap();
-    let status = tokio::time::timeout(Duration::from_secs(2), updates.recv())
+    kraai_test_support::hang_guard(completion).await.unwrap();
+    let status = kraai_test_support::hang_guard(updates.recv())
         .await
         .unwrap()
         .unwrap();
@@ -347,9 +345,7 @@ async fn refresh_failure_preserves_login_waiting_for_file_lock() {
         .await
         .unwrap();
     drop(file_lock);
-    tokio::time::timeout(Duration::from_secs(2), completion)
-        .await
-        .unwrap();
+    kraai_test_support::hang_guard(completion).await.unwrap();
 
     let status = controller.get_status().await;
     assert_eq!(status.state, ProviderLoginState::Authenticated);
@@ -703,7 +699,7 @@ async fn stalled_refresh_releases_auth_file_lock_after_timeout() {
     tokio::task::yield_now().await;
     assert!(!logout.is_finished());
 
-    let refresh_result = tokio::time::timeout(Duration::from_secs(2), refresh)
+    let refresh_result = kraai_test_support::hang_guard(refresh)
         .await
         .unwrap()
         .unwrap();
@@ -716,7 +712,7 @@ async fn stalled_refresh_releases_auth_file_lock_after_timeout() {
         .unwrap();
     assert!(request_error.is_timeout());
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), &mut logout)
+        kraai_test_support::hang_guard(&mut logout)
             .await
             .unwrap()
             .unwrap()

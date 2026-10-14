@@ -20,7 +20,7 @@ async fn fractional_metadata_releases_exactly_the_admitted_bytes() -> color_eyre
         &mut futures::io::Cursor::new(Vec::new()),
         &line,
         &budget,
-        Duration::from_secs(5),
+        kraai_test_support::HANG_TIMEOUT,
     )
     .await?;
     assert_eq!(budget.bytes.load(Ordering::Acquire), 0);
@@ -55,7 +55,7 @@ async fn capacity_waits_for_enough_space_and_cancellation_does_not_reserve()
     assert!(futures::poll!(waiting.as_mut()).is_pending());
     assert!(!budget.failed.is_cancelled());
     budget.release(256);
-    tokio::time::timeout(Duration::from_secs(1), waiting).await??;
+    kraai_test_support::hang_guard(waiting).await??;
     assert_eq!(budget.bytes.load(Ordering::Acquire), 1024);
     let mut cancelled = Box::pin(budget.reserve_wait(1));
     assert!(futures::poll!(cancelled.as_mut()).is_pending());
@@ -78,15 +78,11 @@ async fn closed_transport_and_oversized_frames_do_not_leave_capacity_waits_hangi
     let mut waiting = Box::pin(budget.reserve_wait(1));
     assert!(futures::poll!(waiting.as_mut()).is_pending());
     budget.failed.cancel();
-    assert!(
-        tokio::time::timeout(Duration::from_secs(1), waiting)
-            .await?
-            .is_err()
-    );
+    assert!(kraai_test_support::hang_guard(waiting).await?.is_err());
     assert_eq!(budget.bytes.load(Ordering::Acquire), 1024);
     let budget = Budget::new(1024);
     assert!(
-        tokio::time::timeout(Duration::from_secs(1), budget.reserve_wait(1025))
+        kraai_test_support::hang_guard(budget.reserve_wait(1025))
             .await?
             .is_err()
     );
@@ -115,10 +111,16 @@ async fn large_image_reservation_is_released_only_after_physical_flush() -> colo
     let line = json!({"jsonrpc":"2.0","method":"session/update","params":params}).to_string();
     assert_eq!(budget.bytes.load(Ordering::Acquire), reservation);
     let mut written = futures::io::Cursor::new(Vec::new());
-    write_frame(&mut written, &line, &budget, Duration::from_secs(5)).await?;
+    write_frame(
+        &mut written,
+        &line,
+        &budget,
+        kraai_test_support::HANG_TIMEOUT,
+    )
+    .await?;
     assert_eq!(budget.bytes.load(Ordering::Acquire), 0);
     assert_eq!(written.into_inner(), format!("{line}\n").into_bytes());
-    tokio::time::timeout(Duration::from_secs(1), waiting).await??;
+    kraai_test_support::hang_guard(waiting).await??;
     assert_eq!(budget.bytes.load(Ordering::Acquire), OUTPUT_BYTES);
     Ok(())
 }

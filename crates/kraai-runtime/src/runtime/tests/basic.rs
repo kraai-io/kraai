@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_provider_core::ProviderManager;
+use kraai_test_support::hang_guard;
 use kraai_types::{ChatRole, ProviderId, SessionId, TokenUsage};
 use tokio::sync::broadcast;
 
@@ -22,7 +23,7 @@ fn idle_config_watcher_does_not_block_single_thread_runtime() -> Result<()> {
             return Ok(());
         };
 
-        tokio::time::timeout(Duration::from_secs(1), harness.handle.list_sessions()).await??;
+        hang_guard(harness.handle.list_sessions()).await??;
 
         harness.shutdown().await;
         Ok(())
@@ -41,11 +42,7 @@ async fn profile_queries_share_reads_and_validate_workspace_before_locking() -> 
             profile_id: Some(String::from("test-profile")),
         })
         .await?;
-    let profiles = tokio::time::timeout(
-        Duration::from_secs(1),
-        harness.handle.list_agent_profiles(session_id),
-    )
-    .await;
+    let profiles = hang_guard(harness.handle.list_agent_profiles(session_id)).await;
     let profiles = profiles??;
     assert_eq!(
         profiles.selected_profile_id.as_deref(),
@@ -62,8 +59,7 @@ async fn profile_queries_share_reads_and_validate_workspace_before_locking() -> 
     );
 
     let missing = harness.data_dir.join("missing-workspace");
-    let invalid = tokio::time::timeout(
-        Duration::from_secs(1),
+    let invalid = hang_guard(
         harness
             .handle
             .get_agent_profile_catalog(Some(missing.display().to_string())),
@@ -89,10 +85,10 @@ async fn runtime_shutdown_is_awaitable_and_rejects_new_commands() -> Result<()> 
         };
         let handle = harness.handle.clone();
 
-        tokio::time::timeout(Duration::from_secs(1), handle.shutdown()).await??;
+        hang_guard(handle.shutdown()).await??;
         assert!(handle.list_sessions().await.is_err());
 
-        tokio::time::timeout(Duration::from_secs(1), harness.shutdown()).await?;
+        hang_guard(harness.shutdown()).await?;
     }
     Ok(())
 }
@@ -265,18 +261,12 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
         }
     }
 
-    let first_events = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        collect_events(&mut first, &session_id),
-    )
-    .await
-    .map_err(|_| eyre!("timed out waiting for first subscriber events"))??;
-    let second_events = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        collect_events(&mut second, &session_id),
-    )
-    .await
-    .map_err(|_| eyre!("timed out waiting for second subscriber events"))??;
+    let first_events = hang_guard(collect_events(&mut first, &session_id))
+        .await
+        .map_err(|_| eyre!("timed out waiting for first subscriber events"))??;
+    let second_events = hang_guard(collect_events(&mut second, &session_id))
+        .await
+        .map_err(|_| eyre!("timed out waiting for second subscriber events"))??;
 
     for events in [&first_events, &second_events] {
         assert!(
@@ -455,7 +445,7 @@ async fn invalid_public_ids_return_errors_without_stopping_runtime() -> Result<(
         .unwrap_err();
     assert!(deny_error.to_string().contains("execution_id"));
 
-    tokio::time::timeout(Duration::from_secs(1), harness.handle.list_sessions()).await??;
+    hang_guard(harness.handle.list_sessions()).await??;
     harness.shutdown().await;
     Ok(())
 }

@@ -38,6 +38,9 @@ tracing.workspace = true
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 
+[dev-dependencies]
+kraai-test-support = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 webbrowser = { workspace = true }
 

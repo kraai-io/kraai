@@ -25,6 +25,9 @@ tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 
+[dev-dependencies]
+kraai-test-support = { workspace = true }
+
 [features]
 typescript = ["dep:ts-rs", "kraai-types/typescript"]
 

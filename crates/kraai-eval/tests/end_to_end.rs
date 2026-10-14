@@ -162,7 +162,7 @@ repository = "{}"
 revision = "{}"
 
 [runner]
-timeout_seconds = 10
+timeout_seconds = {timeout}
 network = "disabled"
 rust_toolchain = true
 
@@ -171,15 +171,16 @@ hidden_patch = "hidden.patch"
 
 [[grader.commands]]
 command = ["cargo", "test", "--locked", "--offline"]
-timeout_seconds = 10
+timeout_seconds = {timeout}
 
 [[grader.commands]]
 command = ["{}", "-c", "read -r actual < answer.txt; read -r expected < hidden.expected; [ \"$actual\" = \"$expected\" ]"]
-timeout_seconds = 10
+timeout_seconds = {timeout}
 "#,
             repository.display(),
             revision,
             shell.display(),
+            timeout = kraai_test_support::HANG_TIMEOUT.as_secs(),
         ),
     )?;
 

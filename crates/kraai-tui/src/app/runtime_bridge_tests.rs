@@ -230,7 +230,7 @@ async fn request_bridge_finishes_startup_after_empty_and_failed_responses()
     ] {
         assert!(requests.send(request).is_ok());
     }
-    let timeout = std::time::Duration::from_secs(15);
+    let timeout = kraai_test_support::HANG_TIMEOUT;
     assert!(
         matches!(responses.recv_timeout(timeout)?, RuntimeResponse::Models(Ok(models)) if models.is_empty())
     );
@@ -253,7 +253,7 @@ async fn request_bridge_finishes_startup_after_empty_and_failed_responses()
     ));
     assert!(responses.is_empty());
     drop(requests);
-    tokio::time::timeout(timeout, runtime.shutdown()).await??;
+    kraai_test_support::hang_guard(runtime.shutdown()).await??;
     Ok(())
 }
 

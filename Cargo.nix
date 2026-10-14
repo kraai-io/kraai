@@ -233,6 +233,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-test-support" = rec {
+      packageId = "kraai-test-support";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-test-support";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-tui" = rec {
       packageId = "kraai-tui";
       build = internal.buildRustCrateWithFeatures {
@@ -10045,6 +10055,10 @@ rec {
             packageId = "kraai-persistence";
           }
           {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+          {
             name = "tempfile";
             packageId = "tempfile";
           }
@@ -10146,6 +10160,10 @@ rec {
           {
             name = "kraai-provider-openai-chat-completions";
             packageId = "kraai-provider-openai-chat-completions";
+          }
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
           }
           {
             name = "rusqlite";
@@ -10341,6 +10359,12 @@ rec {
           {
             name = "webbrowser";
             packageId = "webbrowser";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
           }
         ];
 
@@ -10632,6 +10656,10 @@ rec {
             features = [ "http1" "json" "tokio" ];
           }
           {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+          {
             name = "tempfile";
             packageId = "tempfile";
           }
@@ -10776,6 +10804,10 @@ rec {
             name = "async-trait";
             packageId = "async-trait";
           }
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
         ];
 
       };
@@ -10889,6 +10921,12 @@ rec {
             packageId = "toml";
           }
         ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+        ];
 
       };
       "kraai-persistence" = rec {
@@ -10962,6 +11000,10 @@ rec {
           }
         ];
         devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
           {
             name = "nix";
             packageId = "nix 0.31.3";
@@ -11062,6 +11104,12 @@ rec {
             features = [ "serde-json-impl" ];
           }
         ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+        ];
         features = {
           "typescript" = [ "dep:ts-rs" "kraai-types/typescript" ];
         };
@@ -11121,6 +11169,12 @@ rec {
             name = "tokio";
             packageId = "tokio";
             features = [ "full" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
           }
         ];
 
@@ -11217,6 +11271,10 @@ rec {
           }
         ];
         devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
           {
             name = "ulid";
             packageId = "ulid";
@@ -11389,6 +11447,10 @@ rec {
             packageId = "kraai-providers";
           }
           {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+          {
             name = "rusqlite";
             packageId = "rusqlite";
             features = [ "bundled" ];
@@ -11518,6 +11580,12 @@ rec {
             features = [ "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Globalization" "Win32_Security" "Win32_Security_Isolation" "Win32_Security_Authorization" "Win32_Storage_FileSystem" "Win32_System_Threading" "Win32_System_SystemInformation" "Win32_System_JobObjects" "Win32_System_Pipes" "Win32_System_Environment" "Win32_System_Memory" "Win32_System_LibraryLoader" "Win32_UI_Shell" "Win32_System_Com" ];
           }
         ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+        ];
 
       };
       "kraai-script-protocol" = rec {
@@ -11530,6 +11598,21 @@ rec {
           {
             name = "kraai-execution-types";
             packageId = "kraai-execution-types";
+          }
+        ];
+
+      };
+      "kraai-test-support" = rec {
+        crateName = "kraai-test-support";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-test-support; };
+        libName = "kraai_test_support";
+        dependencies = [
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
           }
         ];
 
@@ -11659,6 +11742,12 @@ rec {
             target = { target, features }: (target."windows" or false);
           }
         ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+        ];
 
       };
       "kraai-types" = rec {
@@ -11728,6 +11817,12 @@ rec {
             features = [ "full" ];
           }
         ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+        ];
 
       };
       "kraai-workspace-fs" = rec {
@@ -11753,6 +11848,10 @@ rec {
           }
         ];
         devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
           {
             name = "nix";
             packageId = "nix 0.31.3";

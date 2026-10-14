@@ -30,5 +30,6 @@ ulid = { workspace = true }
 [dev-dependencies]
 async-trait = { workspace = true }
 kraai-provider-openai-chat-completions = { workspace = true }
+kraai-test-support = { workspace = true }
 rusqlite.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

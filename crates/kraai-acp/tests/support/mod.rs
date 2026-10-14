@@ -197,8 +197,7 @@ supports_images = true
 
     pub async fn read(&mut self) -> Result<Value> {
         let mut line = String::new();
-        let bytes = tokio::time::timeout(Duration::from_secs(20), self.output.read_line(&mut line))
-            .await??;
+        let bytes = kraai_test_support::hang_guard(self.output.read_line(&mut line)).await??;
         if bytes == 0 {
             return Err(eyre!("ACP subprocess closed stdout"));
         }
@@ -209,7 +208,7 @@ supports_images = true
         &mut self,
         predicate: impl Fn(&Value) -> bool + Send + Sync,
     ) -> Result<Vec<Value>> {
-        tokio::time::timeout(Duration::from_secs(30), async {
+        kraai_test_support::hang_guard(async {
             let mut messages = Vec::new();
             loop {
                 let value = self.read().await?;
@@ -271,7 +270,7 @@ supports_images = true
 
     pub async fn stop(&mut self) -> Result<()> {
         drop(self.input.take());
-        let status = tokio::time::timeout(Duration::from_secs(20), self.child.wait()).await??;
+        let status = kraai_test_support::hang_guard(self.child.wait()).await??;
         if !status.success() {
             return Err(eyre!("ACP subprocess failed: {status}"));
         }

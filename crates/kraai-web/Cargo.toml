@@ -13,3 +13,6 @@ kraai-io = { workspace = true, features = ["http"] }
 reqwest.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+kraai-test-support = { workspace = true }

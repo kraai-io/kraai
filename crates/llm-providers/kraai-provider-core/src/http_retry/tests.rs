@@ -163,7 +163,7 @@ fn test_policy() -> HttpRetryPolicy {
         max_attempts: 20,
         initial_backoff: Duration::from_millis(5),
         max_delay: Duration::from_millis(50),
-        max_elapsed: Duration::from_secs(2),
+        max_elapsed: kraai_test_support::HANG_TIMEOUT,
     }
 }
 
@@ -525,7 +525,7 @@ async fn stops_after_max_attempts() -> Result<()> {
         max_attempts: 3,
         initial_backoff: Duration::from_millis(1),
         max_delay: Duration::from_millis(10),
-        max_elapsed: Duration::from_secs(1),
+        max_elapsed: kraai_test_support::HANG_TIMEOUT,
     };
     let collector = Arc::new(RetryCollector::default());
     let Some(client) = test_client_or_skip() else {
@@ -569,7 +569,7 @@ async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
         max_attempts: 3,
         initial_backoff: Duration::from_millis(7),
         max_delay: Duration::from_millis(20),
-        max_elapsed: Duration::from_secs(1),
+        max_elapsed: kraai_test_support::HANG_TIMEOUT,
     };
     let collector = Arc::new(RetryCollector::default());
     let Some(client) = test_client_or_skip() else {
@@ -658,7 +658,7 @@ async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
         max_attempts: 2,
         initial_backoff: Duration::from_millis(11),
         max_delay: Duration::from_millis(20),
-        max_elapsed: Duration::from_secs(1),
+        max_elapsed: kraai_test_support::HANG_TIMEOUT,
     };
     let Some(client) = test_client_or_skip() else {
         return Ok(());
@@ -796,7 +796,7 @@ async fn zero_attempt_policy_is_normalized_to_one_attempt() -> Result<()> {
 #[tokio::test]
 async fn shared_cooldown_beyond_the_budget_fails_fast_without_sending() -> Result<()> {
     let cooldown = Arc::new(super::ProviderCooldown::default());
-    cooldown.defer(Duration::from_secs(60));
+    cooldown.defer(kraai_test_support::HANG_TIMEOUT * 2);
     let context = ProviderRequestContext::default().with_cooldown(cooldown);
     let sent = std::sync::atomic::AtomicBool::new(false);
     let Some(client) = test_client_or_skip() else {

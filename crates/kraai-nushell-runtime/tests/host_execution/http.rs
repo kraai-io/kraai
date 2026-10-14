@@ -9,7 +9,7 @@ async fn http_client_is_initialized_for_scripts_and_inherited_startup() {
             .expect("bind HTTP fixture");
         let address = listener.local_addr().expect("HTTP fixture address");
         let server = tokio::spawn(async move {
-            tokio::time::timeout(Duration::from_secs(10), async move {
+            hang_guard(async move {
                 let (mut stream, _) = listener.accept().await.expect("accept HTTP request");
                 let mut request = Vec::new();
                 while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
@@ -22,7 +22,10 @@ async fn http_client_is_initialized_for_scripts_and_inherited_startup() {
             }).await.expect("HTTP fixture timed out");
         });
         let workspace = TestWorkspace::new();
-        let fetch = format!("http get --max-time 5sec http://{address}");
+        let fetch = format!(
+            "http get --max-time {}sec http://{address}",
+            HANG_TIMEOUT.as_secs()
+        );
         let mut execution = if startup == NushellStartup::Inherit {
             let config_home = workspace.0.join("config");
             let nushell_config = config_home.join("nushell");

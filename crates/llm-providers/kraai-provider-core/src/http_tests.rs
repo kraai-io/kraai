@@ -38,7 +38,7 @@ mod tests {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = [0_u8; 1024];
             let _ = stream.read(&mut request).await;
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(kraai_test_support::HANG_TIMEOUT).await;
         });
         let client = build_test_client(
             base_client_builder(Duration::from_millis(100), Duration::from_millis(100))
@@ -69,7 +69,7 @@ mod tests {
                 .await
                 .unwrap();
             stream.flush().await.unwrap();
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(kraai_test_support::HANG_TIMEOUT).await;
         });
         let client = build_test_client(base_client_builder(
             Duration::from_millis(100),

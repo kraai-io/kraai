@@ -2,6 +2,7 @@ use super::*;
 
 use color_eyre::Result;
 use kraai_persistence::{ContextStateDocument, FileContextSnapshot, SqliteContextStateStore};
+use kraai_test_support::hang_guard;
 use kraai_types::ContextStateEvent;
 
 struct PausedContextStore {
@@ -117,9 +118,7 @@ async fn cancelled_unpolled_effect_commit_keeps_session_and_shutdown_ownership()
     assert!(futures::poll!(&mut drain).is_pending());
     assert!(futures::poll!(&mut all).is_pending());
     store.release.notify_one();
-    tokio::time::timeout(std::time::Duration::from_secs(120), drain)
-        .await
-        .unwrap();
+    hang_guard(drain).await.unwrap();
     all.await;
     drop(barrier.write().await);
     let reopened = SqliteContextStateStore::new(&directory);

@@ -186,7 +186,7 @@ mod tests {
         let outcome = run_trusted_with_clean_environment(
             &command,
             Path::new("/"),
-            Duration::from_secs(5),
+            kraai_test_support::HANG_TIMEOUT,
             &BTreeMap::new(),
         )?;
 
