@@ -105,26 +105,23 @@ impl MessageStore for SqliteMessageStore {
         let session_id = session_id.clone();
         self.database
             .read(move |connection, _| {
-                let transaction = connection.transaction()?;
-                let Some(session) = crate::sessions::read_session(&transaction, &session_id)?
-                else {
+                let Some(session) = crate::sessions::read_session(connection, &session_id)? else {
                     return Ok(None);
                 };
                 let history = match &session.tip_id {
                     Some(tip) => {
-                        crate::history_by_id(read_history_chain(&transaction, tip, usize::MAX)?)
+                        crate::history_by_id(read_history_chain(connection, tip, usize::MAX)?)
                     }
                     None => BTreeMap::new(),
                 };
                 let requests = list_records::<kraai_types::RequestUsage>(
-                    &transaction,
+                    connection,
                     "usage",
                     Some(&session_id),
                 )?
                 .into_iter()
                 .map(|request| (request.message_id.clone(), request))
                 .collect();
-                transaction.commit()?;
                 Ok(Some(ConversationSnapshot {
                     session,
                     history,

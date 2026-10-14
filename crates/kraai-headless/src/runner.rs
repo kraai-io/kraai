@@ -86,10 +86,18 @@ pub async fn run(
         let event = match events.recv().await {
             Ok(event) => event.event,
             Err(RecvError::Lagged(skipped)) => {
-                tracing::warn!(
-                    skipped,
-                    "Missed runtime events; the transcript may be incomplete"
-                );
+                failure.get_or_insert_with(|| {
+                    format!(
+                        "Missed {skipped} runtime events; the transcript and metrics are incomplete"
+                    )
+                });
+                let snapshot = runtime.get_session_snapshot(session.clone()).await?;
+                if !snapshot.session.is_running {
+                    break;
+                }
+                if snapshot.pending_script.is_some() {
+                    runtime.cancel_turn(session.clone()).await?;
+                }
                 continue;
             }
             Err(RecvError::Closed) => {

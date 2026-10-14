@@ -155,7 +155,7 @@ pub(super) struct Preparation {
 
 pub(super) struct CancelRequest {
     pub(super) discarded: bool,
-    pub(super) response: Option<Responder<bool>>,
+    pub(super) waiters: Vec<Responder<bool>>,
 }
 
 pub(super) struct StreamJob {

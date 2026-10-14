@@ -32,6 +32,11 @@ pub(crate) async fn run(
     let id = crate::session::runtime_id(&request.session_id)?;
     let mut events = runtime.subscribe_session(&id);
     let model = crate::session::selected_model(runtime, &id).await?;
+    let prompt_start = runtime
+        .get_tip(id.clone())
+        .await
+        .map_err(error::runtime)?
+        .map(MessageId::new);
     match commands::parse(&request.prompt)? {
         Some(commands::Command::Option {
             id: option_id,
@@ -75,7 +80,13 @@ pub(crate) async fn run(
                 .map_err(error::runtime)?;
         }
     }
-    finish_prompt(runtime, &mut events, Output::new(id, connection), cancelled).await
+    finish_prompt(
+        runtime,
+        &mut events,
+        Output::new(id, connection, prompt_start),
+        cancelled,
+    )
+    .await
 }
 
 async fn finish_prompt(
@@ -93,7 +104,7 @@ async fn finish_prompt(
         loop {
             match events.try_recv() {
                 Ok(event) => {
-                    if event.event.session_id() == Some(&output.session_id) {
+                    if output.uncovered(&event) {
                         output.event(runtime, event.event).await?;
                     }
                 }
@@ -127,7 +138,7 @@ async fn drive(
             received = events.recv() => received,
         };
         let event = match received {
-            Ok(event) => event.event,
+            Ok(event) => event,
             Err(broadcast::error::RecvError::Lagged(_)) => {
                 if let Some(reason) = output.catch_up(runtime, cancelled).await? {
                     return Ok(reason);
@@ -140,13 +151,13 @@ async fn drive(
                 ));
             }
         };
-        if let Event::ServiceError { error } = event {
+        if let Event::ServiceError { error } = event.event {
             return Err(crate::error::runtime(error));
         }
-        if event.session_id() != Some(&output.session_id) {
+        if !output.uncovered(&event) {
             continue;
         }
-        match event {
+        match event.event {
             Event::TurnCompleted { .. } => return Ok(acp::StopReason::EndTurn),
             Event::StreamError { error, .. } | Event::ContinuationFailed { error, .. } => {
                 return Err(crate::error::internal(error));
@@ -183,12 +194,14 @@ struct Output {
     /// Tool calls announced to the client, and those still waiting for a result.
     announced: HashSet<String>,
     open: HashSet<String>,
-    /// Messages created after this id belong to the prompt.
-    started_after: MessageId,
+    /// The session tip before the prompt was submitted; the prompt's messages descend from it.
+    prompt_start: Option<MessageId>,
+    /// The global event sequence the last resync already covered.
+    covered: u64,
 }
 
 impl Output {
-    fn new(session_id: SessionId, connection: Connection) -> Self {
+    fn new(session_id: SessionId, connection: Connection, prompt_start: Option<MessageId>) -> Self {
         Self {
             id: acp::SessionId::new(session_id.to_string()),
             session_id,
@@ -198,8 +211,32 @@ impl Output {
             shown: HashSet::new(),
             announced: HashSet::new(),
             open: HashSet::new(),
-            started_after: MessageId::new(ulid::Ulid::generate()),
+            prompt_start,
+            covered: 0,
         }
+    }
+
+    /// Whether `event` belongs to this session and is newer than the last resync.
+    fn uncovered(&self, event: &kraai_runtime::RuntimeEvent) -> bool {
+        event.sequence > self.covered && event.event.session_id() == Some(&self.session_id)
+    }
+
+    /// This prompt's messages in the snapshot, oldest first.
+    fn prompt_messages<'a>(
+        &self,
+        snapshot: &'a kraai_runtime::SessionSnapshot,
+    ) -> Vec<&'a kraai_types::Message> {
+        let mut messages = Vec::new();
+        let mut cursor = snapshot.session.tip_id.clone().map(MessageId::new);
+        while let Some(id) = cursor
+            && Some(&id) != self.prompt_start.as_ref()
+            && let Some(message) = snapshot.history.get(&id)
+        {
+            messages.push(message);
+            cursor = message.parent_id.clone();
+        }
+        messages.reverse();
+        messages
     }
 
     fn update(&self, update: acp::SessionUpdate) -> Result<()> {
@@ -339,10 +376,8 @@ impl Output {
             .get_session_snapshot(self.session_id.clone())
             .await
             .map_err(error::runtime)?;
-        for message in snapshot.history.values() {
-            if message.id <= self.started_after {
-                continue;
-            }
+        self.covered = self.covered.max(snapshot.event_sequence);
+        for message in self.prompt_messages(&snapshot) {
             let id = message.id.to_string();
             match &message.content {
                 ConversationItem::Assistant { items } => {

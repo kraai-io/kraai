@@ -56,7 +56,8 @@ impl Grants {
     }
 
     /// Grants `access` below `path` for good: skipped when `path` already carries the inheritable
-    /// entry, and not revoked at cleanup. Files created later inherit the entry.
+    /// entry, and not revoked at cleanup. Files created later inherit the entry. `path` is granted
+    /// after everything below it, so its entry marks a completed walk.
     pub(super) fn grant_persistent(
         &mut self,
         path: &Path,
@@ -69,15 +70,24 @@ impl Grants {
             return Ok(());
         }
         let mut entries = 0;
+        let mut walked_root = None;
         visit_tree(path, |file| {
             if entries >= MAX_ACL_ENTRIES {
                 return Err(entry_limit(path, MAX_ACL_ENTRIES));
             }
             entries += 1;
             handle::ensure_single_link(&file).map_err(|error| failure(path, &error.to_string()))?;
+            if walked_root.is_none() {
+                walked_root = Some(file);
+                return Ok(());
+            }
             mutation::update(&file, &self.sid, Some(access))
                 .map_err(|error| failure(path, &error.to_string()))
-        })
+        })?;
+        let walked_root =
+            walked_root.ok_or_else(|| failure(path, "sandbox root was not visited"))?;
+        mutation::update(&walked_root, &self.sid, Some(access))
+            .map_err(|error| failure(path, &error.to_string()))
     }
 
     fn grant_with_limit(

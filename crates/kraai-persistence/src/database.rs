@@ -140,9 +140,10 @@ impl Database {
             .context("Database task failed")?
     }
 
+    /// Runs `operation` inside one read transaction, so all of its queries see the same commit.
     pub(crate) async fn read<T: Send + 'static>(
         &self,
-        operation: impl FnOnce(&mut Connection, &LeaseTokens) -> Result<T> + Send + 'static,
+        operation: impl FnOnce(&Connection, &LeaseTokens) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let permit = self
             .reader_permits
@@ -164,7 +165,10 @@ impl Database {
                 Some(connection) => connection,
                 None => database.open_reader()?,
             };
-            let result = operation(&mut connection, &database.leases);
+            let result = connection
+                .transaction()
+                .map_err(Into::into)
+                .and_then(|transaction| operation(&transaction, &database.leases));
             if connection.is_autocommit() {
                 database
                     .readers

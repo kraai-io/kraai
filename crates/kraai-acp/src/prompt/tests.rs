@@ -118,12 +118,9 @@ async fn check_lag(
     requests: Arc<AtomicUsize>,
     lines: Arc<std::sync::Mutex<Vec<String>>>,
 ) -> Result<()> {
-    let output = Output::new(
-        id.clone(),
-        Connection::new(inner.clone(), crate::Stdio::new().budget),
-    );
     let turn = session.begin_turn()?;
     let mut actual_events = runtime.subscribe_session(&id);
+    let prompt_start = runtime.get_tip(id.clone()).await?.map(MessageId::new);
     runtime
         .send_message(
             id.clone(),
@@ -133,26 +130,34 @@ async fn check_lag(
             Default::default(),
         )
         .await?;
-    let partial_id = loop {
+    let output = Output::new(
+        id.clone(),
+        Connection::new(inner.clone(), crate::Stdio::new().budget),
+        prompt_start,
+    );
+    let (partial_id, partial_item) = loop {
+        let event = actual_events.recv().await?.event;
         if let Event::ItemStarted {
-            message_id,
-            item: kraai_types::AssistantItem::Text { text, .. },
+            ref message_id,
+            ref item,
             ..
-        } = actual_events.recv().await?.event
-            && text == "partial"
+        } = event
+            && matches!(item, kraai_types::AssistantItem::Text { text, .. } if text == "partial")
         {
-            break message_id;
+            break (message_id.clone(), event);
         }
     };
     let (sender, mut lagged) = broadcast::channel(1);
-    for sequence in 1..=2 {
-        sender.send(RuntimeEvent {
-            sequence,
-            event: Event::HistoryUpdated {
-                session_id: id.clone(),
-            },
-        })?;
-    }
+    sender.send(RuntimeEvent {
+        sequence: 1,
+        event: Event::HistoryUpdated {
+            session_id: id.clone(),
+        },
+    })?;
+    sender.send(RuntimeEvent {
+        sequence: 2,
+        event: partial_item,
+    })?;
     let stop_reason = {
         let prompt = finish_prompt(&runtime, &mut lagged, output, &turn.token);
         tokio::pin!(prompt);

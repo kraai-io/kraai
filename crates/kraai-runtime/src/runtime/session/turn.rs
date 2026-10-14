@@ -367,12 +367,14 @@ impl SessionActor {
                     && let TurnState::Streaming(job) =
                         std::mem::replace(&mut self.state, TurnState::Idle)
                 {
-                    self.cancel_stream_job(job, cancel.discarded, cancel.response)
-                        .await;
+                    self.cancel_stream_job(job, cancel).await;
                 }
             }
             Ok(Some(_)) => {
                 origin.fail(RuntimeError::unavailable("Runtime is stopping"));
+                if let Some(cancel) = cancel {
+                    cancel.answer(Ok(true));
+                }
             }
             Ok(None) => {
                 match &origin {
@@ -383,14 +385,14 @@ impl SessionActor {
                 origin.nothing_started();
                 if let Some(cancel) = cancel {
                     let discarded = cancel.discarded;
-                    cancel.answer(discarded);
+                    cancel.answer(Ok(discarded));
                 }
             }
             Err(error) => {
                 if let Some(cancel) = cancel {
                     self.finish_turn().await;
                     origin.fail(RuntimeError::from(error));
-                    cancel.answer(true);
+                    cancel.answer(Ok(true));
                     return;
                 }
                 match origin {
@@ -475,9 +477,22 @@ impl PreparationOrigin {
 }
 
 impl super::actor::CancelRequest {
-    pub(super) fn answer(self, cancelled: bool) {
-        if let Some(response) = self.response {
-            let _ = response.send(Ok(cancelled));
+    pub(super) fn new(discarded: bool, response: Option<Responder<bool>>) -> Self {
+        Self {
+            discarded,
+            waiters: response.into_iter().collect(),
+        }
+    }
+
+    /// Joins another cancellation of the same preparation.
+    pub(super) fn merge(&mut self, discarded: bool, response: Option<Responder<bool>>) {
+        self.discarded |= discarded;
+        self.waiters.extend(response);
+    }
+
+    pub(super) fn answer(self, result: RuntimeResult<bool>) {
+        for waiter in self.waiters {
+            let _ = waiter.send(result.clone());
         }
     }
 }

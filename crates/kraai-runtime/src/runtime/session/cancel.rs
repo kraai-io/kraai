@@ -44,13 +44,16 @@ impl SessionActor {
                 self.cancel_running_script(response);
             }
             TurnState::Preparing(mut preparation) => {
-                preparation.cancel = Some(CancelRequest {
-                    discarded,
-                    response,
-                });
+                match &mut preparation.cancel {
+                    Some(cancel) => cancel.merge(discarded, response),
+                    None => preparation.cancel = Some(CancelRequest::new(discarded, response)),
+                }
                 self.state = TurnState::Preparing(preparation);
             }
-            TurnState::Streaming(job) => self.cancel_stream_job(job, discarded, response).await,
+            TurnState::Streaming(job) => {
+                self.cancel_stream_job(job, CancelRequest::new(discarded, response))
+                    .await;
+            }
             TurnState::Idle => {
                 let active = self.runtime.agent_manager.is_turn_active(&self.session_id);
                 let cancelled = active || discarded;
@@ -79,12 +82,7 @@ impl SessionActor {
             .await
     }
 
-    pub(super) async fn cancel_stream_job(
-        &mut self,
-        job: StreamJob,
-        discarded: bool,
-        response: Option<Responder<bool>>,
-    ) {
+    pub(super) async fn cancel_stream_job(&mut self, job: StreamJob, cancel: CancelRequest) {
         // The stream keeps running until the cancellation is durable, so a failed save can be retried.
         let output = kraai_script_protocol::render_tool_call_result(
             kraai_script_protocol::ToolCallResultView {
@@ -117,10 +115,10 @@ impl SessionActor {
                         .await;
                     self.finish_turn().await;
                     self.runtime.send_session_error(&self.session_id, error);
-                    answer(response, Ok(true));
+                    cancel.answer(Ok(true));
                 } else {
                     self.state = TurnState::Streaming(job);
-                    answer(response, Err(error.into()));
+                    cancel.answer(Err(error.into()));
                 }
                 return;
             }
@@ -134,7 +132,8 @@ impl SessionActor {
         }
         self.finish_turn().await;
         let Some(cancelled) = cancelled else {
-            answer(response, Ok(discarded));
+            let discarded = cancel.discarded;
+            cancel.answer(Ok(discarded));
             return;
         };
         self.runtime.send_event(Event::StreamCancelled {
@@ -142,7 +141,7 @@ impl SessionActor {
             message_id: cancelled.message_id.to_string(),
         });
         self.drain().await;
-        answer(response, Ok(true));
+        cancel.answer(Ok(true));
     }
 
     /// Returns true when the session was deleted and the actor should exit.

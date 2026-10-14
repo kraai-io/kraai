@@ -1,6 +1,38 @@
 use super::*;
 
 #[tokio::test]
+async fn a_pooled_read_sees_one_commit_across_its_queries() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let persistence = Persistence::open(directory.path()).await?;
+    persistence.sessions().save(&session("session")).await?;
+    let path = directory.path().join("kraai.sqlite3");
+    let (before, after) = persistence
+        .sessions()
+        .sqlite_database()
+        .read(move |connection, _| {
+            let revision = |connection: &rusqlite::Connection| {
+                connection.query_row(
+                    "SELECT revision FROM sessions WHERE id = 'session'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            };
+            let before = revision(connection)?;
+            rusqlite::Connection::open(&path)?.execute(
+                "UPDATE sessions SET revision = revision + 1 WHERE id = 'session'",
+                [],
+            )?;
+            Ok((before, revision(connection)?))
+        })
+        .await?;
+    ensure!(
+        before == after,
+        "A read observed a commit made between its queries"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn active_lease_rejection_does_not_require_the_database_write_lock() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let owner = Persistence::open(directory.path()).await?;

@@ -227,3 +227,46 @@ fn persistent_grants_are_applied_once_and_kept() -> Result<(), Box<dyn std::erro
     std::fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "regression tests assert permission boundaries"
+)]
+fn failed_persistent_grant_leaves_the_root_unmarked() -> Result<(), Box<dyn std::error::Error>> {
+    let _fixtures = lock_fixtures()?;
+    let identity = super::super::identity::Identity::create()?;
+    let root = std::env::temp_dir().join(format!(
+        "kraai-acl-persistent-failure-{:032x}",
+        rand::random::<u128>()
+    ));
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace)?;
+    std::fs::write(workspace.join("file"), b"content")?;
+    let external = root.join("secret");
+    let link = workspace.join("link");
+    std::fs::write(&external, b"host data")?;
+    std::fs::hard_link(&external, &link)?;
+    let pinned = || -> Result<File, Box<dyn std::error::Error>> {
+        Ok(super::handle::open_by_id(&super::open(&workspace)?)?)
+    };
+    let mut grants = Grants::new(identity.sid.bytes());
+    let result = grants.grant_persistent(&workspace, Access::Read);
+    assert!(
+        matches!(result, Err(SandboxError::SandboxUnavailable(message)) if message.contains("multiple hard links"))
+    );
+    assert!(!super::mutation::grants(
+        &pinned()?,
+        &grants.sid,
+        Access::Read
+    )?);
+    std::fs::remove_file(link)?;
+    grants.grant_persistent(&workspace, Access::Read)?;
+    assert!(super::mutation::grants(
+        &pinned()?,
+        &grants.sid,
+        Access::Read
+    )?);
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}

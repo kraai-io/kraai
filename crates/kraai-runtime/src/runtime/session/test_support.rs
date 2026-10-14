@@ -48,7 +48,7 @@ impl SessionActor {
             && let Some(cancel) = preparation.cancel
         {
             let discarded = cancel.discarded;
-            cancel.answer(discarded);
+            cancel.answer(Ok(discarded));
         }
     }
 

@@ -200,6 +200,40 @@ async fn cancel_turn_discards_prompt_queued_during_preparation() -> Result<()> {
 }
 
 #[tokio::test]
+async fn overlapping_cancellations_during_preparation_are_all_answered() -> Result<()> {
+    let harness = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("runtime fixture");
+    let session = create_session_with_profile(&harness.handle, "test-profile").await?;
+    super::harness::hold_preparation(&harness.runtime, &session).await;
+    let cancellations: Vec<_> = (0..2)
+        .map(|_| {
+            let (response, answer) = tokio::sync::oneshot::channel();
+            harness.runtime.sessions.send(
+                &harness.runtime,
+                &session,
+                crate::runtime::session::SessionMessage::Cancel {
+                    discard_queue: false,
+                    expected_lease: None,
+                    response: Some(response),
+                },
+            );
+            answer
+        })
+        .collect();
+    super::harness::release_preparation(&harness.runtime, &session).await;
+    for answer in cancellations {
+        assert!(
+            !tokio::time::timeout(TEST_TIMEOUT, answer)
+                .await?
+                .expect("every cancellation is answered")?
+        );
+    }
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn cancel_stream_preserves_queued_messages() -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new())
         .await
