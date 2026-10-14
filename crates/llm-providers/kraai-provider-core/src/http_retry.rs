@@ -6,6 +6,7 @@ use reqwest::header::RETRY_AFTER;
 use reqwest::{Response, StatusCode};
 use tracing::warn;
 
+use crate::ProviderError;
 use crate::request_context::{ProviderRequestContext, ProviderRetryEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +42,34 @@ impl HttpRetryPolicy {
     }
 }
 
+/// Shared across a provider's requests so a server's Retry-After pauses all of them.
+#[derive(Debug, Default)]
+pub struct ProviderCooldown {
+    until: std::sync::Mutex<Option<tokio::time::Instant>>,
+}
+
+impl ProviderCooldown {
+    fn remaining(&self) -> Duration {
+        self.until
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .map_or(Duration::ZERO, |until| {
+                until.saturating_duration_since(tokio::time::Instant::now())
+            })
+    }
+
+    fn defer(&self, delay: Duration) {
+        let until = tokio::time::Instant::now() + delay;
+        let mut current = self
+            .until
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if current.is_none_or(|current| current < until) {
+            *current = Some(until);
+        }
+    }
+}
+
 pub const DEFAULT_HTTP_RETRY_POLICY: HttpRetryPolicy = HttpRetryPolicy {
     max_attempts: 6,
     initial_backoff: Duration::from_secs(1),
@@ -66,18 +95,40 @@ where
     let mut unpriced_prior_attempts = 0;
 
     for attempt_number in 1..=max_attempts {
+        if let Some(cooldown) = request_context.cooldown() {
+            let remaining = cooldown.remaining();
+            if !retry_fits_budget(policy, started, remaining) {
+                return Err(ProviderError::RateLimited {
+                    message: format!("{operation} is paused by an earlier rate limit"),
+                    retry_after: Some(remaining),
+                }
+                .into());
+            }
+            tokio::time::sleep(remaining).await;
+        }
         if let Some(observer) = request_context.retry_observer() {
             observer.before_attempt(unpriced_prior_attempts).await?;
         }
         match send().await {
             Ok(response) => {
+                let retry_after = parse_retry_after(&response);
+                if let (Some(cooldown), Some(retry_after)) =
+                    (request_context.cooldown(), retry_after)
+                    && matches!(
+                        response.status(),
+                        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+                    )
+                {
+                    cooldown.defer(retry_after);
+                }
                 if !is_retryable_status(response.status()) || attempt_number >= max_attempts {
                     return Ok(response);
                 }
 
                 let retry_number = attempt_number;
                 let reason = format!("HTTP {}", response.status());
-                let delay = retry_delay_from_response(policy, retry_number, &response);
+                let delay =
+                    retry_after.unwrap_or_else(|| policy.jittered_backoff_for_retry(retry_number));
                 if !retry_fits_budget(policy, started, delay) {
                     return Ok(response);
                 }
@@ -154,17 +205,7 @@ fn notify_retry(
     }
 }
 
-fn retry_delay_from_response(
-    policy: &HttpRetryPolicy,
-    retry_number: u32,
-    response: &Response,
-) -> Duration {
-    parse_retry_after(response)
-        .map(|delay| delay.min(policy.max_delay))
-        .unwrap_or_else(|| policy.jittered_backoff_for_retry(retry_number))
-}
-
-fn parse_retry_after(response: &Response) -> Option<Duration> {
+pub fn parse_retry_after(response: &Response) -> Option<Duration> {
     let header = response.headers().get(RETRY_AFTER)?;
     let raw = header.to_str().ok()?.trim();
     if raw.is_empty() {

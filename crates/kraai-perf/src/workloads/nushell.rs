@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, ensure};
+use kraai_execution_types::{SandboxCapabilities, SandboxCapability, ScriptExecutionId};
 use kraai_nushell_runtime::{
     INTERNAL_HOST_ARGUMENT, ScriptExecutionPlan, ScriptExecutionResult, execute,
 };
 use kraai_sandbox::Termination;
-use kraai_types::{SandboxCapabilities, SandboxCapability, ScriptExecutionId};
 use tokio_util::sync::CancellationToken;
 
 use crate::benchmark::{Benchmark, Context};

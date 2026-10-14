@@ -5,7 +5,7 @@ use futures::StreamExt;
 use kraai_agent::AgentManager;
 use kraai_persistence::Persistence;
 use kraai_provider_core::{ProviderManager, ProviderRequestContext, ProviderStreamEvent};
-use kraai_types::{MessageId, MessageStatus};
+use kraai_types::{MessageId, MessageStatus, SessionId};
 
 use crate::benchmark::{Benchmark, Context};
 use crate::fixtures::{agent, provider};
@@ -19,7 +19,7 @@ pub(super) struct Fixture {
     manager: AgentManager,
     persistence: Persistence,
     providers: ProviderManager,
-    session: String,
+    session: SessionId,
     expected: String,
 }
 
@@ -27,12 +27,12 @@ pub(super) struct Reply {
     id: MessageId,
     chunks: usize,
     visible_text_matches: bool,
-    completed_session: Option<String>,
+    completed_session: Option<SessionId>,
     lease_released: bool,
 }
 
 impl Fixture {
-    async fn new(mut manager: AgentManager, persistence: Persistence) -> Result<Self> {
+    async fn new(manager: AgentManager, persistence: Persistence) -> Result<Self> {
         let session = manager
             .create_session_with(None, Some(agent::PROFILE.into()))
             .await?;
@@ -117,7 +117,14 @@ impl Benchmark for Case {
                         .await
                         .ok_or_eyre("Streamed chunk was rejected")?,
                 );
-                visible_text_matches &= visible == delta;
+                visible_text_matches &= match visible {
+                    kraai_agent::StreamedItem::Started {
+                        item: kraai_types::AssistantItem::Text { text, .. },
+                        ..
+                    } => text == delta,
+                    kraai_agent::StreamedItem::Delta { delta: text, .. } => text == delta,
+                    kraai_agent::StreamedItem::Started { .. } => false,
+                };
                 chunks += 1;
                 if chunks % SNAPSHOT_INTERVAL == 0 {
                     manager.publish_streaming_snapshots().await?;
@@ -157,7 +164,7 @@ impl Benchmark for Case {
             );
             ensure!(reply.visible_text_matches, "Streamed text changed");
             ensure!(
-                reply.completed_session.as_deref() == Some(session.as_str()),
+                reply.completed_session.as_ref() == Some(&session),
                 "Stream completion lost its session"
             );
             ensure!(reply.lease_released, "Turn lease was not released");

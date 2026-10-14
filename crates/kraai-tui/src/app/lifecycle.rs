@@ -9,7 +9,7 @@ impl App {
         self.clamp_chat_scroll();
     }
 
-    pub(super) fn effective_chat_scroll(&self) -> u16 {
+    pub(super) fn effective_chat_scroll(&self) -> usize {
         let max_scroll = self.state.chat_max_scroll();
         if self.state.auto_scroll {
             max_scroll
@@ -26,7 +26,7 @@ impl App {
         let max_scroll = self.state.chat_max_scroll();
         let next_scroll = self
             .effective_chat_scroll()
-            .saturating_add_signed(delta)
+            .saturating_add_signed(isize::from(delta))
             .min(max_scroll);
         self.state.scroll = next_scroll;
         self.state.auto_scroll = delta > 0 && next_scroll == max_scroll;
@@ -58,18 +58,11 @@ impl App {
             runtime_tx,
             runtime_rx,
             clipboard: None,
-            ci_output: Box::new(io::stdout()),
-            ci_output_needs_newline: false,
-            ci_turn_completion_pending: false,
-            ci_metrics_history_pending: false,
-            ci_metrics_context_pending: false,
             startup_options,
+            persist_workspace_preferences: true,
             startup_message_sent: false,
             startup_sync: StartupSync::WaitingForRuntime,
-            ci_error: None,
-            stream_event_content: HashMap::new(),
             state,
-            last_stream_history_request: None,
             last_statusline_animation_tick: None,
             last_runtime_event_sequence: 0,
             last_session_event_sequences: HashMap::new(),
@@ -78,28 +71,7 @@ impl App {
             event_lag_script_resync_pending: false,
             runtime_bridge_connected: true,
             runtime_bridge_error: None,
-        }
-    }
-
-    pub fn run_ci(&mut self) -> Result<()> {
-        while !self.state.exit {
-            crossbeam_channel::select! {
-                recv(self.event_rx) -> event => match event {
-                    Ok(message) => self.handle_runtime_event_bridge_message(message),
-                    Err(_) => self.fail_ci("event channel closed"),
-                },
-                recv(self.runtime_rx) -> response => match response {
-                    Ok(response) => self.handle_runtime_response(response),
-                    Err(_) => self.fail_ci("runtime response channel closed"),
-                },
-                default(Duration::from_millis(100)) => {}
-            }
-        }
-
-        if let Some(error) = self.ci_error.take() {
-            Err(color_eyre::eyre::eyre!(error))
-        } else {
-            Ok(())
+            runtime_event_batch_budget: RUNTIME_EVENT_BATCH_BUDGET,
         }
     }
 
@@ -223,52 +195,16 @@ impl App {
         Some(lines.join("\n"))
     }
 
-    pub fn evaluation_metrics(&self) -> serde_json::Value {
-        let mut usage = kraai_runtime::TokenUsage::default();
-        for model_usage in self.state.exit_usage_totals.usage_by_model.values() {
-            accumulate_token_usage(&mut usage, model_usage);
-        }
-        let script_executions = self
-            .state
-            .chat_history
-            .values()
-            .filter(|message| message.role() == kraai_types::ChatRole::ToolCallResult)
-            .count();
-        let usage = (usage.total_tokens != 0
-            || usage.input_tokens != 0
-            || usage.output_tokens != 0
-            || usage.reasoning_tokens != 0
-            || usage.cache_read_tokens != 0
-            || usage.cache_write_tokens != 0)
-            .then(|| {
-                serde_json::json!({
-                    "total_tokens": usage.total_tokens,
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                    "reasoning_tokens": usage.reasoning_tokens,
-                    "cache_read_tokens": usage.cache_read_tokens,
-                    "cache_write_tokens": usage.cache_write_tokens,
-                })
-            });
-        serde_json::json!({
-            "schema_version": 1,
-            "turns": self.state.exit_usage_totals.completed_message_ids.len(),
-            "script_executions": script_executions,
-            "final_context_tokens": self.state.context_usage.as_ref().map(|context| context.used_context_tokens()),
-            "usage": usage,
-            "request_costs": self.state.launch_requests,
-            "request_costs_complete": !self.costs_incomplete(),
-        })
-    }
-
     pub(super) fn process_events(
         &mut self,
         mut input_pending: impl FnMut() -> std::io::Result<bool>,
     ) -> Result<bool> {
         let mut changed = false;
         let started = Instant::now();
+        let budget = self.runtime_event_batch_budget;
+        let budget_spent = |changed: bool| changed && started.elapsed() >= budget;
         for _ in 0..RUNTIME_EVENT_BATCH_ROUNDS {
-            if started.elapsed() >= RUNTIME_EVENT_BATCH_BUDGET || input_pending()? {
+            if budget_spent(changed) || input_pending()? {
                 break;
             }
             let mut received = false;
@@ -277,7 +213,7 @@ impl App {
                 changed = true;
                 received = true;
             }
-            if started.elapsed() >= RUNTIME_EVENT_BATCH_BUDGET || input_pending()? {
+            if budget_spent(changed) || input_pending()? {
                 break;
             }
             match self.runtime_rx.try_recv() {
@@ -318,7 +254,6 @@ impl App {
                 };
                 if let Some(error) = error {
                     self.set_error(format!("Runtime error: {error}"));
-                    self.fail_ci(format!("Runtime error: {error}"));
                 }
                 self.request_sync();
                 self.request(RuntimeRequest::FinishStartupSync);
@@ -330,7 +265,7 @@ impl App {
                 self.last_runtime_event_sequence = event.sequence;
                 let covered_by_snapshot = if let Some(session_id) = event.event.session_id() {
                     self.last_session_event_sequences
-                        .insert(session_id.to_string(), event.sequence);
+                        .insert(session_id.clone(), event.sequence);
                     self.session_snapshot_sequences
                         .get(session_id)
                         .is_some_and(|snapshot_sequence| event.sequence <= *snapshot_sequence)
@@ -342,15 +277,12 @@ impl App {
                 } else {
                     self.handle_runtime_event(event.event);
                 }
-                self.maybe_finish_ci_run();
             }
             RuntimeEventBridgeMessage::Lagged(skipped) => {
                 self.state.cost_recovery_list_pending = true;
                 self.event_lag_session_resync_pending = true;
                 self.event_lag_script_resync_pending = true;
                 self.state.retry_waiting = false;
-                self.last_stream_history_request = None;
-                self.stream_event_content.clear();
                 self.state.status =
                     format!("Missed {skipped} runtime event(s); resynchronizing session state");
                 if self.startup_sync != StartupSync::WaitingForRuntime {

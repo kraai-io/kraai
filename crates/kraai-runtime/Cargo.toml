@@ -8,14 +8,13 @@ version = "0.1.0"
 
 [dependencies]
 kraai-agent.workspace = true
-kraai-command-catalog.workspace = true
+kraai-commands.workspace = true
+kraai-execution-types.workspace = true
 kraai-io = { workspace = true, features = ["async"] }
 kraai-mcp.workspace = true
 kraai-nushell-runtime.workspace = true
 kraai-persistence.workspace = true
 kraai-provider-core.workspace = true
-kraai-provider-openai-chat-completions.workspace = true
-kraai-provider-openai-codex.workspace = true
 kraai-sandbox.workspace = true
 kraai-script-protocol.workspace = true
 kraai-types.workspace = true
@@ -40,7 +39,6 @@ typescript = [
   "dep:ts-rs",
   "kraai-types/typescript",
   "kraai-provider-core/typescript",
-  "kraai-provider-openai-codex/typescript",
 ]
 
 [dependencies.ts-rs]
@@ -49,4 +47,6 @@ workspace = true
 
 [dev-dependencies]
 image.workspace = true
+kraai-providers.workspace = true
+kraai-test-support = { workspace = true }
 rusqlite.workspace = true

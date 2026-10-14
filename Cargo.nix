@@ -63,80 +63,10 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
-    "kraai-command-catalog" = rec {
-      packageId = "kraai-command-catalog";
+    "kraai-commands" = rec {
+      packageId = "kraai-commands";
       build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-catalog";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-close-files" = rec {
-      packageId = "kraai-command-close-files";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-close-files";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-core" = rec {
-      packageId = "kraai-command-core";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-core";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-edit-file" = rec {
-      packageId = "kraai-command-edit-file";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-edit-file";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-mcp" = rec {
-      packageId = "kraai-command-mcp";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-mcp";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-open-files" = rec {
-      packageId = "kraai-command-open-files";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-open-files";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-view-image" = rec {
-      packageId = "kraai-command-view-image";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-view-image";
-      };
-
-      # Debug support which might change between releases.
-      # File a bug if you depend on any for non-debug work!
-      debug = internal.debugCrate { inherit packageId; };
-    };
-    "kraai-command-web-search" = rec {
-      packageId = "kraai-command-web-search";
-      build = internal.buildRustCrateWithFeatures {
-        packageId = "kraai-command-web-search";
+        packageId = "kraai-commands";
       };
 
       # Debug support which might change between releases.
@@ -147,6 +77,26 @@ rec {
       packageId = "kraai-eval";
       build = internal.buildRustCrateWithFeatures {
         packageId = "kraai-eval";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
+    "kraai-execution-types" = rec {
+      packageId = "kraai-execution-types";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-execution-types";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
+    "kraai-headless" = rec {
+      packageId = "kraai-headless";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-headless";
       };
 
       # Debug support which might change between releases.
@@ -233,6 +183,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "kraai-providers" = rec {
+      packageId = "kraai-providers";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-providers";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "kraai-runtime" = rec {
       packageId = "kraai-runtime";
       build = internal.buildRustCrateWithFeatures {
@@ -267,6 +227,16 @@ rec {
       packageId = "kraai-script-protocol";
       build = internal.buildRustCrateWithFeatures {
         packageId = "kraai-script-protocol";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
+    "kraai-test-support" = rec {
+      packageId = "kraai-test-support";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "kraai-test-support";
       };
 
       # Debug support which might change between releases.
@@ -10015,8 +9985,16 @@ rec {
             packageId = "futures";
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-mcp";
             packageId = "kraai-mcp";
+          }
+          {
+            name = "kraai-providers";
+            packageId = "kraai-providers";
           }
           {
             name = "kraai-runtime";
@@ -10054,6 +10032,10 @@ rec {
             packageId = "tracing-subscriber";
             features = [ "env-filter" "fmt" ];
           }
+          {
+            name = "ulid";
+            packageId = "ulid";
+          }
         ];
         devDependencies = [
           {
@@ -10071,6 +10053,10 @@ rec {
           {
             name = "kraai-persistence";
             packageId = "kraai-persistence";
+          }
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
           }
           {
             name = "tempfile";
@@ -10099,8 +10085,12 @@ rec {
             packageId = "futures";
           }
           {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
+            name = "kraai-commands";
+            packageId = "kraai-commands";
+          }
+          {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-io";
@@ -10118,6 +10108,10 @@ rec {
           {
             name = "kraai-provider-core";
             packageId = "kraai-provider-core";
+          }
+          {
+            name = "kraai-script-protocol";
+            packageId = "kraai-script-protocol";
           }
           {
             name = "kraai-types";
@@ -10168,6 +10162,10 @@ rec {
             packageId = "kraai-provider-openai-chat-completions";
           }
           {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+          {
             name = "rusqlite";
             packageId = "rusqlite";
             features = [ "bundled" ];
@@ -10180,208 +10178,46 @@ rec {
         ];
 
       };
-      "kraai-command-catalog" = rec {
-        crateName = "kraai-command-catalog";
+      "kraai-commands" = rec {
+        crateName = "kraai-commands";
         version = "0.1.0";
         edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-command-catalog; };
-        libName = "kraai_command_catalog";
-        dependencies = [
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-        ];
-
-      };
-      "kraai-command-close-files" = rec {
-        crateName = "kraai-command-close-files";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-close-files; };
-        libName = "kraai_command_close_files";
-        dependencies = [
-          {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-          {
-            name = "kraai-workspace-fs";
-            packageId = "kraai-workspace-fs";
-          }
-          {
-            name = "nu-engine";
-            packageId = "nu-engine";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
-          }
-        ];
-
-      };
-      "kraai-command-core" = rec {
-        crateName = "kraai-command-core";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-command-core; };
-        libName = "kraai_command_core";
-        dependencies = [
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
-          }
-          {
-            name = "serde_json";
-            packageId = "serde_json";
-          }
-        ];
-
-      };
-      "kraai-command-edit-file" = rec {
-        crateName = "kraai-command-edit-file";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-edit-file; };
-        libName = "kraai_command_edit_file";
-        dependencies = [
-          {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-workspace-fs";
-            packageId = "kraai-workspace-fs";
-          }
-          {
-            name = "nu-engine";
-            packageId = "nu-engine";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
-          }
-        ];
-
-      };
-      "kraai-command-mcp" = rec {
-        crateName = "kraai-command-mcp";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-mcp; };
-        libName = "kraai_command_mcp";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-commands; };
+        libName = "kraai_commands";
         dependencies = [
           {
             name = "base64";
             packageId = "base64 0.23.1";
+            optional = true;
           }
           {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-          {
-            name = "nu-engine";
-            packageId = "nu-engine";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
-          }
-          {
-            name = "serde_json";
-            packageId = "serde_json";
-          }
-        ];
-
-      };
-      "kraai-command-open-files" = rec {
-        crateName = "kraai-command-open-files";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-open-files; };
-        libName = "kraai_command_open_files";
-        dependencies = [
-          {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-          {
-            name = "kraai-workspace-fs";
-            packageId = "kraai-workspace-fs";
-          }
-          {
-            name = "nu-engine";
-            packageId = "nu-engine";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
-          }
-        ];
-
-      };
-      "kraai-command-view-image" = rec {
-        crateName = "kraai-command-view-image";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-view-image; };
-        libName = "kraai_command_view_image";
-        dependencies = [
-          {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-io";
             packageId = "kraai-io";
+            optional = true;
           }
           {
-            name = "kraai-types";
-            packageId = "kraai-types";
+            name = "kraai-workspace-fs";
+            packageId = "kraai-workspace-fs";
+            optional = true;
           }
           {
             name = "nu-engine";
             packageId = "nu-engine";
+            optional = true;
           }
           {
             name = "nu-protocol";
             packageId = "nu-protocol";
+            optional = true;
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            optional = true;
           }
         ];
         devDependencies = [
@@ -10396,37 +10232,10 @@ rec {
             packageId = "tempfile";
           }
         ];
-
-      };
-      "kraai-command-web-search" = rec {
-        crateName = "kraai-command-web-search";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/commands/kraai-command-web-search; };
-        libName = "kraai_command_web_search";
-        dependencies = [
-          {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
-          }
-          {
-            name = "nu-engine";
-            packageId = "nu-engine";
-          }
-          {
-            name = "nu-protocol";
-            packageId = "nu-protocol";
-          }
-        ];
-
+        features = {
+          "nushell" = [ "dep:base64" "dep:kraai-io" "dep:kraai-workspace-fs" "dep:nu-engine" "dep:nu-protocol" "dep:serde_json" ];
+        };
+        resolvedDefaultFeatures = [ "nushell" ];
       };
       "kraai-eval" = rec {
         crateName = "kraai-eval";
@@ -10473,6 +10282,11 @@ rec {
           {
             name = "futures";
             packageId = "futures";
+          }
+          {
+            name = "kraai-headless";
+            packageId = "kraai-headless";
+            usesDefaultFeatures = false;
           }
           {
             name = "kraai-io";
@@ -10547,7 +10361,132 @@ rec {
             packageId = "webbrowser";
           }
         ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+        ];
 
+      };
+      "kraai-execution-types" = rec {
+        crateName = "kraai-execution-types";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-execution-types; };
+        libName = "kraai_execution_types";
+        dependencies = [
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "ts-rs";
+            packageId = "ts-rs";
+            optional = true;
+            features = [ "serde-json-impl" ];
+          }
+        ];
+        features = {
+          "typescript" = [ "dep:ts-rs" ];
+        };
+        resolvedDefaultFeatures = [ "typescript" ];
+      };
+      "kraai-headless" = rec {
+        crateName = "kraai-headless";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "kraai-headless";
+            path = "src/main.rs";
+            requiredFeatures = [ "runner" ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-headless; };
+        libName = "kraai_headless";
+        dependencies = [
+          {
+            name = "clap";
+            packageId = "clap";
+            optional = true;
+            features = [ "derive" ];
+          }
+          {
+            name = "color-eyre";
+            packageId = "color-eyre";
+            optional = true;
+          }
+          {
+            name = "kraai-providers";
+            packageId = "kraai-providers";
+            optional = true;
+          }
+          {
+            name = "kraai-runtime";
+            packageId = "kraai-runtime";
+            optional = true;
+          }
+          {
+            name = "kraai-types";
+            packageId = "kraai-types";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+            optional = true;
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            optional = true;
+            features = [ "full" ];
+          }
+          {
+            name = "tracing";
+            packageId = "tracing";
+            optional = true;
+          }
+        ];
+        devDependencies = [
+          {
+            name = "axum";
+            packageId = "axum";
+            usesDefaultFeatures = false;
+            features = [ "http1" "json" "tokio" ];
+          }
+          {
+            name = "futures";
+            packageId = "futures";
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
+            name = "tokio-util";
+            packageId = "tokio-util";
+          }
+        ];
+        features = {
+          "default" = [ "runner" ];
+          "runner" = [ "dep:clap" "dep:color-eyre" "dep:kraai-providers" "dep:kraai-runtime" "dep:serde_json" "dep:tokio" "dep:tracing" ];
+        };
+        resolvedDefaultFeatures = [ "default" "runner" ];
       };
       "kraai-io" = rec {
         crateName = "kraai-io";
@@ -10595,6 +10534,10 @@ rec {
           }
         ];
         devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
           {
             name = "nix";
             packageId = "nix 0.31.3";
@@ -10645,13 +10588,13 @@ rec {
             packageId = "http";
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
             features = [ "http" ];
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
           }
           {
             name = "reqwest";
@@ -10717,6 +10660,10 @@ rec {
             features = [ "http1" "json" "tokio" ];
           }
           {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+          {
             name = "tempfile";
             packageId = "tempfile";
           }
@@ -10746,36 +10693,13 @@ rec {
             packageId = "hmac";
           }
           {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
+            name = "kraai-commands";
+            packageId = "kraai-commands";
+            features = [ "nushell" ];
           }
           {
-            name = "kraai-command-close-files";
-            packageId = "kraai-command-close-files";
-          }
-          {
-            name = "kraai-command-core";
-            packageId = "kraai-command-core";
-          }
-          {
-            name = "kraai-command-edit-file";
-            packageId = "kraai-command-edit-file";
-          }
-          {
-            name = "kraai-command-mcp";
-            packageId = "kraai-command-mcp";
-          }
-          {
-            name = "kraai-command-open-files";
-            packageId = "kraai-command-open-files";
-          }
-          {
-            name = "kraai-command-view-image";
-            packageId = "kraai-command-view-image";
-          }
-          {
-            name = "kraai-command-web-search";
-            packageId = "kraai-command-web-search";
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-io";
@@ -10788,10 +10712,6 @@ rec {
           {
             name = "kraai-sandbox";
             packageId = "kraai-sandbox";
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
           }
           {
             name = "kraai-web";
@@ -10889,8 +10809,13 @@ rec {
             packageId = "async-trait";
           }
           {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" "test-util" ];
           }
         ];
 
@@ -10928,6 +10853,10 @@ rec {
           {
             name = "kraai-agent";
             packageId = "kraai-agent";
+          }
+          {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-nushell-runtime";
@@ -11001,6 +10930,12 @@ rec {
             packageId = "toml";
           }
         ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+        ];
 
       };
       "kraai-persistence" = rec {
@@ -11027,6 +10962,10 @@ rec {
             packageId = "image";
             usesDefaultFeatures = false;
             features = [ "jpeg" "png" ];
+          }
+          {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-io";
@@ -11071,6 +11010,10 @@ rec {
         ];
         devDependencies = [
           {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+          {
             name = "nix";
             packageId = "nix 0.31.3";
             target = { target, features }: (target."unix" or false);
@@ -11113,6 +11056,10 @@ rec {
           {
             name = "httpdate";
             packageId = "httpdate";
+          }
+          {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-io";
@@ -11166,6 +11113,12 @@ rec {
             features = [ "serde-json-impl" ];
           }
         ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+        ];
         features = {
           "typescript" = [ "dep:ts-rs" "kraai-types/typescript" ];
         };
@@ -11189,6 +11142,10 @@ rec {
           {
             name = "futures";
             packageId = "futures";
+          }
+          {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-io";
@@ -11223,6 +11180,12 @@ rec {
             features = [ "full" ];
           }
         ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+        ];
 
       };
       "kraai-provider-openai-codex" = rec {
@@ -11247,6 +11210,10 @@ rec {
           {
             name = "futures";
             packageId = "futures";
+          }
+          {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-io";
@@ -11314,6 +11281,10 @@ rec {
         ];
         devDependencies = [
           {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+          {
             name = "ulid";
             packageId = "ulid";
           }
@@ -11322,6 +11293,41 @@ rec {
           "typescript" = [ "dep:ts-rs" ];
         };
         resolvedDefaultFeatures = [ "typescript" ];
+      };
+      "kraai-providers" = rec {
+        crateName = "kraai-providers";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/llm-providers/kraai-providers; };
+        libName = "kraai_providers";
+        dependencies = [
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
+          {
+            name = "color-eyre";
+            packageId = "color-eyre";
+          }
+          {
+            name = "kraai-provider-core";
+            packageId = "kraai-provider-core";
+          }
+          {
+            name = "kraai-provider-openai-chat-completions";
+            packageId = "kraai-provider-openai-chat-completions";
+          }
+          {
+            name = "kraai-provider-openai-codex";
+            packageId = "kraai-provider-openai-codex";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
+          }
+        ];
+
       };
       "kraai-runtime" = rec {
         crateName = "kraai-runtime";
@@ -11347,8 +11353,12 @@ rec {
             packageId = "kraai-agent";
           }
           {
-            name = "kraai-command-catalog";
-            packageId = "kraai-command-catalog";
+            name = "kraai-commands";
+            packageId = "kraai-commands";
+          }
+          {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "kraai-io";
@@ -11370,14 +11380,6 @@ rec {
           {
             name = "kraai-provider-core";
             packageId = "kraai-provider-core";
-          }
-          {
-            name = "kraai-provider-openai-chat-completions";
-            packageId = "kraai-provider-openai-chat-completions";
-          }
-          {
-            name = "kraai-provider-openai-codex";
-            packageId = "kraai-provider-openai-codex";
           }
           {
             name = "kraai-sandbox";
@@ -11450,13 +11452,21 @@ rec {
             features = [ "jpeg" "png" ];
           }
           {
+            name = "kraai-providers";
+            packageId = "kraai-providers";
+          }
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+          {
             name = "rusqlite";
             packageId = "rusqlite";
             features = [ "bundled" ];
           }
         ];
         features = {
-          "typescript" = [ "dep:ts-rs" "kraai-types/typescript" "kraai-provider-core/typescript" "kraai-provider-openai-codex/typescript" ];
+          "typescript" = [ "dep:ts-rs" "kraai-types/typescript" "kraai-provider-core/typescript" ];
         };
         resolvedDefaultFeatures = [ "typescript" ];
       };
@@ -11474,6 +11484,10 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-runtime-node; };
         libName = "kraai_runtime_node";type = [ "cdylib" "rlib" ];
         dependencies = [
+          {
+            name = "kraai-providers";
+            packageId = "kraai-providers";
+          }
           {
             name = "kraai-runtime";
             packageId = "kraai-runtime";
@@ -11534,8 +11548,8 @@ rec {
         libName = "kraai_sandbox";
         dependencies = [
           {
-            name = "kraai-types";
-            packageId = "kraai-types";
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
           }
           {
             name = "libc";
@@ -11575,6 +11589,12 @@ rec {
             features = [ "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Globalization" "Win32_Security" "Win32_Security_Isolation" "Win32_Security_Authorization" "Win32_Storage_FileSystem" "Win32_System_Threading" "Win32_System_SystemInformation" "Win32_System_JobObjects" "Win32_System_Pipes" "Win32_System_Environment" "Win32_System_Memory" "Win32_System_LibraryLoader" "Win32_UI_Shell" "Win32_System_Com" ];
           }
         ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+        ];
 
       };
       "kraai-script-protocol" = rec {
@@ -11585,8 +11605,23 @@ rec {
         libName = "kraai_script_protocol";
         dependencies = [
           {
-            name = "kraai-types";
-            packageId = "kraai-types";
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+        ];
+
+      };
+      "kraai-test-support" = rec {
+        crateName = "kraai-test-support";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-test-support; };
+        libName = "kraai_test_support";
+        dependencies = [
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
           }
         ];
 
@@ -11634,6 +11669,10 @@ rec {
             features = [ "jpeg" "png" ];
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
             features = [ "async" ];
@@ -11641,6 +11680,10 @@ rec {
           {
             name = "kraai-persistence";
             packageId = "kraai-persistence";
+          }
+          {
+            name = "kraai-providers";
+            packageId = "kraai-providers";
           }
           {
             name = "kraai-runtime";
@@ -11708,6 +11751,12 @@ rec {
             target = { target, features }: (target."windows" or false);
           }
         ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
+        ];
 
       };
       "kraai-types" = rec {
@@ -11717,6 +11766,10 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/kraai-types; };
         libName = "kraai_types";
         dependencies = [
+          {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
           {
             name = "serde";
             packageId = "serde";
@@ -11734,7 +11787,7 @@ rec {
           }
         ];
         features = {
-          "typescript" = [ "dep:ts-rs" ];
+          "typescript" = [ "dep:ts-rs" "kraai-execution-types/typescript" ];
         };
         resolvedDefaultFeatures = [ "typescript" ];
       };
@@ -11750,13 +11803,13 @@ rec {
             packageId = "async-trait";
           }
           {
+            name = "kraai-execution-types";
+            packageId = "kraai-execution-types";
+          }
+          {
             name = "kraai-io";
             packageId = "kraai-io";
             features = [ "http" ];
-          }
-          {
-            name = "kraai-types";
-            packageId = "kraai-types";
           }
           {
             name = "reqwest";
@@ -11771,6 +11824,12 @@ rec {
             name = "tokio";
             packageId = "tokio";
             features = [ "full" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
           }
         ];
 
@@ -11798,6 +11857,10 @@ rec {
           }
         ];
         devDependencies = [
+          {
+            name = "kraai-test-support";
+            packageId = "kraai-test-support";
+          }
           {
             name = "nix";
             packageId = "nix 0.31.3";

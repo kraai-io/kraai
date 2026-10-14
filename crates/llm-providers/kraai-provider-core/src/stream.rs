@@ -58,6 +58,12 @@ pub enum ProviderStreamEvent {
     Reasoning {
         payload: serde_json::Value,
     },
+    /// Readable reasoning text for display while the model thinks. The opaque `Reasoning` item,
+    /// not these deltas, is what later requests replay.
+    ReasoningDelta {
+        item_id: String,
+        delta: String,
+    },
     TextDelta {
         item_id: String,
         phase: AssistantPhase,
@@ -69,6 +75,18 @@ pub enum ProviderStreamEvent {
         input: String,
     },
     Usage(TokenUsage),
+    /// Why the provider ended the response; sent once, after its content.
+    Finished {
+        stop_reason: StopReason,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    EndTurn,
+    ToolCall,
+    /// The response reached the output token limit; its content is complete as far as it goes.
+    MaxOutputTokens,
 }
 
 #[cfg(test)]

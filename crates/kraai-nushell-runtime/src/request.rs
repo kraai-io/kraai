@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use kraai_types::{NushellStartup, ScriptExecutionId};
+use kraai_execution_types::{NushellStartup, ScriptExecutionId};
 use serde::{Deserialize, Serialize};
 
 pub const HOST_PROTOCOL_VERSION: u32 = 6;

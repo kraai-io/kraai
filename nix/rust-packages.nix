@@ -62,6 +62,15 @@
           pkgs.defaultCrateOverrides
           // {
             rmcp = _: {CARGO_CRATE_NAME = "rmcp";};
+            # Its macro emits items in HashMap order, so every build of a parser crate gets a
+            # different crate hash and cached dependents stop linking against a rebuilt copy.
+            pest_consume_macros = _: {
+              postPatch = ''
+                substituteInPlace src/make_parser.rs --replace-fail \
+                  'use std::collections::HashMap;' \
+                  'use std::collections::BTreeMap as HashMap;'
+              '';
+            };
           };
       };
     mkCargoNix = release:
@@ -155,6 +164,7 @@
 
     kraai = frontendPackage "kraai-tui" "kraai";
     kraai-acp = frontendPackage "kraai-acp" "kraai-acp";
+    kraai-headless = frontendPackage "kraai-headless" "kraai-headless";
     kraai-perf = frontendPackage "kraai-perf" "kraai-perf";
 
     kraai-eval = cargoNix.workspaceMembers."kraai-eval".build.overrideAttrs (old: {
@@ -168,7 +178,7 @@
             --set-default KRAAI_EVAL_HARBOR ${../evals/harbor} \
             --set-default KRAAI_EVAL_VIEWER_ASSETS ${self'.packages.kraai-eval-viewer} \
             --prefix PATH : ${lib.makeBinPath [
-            kraai
+            kraai-headless
             pkgs.bubblewrap
             pkgs.clang
             pkgs.coreutils
@@ -244,7 +254,7 @@
   in {
     packages =
       {
-        inherit kraai kraai-acp kraai-perf;
+        inherit kraai kraai-acp kraai-headless kraai-perf;
         default = kraai;
       }
       // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {inherit kraai-eval;};

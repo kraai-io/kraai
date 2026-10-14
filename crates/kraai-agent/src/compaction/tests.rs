@@ -1,6 +1,7 @@
 use super::*;
 use color_eyre::eyre::ensure;
 use futures::stream::{self, BoxStream};
+use kraai_persistence::FileContextSnapshot;
 use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderRequestContext, ProviderStreamEvent,
 };
@@ -94,13 +95,57 @@ impl Summarizer {
     }
 }
 
-fn snapshots(text: &str) -> Vec<FileContextSnapshot> {
-    vec![FileContextSnapshot {
-        path: "file.rs".into(),
-        opened_event: "open".into(),
-        anchor: kraai_types::MessageId::new("result"),
-        text: text.into(),
-    }]
+fn files(text: &str) -> RefreshedContextState {
+    RefreshedContextState {
+        snapshots: vec![FileContextSnapshot {
+            path: "file.rs".into(),
+            opened_event: "open".into(),
+            anchor: kraai_types::MessageId::new("result"),
+            text: text.into(),
+        }],
+        ..Default::default()
+    }
+}
+
+/// A compaction together with the request it was prepared for.
+struct Prepared {
+    compaction: ContextCompaction,
+    original: ProviderRequest,
+}
+
+impl Prepared {
+    fn with_image_resolver(
+        mut self,
+        resolver: Arc<dyn kraai_provider_core::ImageResolver>,
+    ) -> Self {
+        self.compaction = self.compaction.with_image_resolver(resolver);
+        self
+    }
+
+    async fn run(
+        &self,
+        providers: &ProviderManager,
+        provider_id: &ProviderId,
+        model_id: &ModelId,
+    ) -> Result<CompactionOutcome> {
+        self.compaction
+            .run(&self.original, providers, provider_id, model_id)
+            .await
+    }
+}
+
+impl std::ops::Deref for Prepared {
+    type Target = ContextCompaction;
+
+    fn deref(&self) -> &ContextCompaction {
+        &self.compaction
+    }
+}
+
+impl std::ops::DerefMut for Prepared {
+    fn deref_mut(&mut self) -> &mut ContextCompaction {
+        &mut self.compaction
+    }
 }
 
 #[expect(
@@ -111,12 +156,7 @@ fn fixture(
     native: bool,
     mut events: Vec<ProviderStreamEvent>,
     fail: bool,
-) -> (
-    ContextCompaction,
-    ProviderManager,
-    Requests,
-    std::path::PathBuf,
-) {
+) -> (Prepared, ProviderManager, Requests, std::path::PathBuf) {
     let root = std::env::temp_dir().join(format!("compaction-agent-{}", ulid::Ulid::generate()));
     std::fs::create_dir_all(&root).expect("create compaction data directory");
     let history = vec![
@@ -145,8 +185,8 @@ fn fixture(
         message(
             "result",
             ConversationItem::ScriptResult {
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
                 call_id: ToolCallId::new("call"),
@@ -157,25 +197,26 @@ fn fixture(
     let covered_through = history.last().map(|message| message.id.clone());
     let original = assemble(
         "instructions",
-        &snapshots("pinned files"),
+        &files("pinned files"),
         None,
         history,
         Some(kraai_provider_core::ScriptToolDefinition::nushell()),
         &Default::default(),
     );
-    let context = ContextCompaction {
-        store: SqliteCompactionStore::new(&root),
-        usage_store: Arc::new(kraai_persistence::SqliteRequestUsageStore::new(&root)),
-        session_id: "session".into(),
+    let context = Prepared {
+        compaction: ContextCompaction {
+            store: SqliteCompactionStore::new(&root),
+            usage_store: Arc::new(kraai_persistence::SqliteRequestUsageStore::new(&root)),
+            session_id: SessionId::new("session"),
+            prefix: "instructions".into(),
+            context: files("pinned files"),
+            covered_through,
+            previous_boundary: None,
+            on_usage: None,
+            usage_barrier: None,
+            image_resolver: None,
+        },
         original,
-        prefix: "instructions".into(),
-        snapshots: snapshots("pinned files"),
-        file_notifications: vec![],
-        covered_through,
-        previous_boundary: None,
-        on_usage: None,
-        usage_barrier: None,
-        image_resolver: None,
     };
     events.push(ProviderStreamEvent::Usage(TokenUsage {
         input_tokens: 100,
@@ -262,7 +303,7 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
     ensure!(!saved.compatible_with(&ProviderId::new("test"), &ModelId::new("other")));
     let replay = assemble(
         "new instructions",
-        &snapshots("updated files"),
+        &files("updated files"),
         Some(&saved),
         Vec::new(),
         context.original.script_tool.clone(),
@@ -374,7 +415,14 @@ async fn failed_or_malformed_native_compaction_never_replaces_history_or_uses_te
                 .await?
                 .is_none()
         );
-        ensure!(context.usage_store.load("session").await?.len() == 1);
+        ensure!(
+            context
+                .usage_store
+                .load(&SessionId::new("session"))
+                .await?
+                .len()
+                == 1
+        );
         tokio::fs::remove_dir_all(root).await?;
     }
     Ok(())
@@ -461,7 +509,7 @@ async fn native_stream_retries_are_bounded_and_each_attempt_is_accounted() -> Re
             .is_err()
     );
     ensure!(requests.lock().map_err(|e| eyre!("{e}"))?.len() == 3);
-    let usage = context.usage_store.load("session").await?;
+    let usage = context.usage_store.load(&SessionId::new("session")).await?;
     ensure!(usage.len() == 3);
     ensure!(
         context
@@ -557,7 +605,14 @@ async fn native_compaction_recovers_after_interruption_without_duplicate_checkpo
         })
         .collect();
     ensure!(checkpoints == vec![&payload]);
-    ensure!(context.usage_store.load("session").await?.len() == 2);
+    ensure!(
+        context
+            .usage_store
+            .load(&SessionId::new("session"))
+            .await?
+            .len()
+            == 2
+    );
     tokio::fs::remove_dir_all(root).await?;
     Ok(())
 }
@@ -602,7 +657,7 @@ fn empty_user_messages_do_not_discard_older_requests() {
 #[test]
 fn image_request_budget_keeps_recent_images_and_reopenable_references() {
     let image = |index: usize| kraai_types::ContentPart::Image {
-        image: kraai_types::ImageAttachment {
+        image: kraai_execution_types::ImageAttachment {
             id: format!("{index:064x}"),
             mime_type: "image/png".into(),
             width: 1,
@@ -629,7 +684,7 @@ fn image_request_budget_keeps_recent_images_and_reopenable_references() {
             _ => None,
         })
         .sum::<usize>();
-    assert_eq!(count, kraai_types::image::MAX_REQUEST_IMAGES);
+    assert_eq!(count, kraai_execution_types::image::MAX_REQUEST_IMAGES);
     assert!(request.messages.first().is_some_and(|message| {
         message
             .display_text()
@@ -683,14 +738,14 @@ struct TestImageResolver;
 
 #[async_trait::async_trait]
 impl kraai_provider_core::ImageResolver for TestImageResolver {
-    async fn resolve(&self, _: &kraai_types::ImageAttachment) -> Result<Vec<u8>> {
+    async fn resolve(&self, _: &kraai_execution_types::ImageAttachment) -> Result<Vec<u8>> {
         Ok(vec![1, 2, 3])
     }
 }
 
 #[tokio::test]
 async fn compaction_reads_images_but_retains_only_reopenable_references() -> Result<()> {
-    let image = kraai_types::ImageAttachment {
+    let image = kraai_execution_types::ImageAttachment {
         id: "a".repeat(64),
         mime_type: "image/png".into(),
         width: 2,
@@ -765,9 +820,12 @@ async fn file_removal_notifications_survive_compaction_without_becoming_retained
         }],
         false,
     );
-    context.file_notifications =
+    context.context.notifications =
         vec!["removed.txt was automatically unpinned because it no longer exists.".into()];
-    crate::context_state::append_notifications(&mut context.original, &context.file_notifications);
+    crate::context_state::append_notifications(
+        &mut context.original,
+        &context.compaction.context.notifications,
+    );
     let outcome = context
         .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
         .await?;

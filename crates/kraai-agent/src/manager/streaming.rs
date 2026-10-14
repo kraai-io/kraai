@@ -1,14 +1,16 @@
 use super::*;
 
+const SKIPPED_CALL_DIAGNOSTIC: &str = "Not executed: only the first script call of a response runs. Send this script again in its own response if it is still needed.";
+
 impl AgentManager {
     #[cfg(test)]
     pub(super) async fn add_message(
-        &mut self,
-        session_id: &str,
+        &self,
+        session_id: &SessionId,
         role: ChatRole,
         content: kraai_types::MessageContent,
         agent_profile_id: Option<String>,
-    ) -> Result<MessageId> {
+    ) -> AgentResult<MessageId> {
         Ok(self
             .append_message(session_id, role, content, agent_profile_id)
             .await?
@@ -17,21 +19,21 @@ impl AgentManager {
     }
 
     pub async fn add_script_result_to_history(
-        &mut self,
-        session_id: &str,
+        &self,
+        session_id: &SessionId,
         message_id: MessageId,
         profile_id: String,
         call_id: ToolCallId,
         content: kraai_types::MessageContent,
-        outcome: kraai_types::ScriptExecutionOutcome,
-    ) -> Result<bool> {
+        outcome: kraai_execution_types::ScriptExecutionOutcome,
+    ) -> AgentResult<bool> {
         self.require_session(session_id).await?;
         let append = self
             .conversation_store
             .append_message_idempotent(
                 message_id,
                 AppendMessageRequest {
-                    session_id: session_id.to_string(),
+                    session_id: session_id.clone(),
                     content: ConversationItem::ScriptResult {
                         call_id,
                         output: content,
@@ -44,16 +46,22 @@ impl AgentManager {
                 },
             )
             .await?;
+        if append.linked_now {
+            self.history_upserted(session_id, &append.message);
+        }
+        self.answer_skipped_calls(session_id, &append.message)
+            .await?;
         Ok(append.linked_now)
     }
 
+    #[cfg(test)]
     pub(super) async fn append_message(
-        &mut self,
-        session_id: &str,
+        &self,
+        session_id: &SessionId,
         role: ChatRole,
         content: kraai_types::MessageContent,
         agent_profile_id: Option<String>,
-    ) -> Result<AppendedMessage> {
+    ) -> AgentResult<kraai_persistence::AppendedMessage> {
         let title_if_first_message = if role == ChatRole::User {
             title_from_user_prompt(&content.display_text())
         } else {
@@ -73,14 +81,15 @@ impl AgentManager {
             ChatRole::ToolCallResult => {
                 return Err(eyre!(
                     "script results require add_script_result_to_history and a call id"
-                ));
+                )
+                .into());
             }
         };
 
         let appended = self
             .conversation_store
             .append_message(AppendMessageRequest {
-                session_id: session_id.to_string(),
+                session_id: session_id.clone(),
                 content,
                 status: MessageStatus::Complete,
                 agent_profile_id,
@@ -101,53 +110,76 @@ impl AgentManager {
     }
 
     pub(super) async fn start_streaming_message(
-        &mut self,
-        session_id: &str,
-        role: ChatRole,
+        &self,
+        session_id: &SessionId,
+        input: stream_requests::TurnInput,
         stream_id: StreamId,
         agent_profile_id: Option<String>,
         generation: Option<MessageGeneration>,
-    ) -> Result<MessageId> {
+    ) -> AgentResult<MessageId> {
         self.require_session(session_id).await?;
 
-        if role != ChatRole::Assistant {
-            return Err(eyre!("only assistant messages can stream"));
-        }
-
         if self.session_has_active_stream(session_id).await {
-            return Err(eyre!(kraai_types::DomainError::conflict(format!(
+            return Err(AgentError::conflict(format!(
                 "Session already has an active stream: {session_id}"
-            ))));
+            )));
         }
 
-        let subscription = generation
-            .as_ref()
-            .is_some_and(|generation| self.providers.is_subscription(&generation.provider_id));
-        let appended = self
+        let subscription = generation.as_ref().is_some_and(|generation| {
+            read(&self.providers).is_subscription(&generation.provider_id)
+        });
+        let stream_tip = input
+            .users
+            .last()
+            .map(|message| message.id.clone())
+            .or_else(|| input.tip.clone());
+        let started_users = !input.users.is_empty();
+        let mut messages = input.users;
+        messages.push(kraai_persistence::NewMessage {
+            id: MessageId::new(Ulid::generate()),
+            content: ConversationItem::Assistant { items: Vec::new() },
+            status: MessageStatus::Streaming { stream_id },
+            agent_profile_id,
+            generation,
+        });
+        let mut appended = self
             .conversation_store
-            .append_message(AppendMessageRequest {
-                session_id: session_id.to_string(),
-                content: ConversationItem::Assistant { items: Vec::new() },
-                status: MessageStatus::Streaming { stream_id },
-                agent_profile_id,
-                generation,
-                title_if_first_message: None,
-            })
+            .append_messages(
+                session_id,
+                input.tip.as_ref(),
+                messages,
+                input.title,
+                input.consumed_queue_through,
+            )
             .await?;
-        let message_id = appended.message.id.clone();
+        for message in &appended.messages {
+            self.history_upserted(session_id, message);
+        }
+        let message = appended
+            .messages
+            .pop()
+            .ok_or_else(|| eyre!("Starting a stream linked no assistant message"))?;
+        let message_id = message.id.clone();
 
         self.streaming_messages.write().await.insert(
             message_id.clone(),
             StreamingMessageState {
-                session_id: session_id.to_string(),
-                previous_tip: appended.previous_tip,
-                previous_title: appended.previous_title,
-                message: appended.message,
+                session_id: session_id.clone(),
+                previous_tip: stream_tip,
+                previous_title: if started_users {
+                    appended.title
+                } else {
+                    appended.previous_title
+                },
+                message,
                 cancellation_result_id: None,
                 text_item_ids: HashMap::new(),
-                snapshot_dirty: true,
+                pending_deltas: Vec::new(),
+                first_pending_sequence: 0,
+                sealed_deltas: 0,
                 subscription,
                 unpriced_attempts: 0,
+                reissued_attempts: 0,
                 request_started_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -159,19 +191,19 @@ impl AgentManager {
         Ok(message_id)
     }
 
-    pub async fn session_has_active_stream(&self, session_id: &str) -> bool {
+    pub async fn session_has_active_stream(&self, session_id: &SessionId) -> bool {
         let streaming = self.streaming_messages.read().await;
         streaming
             .values()
-            .any(|state| state.session_id == session_id)
+            .any(|state| state.session_id == *session_id)
     }
 
-    pub async fn discard_streaming_state(&self, session_id: &str) {
+    pub async fn discard_streaming_state(&self, session_id: &SessionId) {
         let _persistence = self.streaming_persistence.lock().await;
         self.streaming_messages
             .write()
             .await
-            .retain(|_, state| state.session_id != session_id);
+            .retain(|_, state| state.session_id != *session_id);
     }
 
     pub async fn append_text_chunk(
@@ -180,47 +212,42 @@ impl AgentManager {
         item_id: &str,
         phase: AssistantPhase,
         chunk: &str,
-    ) -> Option<String> {
+    ) -> Option<StreamedItem> {
         let mut streaming = self.streaming_messages.write().await;
         let state = streaming.get_mut(message_id)?;
-        let ConversationItem::Assistant { items } = &mut state.message.content else {
+        let ConversationItem::Assistant { items } = &state.message.content else {
             return None;
         };
-
-        let mut visible = String::new();
-        let item_index = if let Some(index) = state.text_item_ids.get(item_id).copied() {
-            index
-        } else {
-            if items
-                .iter()
-                .any(|item| !matches!(item, AssistantItem::Reasoning { .. }))
-                && !chunk.is_empty()
-            {
-                visible.push_str("\n\n");
+        let (index, started) = match state.text_item_ids.get(item_id).copied() {
+            Some(index) => (index, false),
+            None => {
+                let index = items.len();
+                state.text_item_ids.insert(item_id.to_string(), index);
+                (index, true)
             }
-            items.push(AssistantItem::Text {
+        };
+        state
+            .record(kraai_persistence::StreamDelta::Text {
+                index,
                 phase,
-                text: String::new(),
-            });
-            let index = items.len().saturating_sub(1);
-            state.text_item_ids.insert(item_id.to_string(), index);
-            index
-        };
-        let Some(AssistantItem::Text {
-            phase: stored_phase,
-            text,
-        }) = items.get_mut(item_index)
-        else {
-            return None;
-        };
-        if *stored_phase != phase {
-            return None;
-        }
-        text.push_str(chunk);
-        visible.push_str(chunk);
-        state.snapshot_dirty = true;
+                text: chunk.to_string(),
+            })
+            .ok()?;
         drop(streaming);
-        Some(visible)
+        Some(if started {
+            StreamedItem::Started {
+                index,
+                item: AssistantItem::Text {
+                    phase,
+                    text: chunk.to_string(),
+                },
+            }
+        } else {
+            StreamedItem::Delta {
+                index,
+                delta: chunk.to_string(),
+            }
+        })
     }
 
     pub async fn append_reasoning(
@@ -228,19 +255,16 @@ impl AgentManager {
         message_id: &MessageId,
         provider_id: ProviderId,
         payload: serde_json::Value,
-    ) -> Option<()> {
-        let mut streaming = self.streaming_messages.write().await;
-        let state = streaming.get_mut(message_id)?;
-        let ConversationItem::Assistant { items } = &mut state.message.content else {
-            return None;
-        };
-        items.push(AssistantItem::Reasoning {
-            provider_id,
-            payload,
-        });
-        state.snapshot_dirty = true;
-        drop(streaming);
-        Some(())
+    ) -> Option<StreamedItem> {
+        self.append_item(
+            message_id,
+            AssistantItem::Reasoning {
+                provider_id,
+                payload,
+            },
+            |_| true,
+        )
+        .await
     }
 
     pub async fn append_script_call(
@@ -249,29 +273,121 @@ impl AgentManager {
         call_id: ToolCallId,
         name: String,
         input: String,
-    ) -> Option<()> {
-        let mut streaming = self.streaming_messages.write().await;
-        let state = streaming.get_mut(message_id)?;
-        let ConversationItem::Assistant { items } = &mut state.message.content else {
-            return None;
-        };
-        if items
-            .iter()
-            .any(|item| matches!(item, AssistantItem::ScriptCall { .. }))
-        {
-            return None;
-        }
-        items.push(AssistantItem::ScriptCall {
+    ) -> Option<StreamedItem> {
+        let id = call_id.clone();
+        let call = AssistantItem::ScriptCall {
             call_id,
             name,
             input,
-        });
-        state.snapshot_dirty = true;
-        drop(streaming);
-        Some(())
+        };
+        self.append_item(message_id, call, |items| {
+            !items.iter().any(
+                |item| matches!(item, AssistantItem::ScriptCall { call_id, .. } if *call_id == id),
+            )
+        })
+        .await
     }
 
-    pub async fn complete_message(&self, message_id: &MessageId) -> Result<Option<String>> {
+    /// Appends `item` when `allowed` accepts the message's current items.
+    async fn append_item(
+        &self,
+        message_id: &MessageId,
+        item: AssistantItem,
+        allowed: impl FnOnce(&[AssistantItem]) -> bool,
+    ) -> Option<StreamedItem> {
+        let mut streaming = self.streaming_messages.write().await;
+        let state = streaming.get_mut(message_id)?;
+        let items = state.message.content.assistant_items()?;
+        if !allowed(items) {
+            return None;
+        }
+        let index = items.len();
+        state
+            .record(kraai_persistence::StreamDelta::Item { item: item.clone() })
+            .ok()?;
+        drop(streaming);
+        Some(StreamedItem::Started { index, item })
+    }
+
+    /// Gives every other script call of the response that `result` answers a result saying it
+    /// did not run, since only the first call of a response runs. Providers require a result for
+    /// every call. Safe to repeat.
+    pub(super) async fn answer_skipped_calls(
+        &self,
+        session_id: &SessionId,
+        result: &Message,
+    ) -> AgentResult<()> {
+        let ConversationItem::ScriptResult { call_id, .. } = &result.content else {
+            return Ok(());
+        };
+        let mut parent = result.parent_id.clone();
+        let assistant = loop {
+            let Some(id) = parent else {
+                return Ok(());
+            };
+            let Some(message) = self.message_store.get(&id).await? else {
+                return Ok(());
+            };
+            match &message.content {
+                ConversationItem::ScriptResult { .. } => parent = message.parent_id.clone(),
+                ConversationItem::Assistant { .. } => break message,
+                _ => return Ok(()),
+            }
+        };
+        let Some(items) = assistant.content.assistant_items() else {
+            return Ok(());
+        };
+        let output = kraai_script_protocol::render_tool_call_result(
+            kraai_script_protocol::ToolCallResultView {
+                status: kraai_execution_types::ScriptExecutionStatus::Cancelled,
+                exit_code: None,
+                elapsed_millis: None,
+                stdout: &[],
+                stderr: &[],
+                diagnostic: Some(SKIPPED_CALL_DIAGNOSTIC),
+                stdout_file: None,
+                stderr_file: None,
+            },
+        );
+        for (index, item) in items.iter().enumerate() {
+            let AssistantItem::ScriptCall {
+                call_id: skipped, ..
+            } = item
+            else {
+                continue;
+            };
+            if skipped == call_id {
+                continue;
+            }
+            let append = self
+                .conversation_store
+                .append_message_idempotent(
+                    MessageId::new(format!("{}-skipped-{index}", result.id)),
+                    AppendMessageRequest {
+                        session_id: session_id.clone(),
+                        content: ConversationItem::ScriptResult {
+                            call_id: skipped.clone(),
+                            output: output.clone().into(),
+                            outcome: kraai_execution_types::ScriptExecutionOutcome {
+                                status: kraai_execution_types::ScriptExecutionStatus::Cancelled,
+                                exit_code: None,
+                            },
+                        },
+                        status: MessageStatus::Complete,
+                        agent_profile_id: result.agent_profile_id.clone(),
+                        generation: None,
+                        title_if_first_message: None,
+                    },
+                )
+                .await?;
+            if append.linked_now {
+                self.history_upserted(session_id, &append.message);
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn complete_message(&self, message_id: &MessageId) -> AgentResult<Option<SessionId>> {
         let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(mut state) = state else {
@@ -284,12 +400,16 @@ impl AgentManager {
                 .write()
                 .await
                 .insert(message_id.clone(), state);
-            return Err(error);
+            return Err(error.into());
         }
+        self.history_upserted(&state.session_id, &state.message);
         Ok(Some(state.session_id))
     }
 
-    pub async fn abort_streaming_message(&self, message_id: &MessageId) -> Result<Option<String>> {
+    pub async fn abort_streaming_message(
+        &self,
+        message_id: &MessageId,
+    ) -> AgentResult<Option<SessionId>> {
         let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(state) = state else {
@@ -309,8 +429,9 @@ impl AgentManager {
                 .write()
                 .await
                 .insert(message_id.clone(), state);
-            return Err(error);
+            return Err(error.into());
         }
+        self.history_removed(&state.session_id, vec![message_id.clone()]);
         Ok(Some(state.session_id))
     }
 
@@ -318,7 +439,7 @@ impl AgentManager {
         &self,
         message_id: &MessageId,
         cancelled_script_output: &str,
-    ) -> Result<Option<CancelledStreamResult>> {
+    ) -> AgentResult<Option<CancelledStreamResult>> {
         let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(mut state) = state else {
@@ -349,7 +470,8 @@ impl AgentManager {
                         .cancellation_result_id
                         .get_or_insert_with(|| MessageId::new(Ulid::generate()))
                         .clone();
-                    self.conversation_store
+                    let result = self
+                        .conversation_store
                         .append_message_idempotent(
                             result_id,
                             AppendMessageRequest {
@@ -357,8 +479,9 @@ impl AgentManager {
                                 content: ConversationItem::ScriptResult {
                                     call_id,
                                     output: cancelled_script_output.to_string().into(),
-                                    outcome: kraai_types::ScriptExecutionOutcome {
-                                        status: kraai_types::ScriptExecutionStatus::Cancelled,
+                                    outcome: kraai_execution_types::ScriptExecutionOutcome {
+                                        status:
+                                            kraai_execution_types::ScriptExecutionStatus::Cancelled,
                                         exit_code: None,
                                     },
                                 },
@@ -368,6 +491,11 @@ impl AgentManager {
                                 title_if_first_message: None,
                             },
                         )
+                        .await?;
+                    if result.linked_now {
+                        self.history_upserted(&state.session_id, &result.message);
+                    }
+                    self.answer_skipped_calls(&state.session_id, &result.message)
                         .await?;
                 }
                 state.message.status = MessageStatus::Complete;
@@ -390,7 +518,12 @@ impl AgentManager {
                 .write()
                 .await
                 .insert(message_id.clone(), state);
-            return Err(error);
+            return Err(error.into());
+        }
+        if persisted {
+            self.history_upserted(&state.session_id, &state.message);
+        } else {
+            self.history_removed(&state.session_id, vec![message_id.clone()]);
         }
 
         Ok(Some(CancelledStreamResult {
@@ -402,14 +535,14 @@ impl AgentManager {
 
     pub(super) async fn abort_streaming_messages_for_session(
         &self,
-        session_id: &str,
-    ) -> Result<()> {
+        session_id: &SessionId,
+    ) -> AgentResult<()> {
         let to_abort: Vec<MessageId> = {
             let streaming = self.streaming_messages.read().await;
             streaming
                 .iter()
                 .filter_map(|(message_id, state)| {
-                    (state.session_id == session_id).then_some(message_id.clone())
+                    (state.session_id == *session_id).then_some(message_id.clone())
                 })
                 .collect()
         };
@@ -421,24 +554,20 @@ impl AgentManager {
         Ok(())
     }
 
-    pub async fn get_chat_history(&self, session_id: &str) -> Result<BTreeMap<MessageId, Message>> {
-        let mut result = BTreeMap::new();
-
+    pub async fn get_chat_history(
+        &self,
+        session_id: &SessionId,
+    ) -> AgentResult<BTreeMap<MessageId, Message>> {
         let Some(tip_id) = self.get_tip(session_id).await? else {
-            return Ok(result);
+            return Ok(BTreeMap::new());
         };
 
-        self.visit_history_context(&tip_id, |message| {
-            result
-                .entry(message.id.clone())
-                .or_insert_with(|| message.into_owned());
-        })
-        .await?;
+        let mut result = kraai_persistence::history_by_id(self.history_context(&tip_id).await?);
 
         let streaming = self.streaming_messages.read().await;
         let mut streaming_messages: Vec<_> = streaming
             .iter()
-            .filter(|(_, state)| state.session_id == session_id)
+            .filter(|(_, state)| state.session_id == *session_id)
             .map(|(message_id, state)| (message_id.clone(), state.message.clone()))
             .collect();
         drop(streaming);
@@ -450,17 +579,12 @@ impl AgentManager {
 
     pub async fn undo_last_user_message(
         &self,
-        session_id: &str,
-    ) -> Result<Option<kraai_types::MessageContent>> {
-        if self.pending_message_rollbacks.contains_key(session_id) {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "Cannot undo while queued message rollback is incomplete"
-            )));
-        }
+        session_id: &SessionId,
+    ) -> AgentResult<Option<kraai_types::MessageContent>> {
         if self.is_turn_active(session_id) {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "Cannot undo while the current turn is active"
-            )));
+            return Err(AgentError::conflict(
+                "Cannot undo while the current turn is active",
+            ));
         }
 
         let mut session = self.require_session(session_id).await?;
@@ -480,10 +604,11 @@ impl AgentManager {
                     .save_if_tip_matches(&session, expected_tip.as_ref())
                     .await?
                 {
-                    return Err(eyre!(kraai_types::DomainError::conflict(
-                        "Session changed while undoing a message"
-                    )));
+                    return Err(AgentError::conflict(
+                        "Session changed while undoing a message",
+                    ));
                 }
+                self.history_removed(session_id, removed.clone());
                 for id in removed {
                     if let Err(error) = self
                         .session_store
@@ -510,24 +635,32 @@ impl AgentManager {
 }
 
 impl AgentManager {
-    pub async fn publish_streaming_snapshots(&self) -> Result<()> {
+    pub async fn publish_streaming_snapshots(&self) -> AgentResult<()> {
         let _persistence = self.streaming_persistence.lock().await;
-        let snapshots: Vec<_> = self
+        let batches: Vec<_> = self
             .streaming_messages
-            .read()
+            .write()
             .await
-            .values()
-            .filter(|state| state.snapshot_dirty)
-            .map(|state| state.message.clone())
+            .values_mut()
+            .filter(|state| !state.pending_deltas.is_empty())
+            .map(|state| {
+                state.sealed_deltas = state.pending_deltas.len();
+                (
+                    state.message.clone(),
+                    state.first_pending_sequence,
+                    state.pending_deltas.clone(),
+                )
+            })
             .collect();
-        for message in snapshots {
-            self.message_store.save(&message).await?;
+        for (message, first_sequence, deltas) in batches {
+            self.message_store
+                .append_stream_deltas(&message, first_sequence, &deltas)
+                .await?;
             let mut streaming = self.streaming_messages.write().await;
-            if let Some(state) = streaming.get_mut(&message.id)
-                && state.message.content == message.content
-                && state.message.generation == message.generation
-            {
-                state.snapshot_dirty = false;
+            if let Some(state) = streaming.get_mut(&message.id) {
+                state.pending_deltas.drain(..deltas.len());
+                state.first_pending_sequence += deltas.len() as u64;
+                state.sealed_deltas = 0;
             }
             drop(streaming);
         }

@@ -2,8 +2,16 @@ use super::super::*;
 use color_eyre::eyre::Result;
 use futures::stream::BoxStream;
 use kraai_provider_core::{Provider, ProviderRequest};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+pub(super) async fn open_persistence(data_dir: &Path) -> Result<kraai_persistence::Persistence> {
+    kraai_persistence::Persistence::open_with_turn_lease(
+        data_dir,
+        kraai_test_support::OUTLIVES_ANY_TEST,
+    )
+    .await
+}
 
 pub(super) struct MockProvider {
     id: ProviderId,
@@ -64,9 +72,7 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
     let data_dir = test_dir("manager");
     tokio::fs::create_dir_all(&data_dir).await.unwrap();
 
-    let persistence = kraai_persistence::Persistence::open(&data_dir)
-        .await
-        .unwrap();
+    let persistence = open_persistence(&data_dir).await.unwrap();
 
     let mut providers = ProviderManager::new();
     providers.register_provider(
@@ -101,4 +107,16 @@ pub(super) fn corrupt_message(data_dir: &Path, id: &MessageId, data: &str) -> Re
         rusqlite::params![id.as_str(), data],
     )?;
     Ok(())
+}
+
+/// The text a streamed append added, whether it started an item or extended one.
+pub(super) fn streamed_text(streamed: Option<StreamedItem>) -> Option<String> {
+    match streamed? {
+        StreamedItem::Started {
+            item: AssistantItem::Text { text, .. },
+            ..
+        }
+        | StreamedItem::Delta { delta: text, .. } => Some(text),
+        StreamedItem::Started { .. } => None,
+    }
 }

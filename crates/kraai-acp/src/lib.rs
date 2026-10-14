@@ -23,6 +23,7 @@ use agent_client_protocol::{
 };
 use config_updates::{ConfigUpdates, PreparedSession};
 use kraai_runtime::RuntimeHandle;
+use kraai_types::SessionId;
 use tokio::sync::Mutex;
 
 pub use session::Options;
@@ -33,7 +34,7 @@ struct Server {
     runtime: RuntimeHandle,
     options: Options,
     initialized: AtomicBool,
-    sessions: Mutex<BTreeMap<String, Arc<session::Session>>>,
+    sessions: Mutex<BTreeMap<SessionId, Arc<session::Session>>>,
     config_updated: Arc<ConfigUpdates>,
 }
 
@@ -48,10 +49,11 @@ impl Server {
 
     async fn session(&self, id: &acp::SessionId) -> Result<Arc<session::Session>> {
         self.require_initialized()?;
+        let id = session::runtime_id(id)?;
         self.sessions
             .lock()
             .await
-            .get(id.0.as_ref())
+            .get(&id)
             .filter(|session| session.ready.load(Ordering::Acquire))
             .cloned()
             .ok_or_else(|| error::invalid("Unknown session"))
@@ -70,7 +72,7 @@ impl Server {
             .await
             .map_err(|error| crate::error::invalid(error.to_string()))?;
         let mcp = mcp::config(request.mcp_servers, &cwd)?;
-        let id = request.session_id.to_string();
+        let id = session::runtime_id(&request.session_id)?;
         let existing = self
             .runtime
             .list_sessions()
@@ -207,7 +209,8 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                         .await?;
                         let mut publication = config_updates::lock(&session).await;
                         let config = config::options(&server.runtime, &id).await?;
-                        commands::advertise(&connection, acp::SessionId::new(id.clone())).await?;
+                        commands::advertise(&connection, acp::SessionId::new(id.to_string()))
+                            .await?;
                         *publication.current = Some(config.clone());
                         server
                             .sessions
@@ -215,7 +218,8 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                             .await
                             .insert(id.clone(), session.clone());
                         Ok(PreparedSession {
-                            response: acp::NewSessionResponse::new(id).config_options(config),
+                            response: acp::NewSessionResponse::new(id.to_string())
+                                .config_options(config),
                             session,
                             _publication: publication,
                         })
@@ -263,7 +267,7 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                     let result = async {
                         let config = config::set(
                             &server.runtime,
-                            request.session_id.0.as_ref(),
+                            &session::runtime_id(&request.session_id)?,
                             request.config_id.0.as_ref(),
                             request.value,
                         )

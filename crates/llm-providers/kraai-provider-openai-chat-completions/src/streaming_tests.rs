@@ -39,12 +39,18 @@ async fn fragmented_arguments_preserve_script_and_drain_usage_after_call() -> Re
         let (first, last) = arguments.split_at(split);
         let events = collect(vec![data(call(first)), data(json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":last}}]}}]})), data(finish("tool_calls")), data(json!({"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":3}})), Ok(SseEvent::Done)], true).await.into_iter().collect::<Result<Vec<_>>>()?;
         assert!(
-            matches!(events.get(1), Some(ProviderStreamEvent::Usage(usage)) if usage.total_tokens == 5)
+            matches!(events.get(2), Some(ProviderStreamEvent::Usage(usage)) if usage.total_tokens == 5)
         );
         assert!(
             matches!(events.first(), Some(ProviderStreamEvent::ScriptCall { call_id, name, input: script }) if call_id.as_str() == "call-1" && name == "kraai_nushell" && script == input)
         );
-        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            events.get(1),
+            Some(ProviderStreamEvent::Finished {
+                stop_reason: StopReason::ToolCall
+            })
+        ));
+        assert_eq!(events.len(), 3);
     }
     Ok(())
 }
@@ -63,7 +69,7 @@ async fn tool_fragments_without_indexes_preserve_the_single_call() -> Result<()>
     .await
     .into_iter()
     .collect::<Result<Vec<_>>>()?;
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 2);
     assert!(
         matches!(events.first(), Some(ProviderStreamEvent::ScriptCall { call_id, name, input }) if call_id.as_str() == "call-1" && name == "kraai_nushell" && input == "ls")
     );
@@ -106,7 +112,6 @@ async fn malformed_or_incomplete_calls_never_emit_a_script() {
     for events in [
         vec![data(call(good))],
         vec![data(call(good)), Ok(SseEvent::Done)],
-        vec![data(call(good)), data(finish("length")), Ok(SseEvent::Done)],
         vec![data(call(good)), data(finish("stop")), Ok(SseEvent::Done)],
         vec![
             data(call(good)),
@@ -161,8 +166,14 @@ async fn completed_call_survives_trailing_stream_failure() {
         assert!(
             matches!(events.first(), Some(Ok(ProviderStreamEvent::ScriptCall { input, .. })) if input == "ls")
         );
-        assert!(events.get(1).is_some_and(Result::is_err));
-        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            events.get(1),
+            Some(Ok(ProviderStreamEvent::Finished {
+                stop_reason: StopReason::ToolCall
+            }))
+        ));
+        assert!(events.get(2).is_some_and(Result::is_err));
+        assert_eq!(events.len(), 3);
     }
 }
 
@@ -172,7 +183,7 @@ async fn completed_call_does_not_wait_for_trailing_usage_or_done() -> Result<()>
         .chain(stream::pending())
         .boxed();
     let mut events = adapt_chat_completion_stream(source, Some("kraai_nushell".into()), false);
-    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.next()).await?;
+    let event = kraai_test_support::hang_guard(events.next()).await?;
     assert!(
         matches!(event, Some(Ok(ProviderStreamEvent::ScriptCall { input, .. })) if input == "ls")
     );
@@ -209,8 +220,14 @@ async fn text_usage_and_errors_survive_without_tools() -> Result<()> {
     assert!(
         matches!(events.first(), Some(ProviderStreamEvent::TextDelta { delta, .. }) if delta == "summary")
     );
+    assert!(matches!(
+        events.get(1),
+        Some(ProviderStreamEvent::Finished {
+            stop_reason: StopReason::EndTurn
+        })
+    ));
     assert!(
-        matches!(events.get(1), Some(ProviderStreamEvent::Usage(usage)) if usage.input_tokens == 100 && usage.output_tokens == 40 && usage.reasoning_tokens == 5 && usage.cache_read_tokens == 20)
+        matches!(events.get(2), Some(ProviderStreamEvent::Usage(usage)) if usage.input_tokens == 100 && usage.output_tokens == 40 && usage.reasoning_tokens == 5 && usage.cache_read_tokens == 20)
     );
     for failure in [
         json!({"error":{"message":"rate limit"}}),
@@ -234,8 +251,7 @@ async fn termination_does_not_wait_for_transport_eof() -> Result<()> {
         let source = stream::iter([event, Ok(SseEvent::Done)])
             .chain(stream::pending())
             .boxed();
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
+        kraai_test_support::hang_guard(
             adapt_chat_completion_stream(source, None, false).collect::<Vec<_>>(),
         )
         .await?;
@@ -258,11 +274,23 @@ async fn reasoning_is_assembled_for_replay_before_the_tool_call() -> Result<()> 
     .await
     .into_iter()
     .collect::<Result<Vec<_>>>()?;
+    let deltas: String = events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderStreamEvent::ReasoningDelta { delta, .. } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deltas, "Inspect the files.");
+    let rest: Vec<_> = events
+        .iter()
+        .filter(|event| !matches!(event, ProviderStreamEvent::ReasoningDelta { .. }))
+        .collect();
     assert!(
-        matches!(events.first(), Some(ProviderStreamEvent::Reasoning { payload }) if payload == &json!({"reasoning_content":"Inspect the files."}))
+        matches!(rest.first(), Some(ProviderStreamEvent::Reasoning { payload }) if payload == &json!({"reasoning_content":"Inspect the files."}))
     );
     assert!(matches!(
-        events.get(1),
+        rest.get(1),
         Some(ProviderStreamEvent::ScriptCall { .. })
     ));
     Ok(())
@@ -320,8 +348,8 @@ async fn structured_reasoning_fragments_survive_tool_continuation() -> Result<()
                 ],
             },
             kraai_types::ConversationItem::ScriptResult {
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
                 call_id: ToolCallId::new("call-1"),
@@ -352,4 +380,59 @@ async fn structured_reasoning_limits_include_opaque_payloads() {
             .as_ref()
             .is_err_and(|error| error.to_string().contains("Reasoning exceeds size limit"))
     }));
+}
+
+#[tokio::test]
+async fn length_finish_keeps_text_and_drops_the_truncated_call() -> Result<()> {
+    let events = collect(
+        vec![
+            data(json!({"choices":[{"delta":{"content":"partial"}}]})),
+            data(call(r#"{"input":"ls"#)),
+            data(finish("length")),
+            Ok(SseEvent::Done),
+        ],
+        true,
+    )
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
+    assert!(
+        matches!(events.first(), Some(ProviderStreamEvent::TextDelta { delta, .. }) if delta == "partial")
+    );
+    assert!(matches!(
+        events.get(1),
+        Some(ProviderStreamEvent::Finished {
+            stop_reason: StopReason::MaxOutputTokens
+        })
+    ));
+    assert_eq!(events.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn several_indexed_calls_are_emitted_in_order() -> Result<()> {
+    let mut second = call(r##"{"input":"# timeout=1sec\npwd"}"##);
+    second["choices"][0]["delta"]["tool_calls"][0]["index"] = json!(1);
+    second["choices"][0]["delta"]["tool_calls"][0]["id"] = json!("call-2");
+    let events = collect(
+        vec![
+            data(call(r##"{"input":"# timeout=1sec\nls"}"##)),
+            data(second),
+            data(finish("tool_calls")),
+            Ok(SseEvent::Done),
+        ],
+        true,
+    )
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
+    let calls: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderStreamEvent::ScriptCall { call_id, .. } => Some(call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls, ["call-1", "call-2"]);
+    Ok(())
 }

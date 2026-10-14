@@ -112,11 +112,11 @@ pub(super) async fn request_shutdown(command_tx: &mpsc::Sender<Command>) -> Runt
 )]
 mod tests {
     use std::sync::Arc;
-    use std::time::Duration;
 
     use super::*;
     use crate::RuntimeStartupState;
     use crate::handle::RuntimeEventSender;
+    use kraai_test_support::hang_guard;
 
     fn handle() -> (
         RuntimeHandle,
@@ -124,7 +124,7 @@ mod tests {
         watch::Receiver<bool>,
     ) {
         let (command_tx, command_rx) = mpsc::channel(1);
-        let (_startup_tx, startup_rx) = watch::channel(RuntimeStartupState::Ready);
+        let (_startup_tx, startup_rx) = watch::channel(RuntimeStartupState::ready());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         (
             RuntimeHandle {
@@ -160,10 +160,7 @@ mod tests {
         let mut retry = Box::pin(handle.shutdown());
         assert!(futures::poll!(&mut retry).is_pending());
         acknowledge_shutdown(&mut commands).await;
-        tokio::time::timeout(Duration::from_secs(1), retry)
-            .await
-            .unwrap()
-            .unwrap();
+        hang_guard(retry).await.unwrap().unwrap();
         assert!(commands.try_recv().is_err());
     }
 
@@ -200,11 +197,9 @@ mod tests {
         assert!(futures::poll!(&mut second).is_pending());
         finish_tx.send(()).unwrap();
 
-        let (first, second) = tokio::time::timeout(Duration::from_secs(1), async {
-            tokio::join!(first, second)
-        })
-        .await
-        .unwrap();
+        let (first, second) = hang_guard(async { tokio::join!(first, second) })
+            .await
+            .unwrap();
         first.unwrap();
         second.unwrap();
         assert!(commands.try_recv().is_err());
@@ -230,10 +225,7 @@ mod tests {
         let mut retry = Box::pin(handle.shutdown());
         assert!(futures::poll!(&mut retry).is_pending());
         finish_tx.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(1), retry)
-            .await
-            .unwrap()
-            .unwrap();
+        hang_guard(retry).await.unwrap().unwrap();
         assert!(commands.try_recv().is_err());
     }
 
@@ -263,11 +255,9 @@ mod tests {
         assert!(futures::poll!(&mut second).is_pending());
         finish_tx.send(()).unwrap();
 
-        let (first, second) = tokio::time::timeout(Duration::from_secs(1), async {
-            tokio::join!(first, second)
-        })
-        .await
-        .unwrap();
+        let (first, second) = hang_guard(async { tokio::join!(first, second) })
+            .await
+            .unwrap();
         let expected = Err(RuntimeHandle::response_channel_closed());
         assert_eq!(first, expected);
         assert_eq!(second, expected);

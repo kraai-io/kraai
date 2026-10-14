@@ -5,7 +5,8 @@
 
 use super::*;
 use crate::app::{KeyCode, KeyEvent, KeyModifiers, is_known_slash_command};
-use kraai_types::{ContentPart, ImageAttachment, MessageContent};
+use kraai_execution_types::ImageAttachment;
+use kraai_types::{ContentPart, MessageContent, SessionId};
 
 fn image() -> ImageAttachment {
     ImageAttachment {
@@ -141,14 +142,18 @@ fn word_deletion_and_unicode_edits_keep_remaining_image_order() {
 fn late_import_cannot_restore_deleted_cleared_or_switched_chips() {
     for action in 0..3 {
         let mut harness = test_harness();
-        harness.app.state.current_session_id = Some("first".into());
+        harness.app.state.current_session_id = Some(SessionId::new("first"));
         let old = begin_paste(&mut harness);
         match action {
             0 => harness.app.backspace_input_char(),
             1 => harness.app.handle_ctrl_c(),
             _ => {
-                harness.app.reset_chat_session(Some("second".into()), "");
-                harness.app.reset_chat_session(Some("first".into()), "");
+                harness
+                    .app
+                    .reset_chat_session(Some(SessionId::new("second")), "");
+                harness
+                    .app
+                    .reset_chat_session(Some(SessionId::new("first")), "");
             }
         }
         let new = begin_paste(&mut harness);
@@ -240,7 +245,7 @@ fn history_recovers_draft_attachments_and_literal_labels_remain_text() {
 fn image_only_messages_restore_after_send_failure() {
     let mut harness = test_harness();
     ready(&mut harness);
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     paste(&mut harness);
     harness.app.handle_submit();
     assert!(
@@ -250,7 +255,7 @@ fn image_only_messages_restore_after_send_failure() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SendMessage {
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Err(kraai_runtime::RuntimeError::unavailable("fixture failure")),
         });
     assert_eq!(harness.app.state.input, "[Image #1]");
@@ -284,7 +289,7 @@ fn disconnect_and_creation_failure_preserve_attachments() {
 fn undo_preserves_ordered_content_when_resubmitted() {
     let mut harness = test_harness();
     ready(&mut harness);
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     let original = MessageContent(vec![
         ContentPart::Text {
             text: "first".into(),
@@ -297,7 +302,7 @@ fn undo_preserves_ordered_content_when_resubmitted() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::UndoLastUserMessage {
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Ok(Some(original.clone())),
         });
     harness.drain_requests();
@@ -311,7 +316,7 @@ fn undo_preserves_ordered_content_when_resubmitted() {
 #[test]
 fn attachment_limit_keeps_the_draft() {
     let mut harness = test_harness();
-    for _ in 0..kraai_types::image::MAX_IMAGE_ATTACHMENTS {
+    for _ in 0..kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS {
         paste(&mut harness);
     }
     harness.app.paste_image();
@@ -321,7 +326,7 @@ fn attachment_limit_keeps_the_draft() {
     assert!(harness.app.state.input.ends_with("question"));
     assert_eq!(
         harness.app.state.draft_images.len(),
-        kraai_types::image::MAX_IMAGE_ATTACHMENTS
+        kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS
     );
 }
 
@@ -372,7 +377,7 @@ fn automatic_session_creation_preserves_next_draft_and_pending_paste() {
         .app
         .handle_runtime_response(RuntimeResponse::CreateSession {
             creation_id: 0,
-            result: Ok("created".into()),
+            result: Ok(SessionId::new("created")),
         });
     assert_eq!(harness.app.state.input, "next draft [Image #1]");
     harness
@@ -496,7 +501,7 @@ fn automatic_submission_cannot_clear_an_identical_new_draft() {
         .app
         .handle_runtime_response(RuntimeResponse::CreateSession {
             creation_id: 0,
-            result: Ok("created".into()),
+            result: Ok(SessionId::new("created")),
         });
     assert_eq!(harness.app.state.input, "same message");
 }
@@ -505,14 +510,14 @@ fn automatic_submission_cannot_clear_an_identical_new_draft() {
 fn failed_submission_does_not_merge_an_identical_independent_draft() {
     let mut harness = test_harness();
     ready(&mut harness);
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.set_input_text("same message".into());
     harness.app.handle_submit();
     harness.app.set_input_text("same message".into());
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SendMessage {
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Err(kraai_runtime::RuntimeError::unavailable("failed")),
         });
     assert_eq!(harness.app.state.input, "same message\n\nsame message");

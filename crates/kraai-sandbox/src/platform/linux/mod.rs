@@ -23,7 +23,7 @@ pub(crate) async fn prepare(
 ) -> Result<PreparedCommand, SandboxError> {
     let network_enabled = plan
         .capabilities
-        .contains(kraai_types::SandboxCapability::Network);
+        .contains(kraai_execution_types::SandboxCapability::Network);
     let bwrap =
         bubblewrap::find_bwrap(&plan.workspace_root, private_temp.path()).ok_or_else(|| {
             SandboxError::SandboxUnavailable(String::from(

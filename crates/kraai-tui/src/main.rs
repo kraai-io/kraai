@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use clap::{CommandFactory, Parser, error::ErrorKind};
+use clap::Parser;
 use color_eyre::eyre::Result;
 use kraai_runtime::RuntimeBuilder;
 use std::path::PathBuf;
@@ -59,18 +59,6 @@ impl Drop for TerminalSessionGuard {
 
 #[derive(Debug, Parser)]
 struct Cli {
-    #[arg(long)]
-    ci: bool,
-
-    #[arg(long, value_name = "ID", requires = "ci")]
-    provider: Option<String>,
-
-    #[arg(long, value_name = "ID", requires = "ci")]
-    model: Option<String>,
-
-    #[arg(long = "option", value_name = "ID=VALUE", requires = "ci")]
-    options: Vec<String>,
-
     #[arg(long = "agent-profile", value_name = "ID")]
     agent_profile: Option<String>,
 
@@ -79,33 +67,6 @@ struct Cli {
 
     #[arg(long = "provider-config", value_name = "PATH")]
     provider_config: Option<PathBuf>,
-}
-
-impl Cli {
-    fn validate(self) -> Result<Self, clap::Error> {
-        if !self.ci {
-            return Ok(self);
-        }
-
-        let missing = [
-            (self.provider.is_none(), "--provider <ID>"),
-            (self.model.is_none(), "--model <ID>"),
-            (self.agent_profile.is_none(), "--agent-profile <ID>"),
-            (self.message.is_none(), "--message <TEXT>"),
-        ]
-        .into_iter()
-        .filter_map(|(is_missing, flag)| is_missing.then_some(flag))
-        .collect::<Vec<_>>();
-
-        if missing.is_empty() {
-            Ok(self)
-        } else {
-            Err(Self::command().error(
-                ErrorKind::MissingRequiredArgument,
-                format!("--ci requires {}", missing.join(", ")),
-            ))
-        }
-    }
 }
 
 fn main() -> Result<()> {
@@ -117,9 +78,10 @@ fn main() -> Result<()> {
     }
     color_eyre::install()?;
 
-    let cli = Cli::parse().validate().unwrap_or_else(|error| error.exit());
+    let cli = Cli::parse();
 
-    let runtime_builder = RuntimeBuilder::new().use_current_executable_as_nushell_host();
+    let runtime_builder = RuntimeBuilder::new(kraai_providers::DefaultProviders)
+        .use_current_executable_as_nushell_host();
     let runtime_builder = if let Some(path) = cli.provider_config.clone() {
         runtime_builder.provider_config_path(path)
     } else {
@@ -128,21 +90,11 @@ fn main() -> Result<()> {
     let runtime = runtime_builder.build();
 
     let startup_options = StartupOptions {
-        ci: cli.ci,
-        provider_id: cli.provider,
-        model_id: cli.model,
         agent_profile_id: cli.agent_profile,
         message: cli.message,
-        options: cli.options,
     };
 
     let mut app = App::new(runtime, startup_options);
-
-    if cli.ci {
-        let run_result = app.run_ci();
-        let metrics_result = write_evaluation_metrics(&app);
-        return run_result.and(metrics_result);
-    }
 
     ratatui::crossterm::terminal::enable_raw_mode()?;
     app.request_cursor_preferences();
@@ -164,78 +116,20 @@ fn main() -> Result<()> {
     result.and(restore_result.map_err(Into::into))
 }
 
-fn write_evaluation_metrics(app: &App) -> Result<()> {
-    let Some(path) = std::env::var_os("KRAAI_EVAL_METRICS_PATH") else {
-        return Ok(());
-    };
-    std::fs::write(path, serde_json::to_vec_pretty(&app.evaluation_metrics())?)?;
-    Ok(())
-}
-
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "CLI tests use direct assertions for parsing outcomes"
 )]
 mod tests {
-    use clap::{Parser, error::ErrorKind};
+    use clap::Parser;
 
     use super::Cli;
 
     #[test]
-    fn ci_requires_provider_model_agent_profile_and_message() {
-        let error = Cli::try_parse_from(["kraai", "--ci"])
-            .and_then(Cli::validate)
-            .expect_err("--ci without required args should fail");
-
-        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
-        let rendered = error.to_string();
-        assert!(rendered.contains("--provider <ID>"));
-        assert!(rendered.contains("--model <ID>"));
-        assert!(rendered.contains("--agent-profile <ID>"));
-        assert!(rendered.contains("--message <TEXT>"));
-    }
-
-    #[test]
-    fn ci_accepts_complete_argument_set() {
-        let cli = Cli::try_parse_from([
-            "kraai",
-            "--ci",
-            "--provider",
-            "openai-chat-completions",
-            "--model",
-            "gpt-4o-mini",
-            "--agent-profile",
-            "coding",
-            "--message",
-            "hello world",
-            "--option",
-            "effort=high",
-            "--option",
-            "thinking=true",
-        ])
-        .and_then(Cli::validate)
-        .expect("complete ci args should parse");
-
-        assert!(cli.ci);
-        assert_eq!(cli.provider.as_deref(), Some("openai-chat-completions"));
-        assert_eq!(cli.model.as_deref(), Some("gpt-4o-mini"));
-        assert_eq!(cli.agent_profile.as_deref(), Some("coding"));
-        assert_eq!(cli.message.as_deref(), Some("hello world"));
-        assert_eq!(cli.options, ["effort=high", "thinking=true"]);
-    }
-
-    #[test]
-    fn provider_model_and_options_require_ci_mode() {
-        for (flag, value) in [
-            ("--provider", "openai-chat-completions"),
-            ("--model", "gpt-4o-mini"),
-            ("--option", "effort=high"),
-        ] {
-            let error = Cli::try_parse_from(["kraai", flag, value])
-                .expect_err("model configuration flags are only available in CI mode");
-            assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
-            assert!(error.to_string().contains("--ci"));
+    fn evaluation_flags_belong_to_the_headless_runner() {
+        for flag in ["--ci", "--provider", "--model", "--option"] {
+            assert!(Cli::try_parse_from(["kraai", flag, "value"]).is_err());
         }
     }
 
@@ -253,13 +147,7 @@ mod tests {
                 "/tmp/providers.toml",
             ],
         ] {
-            let cli = Cli::try_parse_from(args)
-                .and_then(Cli::validate)
-                .expect("interactive arguments should parse");
-            assert!(!cli.ci);
-            assert!(cli.provider.is_none());
-            assert!(cli.model.is_none());
-            assert!(cli.options.is_empty());
+            Cli::try_parse_from(args).expect("interactive arguments should parse");
         }
     }
 }

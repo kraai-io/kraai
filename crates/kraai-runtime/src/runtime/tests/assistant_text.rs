@@ -27,14 +27,7 @@ async fn native_assistant_text_preserves_literal_tool_envelopes() -> Result<()> 
     }).await;
     let chunks = events
         .iter()
-        .filter_map(|event| match event {
-            Event::StreamChunk {
-                session_id: id,
-                chunk,
-                ..
-            } if id == &session_id => Some(chunk.as_str()),
-            _ => None,
-        })
+        .filter_map(|event| super::harness::streamed_text(event, &session_id))
         .collect::<String>();
     assert_eq!(chunks, text);
     assert!(!events.iter().any(

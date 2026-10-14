@@ -1,10 +1,13 @@
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use kraai_runtime::{CreateSessionRequest, RuntimeError, RuntimeEvent, RuntimeHandle};
+use kraai_types::SessionId;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
 
-use super::auth::map_openai_codex_auth_status;
+use super::auth::map_provider_auth_status;
 use super::{RuntimeRequest, RuntimeResponse};
+
+const HISTORY_PAGE: usize = 200;
 
 #[derive(Debug)]
 pub(super) enum RuntimeEventBridgeMessage {
@@ -155,7 +158,7 @@ pub(super) fn route_requests(
 struct RequestBridge {
     executor: kraai_runtime::RuntimeResult<tokio::runtime::Runtime>,
     runtime: RuntimeHandle,
-    model_save_ids: HashMap<String, u64>,
+    model_save_ids: HashMap<SessionId, u64>,
 }
 
 impl RequestBridge {
@@ -205,11 +208,11 @@ impl RequestBridge {
                 let result = self.execute(|runtime| runtime.get_settings());
                 RuntimeResponse::Settings(result)
             }
-            RuntimeRequest::GetOpenAiCodexAuthStatus => {
+            RuntimeRequest::GetProviderAuthStatuses => {
                 let result = self
-                    .execute(|runtime| runtime.get_openai_codex_auth_status())
-                    .map(map_openai_codex_auth_status);
-                RuntimeResponse::OpenAiCodexAuthStatus(result)
+                    .execute(|runtime| runtime.get_provider_auth_statuses())
+                    .map(|statuses| statuses.into_iter().map(map_provider_auth_status).collect());
+                RuntimeResponse::ProviderAuthStatuses(result)
             }
             RuntimeRequest::GetMcpAuthStatuses => RuntimeResponse::McpAuthStatuses(
                 self.execute(|runtime| runtime.get_mcp_auth_statuses()),
@@ -228,41 +231,24 @@ impl RequestBridge {
             RuntimeRequest::LogoutMcp { server } => {
                 RuntimeResponse::McpAuthStatus(self.execute(|runtime| runtime.logout_mcp(server)))
             }
-            RuntimeRequest::StartOpenAiCodexBrowserLogin => {
-                let result = self
-                    .execute(|runtime| runtime.start_openai_codex_browser_login())
-                    .and_then(|_| {
-                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
-                            .map(map_openai_codex_auth_status)
-                    });
-                RuntimeResponse::StartOpenAiCodexBrowserLogin(result)
+            RuntimeRequest::StartProviderLogin {
+                provider_type,
+                method,
+            } => RuntimeResponse::ProviderAuthStatus(
+                self.execute(|runtime| runtime.start_provider_login(provider_type, method))
+                    .map(map_provider_auth_status),
+            ),
+            RuntimeRequest::CancelProviderLogin { provider_type } => {
+                RuntimeResponse::ProviderAuthStatus(
+                    self.execute(|runtime| runtime.cancel_provider_login(provider_type))
+                        .map(map_provider_auth_status),
+                )
             }
-            RuntimeRequest::StartOpenAiCodexDeviceCodeLogin => {
-                let result = self
-                    .execute(|runtime| runtime.start_openai_codex_device_code_login())
-                    .and_then(|_| {
-                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
-                            .map(map_openai_codex_auth_status)
-                    });
-                RuntimeResponse::StartOpenAiCodexDeviceCodeLogin(result)
-            }
-            RuntimeRequest::CancelOpenAiCodexLogin => {
-                let result = self
-                    .execute(|runtime| runtime.cancel_openai_codex_login())
-                    .and_then(|_| {
-                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
-                            .map(map_openai_codex_auth_status)
-                    });
-                RuntimeResponse::CancelOpenAiCodexLogin(result)
-            }
-            RuntimeRequest::LogoutOpenAiCodexAuth => {
-                let result = self
-                    .execute(|runtime| runtime.logout_openai_codex_auth())
-                    .and_then(|_| {
-                        self.execute(|runtime| runtime.get_openai_codex_auth_status())
-                            .map(map_openai_codex_auth_status)
-                    });
-                RuntimeResponse::LogoutOpenAiCodexAuth(result)
+            RuntimeRequest::LogoutProvider { provider_type } => {
+                RuntimeResponse::ProviderAuthStatus(
+                    self.execute(|runtime| runtime.logout_provider(provider_type))
+                        .map(map_provider_auth_status),
+                )
             }
             RuntimeRequest::SetSessionProfile {
                 session_id,
@@ -336,9 +322,11 @@ impl RequestBridge {
                 let result = self.execute(|runtime| runtime.save_settings(settings));
                 RuntimeResponse::SaveSettings(result)
             }
-            RuntimeRequest::GetChatHistory { session_id } => {
-                let result = self.execute(|runtime| runtime.get_chat_history(session_id.clone()));
-                RuntimeResponse::ChatHistory { session_id, result }
+            RuntimeRequest::GetHistoryPage { session_id, from } => {
+                let result = self.execute(|runtime| {
+                    runtime.get_history_page(session_id.clone(), Some(from.clone()), HISTORY_PAGE)
+                });
+                RuntimeResponse::HistoryPage { session_id, result }
             }
             RuntimeRequest::GetSessionSnapshot { session_id } => {
                 let result =
@@ -348,10 +336,6 @@ impl RequestBridge {
                     session_id,
                     result: Box::new(result),
                 }
-            }
-            RuntimeRequest::GetCurrentTip { session_id } => {
-                let result = self.execute(|runtime| runtime.get_tip(session_id.clone()));
-                RuntimeResponse::CurrentTip { session_id, result }
             }
             RuntimeRequest::UndoLastUserMessage { session_id } => {
                 let result =

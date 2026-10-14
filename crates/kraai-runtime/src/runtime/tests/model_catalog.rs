@@ -4,9 +4,10 @@ use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderDefinition, ProviderError, ProviderPricingPolicy,
     ProviderRequest, ProviderRequestContext, ProviderStreamEvent,
 };
+use kraai_test_support::hang_guard;
 use kraai_types::{ModelId, ProviderId};
 
-use super::harness::{RuntimeTestHarness, TEST_TIMEOUT};
+use super::harness::RuntimeTestHarness;
 use crate::Event;
 
 struct CatalogProvider {
@@ -105,12 +106,7 @@ async fn installed_provider_catalog_rebinds_even_when_discovery_fails() -> Resul
         assert!(sources.has_changed()?);
         let current = sources.borrow_and_update().clone();
         assert!(!current.same_channel(&previous));
-        let installed = harness
-            .runtime
-            .agent_manager
-            .read()
-            .await
-            .cloned_provider_manager();
+        let installed = harness.runtime.agent_manager.cloned_provider_manager();
         assert!(current.same_channel(&installed.subscribe_model_catalog()));
         assert!(installed.has_provider(&ProviderId::new(type_id)));
         assert_eq!(
@@ -120,7 +116,7 @@ async fn installed_provider_catalog_rebinds_even_when_discovery_fails() -> Resul
             Some(5_000)
         );
         let mut config_loaded = false;
-        tokio::time::timeout(TEST_TIMEOUT, async {
+        hang_guard(async {
             loop {
                 match events.recv().await?.event {
                     Event::ConfigLoaded => config_loaded = true,

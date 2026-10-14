@@ -3,7 +3,7 @@ const { mkdtempSync, realpathSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join, toNamespacedPath } = require('node:path');
 const { test } = require('node:test');
-const { localProvider, unwrap, readRecord } = require('./fixtures.cjs');
+const { HANG_TIMEOUT, localProvider, unwrap, readRecord } = require('./fixtures.cjs');
 const { createRuntime } = require('..');
 
 function fixture(t) {
@@ -21,11 +21,11 @@ function fixture(t) {
   };
 }
 
-test('sessions, settings, structured errors, subscriptions and shutdown', { timeout: 30000 }, async (t) => {
+test('sessions, settings, structured errors, subscriptions and shutdown', { timeout: HANG_TIMEOUT }, async (t) => {
   const { directory, create } = fixture(t);
   writeFileSync(join(directory, 'agents.toml'), '[[profiles]]\nid = "isolated"\nextends = "coding"\n');
   const runtime = create();
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   const settings = unwrap(await runtime.getSettings());
   assert.deepEqual(settings, { providers: [], models: [] });
   unwrap(await runtime.saveSettings(settings));
@@ -57,7 +57,7 @@ test('sessions, settings, structured errors, subscriptions and shutdown', { time
   assert.equal((await runtime.listSessions()).Err.kind, 'unavailable');
 });
 
-test('startup failures remain observable and can be shut down', { timeout: 30000 }, async (t) => {
+test('startup failures remain observable and can be shut down', { timeout: HANG_TIMEOUT }, async (t) => {
   const { directory, create } = fixture(t);
   const config = join(directory, 'broken.toml');
   writeFileSync(config, 'not valid toml [');
@@ -67,9 +67,9 @@ test('startup failures remain observable and can be shut down', { timeout: 30000
   unwrap(await runtime.shutdown());
 });
 
-test('MCP auth methods return statuses and structured errors', { timeout: 30000 }, async t => {
+test('MCP auth methods return statuses and structured errors', { timeout: HANG_TIMEOUT }, async t => {
   const runtime = fixture(t).create();
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   assert.deepEqual(unwrap(await runtime.getMcpAuthStatuses()), []);
   for (const method of ['startMcpLogin', 'cancelMcpLogin', 'logoutMcp']) {
     const result = await runtime[method]('missing-server');
@@ -78,7 +78,7 @@ test('MCP auth methods return statuses and structured errors', { timeout: 30000 
   }
 });
 
-test('MCP auth distinguishes unsupported login from credential storage failures', { timeout: 30000 }, async t => {
+test('MCP auth distinguishes unsupported login from credential storage failures', { timeout: HANG_TIMEOUT }, async t => {
   const { directory, create } = fixture(t);
   writeFileSync(join(directory, 'mcp.toml'), `
 [servers.local]
@@ -93,7 +93,7 @@ transport = { type = "http", url = "https://example.test/mcp" }
 `);
   writeFileSync(join(directory, 'mcp-auth'), 'blocks credential directory creation');
   const runtime = create();
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   for (const method of ['startMcpLogin', 'cancelMcpLogin', 'logoutMcp']) {
     assert.equal((await runtime[method]('disabled')).Err.kind, 'not_found');
     for (const server of ['local', 'static']) {
@@ -105,11 +105,11 @@ transport = { type = "http", url = "https://example.test/mcp" }
   assert.equal((await runtime.logoutMcp('oauth')).Err.kind, 'internal');
 });
 
-test('streams a reply from a local provider and persists the conversation', { timeout: 30000 }, async (t) => {
+test('streams a reply from a local provider and persists the conversation', { timeout: HANG_TIMEOUT }, async (t) => {
   const { directory, create } = fixture(t);
   const provider = await localProvider(t, ['Hello from Rust']);
   const runtime = create();
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   unwrap(await runtime.saveSettings(provider.settings));
   const session = unwrap(await runtime.createSessionWith({ workspace_dir: directory, profile_id: null }));
   const events = runtime.subscribe();
@@ -125,11 +125,12 @@ test('streams a reply from a local provider and persists the conversation', { ti
     const event = read.value.event;
     if (typeof event !== 'object') continue;
     assert.ok(!('StreamError' in event), JSON.stringify(event));
-    if ('StreamChunk' in event) chunks += event.StreamChunk.chunk;
+    if ('ItemStarted' in event && event.ItemStarted.item.type === 'text') chunks += event.ItemStarted.item.text;
+    if ('ItemDelta' in event) chunks += event.ItemDelta.delta;
     if ('StreamComplete' in event) break;
   }
   assert.equal(chunks, 'Hello from Rust');
-  const history = unwrap(await runtime.getChatHistory(session));
+  const history = unwrap(await runtime.getHistoryPage(session, null, 200)).messages;
   assert.ok(Object.values(history).some(message => message.content.type === 'assistant'));
   const snapshot = unwrap(await runtime.getSessionSnapshot(session));
   const request = Object.values(snapshot.requests).find(value => value.model_id === 'test-model');
@@ -140,7 +141,7 @@ test('streams a reply from a local provider and persists the conversation', { ti
   unwrap(await runtime.shutdown());
 });
 
-test('native methods reject invalid and wrong-class receivers', { timeout: 30000 }, async t => {
+test('native methods reject invalid and wrong-class receivers', { timeout: HANG_TIMEOUT }, async t => {
   const { create } = fixture(t);
   const runtime = create();
   const events = runtime.subscribe();
@@ -154,12 +155,12 @@ test('native methods reject invalid and wrong-class receivers', { timeout: 30000
       await assert.rejects(async () => instance[asyncMethod].call(receiver));
     }
   }
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   events.close();
   assert.deepEqual(await events.next(), { type: 'closed' });
 });
 
-test('model options require explicit choices and survive request persistence', { timeout: 30000 }, async t => {
+test('model options require explicit choices and survive request persistence', { timeout: HANG_TIMEOUT }, async t => {
   const { directory, create } = fixture(t);
   const provider = await localProvider(t, ['Chosen options']);
   provider.settings.models[0].options = [{
@@ -193,7 +194,7 @@ test('model options require explicit choices and survive request persistence', {
   events.close();
 });
 
-test('session model options persist before a prompt and survive restart', { timeout: 30000 }, async t => {
+test('session model options persist before a prompt and survive restart', { timeout: HANG_TIMEOUT }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'kraai-node-model-options-'));
   let runtime;
   t.after(async () => {
@@ -241,13 +242,29 @@ test('session model options persist before a prompt and survive restart', { time
   assert.equal(provider.requests.length, 0);
 });
 
-test('storage roots must be absolute and may be created at startup', { timeout: 30000 }, async t => {
+test('storage roots must be absolute and may be created at startup', { timeout: HANG_TIMEOUT }, async t => {
   for (const storage_root of ['', '.', 'relative', '../relative']) {
     assert.throws(() => createRuntime({ storage_root }), /storage_root must be a non-empty absolute path/);
   }
   const { directory, create } = fixture(t);
   const storage_root = join(directory, 'new-storage');
   const runtime = create({ storage_root });
-  assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
   assert.deepEqual(unwrap(await runtime.listSessions()), []);
+});
+
+test('images cross the binding as raw bytes', async (t) => {
+  const { create } = fixture(t);
+  const runtime = create();
+  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const image = unwrap(await runtime.importImage(png));
+  assert.equal(image.byte_length, png.length);
+  const bytes = unwrap(await runtime.readImage(image));
+  assert.ok(Buffer.isBuffer(bytes));
+  assert.deepEqual(bytes, png);
+  assert.ok('Err' in (await runtime.readImage({ ...image, id: 'f'.repeat(64) })));
 });

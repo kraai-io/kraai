@@ -1,29 +1,23 @@
-use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
-
-use kraai_types::{ConversationItem, MessageGeneration, ModelId, ProviderId, StreamId, TokenUsage};
+use kraai_types::{
+    ConversationItem, MessageGeneration, ModelId, ProviderId, SessionId, StreamId, TokenUsage,
+};
 
 use super::*;
 
-#[derive(Clone, Default)]
-struct RecordedOutput(Arc<Mutex<Vec<u8>>>);
-
-impl Write for RecordedOutput {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 fn stream_event(sequence: u64, event: Event) -> RuntimeEventBridgeMessage {
     RuntimeEventBridgeMessage::Event(RuntimeEvent { sequence, event })
+}
+
+fn text_started_at(message_id: &str, index: usize, text: &str) -> Event {
+    Event::ItemStarted {
+        session_id: SessionId::new("session"),
+        message_id: message_id.into(),
+        item_index: index,
+        item: kraai_types::AssistantItem::Text {
+            phase: kraai_types::AssistantPhase::FinalAnswer,
+            text: text.into(),
+        },
+    }
 }
 
 fn snapshot_with_message(sequence: u64, complete: bool) -> SessionSnapshot {
@@ -74,305 +68,27 @@ fn snapshot_with_message(sequence: u64, complete: bool) -> SessionSnapshot {
 }
 
 #[test]
-fn snapshot_cannot_swallow_ci_stream_output() {
-    let mut harness = test_harness();
-    harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
-    let output = RecordedOutput::default();
-    harness.app.ci_output = Box::new(output.clone());
-    harness
-        .app
-        .handle_runtime_event_bridge_message(stream_event(
-            1,
-            Event::StreamStart {
-                session_id: String::from("session"),
-                message_id: String::from("answer"),
-            },
-        ));
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-            model_save_id: 0,
-            session_id: String::from("session"),
-            result: Box::new(Ok(snapshot_with_message(3, false))),
-        });
-
-    harness
-        .app
-        .handle_runtime_event_bridge_message(stream_event(
-            2,
-            Event::StreamChunk {
-                session_id: String::from("session"),
-                message_id: String::from("answer"),
-                chunk: String::from("answer text"),
-            },
-        ));
-
-    assert_eq!(
-        *output.0.lock().unwrap_or_else(|error| error.into_inner()),
-        b"answer text"
-    );
-}
-
-#[test]
-fn snapshot_cannot_swallow_ci_completion_and_usage() {
-    let mut harness = test_harness();
-    harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
-    harness
-        .app
-        .handle_runtime_event_bridge_message(stream_event(
-            1,
-            Event::StreamStart {
-                session_id: String::from("session"),
-                message_id: String::from("answer"),
-            },
-        ));
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-            model_save_id: 0,
-            session_id: String::from("session"),
-            result: Box::new(Ok(snapshot_with_message(4, true))),
-        });
-
-    harness
-        .app
-        .handle_runtime_event_bridge_message(stream_event(
-            3,
-            Event::StreamComplete {
-                session_id: String::from("session"),
-                message_id: String::from("answer"),
-            },
-        ));
-    harness
-        .app
-        .handle_runtime_event_bridge_message(stream_event(
-            4,
-            Event::HistoryUpdated {
-                session_id: String::from("session"),
-            },
-        ));
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-            model_save_id: 0,
-            session_id: String::from("session"),
-            result: Box::new(Ok(snapshot_with_message(4, true))),
-        });
-
-    assert!(harness.app.state.exit);
-    assert_eq!(harness.app.evaluation_metrics()["turns"], 1);
-    assert_eq!(
-        harness.app.evaluation_metrics()["usage"]["input_tokens"],
-        20
-    );
-}
-
-#[test]
-fn snapshot_cannot_swallow_a_ci_stream_failure() {
-    let mut harness = test_harness();
-    harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-            model_save_id: 0,
-            session_id: String::from("session"),
-            result: Box::new(Ok(session_snapshot_at(4, None))),
-        });
-
-    harness
-        .app
-        .handle_runtime_event_bridge_message(stream_event(
-            3,
-            Event::StreamError {
-                session_id: String::from("session"),
-                message_id: String::from("answer"),
-                error: String::from("provider disconnected"),
-            },
-        ));
-
-    assert!(harness.app.state.exit);
-    assert_eq!(
-        harness.app.ci_error.as_deref(),
-        Some("Stream error: provider disconnected")
-    );
-}
-
-#[test]
-fn ci_waits_for_the_entire_snapshot_event_backlog() {
-    let mut harness = test_harness();
-    harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
-    let output = RecordedOutput::default();
-    harness.app.ci_output = Box::new(output.clone());
-    let mut snapshot = snapshot_with_message(8, true);
-    let mut first_message = snapshot
-        .history
-        .get(&MessageId::new("answer"))
-        .unwrap()
-        .clone();
-    first_message.id = MessageId::new("first");
-    first_message.content = ConversationItem::Assistant {
-        items: vec![kraai_types::AssistantItem::Text {
-            phase: kraai_types::AssistantPhase::FinalAnswer,
-            text: String::from("first"),
-        }],
-    };
-    snapshot
-        .history
-        .insert(first_message.id.clone(), first_message);
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-            model_save_id: 0,
-            session_id: String::from("session"),
-            result: Box::new(Ok(snapshot.clone())),
-        });
-
-    for (sequence, message_id, event_kind) in [
-        (1, "first", 0),
-        (2, "first", 1),
-        (3, "first", 2),
-        (4, "answer", 0),
-        (5, "answer", 1),
-        (6, "answer", 2),
-    ] {
-        let session_id = String::from("session");
-        let message_id = String::from(message_id);
-        let event = match event_kind {
-            0 => Event::StreamStart {
-                session_id,
-                message_id,
-            },
-            1 => Event::StreamChunk {
-                session_id,
-                chunk: message_id.clone(),
-                message_id,
-            },
-            _ => Event::StreamComplete {
-                session_id,
-                message_id,
-            },
-        };
-        harness
-            .app
-            .handle_runtime_event_bridge_message(stream_event(sequence, event));
-        if event_kind == 2 {
-            harness
-                .app
-                .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-                    model_save_id: 0,
-                    session_id: String::from("session"),
-                    result: Box::new(Ok(snapshot.clone())),
-                });
-        }
-        assert!(!harness.app.state.exit, "exited after event {sequence}");
-        assert!(!harness.app.state.is_streaming);
-        assert!(!harness.app.state.profile_locked);
-    }
-
-    harness
-        .app
-        .handle_runtime_event_bridge_message(stream_event(
-            7,
-            Event::HistoryUpdated {
-                session_id: String::from("session"),
-            },
-        ));
-    assert!(!harness.app.state.exit);
-    harness
-        .app
-        .handle_runtime_event_bridge_message(stream_event(
-            8,
-            Event::ContextStateChanged {
-                session_id: String::from("background"),
-                notifications: Vec::new(),
-            },
-        ));
-
-    assert!(harness.app.state.exit);
-    assert_eq!(*output.0.lock().unwrap(), b"first\nanswer\n");
-    assert_eq!(harness.app.evaluation_metrics()["turns"], 2);
-    assert_eq!(
-        harness.app.evaluation_metrics()["usage"]["input_tokens"],
-        40
-    );
-}
-
-#[test]
-fn duplicate_covered_events_do_not_repeat_output_or_completion_requests() {
-    let mut harness = test_harness();
-    harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
-    let output = RecordedOutput::default();
-    harness.app.ci_output = Box::new(output.clone());
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-            model_save_id: 0,
-            session_id: String::from("session"),
-            result: Box::new(Ok(snapshot_with_message(4, true))),
-        });
-    for _ in 0..2 {
-        harness
-            .app
-            .handle_runtime_event_bridge_message(stream_event(
-                2,
-                Event::StreamChunk {
-                    session_id: String::from("session"),
-                    message_id: String::from("answer"),
-                    chunk: String::from("answer text"),
-                },
-            ));
-    }
-    harness
-        .app
-        .handle_runtime_event_bridge_message(stream_event(
-            3,
-            Event::StreamComplete {
-                session_id: String::from("session"),
-                message_id: String::from("answer"),
-            },
-        ));
-    assert!(!harness.drain_requests().is_empty());
-    harness
-        .app
-        .handle_runtime_event_bridge_message(stream_event(
-            3,
-            Event::StreamComplete {
-                session_id: String::from("session"),
-                message_id: String::from("answer"),
-            },
-        ));
-    assert!(harness.drain_requests().is_empty());
-    assert_eq!(*output.0.lock().unwrap(), b"answer text\n");
-    assert_eq!(harness.app.evaluation_metrics()["turns"], 1);
-}
-
-#[test]
 fn covered_stream_lifecycle_preserves_newer_approval_state() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(session_snapshot_at(10, Some(pending_script("current"))))),
         });
     for (index, event) in [
         Event::StreamStart {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             message_id: String::from("answer"),
         },
         Event::StreamComplete {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             message_id: String::from("answer"),
         },
         Event::ScriptApprovalRequested {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             script: pending_script("old"),
         },
     ]
@@ -402,113 +118,71 @@ fn covered_stream_lifecycle_preserves_newer_approval_state() {
 }
 
 #[test]
-fn snapshot_cannot_swallow_a_ci_approval_failure() {
+fn item_events_build_the_streaming_message_and_gaps_request_a_snapshot() {
     let mut harness = test_harness();
-    harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-            model_save_id: 0,
-            session_id: String::from("session"),
-            result: Box::new(Ok(session_snapshot_at(4, Some(pending_script("current"))))),
-        });
-    harness
-        .app
-        .handle_runtime_event_bridge_message(stream_event(
-            3,
-            Event::ScriptApprovalRequested {
-                session_id: String::from("session"),
-                script: pending_script("current"),
-            },
-        ));
-    assert!(harness.app.state.exit);
-    assert_eq!(
-        harness.app.ci_error.as_deref(),
-        Some("CI mode cannot answer a script capability escalation prompt")
-    );
-}
-
-#[test]
-fn live_script_calls_remain_structured_across_duplicate_events_and_stale_history() {
-    let mut harness = test_harness();
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.chat_history = snapshot_with_message(1, false).history;
-    let event = Event::ScriptCall {
-        session_id: "session".into(),
+    harness.app.handle_runtime_event(Event::ItemDelta {
+        session_id: SessionId::new("session"),
         message_id: "answer".into(),
-        call_id: kraai_types::ToolCallId::new("call"),
-        name: "kraai_nushell".into(),
-        input: "# timeout=1sec\nprint '</tool_call>'".into(),
-    };
-    harness.app.handle_runtime_event(event.clone());
-    harness.app.handle_runtime_event(event);
-    let mut stale = snapshot_with_message(1, false).history;
-    harness.app.merge_local_streaming_content(&mut stale);
-    assert!(
-        matches!(stale.get(&MessageId::new("answer")).map(|message| &message.content),
-        Some(ConversationItem::Assistant { items }) if matches!(items.as_slice(),
-            [kraai_types::AssistantItem::Text { .. }, kraai_types::AssistantItem::ScriptCall { input, .. }]
-            if input == "# timeout=1sec\nprint '</tool_call>'"))
-    );
-}
-
-#[test]
-fn script_calls_before_history_preserve_buffered_text_and_survive_stale_snapshots() {
-    let mut harness = test_harness();
-    harness.app.state.current_session_id = Some("session".into());
-    harness.app.handle_runtime_event(Event::StreamStart {
-        session_id: "session".into(),
-        message_id: "answer".into(),
+        item_index: 0,
+        delta: " continued".into(),
     });
-    harness.app.handle_runtime_event(Event::StreamChunk {
-        session_id: "session".into(),
+    let call = Event::ItemStarted {
+        session_id: SessionId::new("session"),
         message_id: "answer".into(),
-        chunk: "answer text".into(),
-    });
-    let call = Event::ScriptCall {
-        session_id: "session".into(),
-        message_id: "answer".into(),
-        call_id: kraai_types::ToolCallId::new("call"),
-        name: "kraai_nushell".into(),
-        input: "# timeout=1sec\nls".into(),
+        item_index: 1,
+        item: kraai_types::AssistantItem::ScriptCall {
+            call_id: kraai_types::ToolCallId::new("call"),
+            name: "kraai_nushell".into(),
+            input: "# timeout=1sec
+print '</tool_call>'"
+                .into(),
+        },
     };
     harness.app.handle_runtime_event(call.clone());
+    harness.app.handle_runtime_event(call);
+    assert!(matches!(
+        &harness.app.state.chat_history.get(&MessageId::new("answer")).unwrap().content,
+        ConversationItem::Assistant { items }
+            if matches!(items.as_slice(),
+                [kraai_types::AssistantItem::Text { text, .. }, kraai_types::AssistantItem::ScriptCall { input, .. }]
+                if text == "answer text continued" && input == "# timeout=1sec\nprint '</tool_call>'")
+    ));
+    harness.drain_requests();
     harness
         .app
-        .handle_runtime_response(RuntimeResponse::ChatHistory {
-            session_id: "session".into(),
-            result: Ok(Default::default()),
-        });
+        .handle_runtime_event(text_started_at("answer", 5, "lost"));
+    assert!(harness.drain_requests().iter().any(|request| matches!(
+        request,
+        RuntimeRequest::GetSessionSnapshot { session_id } if session_id.as_str() == "session"
+    )));
+}
 
-    let mut stale = snapshot_with_message(1, false);
-    stale
+#[test]
+fn history_events_upsert_and_remove_messages() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
+    let message = snapshot_with_message(1, true)
         .history
-        .get_mut(&MessageId::new("answer"))
-        .unwrap()
-        .content = ConversationItem::Assistant {
-        items: vec![kraai_types::AssistantItem::Text {
-            phase: kraai_types::AssistantPhase::FinalAnswer,
-            text: "answer".into(),
-        }],
-    };
-    for _ in 0..2 {
+        .remove(&MessageId::new("answer"))
+        .unwrap();
+    harness.app.handle_runtime_event(Event::MessageUpserted {
+        session_id: SessionId::new("session"),
+        message: Box::new(message),
+    });
+    assert!(
         harness
             .app
-            .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-                model_save_id: 0,
-                session_id: "session".into(),
-                result: Box::new(Ok(stale.clone())),
-            });
-        assert!(matches!(
-            &harness.app.state.chat_history.get(&MessageId::new("answer")).unwrap().content,
-            ConversationItem::Assistant { items }
-                if matches!(items.as_slice(),
-                    [kraai_types::AssistantItem::Text { text, .. }, kraai_types::AssistantItem::ScriptCall { call_id, input, .. }]
-                    if text == "answer text" && call_id.as_str() == "call" && input == "# timeout=1sec\nls")
-        ));
-        harness.app.handle_runtime_event(call.clone());
-    }
+            .state
+            .chat_history
+            .contains_key(&MessageId::new("answer"))
+    );
+    harness.app.handle_runtime_event(Event::MessagesRemoved {
+        session_id: SessionId::new("session"),
+        message_ids: vec![MessageId::new("answer")],
+    });
+    assert!(harness.app.state.chat_history.is_empty());
 }
 
 #[test]
@@ -516,7 +190,7 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
     let mut harness = test_harness();
     harness
         .app
-        .reset_chat_session(Some("session".into()), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
     let mut snapshot = session_snapshot_at(1, None);
     snapshot.session.selected_model = Some(kraai_types::ModelSelection {
         provider_id: ProviderId::new("saved-provider"),
@@ -530,7 +204,7 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot.clone())),
         });
     assert_eq!(
@@ -552,7 +226,7 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot)),
         });
     assert_eq!(
@@ -567,7 +241,7 @@ fn observer_refreshes_model_when_saved_selection_changes() {
     let mut harness = test_harness();
     harness
         .app
-        .reset_chat_session(Some("session".into()), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
     for (sequence, selection) in [
         None,
         Some(("first-provider", "first-model", "low")),
@@ -591,7 +265,7 @@ fn observer_refreshes_model_when_saved_selection_changes() {
             .app
             .handle_runtime_response(RuntimeResponse::SessionSnapshot {
                 model_save_id: 0,
-                session_id: "session".into(),
+                session_id: SessionId::new("session"),
                 result: Box::new(Ok(snapshot)),
             });
         if let Some((provider, model, effort)) = selection {

@@ -24,7 +24,7 @@ pub(super) async fn warm_cache(
     let started = Instant::now();
     let context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
         observer.clone(),
-        session_id,
+        session_id.to_string(),
     )
     .with_image_resolver(images);
     let mut stream = match providers

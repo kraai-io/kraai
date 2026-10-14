@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -6,13 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use kraai_agent::AgentManager;
 use kraai_persistence::{ContextStateStore, ScriptExecutionStore};
 use kraai_provider_core::ProviderRegistry;
-use kraai_provider_openai_codex::OpenAiCodexAuthController;
-use kraai_types::{MessageId, ModelId, ProviderId};
-use tokio::sync::{Mutex, RwLock, mpsc};
-use tokio::task::{AbortHandle, JoinHandle};
-use tokio_util::sync::CancellationToken;
+use kraai_types::SessionId;
+use tokio::sync::{Mutex, mpsc};
 
-use super::script_execution::PendingScriptApproval;
 use crate::api::Event;
 use crate::api::RuntimeStartupState;
 use crate::handle::{Command, RuntimeEventSender};
@@ -25,25 +21,20 @@ pub(crate) fn emit_event(event_tx: &RuntimeEventSender, event: Event) {
 pub(crate) struct RuntimeCore {
     pub(crate) event_tx: RuntimeEventSender,
     pub(crate) command_tx: mpsc::Sender<Command>,
-    pub(crate) queue_drains: Arc<super::queue::QueueDrains>,
-    pub(crate) session_preparations: Arc<super::queue::SessionPreparations>,
-    pub(crate) agent_manager: Arc<RwLock<AgentManager>>,
+    pub(crate) sessions: Arc<super::session::SessionActors>,
+    pub(crate) agent_manager: Arc<AgentManager>,
     pub(crate) observed_sessions:
-        Arc<Mutex<HashMap<String, kraai_persistence::SessionObservation>>>,
+        Arc<Mutex<HashMap<SessionId, kraai_persistence::SessionObservation>>>,
     pub(crate) session_store: Arc<kraai_persistence::SqliteSessionStore>,
     pub(crate) image_store: Arc<kraai_persistence::FileImageStore>,
     pub(crate) execution_store: Arc<dyn ScriptExecutionStore>,
     pub(crate) context_state_store: Arc<dyn ContextStateStore>,
     pub(crate) provider_registry: ProviderRegistry,
-    pub(crate) active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
     pub(crate) stream_tasks: Arc<super::stream_tasks::StreamTasks>,
-    pub(crate) active_script_tasks: Arc<Mutex<HashMap<String, ActiveScriptTask>>>,
-    pub(crate) pending_script_approvals: Arc<Mutex<HashMap<String, PendingScriptApproval>>>,
-    pub(crate) queued_messages: Arc<Mutex<HashMap<String, VecDeque<QueuedMessage>>>>,
-    /// Separates coherent snapshot reads from state mutations and their corresponding events.
-    pub(crate) session_state_barrier: Arc<RwLock<()>>,
+    /// Serializes provider configuration reloads.
+    pub(crate) config_reload: Arc<Mutex<()>>,
     pub(crate) stopping: Arc<AtomicBool>,
-    pub(crate) openai_codex_auth: Arc<OpenAiCodexAuthController>,
+    pub(crate) provider_auth: Arc<Vec<Arc<dyn kraai_provider_core::ProviderAuth>>>,
     pub(crate) config: Arc<RuntimeConfig>,
     pub(crate) startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
     pub(crate) model_catalog_tx: tokio::sync::watch::Sender<tokio::sync::watch::Receiver<u64>>,
@@ -55,26 +46,14 @@ pub(crate) struct RuntimeConfig {
     pub(crate) nushell_host_path: Option<PathBuf>,
     pub(crate) script_runtime_roots: Option<Vec<PathBuf>>,
     pub(crate) use_current_executable_as_nushell_host: bool,
+    /// Holds full script output that the model saw only part of, one directory per session.
+    pub(crate) script_output_root: PathBuf,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct ActiveStream {
-    pub(crate) message_id: MessageId,
-    pub(crate) abort_handle: AbortHandle,
-}
-
-pub(crate) struct ActiveScriptTask {
-    pub(crate) cancellation: CancellationToken,
-    pub(crate) completion: CancellationToken,
-    pub(crate) join_handle: JoinHandle<()>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct QueuedMessage {
-    pub(crate) message: kraai_types::MessageContent,
-    pub(crate) model_id: ModelId,
-    pub(crate) provider_id: ProviderId,
-    pub(crate) options: kraai_types::ModelOptionValues,
+impl RuntimeConfig {
+    pub(crate) fn script_output_dir(&self, session_id: &kraai_types::SessionId) -> PathBuf {
+        self.script_output_root.join(session_id.as_str())
+    }
 }
 
 impl RuntimeCore {
@@ -88,46 +67,42 @@ impl RuntimeCore {
         });
     }
 
-    pub(crate) fn send_session_error(
-        &self,
-        session_id: impl Into<String>,
-        error: impl std::fmt::Display,
-    ) {
+    pub(crate) fn send_session_error(&self, session_id: &SessionId, error: impl std::fmt::Display) {
         self.send_event(Event::SessionError {
-            session_id: session_id.into(),
+            session_id: session_id.clone(),
             error: crate::RuntimeError::internal(error),
         });
     }
 
     pub(crate) fn send_session_report_error(
         &self,
-        session_id: impl Into<String>,
-        error: color_eyre::Report,
+        session_id: &SessionId,
+        error: impl Into<crate::RuntimeError>,
     ) {
         self.send_event(Event::SessionError {
-            session_id: session_id.into(),
-            error: crate::RuntimeError::from_report(error),
+            session_id: session_id.clone(),
+            error: error.into(),
         });
     }
 
     pub(crate) async fn run(
         self,
-        mut command_rx: mpsc::Receiver<Command>,
-        mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+        command_rx: mpsc::Receiver<Command>,
+        shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
         tracing::info!("Starting event loop");
 
         let background_tasks = [
             self.spawn_config_watcher(),
-            self.spawn_openai_auth_forwarder(),
+            self.spawn_provider_auth_forwarder(),
             self.spawn_model_catalog_forwarder(),
-            self.spawn_mcp_auth_forwarder().await,
+            self.spawn_mcp_auth_forwarder(),
             self.spawn_lease_heartbeat(),
             self.spawn_session_observers(),
         ];
         match self.load_providers_config_and_emit().await {
             Ok(()) => {
-                self.startup_tx.send_replace(RuntimeStartupState::Ready);
+                self.startup_tx.send_replace(RuntimeStartupState::ready());
             }
             Err(error) => {
                 let error = format!("Failed to load config: {error}");
@@ -136,11 +111,52 @@ impl RuntimeCore {
                 self.send_service_error(error);
             }
         }
+        self.serve(command_rx, shutdown_rx).await;
+        for task in background_tasks {
+            task.abort();
+            let _ = task.await;
+        }
+        tracing::info!("Event loop terminated");
+    }
 
+    /// Recovers abandoned sessions, then dispatches commands until shutdown and stops all
+    /// session work before answering the shutdown request.
+    /// Reports every durable history change to clients as it happens.
+    fn observe_history(&self) {
+        let event_tx = self.event_tx.clone();
+        self.agent_manager
+            .set_history_observer(Arc::new(move |change| {
+                let event = match change {
+                    kraai_agent::HistoryChange::Upserted {
+                        session_id,
+                        message,
+                    } => Event::MessageUpserted {
+                        session_id,
+                        message: Box::new(super::client_view::client_message(*message)),
+                    },
+                    kraai_agent::HistoryChange::Removed {
+                        session_id,
+                        message_ids,
+                    } => Event::MessagesRemoved {
+                        session_id,
+                        message_ids,
+                    },
+                };
+                emit_event(&event_tx, event);
+            }));
+    }
+
+    pub(crate) async fn serve(
+        &self,
+        mut command_rx: mpsc::Receiver<Command>,
+        mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    ) {
+        self.observe_history();
+        self.sweep_expired_leases().await;
         let mut shutdown_response = None;
         loop {
             let command = tokio::select! {
-                command = self.next_command(&mut command_rx) => command,
+                command = command_rx.recv() => command,
                 changed = shutdown_rx.changed() => {
                     if changed.is_err() || *shutdown_rx.borrow() {
                         None
@@ -156,66 +172,24 @@ impl RuntimeCore {
                 shutdown_response = response;
                 break;
             }
-            if let Err(error) = self.handle_command(command).await {
-                self.send_service_error(error);
-            }
+            self.dispatch(command);
         }
 
         self.stop_active_work().await;
-
-        if let Ok(sessions) = self.session_store.owned_sessions().await {
-            for session in sessions {
-                self.release_turn(&session).await;
-            }
+        for session in self.session_store.owned_sessions() {
+            self.release_turn(&session).await;
         }
         self.shutdown_mcp().await;
-
-        for task in background_tasks {
-            task.abort();
-            let _ = task.await;
-        }
         if let Some(response) = shutdown_response {
             let _ = response.send(Ok(()));
         }
-
-        tracing::info!("Event loop terminated");
     }
 
     pub(crate) async fn stop_active_work(&self) {
-        let state_guard = self.session_state_barrier.write().await;
         self.stopping.store(true, Ordering::Release);
+        self.sessions.stop().await;
         self.stream_tasks.close();
-        let active_streams = self
-            .active_streams
-            .lock()
-            .await
-            .drain()
-            .map(|(_, stream)| stream)
-            .collect::<Vec<_>>();
-        let active_script_tasks = self
-            .active_script_tasks
-            .lock()
-            .await
-            .drain()
-            .map(|(_, task)| task)
-            .collect::<Vec<_>>();
-        drop(state_guard);
-        if !active_streams.is_empty() {
-            let agent = self.agent_manager.write().await;
-            for stream in active_streams {
-                stream.abort_handle.abort();
-            }
-            drop(agent);
-        }
-        for task in &active_script_tasks {
-            task.cancellation.cancel();
-        }
         self.stream_tasks.wait().await;
-        for task in active_script_tasks {
-            let _ = task.join_handle.await;
-        }
-        self.stream_tasks.wait().await;
-        drop(self.session_state_barrier.write().await);
     }
 
     pub(crate) fn is_stopping(&self) -> bool {
@@ -223,15 +197,15 @@ impl RuntimeCore {
     }
 
     pub(crate) async fn load_providers_config_and_emit(&self) -> color_eyre::Result<()> {
+        let _reload = self.config_reload.lock().await;
         let config = self
             .read_and_validate_provider_config(&self.config.provider_config_path)
             .await?;
-        let mut agent = self.agent_manager.write().await;
+        let agent = &self.agent_manager;
         let result = agent
             .set_providers(config, self.provider_registry.clone())
             .await;
         let updates = agent.cloned_provider_manager().subscribe_model_catalog();
-        drop(agent);
         self.model_catalog_tx.send_if_modified(|current| {
             if current.same_channel(&updates) {
                 false

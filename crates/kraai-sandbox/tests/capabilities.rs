@@ -6,8 +6,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use kraai_execution_types::{SandboxCapabilities, SandboxCapability};
 use kraai_sandbox::{LaunchPlan, PrivateTempConfig, Termination};
-use kraai_types::{SandboxCapabilities, SandboxCapability};
+use kraai_test_support::HANG_TIMEOUT;
 use tokio_util::sync::CancellationToken;
 
 struct Fixture {
@@ -52,7 +53,7 @@ impl Fixture {
             executable.clone(),
             self.root.join("workspace"),
             SandboxCapabilities::new(capabilities.iter().copied()).expect("capabilities"),
-            Duration::from_secs(30),
+            HANG_TIMEOUT,
         );
         plan.runtime_roots
             .extend([executable, self.root.join("runtime")]);

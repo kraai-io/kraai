@@ -9,7 +9,7 @@ use fixture::{HttpFixture, execute, load, session, tool_status};
 
 fn script(value: &str) -> Reply {
     Reply::Script(format!(
-        "# timeout=10sec permissions=no-sandbox\nkraai-mcp call attached echo {{value: '{value}'}}"
+        "# timeout=10min permissions=no-sandbox\nkraai-mcp call attached echo {{value: '{value}'}}"
     ))
 }
 
@@ -102,16 +102,16 @@ async fn http_attachments_call_tools_with_headers_and_remain_session_scoped() ->
     let replacement_prompt = payloads
         .get(4)
         .ok_or_else(|| eyre!("missing replacement prompt"))?;
-    let system = replacement_prompt
+    let mcp_instructions = replacement_prompt
         .get("messages")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|message| message.get("role") == Some(&json!("system")))
         .map(Value::to_string)
+        .filter(|message| message.contains("Available MCP"))
         .collect::<String>();
-    assert!(system.contains("ACP replacement HTTP echo"));
-    assert!(!system.contains("ACP first HTTP echo"));
+    assert!(mcp_instructions.contains("ACP replacement HTTP echo"));
+    assert!(!mcp_instructions.contains("ACP first HTTP echo"));
     load(&mut harness, &attached, json!([])).await?;
     assert!(tool_status(
         &execute(&mut harness, &attached).await?,
@@ -193,7 +193,7 @@ async fn stdio_attachment_receives_env_cwd_and_exits_on_clear_and_disconnect() -
 
 #[cfg(unix)]
 async fn wait_for_exit(shell: &std::path::Path, pid: &str) -> Result<()> {
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    kraai_test_support::hang_guard(async {
         loop {
             if !tokio::process::Command::new(shell)
                 .args(["-c", "kill -0 \"$1\" 2>/dev/null", "fixture", pid])

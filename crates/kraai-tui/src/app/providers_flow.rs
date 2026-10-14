@@ -56,7 +56,7 @@ impl App {
                     return;
                 }
                 self.state.providers_view = ProvidersView::Detail;
-                self.maybe_request_openai_auth_status();
+                self.request(RuntimeRequest::GetProviderAuthStatuses);
             }
             KeyCode::Char('a') => {
                 self.state.providers_view = ProvidersView::Connect;
@@ -265,51 +265,53 @@ impl App {
         self.state.connect_provider_index = 0;
         self.state.status = format!("Added provider: {next_provider_id}");
         self.save_settings_draft();
-        self.maybe_request_openai_auth_status();
+        self.request(RuntimeRequest::GetProviderAuthStatuses);
+    }
+
+    /// The current provider's type when it signs in with an account.
+    fn current_auth_provider(&self) -> Option<String> {
+        self.current_provider()
+            .map(|provider| provider.type_id.clone())
+            .filter(|type_id| self.state.provider_auth.contains_key(type_id))
     }
 
     pub(super) fn execute_provider_detail_action(&mut self, action: ProviderDetailAction) {
+        let auth_request = |provider_type: String| match action {
+            ProviderDetailAction::BrowserLogin => Some((
+                RuntimeRequest::StartProviderLogin {
+                    provider_type,
+                    method: kraai_runtime::LoginMethod::Browser,
+                },
+                "Starting browser sign-in",
+            )),
+            ProviderDetailAction::DeviceCodeLogin => Some((
+                RuntimeRequest::StartProviderLogin {
+                    provider_type,
+                    method: kraai_runtime::LoginMethod::DeviceCode,
+                },
+                "Starting device-code sign-in",
+            )),
+            ProviderDetailAction::CancelLogin => Some((
+                RuntimeRequest::CancelProviderLogin { provider_type },
+                "Cancelling sign-in",
+            )),
+            ProviderDetailAction::Logout => Some((
+                RuntimeRequest::LogoutProvider { provider_type },
+                "Signing out",
+            )),
+            ProviderDetailAction::Advanced | ProviderDetailAction::RefreshModels => None,
+        };
+        if let Some((request, status)) = self.current_auth_provider().and_then(auth_request) {
+            if self.request(request) == RuntimeRequestDelivery::Delivered {
+                self.state.status = String::from(status);
+            }
+            return;
+        }
         match action {
-            ProviderDetailAction::BrowserLogin => {
-                if self
-                    .current_provider()
-                    .is_some_and(|provider| provider.type_id == "openai-codex")
-                    && self.request(RuntimeRequest::StartOpenAiCodexBrowserLogin)
-                        == RuntimeRequestDelivery::Delivered
-                {
-                    self.state.status = String::from("Starting OpenAI browser login");
-                }
-            }
-            ProviderDetailAction::DeviceCodeLogin => {
-                if self
-                    .current_provider()
-                    .is_some_and(|provider| provider.type_id == "openai-codex")
-                    && self.request(RuntimeRequest::StartOpenAiCodexDeviceCodeLogin)
-                        == RuntimeRequestDelivery::Delivered
-                {
-                    self.state.status = String::from("Starting OpenAI device-code login");
-                }
-            }
-            ProviderDetailAction::CancelLogin => {
-                if self
-                    .current_provider()
-                    .is_some_and(|provider| provider.type_id == "openai-codex")
-                    && self.request(RuntimeRequest::CancelOpenAiCodexLogin)
-                        == RuntimeRequestDelivery::Delivered
-                {
-                    self.state.status = String::from("Cancelling OpenAI login");
-                }
-            }
-            ProviderDetailAction::Logout => {
-                if self
-                    .current_provider()
-                    .is_some_and(|provider| provider.type_id == "openai-codex")
-                    && self.request(RuntimeRequest::LogoutOpenAiCodexAuth)
-                        == RuntimeRequestDelivery::Delivered
-                {
-                    self.state.status = String::from("Logging out from OpenAI");
-                }
-            }
+            ProviderDetailAction::BrowserLogin
+            | ProviderDetailAction::DeviceCodeLogin
+            | ProviderDetailAction::CancelLogin
+            | ProviderDetailAction::Logout => {}
             ProviderDetailAction::Advanced => {
                 self.state.providers_view = ProvidersView::Advanced;
                 self.state.providers_advanced_focus = ProvidersAdvancedFocus::ProviderFields;
@@ -324,23 +326,17 @@ impl App {
         }
     }
 
-    pub(super) fn maybe_request_openai_auth_status(&mut self) {
-        if self
-            .current_provider()
-            .is_some_and(|provider| provider.type_id == "openai-codex")
-        {
-            self.request(RuntimeRequest::GetOpenAiCodexAuthStatus);
-        }
-    }
-
-    pub(super) fn apply_openai_codex_auth_status(&mut self, status: ProviderAuthStatus) -> bool {
-        if status.sequence < self.state.openai_codex_auth.sequence {
+    pub(super) fn apply_provider_auth_status(&mut self, status: ProviderAuthStatus) -> bool {
+        let previous = self.state.provider_auth.get(&status.provider_type);
+        if previous.is_some_and(|previous| status.sequence < previous.sequence) {
             return false;
         }
-        let previous_target = pending_auth_target(&self.state.openai_codex_auth).map(str::to_owned);
+        let previous_target = previous.and_then(pending_auth_target).map(str::to_owned);
         let next_target = pending_auth_target(&status).map(str::to_owned);
         let next_state = status.state;
-        self.state.openai_codex_auth = status;
+        self.state
+            .provider_auth
+            .insert(status.provider_type.clone(), status);
 
         if let Some(target) = next_target
             && previous_target.as_deref() != Some(target.as_str())
@@ -348,11 +344,11 @@ impl App {
             self.state.status = match open_external_target(&target) {
                 Ok(()) => match next_state {
                     ProviderAuthState::BrowserPending => {
-                        String::from("Opened browser for OpenAI sign-in. Press y to copy the URL.")
+                        String::from("Opened browser for sign-in. Press y to copy the URL.")
                     }
-                    ProviderAuthState::DeviceCodePending => String::from(
-                        "Opened browser for OpenAI device sign-in. Press y to copy the code.",
-                    ),
+                    ProviderAuthState::DeviceCodePending => {
+                        String::from("Opened browser for device sign-in. Press y to copy the code.")
+                    }
                     ProviderAuthState::SignedOut | ProviderAuthState::Authenticated => {
                         String::from("Opened browser")
                     }
@@ -373,8 +369,16 @@ impl App {
         true
     }
 
+    fn current_auth_status(&self) -> Option<&ProviderAuthStatus> {
+        self.current_provider()
+            .and_then(|provider| self.state.provider_auth.get(&provider.type_id))
+    }
+
     pub(super) fn retry_open_pending_auth_target(&mut self) {
-        let target = pending_auth_target(&self.state.openai_codex_auth).map(str::to_owned);
+        let target = self
+            .current_auth_status()
+            .and_then(pending_auth_target)
+            .map(str::to_owned);
 
         let Some(target) = target else {
             self.state.status = String::from("No pending auth URL available");
@@ -388,11 +392,13 @@ impl App {
     }
 
     pub(super) fn copy_pending_auth_value(&mut self) {
-        let value = match self.state.openai_codex_auth.state {
-            ProviderAuthState::BrowserPending => self.state.openai_codex_auth.auth_url.clone(),
-            ProviderAuthState::DeviceCodePending => self.state.openai_codex_auth.user_code.clone(),
-            ProviderAuthState::SignedOut | ProviderAuthState::Authenticated => None,
-        };
+        let value = self
+            .current_auth_status()
+            .and_then(|status| match status.state {
+                ProviderAuthState::BrowserPending => status.auth_url.clone(),
+                ProviderAuthState::DeviceCodePending => status.user_code.clone(),
+                ProviderAuthState::SignedOut | ProviderAuthState::Authenticated => None,
+            });
 
         let Some(value) = value else {
             self.state.status = String::from("Nothing to copy");

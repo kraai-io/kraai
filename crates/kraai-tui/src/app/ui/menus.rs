@@ -86,7 +86,7 @@ pub(super) fn render_agent_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
             let capabilities = profile
                 .capabilities
                 .iter()
-                .map(kraai_types::SandboxCapability::as_str)
+                .map(kraai_execution_types::SandboxCapability::as_str)
                 .collect::<Vec<_>>()
                 .join(",");
             lines.push(Line::raw(format!(
@@ -164,7 +164,10 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
             .as_ref()
             .is_some_and(|sid| sid == &session.id);
         let title = session.title.clone().unwrap_or_else(|| {
-            format!("Session {}", session.id.chars().take(8).collect::<String>())
+            format!(
+                "Session {}",
+                session.id.as_str().chars().take(8).collect::<String>()
+            )
         });
         let current_suffix = if current { " (current)" } else { "" };
         let approval_suffix = if session.waiting_for_approval {

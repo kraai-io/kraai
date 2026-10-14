@@ -7,7 +7,7 @@ use std::ptr;
 
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::Isolation::{
-    CreateAppContainerProfile, DeleteAppContainerProfile,
+    CreateAppContainerProfile, DeleteAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
 };
 use windows_sys::Win32::Security::{
     CopySid, DeriveCapabilitySidsFromName, FreeSid, GetLengthSid, PSID,
@@ -45,6 +45,51 @@ pub(super) struct Identity {
 }
 
 impl Identity {
+    /// The identity every run in `workspace` with the same access uses. Its profile and its file
+    /// grants are kept, so later runs reuse them instead of granting every file again.
+    pub(super) fn for_workspace(
+        workspace: &std::path::Path,
+        writable: bool,
+    ) -> Result<Self, SandboxError> {
+        let _lock = super::mutation_lock::Lock::acquire()?;
+        let key = workspace.to_string_lossy().to_lowercase();
+        let name = format!(
+            "kraai.w.{:016x}.{}",
+            fnv1a(key.as_bytes()),
+            if writable { "w" } else { "r" }
+        )
+        .encode_utf16()
+        .chain([0])
+        .collect::<Vec<_>>();
+        let mut sid = ptr::null_mut();
+        let mut result = unsafe {
+            CreateAppContainerProfile(
+                name.as_ptr(),
+                name.as_ptr(),
+                name.as_ptr(),
+                ptr::null(),
+                0,
+                &mut sid,
+            )
+        };
+        if result == HRESULT_ALREADY_EXISTS {
+            result = unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
+        }
+        if result < 0 {
+            return Err(SandboxError::SandboxUnavailable(format!(
+                "unable to open the workspace AppContainer profile: HRESULT {result:#x}"
+            )));
+        }
+        let copied = unsafe { Sid::copy(sid) };
+        unsafe { FreeSid(sid) };
+        // An empty name keeps cleanup from deleting the shared profile.
+        Ok(Self {
+            name: Vec::new(),
+            sid: copied?,
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn create() -> Result<Self, SandboxError> {
         let _lock = super::mutation_lock::Lock::acquire()?;
         let name = format!("kraai.{:032x}", rand::random::<u128>())
@@ -108,6 +153,16 @@ impl Drop for Identity {
     fn drop(&mut self) {
         let _ = self.cleanup();
     }
+}
+
+/// `HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)`.
+const HRESULT_ALREADY_EXISTS: i32 = i32::from_ne_bytes(0x8007_00B7_u32.to_ne_bytes());
+
+/// A stable 64-bit FNV-1a hash, so profile names stay the same across builds.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 pub(super) fn capability(name: &str) -> Result<Vec<Sid>, SandboxError> {

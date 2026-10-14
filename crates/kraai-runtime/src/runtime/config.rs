@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Result, eyre};
+use kraai_provider_core::ProviderAuthStatus;
 use kraai_provider_core::ProviderManagerConfig;
-use kraai_provider_openai_codex::OpenAiCodexAuthStatus;
 use notify::{RecursiveMode, Watcher};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -15,11 +15,15 @@ use crate::settings::{
 };
 
 impl RuntimeCore {
-    pub(crate) fn spawn_openai_auth_forwarder(&self) -> JoinHandle<()> {
-        tokio::spawn(forward_auth_updates(
-            self.openai_codex_auth.subscribe(),
-            self.event_tx.clone(),
-        ))
+    pub(crate) fn spawn_provider_auth_forwarder(&self) -> JoinHandle<()> {
+        let forwarders: Vec<_> = self
+            .provider_auth
+            .iter()
+            .map(|auth| forward_auth_updates(auth.subscribe(), self.event_tx.clone()))
+            .collect();
+        tokio::spawn(async move {
+            futures::future::join_all(forwarders).await;
+        })
     }
 
     pub(crate) fn spawn_config_watcher(&self) -> JoinHandle<()> {
@@ -140,28 +144,26 @@ impl RuntimeCore {
 pub(crate) fn canonicalize_workspace_dir(path: &str) -> Result<PathBuf> {
     let raw = PathBuf::from(path);
     if !raw.exists() {
-        return Err(eyre!(kraai_types::DomainError::invalid_argument(format!(
-            "Workspace directory does not exist: {}",
-            raw.display()
-        ))));
+        return Err(eyre!(kraai_execution_types::DomainError::invalid_argument(
+            format!("Workspace directory does not exist: {}", raw.display())
+        )));
     }
     if !raw.is_dir() {
-        return Err(eyre!(kraai_types::DomainError::invalid_argument(format!(
-            "Workspace path is not a directory: {}",
-            raw.display()
-        ))));
+        return Err(eyre!(kraai_execution_types::DomainError::invalid_argument(
+            format!("Workspace path is not a directory: {}", raw.display())
+        )));
     }
 
     Ok(raw.canonicalize().unwrap_or(raw))
 }
 
 async fn forward_auth_updates(
-    mut updates: broadcast::Receiver<OpenAiCodexAuthStatus>,
+    mut updates: broadcast::Receiver<ProviderAuthStatus>,
     events: RuntimeEventSender,
 ) {
     loop {
         match updates.recv().await {
-            Ok(status) => events.send(Event::OpenAiCodexAuthUpdated { status }),
+            Ok(status) => events.send(Event::ProviderAuthUpdated { status }),
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
             Err(broadcast::error::RecvError::Closed) => return,
         }
@@ -172,19 +174,20 @@ async fn forward_auth_updates(
 mod tests {
     use super::*;
     use color_eyre::eyre::ensure;
-    use kraai_provider_openai_codex::OpenAiCodexLoginState;
+    use kraai_provider_core::ProviderLoginState;
+    use kraai_test_support::hang_guard;
 
     #[tokio::test]
     async fn auth_forwarding_recovers_from_lag_and_drains_before_close() -> Result<()> {
         let (updates, receiver) = broadcast::channel(2);
         let events = RuntimeEventSender::new(4);
         let mut received = events.subscribe();
-        let status = |sequence| OpenAiCodexAuthStatus {
+        let status = |sequence| ProviderAuthStatus {
+            provider_type: String::from("example"),
             sequence,
-            state: OpenAiCodexLoginState::SignedOut,
-            email: None,
-            plan_type: None,
-            account_id: None,
+            state: ProviderLoginState::SignedOut,
+            account: None,
+            plan: None,
             last_refresh_unix: Some(sequence),
             error: None,
         };
@@ -196,13 +199,13 @@ mod tests {
         ensure!(futures::poll!(&mut forwarding).is_pending());
         for sequence in 1..3 {
             ensure!(matches!(received.try_recv()?.event,
-                Event::OpenAiCodexAuthUpdated { status: actual } if actual == status(sequence)));
+                Event::ProviderAuthUpdated { status: actual } if actual == status(sequence)));
         }
         updates.send(status(3))?;
         drop(updates);
-        tokio::time::timeout(std::time::Duration::from_secs(1), forwarding).await?;
+        hang_guard(forwarding).await?;
         ensure!(matches!(received.try_recv()?.event,
-            Event::OpenAiCodexAuthUpdated { status: actual } if actual == status(3)));
+            Event::ProviderAuthUpdated { status: actual } if actual == status(3)));
         Ok(())
     }
 }

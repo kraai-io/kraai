@@ -1,0 +1,18 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "kraai-execution-types"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+typescript = ["dep:ts-rs"]
+
+[dependencies.ts-rs]
+optional = true
+workspace = true

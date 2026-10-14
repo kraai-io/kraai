@@ -2,17 +2,17 @@ use super::core::emit_event;
 use crate::{api::Event, handle::RuntimeEventSender};
 use kraai_agent::AgentManager;
 use kraai_provider_core::{ProviderRetryEvent, ProviderRetryObserver};
-use kraai_types::{MessageId, ModelId, ProviderId};
+use kraai_types::{MessageId, ModelId, ProviderId, SessionId};
 use std::{pin::Pin, sync::Arc};
 use tokio::sync::RwLock;
 
 pub(super) struct RuntimeRetryObserver {
-    pub(super) session_id: String,
+    pub(super) session_id: SessionId,
     pub(super) provider_id: ProviderId,
     pub(super) model_id: ModelId,
     pub(super) event_tx: RuntimeEventSender,
     pub(super) message_id: MessageId,
-    pub(super) agent_manager: Arc<RwLock<AgentManager>>,
+    pub(super) agent_manager: Arc<AgentManager>,
     pub(super) session_state_barrier: Arc<RwLock<()>>,
 }
 
@@ -40,7 +40,7 @@ impl ProviderRetryObserver for RuntimeRetryObserver {
                 return Ok(());
             }
             let _guard = self.session_state_barrier.read().await;
-            let agent = self.agent_manager.read().await;
+            let agent = &self.agent_manager;
             if let Some(request) = agent
                 .record_request_attempt(&self.message_id, unpriced_prior_attempts)
                 .await?
@@ -53,7 +53,6 @@ impl ProviderRetryObserver for RuntimeRetryObserver {
                     },
                 );
             }
-            drop(agent);
             Ok(())
         })
     }

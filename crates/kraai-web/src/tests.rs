@@ -72,8 +72,7 @@ async fn oversized_stream_is_rejected_before_eof() -> Result<(), Box<dyn std::er
         limit: 5,
         max_chars: 6000,
     };
-    let result =
-        tokio::time::timeout(Duration::from_secs(5), search(&client, &endpoint, &request)).await;
+    let result = kraai_test_support::hang_guard(search(&client, &endpoint, &request)).await;
     server.abort();
     match result? {
         Err(error) if error.contains("exceeds 1 MiB") => Ok(()),

@@ -113,7 +113,7 @@ pub fn prepare_benchmark_spec(
 
 pub fn runner_store_root(program: &Path) -> Result<PathBuf> {
     let suffix = program.strip_prefix("/nix/store").map_err(|error| color_eyre::eyre::eyre!(
-        "public benchmarks require a Nix-packaged runner; use `nix build .#kraai` and --runner ./result/bin/kraai: {error}"
+        "public benchmarks require a Nix-packaged runner; use `nix build .#kraai-headless` and --runner ./result/bin/kraai-headless: {error}"
     ))?;
     let component = suffix
         .components()

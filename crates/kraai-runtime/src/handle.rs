@@ -1,15 +1,16 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use kraai_execution_types::ScriptExecutionId;
 use kraai_provider_core::ProviderDefinition;
-use kraai_types::{MessageId, ModelId, ModelOptionValues, ProviderId, ScriptExecutionId};
+use kraai_types::{MessageId, ModelId, ModelOptionValues, ProviderId, SessionId};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::RuntimeError;
 use crate::{
     AgentProfileCatalog, AgentProfilesState, ContinueSessionOutcome, CreateSessionRequest, Model,
-    OpenAiCodexAuthStatus, RuntimeEvent, RuntimeResult, RuntimeStartupState, Session,
-    SessionContextUsage, SessionSnapshot, SettingsDocument, SubmitMessageOutcome, WorkspaceState,
+    RuntimeEvent, RuntimeResult, RuntimeStartupState, Session, SessionContextUsage,
+    SessionSnapshot, SettingsDocument, SubmitMessageOutcome, WorkspaceState,
 };
 
 mod command;
@@ -71,7 +72,7 @@ impl RuntimeHandle {
         self.event_tx.subscribe()
     }
 
-    pub fn subscribe_session(&self, session_id: &str) -> broadcast::Receiver<RuntimeEvent> {
+    pub fn subscribe_session(&self, session_id: &SessionId) -> broadcast::Receiver<RuntimeEvent> {
         self.event_tx.subscribe_session(session_id)
     }
 
@@ -120,7 +121,7 @@ impl RuntimeHandle {
 
     pub async fn list_agent_profiles(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<AgentProfilesState> {
         self.request(|response| Command::ListAgentProfiles {
             session_id,
@@ -142,7 +143,7 @@ impl RuntimeHandle {
 
     pub async fn set_session_profile(
         &self,
-        session_id: String,
+        session_id: SessionId,
         profile_id: String,
     ) -> RuntimeResult<()> {
         self.request(|response| Command::SetSessionProfile {
@@ -155,7 +156,7 @@ impl RuntimeHandle {
 
     pub async fn get_session_model(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<Option<kraai_types::ModelSelection>> {
         self.request(|response| Command::GetSessionModel {
             session_id,
@@ -166,7 +167,7 @@ impl RuntimeHandle {
 
     pub async fn set_session_model(
         &self,
-        session_id: String,
+        session_id: SessionId,
         selection: kraai_types::ModelSelection,
     ) -> RuntimeResult<()> {
         self.request(|response| Command::SetSessionModel {
@@ -179,7 +180,7 @@ impl RuntimeHandle {
 
     pub async fn set_session_mcp_servers(
         &self,
-        session_id: String,
+        session_id: SessionId,
         config: kraai_mcp::McpConfig,
     ) -> RuntimeResult<()> {
         self.request(|response| Command::SetSessionMcpServers {
@@ -196,7 +197,7 @@ impl RuntimeHandle {
             .await
     }
 
-    pub async fn create_session(&self) -> RuntimeResult<String> {
+    pub async fn create_session(&self) -> RuntimeResult<SessionId> {
         self.create_session_with(CreateSessionRequest::default())
             .await
     }
@@ -204,7 +205,7 @@ impl RuntimeHandle {
     pub async fn create_session_with(
         &self,
         request: CreateSessionRequest,
-    ) -> RuntimeResult<String> {
+    ) -> RuntimeResult<SessionId> {
         self.request(|response| Command::CreateSession { request, response })
             .await
     }
@@ -212,7 +213,7 @@ impl RuntimeHandle {
     /// Send a message to the agent
     pub async fn send_message(
         &self,
-        session_id: String,
+        session_id: SessionId,
         message: String,
         model_id: String,
         provider_id: String,
@@ -225,19 +226,22 @@ impl RuntimeHandle {
     pub async fn import_image(
         &self,
         bytes: Vec<u8>,
-    ) -> RuntimeResult<kraai_types::ImageAttachment> {
+    ) -> RuntimeResult<kraai_execution_types::ImageAttachment> {
         self.request(|response| Command::ImportImage { bytes, response })
             .await
     }
 
-    pub async fn read_image(&self, image: kraai_types::ImageAttachment) -> RuntimeResult<Vec<u8>> {
+    pub async fn read_image(
+        &self,
+        image: kraai_execution_types::ImageAttachment,
+    ) -> RuntimeResult<Vec<u8>> {
         self.request(|response| Command::ReadImage { image, response })
             .await
     }
 
     pub async fn send_content(
         &self,
-        session_id: String,
+        session_id: SessionId,
         message: kraai_types::MessageContent,
         model_id: String,
         provider_id: String,
@@ -260,19 +264,27 @@ impl RuntimeHandle {
         .await
     }
 
-    /// Get the chat history as a tree
-    pub async fn get_chat_history(
+    /// Reads up to `limit` messages of the session's history ending at `from`, or at the latest
+    /// message when `from` is `None`.
+    pub async fn get_history_page(
         &self,
-        session_id: String,
-    ) -> RuntimeResult<BTreeMap<MessageId, kraai_types::Message>> {
-        self.request(|response| Command::GetChatHistory {
+        session_id: SessionId,
+        from: Option<MessageId>,
+        limit: usize,
+    ) -> RuntimeResult<crate::HistoryPage> {
+        self.request(|response| Command::GetHistoryPage {
             session_id,
+            from,
+            limit,
             response,
         })
         .await
     }
 
-    pub async fn get_session_snapshot(&self, session_id: String) -> RuntimeResult<SessionSnapshot> {
+    pub async fn get_session_snapshot(
+        &self,
+        session_id: SessionId,
+    ) -> RuntimeResult<SessionSnapshot> {
         self.request(|response| Command::GetSessionSnapshot {
             session_id,
             response,
@@ -282,7 +294,7 @@ impl RuntimeHandle {
 
     pub async fn get_session_context_usage(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<Option<SessionContextUsage>> {
         self.request(|response| Command::GetSessionContextUsage {
             session_id,
@@ -292,7 +304,7 @@ impl RuntimeHandle {
     }
 
     /// Load a session by ID
-    pub async fn load_session(&self, session_id: String) -> RuntimeResult<bool> {
+    pub async fn load_session(&self, session_id: SessionId) -> RuntimeResult<bool> {
         self.request(|response| Command::LoadSession {
             session_id,
             response,
@@ -312,7 +324,7 @@ impl RuntimeHandle {
     }
 
     /// Delete a session by ID
-    pub async fn delete_session(&self, session_id: String) -> RuntimeResult<()> {
+    pub async fn delete_session(&self, session_id: SessionId) -> RuntimeResult<()> {
         self.request(|response| Command::DeleteSession {
             session_id,
             response,
@@ -322,7 +334,7 @@ impl RuntimeHandle {
 
     pub async fn get_workspace_state(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<Option<WorkspaceState>> {
         self.request(|response| Command::GetWorkspaceState {
             session_id,
@@ -333,7 +345,7 @@ impl RuntimeHandle {
 
     pub async fn set_workspace_dir(
         &self,
-        session_id: String,
+        session_id: SessionId,
         workspace_dir: String,
     ) -> RuntimeResult<()> {
         self.request(|response| Command::SetWorkspaceDir {
@@ -345,7 +357,7 @@ impl RuntimeHandle {
     }
 
     /// Get the current tip message ID for a session.
-    pub async fn get_tip(&self, session_id: String) -> RuntimeResult<Option<String>> {
+    pub async fn get_tip(&self, session_id: SessionId) -> RuntimeResult<Option<String>> {
         self.request(|response| Command::GetTip {
             session_id,
             response,
@@ -355,7 +367,7 @@ impl RuntimeHandle {
 
     pub async fn undo_last_user_message(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<Option<kraai_types::MessageContent>> {
         self.request(|response| Command::UndoLastUserMessage {
             session_id,
@@ -366,7 +378,7 @@ impl RuntimeHandle {
 
     pub async fn get_pending_script(
         &self,
-        session_id: String,
+        session_id: SessionId,
     ) -> RuntimeResult<Option<crate::PendingScriptInfo>> {
         self.request(|response| Command::GetPendingScript {
             session_id,
@@ -377,7 +389,7 @@ impl RuntimeHandle {
 
     pub async fn approve_script(
         &self,
-        session_id: String,
+        session_id: SessionId,
         execution_id: String,
     ) -> RuntimeResult<()> {
         let execution_id = ScriptExecutionId::try_new(execution_id).map_err(|error| {
@@ -391,7 +403,11 @@ impl RuntimeHandle {
         .await
     }
 
-    pub async fn deny_script(&self, session_id: String, execution_id: String) -> RuntimeResult<()> {
+    pub async fn deny_script(
+        &self,
+        session_id: SessionId,
+        execution_id: String,
+    ) -> RuntimeResult<()> {
         let execution_id = ScriptExecutionId::try_new(execution_id).map_err(|error| {
             RuntimeError::invalid_argument(format!("invalid execution_id: {error}"))
         })?;
@@ -404,7 +420,7 @@ impl RuntimeHandle {
     }
 
     /// Cancel the active stream for a session.
-    pub async fn cancel_stream(&self, session_id: String) -> RuntimeResult<bool> {
+    pub async fn cancel_stream(&self, session_id: SessionId) -> RuntimeResult<bool> {
         self.request(|response| Command::CancelStream {
             session_id,
             response,
@@ -412,7 +428,7 @@ impl RuntimeHandle {
         .await
     }
 
-    pub async fn cancel_turn(&self, session_id: String) -> RuntimeResult<bool> {
+    pub async fn cancel_turn(&self, session_id: SessionId) -> RuntimeResult<bool> {
         self.request(|response| Command::CancelTurn {
             session_id,
             response,
@@ -422,7 +438,7 @@ impl RuntimeHandle {
 
     pub async fn continue_session(
         &self,
-        session_id: String,
+        session_id: SessionId,
         model_id: String,
         provider_id: String,
         options: ModelOptionValues,
@@ -433,7 +449,7 @@ impl RuntimeHandle {
 
     pub async fn continue_turn(
         &self,
-        session_id: String,
+        session_id: SessionId,
         model_id: String,
         provider_id: String,
         options: ModelOptionValues,
@@ -444,7 +460,7 @@ impl RuntimeHandle {
 
     async fn request_continuation(
         &self,
-        session_id: String,
+        session_id: SessionId,
         model_id: String,
         provider_id: String,
         options: ModelOptionValues,
@@ -467,8 +483,11 @@ impl RuntimeHandle {
         .await
     }
 
-    pub async fn get_openai_codex_auth_status(&self) -> RuntimeResult<OpenAiCodexAuthStatus> {
-        self.request(|response| Command::GetOpenAiCodexAuthStatus { response })
+    /// The sign-in state of every provider type that signs in with an account.
+    pub async fn get_provider_auth_statuses(
+        &self,
+    ) -> RuntimeResult<Vec<crate::ProviderAuthStatus>> {
+        self.request(|response| Command::GetProviderAuthStatuses { response })
             .await
     }
 
@@ -492,23 +511,111 @@ impl RuntimeHandle {
             .await
     }
 
-    pub async fn start_openai_codex_browser_login(&self) -> RuntimeResult<()> {
-        self.request(|response| Command::StartOpenAiCodexBrowserLogin { response })
-            .await
+    pub async fn start_provider_login(
+        &self,
+        provider_type: String,
+        method: crate::LoginMethod,
+    ) -> RuntimeResult<crate::ProviderAuthStatus> {
+        self.request(|response| Command::StartProviderLogin {
+            provider_type,
+            method,
+            response,
+        })
+        .await
     }
 
-    pub async fn start_openai_codex_device_code_login(&self) -> RuntimeResult<()> {
-        self.request(|response| Command::StartOpenAiCodexDeviceCodeLogin { response })
-            .await
+    pub async fn cancel_provider_login(
+        &self,
+        provider_type: String,
+    ) -> RuntimeResult<crate::ProviderAuthStatus> {
+        self.request(|response| Command::CancelProviderLogin {
+            provider_type,
+            response,
+        })
+        .await
     }
 
-    pub async fn cancel_openai_codex_login(&self) -> RuntimeResult<()> {
-        self.request(|response| Command::CancelOpenAiCodexLogin { response })
-            .await
+    pub async fn logout_provider(
+        &self,
+        provider_type: String,
+    ) -> RuntimeResult<crate::ProviderAuthStatus> {
+        self.request(|response| Command::LogoutProvider {
+            provider_type,
+            response,
+        })
+        .await
+    }
+}
+
+/// Lists every request method of [`RuntimeHandle`] for bindings that expose it over a wire,
+/// by calling `$callback! { json { name(arg: Type, ...) -> Output; ... } binary { ... } }`.
+/// `binary` methods take or return raw bytes. Add every new request method here.
+#[macro_export]
+macro_rules! runtime_methods {
+    ($callback:ident) => {
+        $callback! {
+            json {
+                wait_for_startup() -> $crate::RuntimeStartupState;
+                list_models() -> ::std::collections::HashMap<String, Vec<$crate::Model>>;
+                list_provider_definitions() -> Vec<$crate::ProviderDefinition>;
+                get_settings() -> $crate::SettingsDocument;
+                list_agent_profiles(session_id: $crate::__types::SessionId) -> $crate::AgentProfilesState;
+                get_agent_profile_catalog(workspace_dir: Option<String>) -> $crate::AgentProfileCatalog;
+                set_session_profile(session_id: $crate::__types::SessionId, profile_id: String) -> ();
+                get_session_model(session_id: $crate::__types::SessionId) -> Option<$crate::__types::ModelSelection>;
+                set_session_model(session_id: $crate::__types::SessionId, selection: $crate::__types::ModelSelection) -> ();
+                set_session_mcp_servers(session_id: $crate::__types::SessionId, config: $crate::McpConfig) -> ();
+                save_settings(settings: $crate::SettingsDocument) -> ();
+                create_session() -> $crate::__types::SessionId;
+                create_session_with(request: $crate::CreateSessionRequest) -> $crate::__types::SessionId;
+                send_content(session_id: $crate::__types::SessionId, message: $crate::__types::MessageContent, model_id: String, provider_id: String, options: $crate::__types::ModelOptionValues) -> $crate::SubmitMessageOutcome;
+                send_message(session_id: $crate::__types::SessionId, message: String, model_id: String, provider_id: String, options: $crate::__types::ModelOptionValues) -> $crate::SubmitMessageOutcome;
+                get_history_page(session_id: $crate::__types::SessionId, from: Option<$crate::MessageId>, limit: usize) -> $crate::HistoryPage;
+                get_session_snapshot(session_id: $crate::__types::SessionId) -> $crate::SessionSnapshot;
+                get_session_context_usage(session_id: $crate::__types::SessionId) -> Option<$crate::SessionContextUsage>;
+                load_session(session_id: $crate::__types::SessionId) -> bool;
+                list_sessions() -> Vec<$crate::Session>;
+                list_user_input_history(limit: usize) -> Vec<String>;
+                delete_session(session_id: $crate::__types::SessionId) -> ();
+                get_workspace_state(session_id: $crate::__types::SessionId) -> Option<$crate::WorkspaceState>;
+                set_workspace_dir(session_id: $crate::__types::SessionId, workspace_dir: String) -> ();
+                get_tip(session_id: $crate::__types::SessionId) -> Option<String>;
+                undo_last_user_message(session_id: $crate::__types::SessionId) -> Option<$crate::__types::MessageContent>;
+                get_pending_script(session_id: $crate::__types::SessionId) -> Option<$crate::PendingScriptInfo>;
+                approve_script(session_id: $crate::__types::SessionId, execution_id: String) -> ();
+                deny_script(session_id: $crate::__types::SessionId, execution_id: String) -> ();
+                cancel_stream(session_id: $crate::__types::SessionId) -> bool;
+                cancel_turn(session_id: $crate::__types::SessionId) -> bool;
+                continue_session(session_id: $crate::__types::SessionId, model_id: String, provider_id: String, options: $crate::__types::ModelOptionValues) -> $crate::ContinueSessionOutcome;
+                continue_turn(session_id: $crate::__types::SessionId, model_id: String, provider_id: String, options: $crate::__types::ModelOptionValues) -> $crate::ContinueSessionOutcome;
+                get_provider_auth_statuses() -> Vec<$crate::ProviderAuthStatus>;
+                start_provider_login(provider_type: String, method: $crate::LoginMethod) -> $crate::ProviderAuthStatus;
+                cancel_provider_login(provider_type: String) -> $crate::ProviderAuthStatus;
+                logout_provider(provider_type: String) -> $crate::ProviderAuthStatus;
+                get_mcp_auth_statuses() -> Vec<$crate::McpAuthStatus>;
+                start_mcp_login(server: String) -> $crate::McpAuthStatus;
+                cancel_mcp_login(server: String) -> $crate::McpAuthStatus;
+                logout_mcp(server: String) -> $crate::McpAuthStatus;
+            }
+            binary {
+                import_image(bytes: Vec<u8>) -> $crate::__types::ImageAttachment;
+                read_image(image: $crate::__types::ImageAttachment) -> Vec<u8>;
+            }
+        }
+    };
+}
+
+#[cfg(test)]
+mod method_list {
+    macro_rules! assert_handle_methods {
+        (json { $($name:ident($($arg:ident: $ty:ty),*) -> $out:ty;)* } binary { $($bname:ident($($barg:ident: $bty:ty),*) -> $bout:ty;)* }) => {
+            #[test]
+            fn listed_methods_exist_on_the_handle() {
+                $(let _ = crate::RuntimeHandle::$name;)*
+                $(let _ = crate::RuntimeHandle::$bname;)*
+            }
+        };
     }
 
-    pub async fn logout_openai_codex_auth(&self) -> RuntimeResult<()> {
-        self.request(|response| Command::LogoutOpenAiCodexAuth { response })
-            .await
-    }
+    crate::runtime_methods!(assert_handle_methods);
 }

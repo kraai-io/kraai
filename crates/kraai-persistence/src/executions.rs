@@ -1,9 +1,10 @@
 use crate::database::{Database, assert_owner, list_records, read_record, write_record};
 use color_eyre::eyre::{Result, ensure, eyre};
-use kraai_types::{
-    MessageId, SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, ToolCallId,
+use kraai_execution_types::{
+    SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
+    ScriptOutputStream, ScriptProfileSnapshot,
 };
+use kraai_types::{MessageId, SessionId, ToolCallId};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -12,7 +13,7 @@ use ulid::Ulid;
 #[derive(Debug, Clone)]
 pub struct NewScriptExecution {
     pub id: ScriptExecutionId,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub source_message_id: MessageId,
     pub call_id: ToolCallId,
     pub profile: ScriptProfileSnapshot,
@@ -26,8 +27,8 @@ pub struct NewScriptExecution {
 pub struct ScriptExecutionRecord {
     pub id: ScriptExecutionId,
     pub result_message_id: MessageId,
-    pub images: std::collections::BTreeMap<u64, kraai_types::ImageAttachment>,
-    pub session_id: String,
+    pub images: std::collections::BTreeMap<u64, kraai_execution_types::ImageAttachment>,
+    pub session_id: SessionId,
     pub source_message_id: MessageId,
     pub call_id: ToolCallId,
     pub profile: ScriptProfileSnapshot,
@@ -45,8 +46,8 @@ pub struct ScriptExecutionRecord {
 }
 
 impl ScriptExecutionRecord {
-    pub fn outcome(&self) -> Result<kraai_types::ScriptExecutionOutcome> {
-        Ok(kraai_types::ScriptExecutionOutcome {
+    pub fn outcome(&self) -> Result<kraai_execution_types::ScriptExecutionOutcome> {
+        Ok(kraai_execution_types::ScriptExecutionOutcome {
             status: self
                 .status
                 .ok_or_else(|| eyre!("Execution {} has no terminal status", self.id))?,
@@ -82,7 +83,7 @@ pub trait ScriptExecutionStore: Send + Sync {
 
     async fn get(&self, id: &ScriptExecutionId) -> Result<Option<ScriptExecutionRecord>>;
 
-    async fn list_for_session(&self, session_id: &str) -> Result<Vec<ScriptExecutionRecord>>;
+    async fn list_for_session(&self, session_id: &SessionId) -> Result<Vec<ScriptExecutionRecord>>;
 
     async fn list_all(&self) -> Result<Vec<ScriptExecutionRecord>>;
 
@@ -94,7 +95,7 @@ pub trait ScriptExecutionStore: Send + Sync {
         &self,
         id: &ScriptExecutionId,
         sequence: u64,
-        image: kraai_types::ImageAttachment,
+        image: kraai_execution_types::ImageAttachment,
     ) -> Result<()>;
 
     async fn mark_awaiting_approval(&self, id: &ScriptExecutionId)
@@ -102,12 +103,12 @@ pub trait ScriptExecutionStore: Send + Sync {
 
     async fn mark_running(&self, id: &ScriptExecutionId) -> Result<ScriptExecutionRecord>;
 
-    /// Append and sync an output prefix while the execution remains active.
+    /// Append and sync output chunks, in order, in one transaction while the execution remains
+    /// active.
     async fn append_output(
         &self,
         id: &ScriptExecutionId,
-        stream: ScriptOutputStream,
-        bytes: Vec<u8>,
+        chunks: Vec<(ScriptOutputStream, Vec<u8>)>,
     ) -> Result<()>;
 
     async fn finish(
@@ -172,6 +173,23 @@ impl SqliteScriptExecutionStore {
     }
 }
 
+/// Joins adjacent chunks of the same stream and drops empty ones, keeping their order.
+fn coalesce_output(
+    chunks: Vec<(ScriptOutputStream, Vec<u8>)>,
+) -> Vec<(ScriptOutputStream, Vec<u8>)> {
+    let mut coalesced: Vec<(ScriptOutputStream, Vec<u8>)> = Vec::with_capacity(chunks.len());
+    for (stream, bytes) in chunks {
+        if bytes.is_empty() {
+            continue;
+        }
+        match coalesced.last_mut() {
+            Some((last, joined)) if *last == stream => joined.extend_from_slice(&bytes),
+            _ => coalesced.push((stream, bytes)),
+        }
+    }
+    coalesced
+}
+
 #[async_trait::async_trait]
 impl ScriptExecutionStore for SqliteScriptExecutionStore {
     async fn create(&self, execution: NewScriptExecution) -> Result<ScriptExecutionRecord> {
@@ -227,24 +245,24 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
     async fn get(&self, id: &ScriptExecutionId) -> Result<Option<ScriptExecutionRecord>> {
         let id = id.to_string();
         self.database
-            .run(move |connection, _| read_record(connection, "execution", &id))
+            .read(move |connection, _| read_record(connection, "execution", &id))
             .await
     }
-    async fn list_for_session(&self, session_id: &str) -> Result<Vec<ScriptExecutionRecord>> {
-        let session = session_id.to_string();
+    async fn list_for_session(&self, session_id: &SessionId) -> Result<Vec<ScriptExecutionRecord>> {
+        let session = session_id.clone();
         self.database
-            .run(move |connection, _| list_records(connection, "execution", Some(&session)))
+            .read(move |connection, _| list_records(connection, "execution", Some(&session)))
             .await
     }
     async fn list_all(&self) -> Result<Vec<ScriptExecutionRecord>> {
         self.database
-            .run(|connection, _| list_records(connection, "execution", None))
+            .read(|connection, _| list_records(connection, "execution", None))
             .await
     }
     async fn read_source(&self, id: &ScriptExecutionId) -> Result<Vec<u8>> {
         let id = id.to_string();
         self.database
-            .run(move |connection, _| {
+            .read(move |connection, _| {
                 Ok(connection.query_row(
                     "SELECT source FROM execution_sources WHERE execution_id = ?1",
                     [id],
@@ -255,7 +273,7 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
     }
     async fn read_output(&self, id: &ScriptExecutionId) -> Result<PersistedScriptOutput> {
         let id = id.to_string();
-        self.database.run(move |connection, _| {
+        self.database.read(move |connection, _| {
             ensure!(read_record::<ScriptExecutionRecord>(connection, "execution", &id)?.is_some(), "Execution not found: {id}");
             let mut output = PersistedScriptOutput { stdout: Vec::new(), stderr: Vec::new() };
             let mut statement = connection.prepare("SELECT stream, bytes FROM execution_output WHERE execution_id = ?1 ORDER BY sequence")?;
@@ -274,7 +292,7 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
         &self,
         id: &ScriptExecutionId,
         sequence: u64,
-        image: kraai_types::ImageAttachment,
+        image: kraai_execution_types::ImageAttachment,
     ) -> Result<()> {
         image.validate().map_err(|error| eyre!(error))?;
         ensure!(sequence > 0, "Image attachment sequence must be positive");
@@ -288,7 +306,7 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
             }
             require_phase(record, &[ScriptExecutionPhase::Running])?;
             ensure!(
-                record.images.len() < kraai_types::image::MAX_IMAGE_ATTACHMENTS,
+                record.images.len() < kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS,
                 "Too many image attachments in one script execution"
             );
             let total = record
@@ -297,7 +315,9 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
                 .map(|image| image.byte_length)
                 .try_fold(image.byte_length, u64::checked_add);
             ensure!(
-                total.is_some_and(|total| total <= kraai_types::image::MAX_REQUEST_IMAGE_BYTES),
+                total.is_some_and(
+                    |total| total <= kraai_execution_types::image::MAX_REQUEST_IMAGE_BYTES
+                ),
                 "Image attachments exceed the execution byte limit"
             );
             record.images.insert(sequence, image);
@@ -331,22 +351,24 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
     async fn append_output(
         &self,
         id: &ScriptExecutionId,
-        stream: ScriptOutputStream,
-        bytes: Vec<u8>,
+        chunks: Vec<(ScriptOutputStream, Vec<u8>)>,
     ) -> Result<()> {
-        if bytes.is_empty() {
+        let chunks = coalesce_output(chunks);
+        if chunks.is_empty() {
             return Ok(());
         }
-        let stream = match stream {
-            ScriptOutputStream::Stdout => "stdout",
-            ScriptOutputStream::Stderr => "stderr",
-        };
         self.update(id, move |connection, record| {
             require_phase(record, &[ScriptExecutionPhase::Running])?;
-            connection.execute(
+            let mut insert = connection.prepare_cached(
                 "INSERT INTO execution_output(execution_id, stream, bytes) VALUES (?1, ?2, ?3)",
-                params![record.id.as_str(), stream, bytes],
             )?;
+            for (stream, bytes) in chunks {
+                let stream = match stream {
+                    ScriptOutputStream::Stdout => "stdout",
+                    ScriptOutputStream::Stderr => "stderr",
+                };
+                insert.execute(params![record.id.as_str(), stream, bytes])?;
+            }
             Ok(())
         })
         .await

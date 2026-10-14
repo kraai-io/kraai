@@ -115,7 +115,7 @@ async fn cancelling_a_refresh_caller_preserves_rotated_credentials() {
         let expected = expected.clone();
         tokio::spawn(async move { controller.refresh_request_auth(&expected).await })
     };
-    tokio::time::timeout(Duration::from_secs(5), received)
+    kraai_test_support::hang_guard(received)
         .await
         .unwrap()
         .unwrap();
@@ -123,12 +123,9 @@ async fn cancelling_a_refresh_caller_preserves_rotated_credentials() {
     assert!(matches!(caller.await, Err(error) if error.is_cancelled()));
     release.send(()).unwrap();
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
-        controller.refresh_request_auth(&expected),
-    )
-    .await
-    .unwrap();
+    let result = kraai_test_support::hang_guard(controller.refresh_request_auth(&expected))
+        .await
+        .unwrap();
     let persisted = load_auth_file(&path).unwrap();
     let current = controller.get_request_auth().await;
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -158,7 +155,7 @@ async fn logout_after_cancelled_refresh_cannot_restore_credentials() {
         let controller = controller.clone();
         tokio::spawn(async move { controller.refresh_request_auth(&expected).await })
     };
-    tokio::time::timeout(Duration::from_secs(5), received)
+    kraai_test_support::hang_guard(received)
         .await
         .unwrap()
         .unwrap();
@@ -166,11 +163,11 @@ async fn logout_after_cancelled_refresh_cannot_restore_credentials() {
     assert!(matches!(caller.await, Err(error) if error.is_cancelled()));
     release.send(()).unwrap();
 
-    let status = tokio::time::timeout(Duration::from_secs(5), controller.logout())
+    let status = kraai_test_support::hang_guard(controller.logout())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(status.state, OpenAiCodexLoginState::SignedOut);
+    assert_eq!(status.state, ProviderLoginState::SignedOut);
     assert!(controller.get_request_auth().await.is_err());
     assert!(load_auth_file(&path).unwrap().is_none());
     assert_eq!(requests.load(Ordering::SeqCst), 1);
@@ -199,27 +196,27 @@ async fn cancelled_refresh_still_times_out_and_releases_the_file_lock() {
         let controller = controller.clone();
         tokio::spawn(async move { controller.refresh_request_auth(&expected).await })
     };
-    tokio::time::timeout(Duration::from_secs(5), received)
+    kraai_test_support::hang_guard(received)
         .await
         .unwrap()
         .unwrap();
     caller.abort();
     assert!(matches!(caller.await, Err(error) if error.is_cancelled()));
-    let result = tokio::time::timeout(Duration::from_secs(5), controller.logout()).await;
+    let result = kraai_test_support::hang_guard(controller.logout()).await;
     server.abort();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
     assert_eq!(
         result.unwrap().unwrap().state,
-        OpenAiCodexLoginState::SignedOut
+        ProviderLoginState::SignedOut
     );
 }
 
 async fn refresh_failure_preserves_newer_logins(outcome: RefreshOutcome) {
     for login_state in [
-        OpenAiCodexLoginState::BrowserPending(PendingBrowserLogin {
+        ProviderLoginState::BrowserPending(PendingBrowserLogin {
             auth_url: String::from("https://example.invalid"),
         }),
-        OpenAiCodexLoginState::DeviceCodePending(PendingDeviceCodeLogin {
+        ProviderLoginState::DeviceCodePending(PendingDeviceCodeLogin {
             verification_url: String::from("https://example.invalid"),
             user_code: String::from("ABCD"),
         }),
@@ -241,7 +238,7 @@ async fn refresh_failure_preserves_newer_logins(outcome: RefreshOutcome) {
                 let controller = controller.clone();
                 tokio::spawn(async move { controller.refresh_request_auth(&expected).await })
             };
-            tokio::time::timeout(Duration::from_secs(5), received)
+            kraai_test_support::hang_guard(received)
                 .await
                 .unwrap()
                 .unwrap();
@@ -257,13 +254,11 @@ async fn refresh_failure_preserves_newer_logins(outcome: RefreshOutcome) {
                 caller.abort();
             }
             release.send(()).unwrap();
-            let status = tokio::time::timeout(Duration::from_secs(5), updates.recv())
+            let status = kraai_test_support::hang_guard(updates.recv())
                 .await
                 .unwrap()
                 .unwrap();
-            let result = tokio::time::timeout(Duration::from_secs(5), caller)
-                .await
-                .unwrap();
+            let result = kraai_test_support::hang_guard(caller).await.unwrap();
             if cancel_caller {
                 assert!(matches!(result, Err(error) if error.is_cancelled()));
             } else {
@@ -274,11 +269,11 @@ async fn refresh_failure_preserves_newer_logins(outcome: RefreshOutcome) {
 
             let new_auth = stored_auth("new@example.com", "pro", "workspace_new", unix_now());
             assert!(finish_login.send(new_auth.clone()).is_ok());
-            let status = tokio::time::timeout(Duration::from_secs(5), updates.recv())
+            let status = kraai_test_support::hang_guard(updates.recv())
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(status.state, OpenAiCodexLoginState::Authenticated);
+            assert_eq!(status.state, ProviderLoginState::Authenticated);
             assert!(status.error.is_none());
             let current = controller.get_request_auth().await.unwrap();
             let persisted = load_auth_file(&path).unwrap().unwrap();

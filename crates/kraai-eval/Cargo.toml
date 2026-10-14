@@ -18,6 +18,7 @@ chrono = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
 futures = { workspace = true }
+kraai-headless.workspace = true
 kraai-io = { workspace = true, features = ["http"] }
 kraai-persistence = { workspace = true }
 kraai-provider-core = { workspace = true }
@@ -35,3 +36,6 @@ toml = { workspace = true }
 ulid = { workspace = true }
 unicode-width = { workspace = true }
 webbrowser = { workspace = true }
+
+[dev-dependencies]
+kraai-test-support = { workspace = true }

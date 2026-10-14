@@ -1,5 +1,6 @@
+use kraai_execution_types::{ImageAttachment, ScriptExecutionId};
 use kraai_persistence::{FileImageStore, ScriptExecutionStore};
-use kraai_types::{ImageAttachment, ScriptExecutionId};
+use kraai_types::SessionId;
 use std::sync::Arc;
 
 pub(super) struct StoredImageResolver(pub(super) FileImageStore);
@@ -13,8 +14,8 @@ impl kraai_provider_core::ImageResolver for StoredImageResolver {
 
 pub(super) struct DurableImageAttachments {
     pub(super) execution_id: ScriptExecutionId,
-    pub(super) session_id: String,
-    pub(super) agent: Arc<tokio::sync::RwLock<kraai_agent::AgentManager>>,
+    pub(super) session_id: SessionId,
+    pub(super) agent: Arc<kraai_agent::AgentManager>,
     pub(super) images: Arc<FileImageStore>,
     pub(super) executions: Arc<dyn ScriptExecutionStore>,
 }
@@ -34,11 +35,12 @@ impl kraai_nushell_runtime::ImageAttachmentHandler for DurableImageAttachments {
                 .await
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| "Image execution is missing".to_string())?;
-            if sequence == 0 || record.phase != kraai_types::ScriptExecutionPhase::Running {
+            if sequence == 0 || record.phase != kraai_execution_types::ScriptExecutionPhase::Running
+            {
                 return Err("Image execution is not running or sequence is invalid".into());
             }
             if !record.images.contains_key(&sequence) {
-                if record.images.len() >= kraai_types::image::MAX_IMAGE_ATTACHMENTS {
+                if record.images.len() >= kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS {
                     return Err("Too many image attachments in one script execution".into());
                 }
                 let total = record
@@ -46,7 +48,9 @@ impl kraai_nushell_runtime::ImageAttachmentHandler for DurableImageAttachments {
                     .values()
                     .map(|image| image.byte_length)
                     .try_fold(bytes.len() as u64, u64::checked_add);
-                if total.is_none_or(|total| total > kraai_types::image::MAX_REQUEST_IMAGE_BYTES) {
+                if total.is_none_or(|total| {
+                    total > kraai_execution_types::image::MAX_REQUEST_IMAGE_BYTES
+                }) {
                     return Err("Image attachments exceed the execution byte limit".into());
                 }
             }
@@ -72,8 +76,6 @@ impl kraai_nushell_runtime::ImageAttachmentHandler for DurableImageAttachments {
         Box::pin(async move {
             let history = self
                 .agent
-                .read()
-                .await
                 .get_chat_history(&self.session_id)
                 .await
                 .map_err(|error| error.to_string())?;

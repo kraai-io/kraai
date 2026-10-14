@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -9,15 +9,12 @@ use futures::stream::{self, BoxStream};
 use kraai_agent::AgentManager;
 use kraai_persistence::SqliteMessageStore;
 use kraai_provider_core::{ModelConfig, ProviderManager, ProviderRequest};
-use kraai_types::{AssistantPhase, ModelId, ProviderId, TokenUsage};
-use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
+use kraai_types::{AssistantPhase, ModelId, ProviderId, SessionId, TokenUsage};
+use tokio::sync::{broadcast, mpsc};
 
-use super::super::builder::build_provider_registry;
 use super::super::core::{RuntimeConfig, RuntimeCore};
-use crate::handle::{Command, RuntimeEventSender};
+use crate::handle::RuntimeEventSender;
 use crate::{Event, EventCallback, RuntimeHandle};
-
-pub(super) const TEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
     let mut current = Some(error);
@@ -43,6 +40,7 @@ enum ScriptedChunkKind {
     Usage(TokenUsage),
     Error(String),
     ErrorWithSource(String, String),
+    Interrupted(String),
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +97,12 @@ impl ScriptedChunk {
     pub(super) fn error_with_source(error: &str, source: &str) -> Self {
         Self {
             kind: ScriptedChunkKind::ErrorWithSource(error.into(), source.into()),
+        }
+    }
+
+    pub(super) fn interrupted(reason: impl Into<String>) -> Self {
+        Self {
+            kind: ScriptedChunkKind::Interrupted(reason.into()),
         }
     }
 }
@@ -172,6 +176,9 @@ impl kraai_provider_core::Provider for ScriptedProvider {
                 ScriptedChunkKind::Error(error) => Err(eyre!(error)),
                 ScriptedChunkKind::ErrorWithSource(error, source) => {
                     Err(eyre!(source).wrap_err(error))
+                }
+                ScriptedChunkKind::Interrupted(reason) => {
+                    Err(kraai_provider_core::ProviderError::StreamInterrupted(reason).into())
                 }
             },
         ))))
@@ -255,7 +262,7 @@ impl EventCollector {
     where
         F: Fn(&[Event]) -> bool,
     {
-        let deadline = tokio::time::Instant::now() + TEST_TIMEOUT;
+        let deadline = tokio::time::Instant::now() + kraai_test_support::HANG_TIMEOUT;
         loop {
             let snapshot = self.snapshot();
             if predicate(&snapshot) {
@@ -386,30 +393,28 @@ path = \"inherit\"\n",
         let image_store = persistence.images().clone();
         let (model_catalog_tx, _) =
             tokio::sync::watch::channel(providers.subscribe_model_catalog());
-        let agent_manager = Arc::new(tokio::sync::RwLock::new(AgentManager::new(
+        let agent_manager = Arc::new(AgentManager::new(
             providers,
             data_dir.join("workspace"),
             persistence,
             data_dir.clone(),
-        )));
+        ));
 
-        let auth_root = kraai_persistence::agent_state_root().expect("locate application state");
-        let auth_path = auth_root.join("provider-state/openai-codex/auth.json");
-        let openai_codex_auth =
-            match kraai_provider_openai_codex::OpenAiCodexAuthController::new_with_options(
-                kraai_provider_openai_codex::OpenAiCodexAuthControllerOptions::new(
-                    auth_root, auth_path,
-                ),
-            ) {
-                Ok(controller) => Arc::new(controller),
-                Err(error) if is_missing_system_ca_error(&error) => return None,
-                Err(error) => panic!("unexpected OpenAI auth controller init error: {error}"),
-            };
+        let setup = match kraai_provider_core::ProviderSet::load(
+            &kraai_providers::DefaultProviders,
+            &data_dir,
+        )
+        .await
+        {
+            Ok(setup) => setup,
+            Err(error) if is_missing_system_ca_error(error.as_ref()) => return None,
+            Err(error) => panic!("unexpected provider setup error: {error:?}"),
+        };
         let events = EventCollector::default();
-        let (command_tx, mut command_rx) = mpsc::channel(32);
+        let (command_tx, command_rx) = mpsc::channel(32);
         let event_tx = RuntimeEventSender::new(1024);
         let (startup_tx, startup_rx) =
-            tokio::sync::watch::channel(crate::RuntimeStartupState::Ready);
+            tokio::sync::watch::channel(crate::RuntimeStartupState::ready());
         let handle = RuntimeHandle {
             command_tx: command_tx.clone(),
             event_tx: event_tx.clone(),
@@ -420,28 +425,23 @@ path = \"inherit\"\n",
             observed_sessions: Arc::default(),
             session_store,
             image_store,
-            queue_drains: Arc::default(),
-            session_preparations: Arc::default(),
+            sessions: Arc::default(),
             event_tx: event_tx.clone(),
             command_tx,
             agent_manager,
             execution_store,
             context_state_store,
-            provider_registry: build_provider_registry(openai_codex_auth.clone())
-                .expect("provider registry"),
-            active_streams: Arc::new(Mutex::new(HashMap::new())),
+            provider_registry: setup.registry,
             stream_tasks: Default::default(),
-            active_script_tasks: Arc::new(Mutex::new(HashMap::new())),
-            pending_script_approvals: Arc::new(Mutex::new(HashMap::new())),
-            queued_messages: Arc::new(Mutex::new(HashMap::new())),
-            session_state_barrier: Arc::new(RwLock::new(())),
+            config_reload: Arc::default(),
             stopping: Arc::default(),
-            openai_codex_auth,
+            provider_auth: Arc::new(setup.auth),
             config: Arc::new(RuntimeConfig {
                 provider_config_path: data_dir.join("providers.toml"),
                 use_current_executable_as_nushell_host: false,
                 nushell_host_path: None,
                 script_runtime_roots: None,
+                script_output_root: data_dir.join("script-output"),
             }),
             startup_tx,
             model_catalog_tx,
@@ -460,19 +460,8 @@ path = \"inherit\"\n",
         });
         let runtime_for_task = runtime.clone();
         let runtime_task = tokio::spawn(async move {
-            while let Some(command) = runtime_for_task.next_command(&mut command_rx).await {
-                if let Command::Shutdown { response } = command {
-                    runtime_for_task.stop_active_work().await;
-                    runtime_for_task.shutdown_mcp().await;
-                    if let Some(response) = response {
-                        let _ = response.send(Ok(()));
-                    }
-                    break;
-                }
-                if let Err(error) = runtime_for_task.handle_command(command).await {
-                    runtime_for_task.send_service_error(error);
-                }
-            }
+            let (_shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+            runtime_for_task.serve(command_rx, shutdown_rx).await;
         });
 
         let maintenance_tasks = vec![
@@ -509,10 +498,268 @@ path = \"inherit\"\n",
 pub(super) async fn create_session_with_profile(
     handle: &RuntimeHandle,
     profile_id: &str,
-) -> Result<String> {
+) -> Result<SessionId> {
     let session_id = handle.create_session().await?;
     handle
         .set_session_profile(session_id.clone(), profile_id.to_string())
         .await?;
     Ok(session_id)
+}
+
+pub(super) fn queued(
+    content: kraai_types::MessageContent,
+    model_id: ModelId,
+    provider_id: ProviderId,
+) -> kraai_persistence::QueuedMessage {
+    kraai_persistence::QueuedMessage {
+        content,
+        selection: kraai_types::ModelSelection {
+            provider_id,
+            model_id,
+            options: Default::default(),
+        },
+    }
+}
+
+async fn with_turn<T>(
+    runtime: &RuntimeCore,
+    session: &SessionId,
+    operation: impl AsyncFnOnce(&kraai_persistence::SqliteSessionStore) -> T,
+) -> T {
+    let store = &runtime.session_store;
+    let claimed = !store.owns_turn(session).await.expect("session ownership");
+    if claimed {
+        store.claim_turn(session).await.expect("claim session");
+    }
+    let result = operation(store).await;
+    if claimed {
+        store.release_turn(session).await.expect("release session");
+    }
+    result
+}
+
+/// Queues messages as this runtime would, claiming the session only for the write.
+pub(super) async fn enqueue(
+    runtime: &RuntimeCore,
+    session: &SessionId,
+    messages: impl IntoIterator<Item = kraai_persistence::QueuedMessage>,
+) {
+    with_turn(runtime, session, async |store| {
+        for message in messages {
+            store
+                .enqueue_message(session, &message)
+                .await
+                .expect("enqueue message");
+        }
+    })
+    .await;
+}
+
+pub(super) async fn queue(
+    runtime: &RuntimeCore,
+    session: &SessionId,
+) -> Vec<kraai_persistence::QueuedMessage> {
+    runtime
+        .session_store
+        .queued_messages(session)
+        .await
+        .expect("queued messages")
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect()
+}
+
+pub(super) async fn take_queue(
+    runtime: &RuntimeCore,
+    session: &SessionId,
+) -> Vec<kraai_persistence::QueuedMessage> {
+    let messages = queue(runtime, session).await;
+    with_turn(runtime, session, async |store| {
+        store
+            .clear_queued_messages(session)
+            .await
+            .expect("clear queue");
+    })
+    .await;
+    messages
+}
+
+/// Takes the session's pending approval out of its actor, as a stopped runtime would lose it.
+pub(super) async fn take_pending_approval(
+    runtime: &RuntimeCore,
+    session: &SessionId,
+) -> super::super::script_execution::PendingScriptApproval {
+    runtime
+        .with_session_actor(session, |actor| {
+            Box::pin(async move { actor.take_pending_approval() })
+        })
+        .await
+        .expect("pending script approval")
+}
+
+/// Cancels the session's work the way the lease heartbeat does after losing `token`.
+pub(super) async fn cancel_if_lease_matches(
+    runtime: &RuntimeCore,
+    session: &SessionId,
+    token: i64,
+) -> crate::RuntimeResult<bool> {
+    let (response, cancelled) = tokio::sync::oneshot::channel();
+    runtime.sessions.send(
+        runtime,
+        session,
+        super::super::session::SessionMessage::Cancel {
+            discard_queue: true,
+            expected_lease: Some(token),
+            response: Some(response),
+        },
+    );
+    cancelled
+        .await
+        .expect("session actor answered the cancellation")
+}
+
+/// The message id of the latest stream started in `session`.
+pub(super) fn started_stream(events: &[Event], session: &SessionId) -> kraai_types::MessageId {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            Event::StreamStart {
+                session_id,
+                message_id,
+            } if session_id == session => Some(kraai_types::MessageId::new(message_id.clone())),
+            _ => None,
+        })
+        .expect("stream start event")
+}
+
+/// Holds the session in its preparing state until `release_preparation`.
+pub(super) async fn hold_preparation(runtime: &RuntimeCore, session: &SessionId) {
+    runtime
+        .with_session_actor(session, |actor| {
+            Box::pin(async move { actor.begin_test_preparation() })
+        })
+        .await;
+}
+
+pub(super) async fn release_preparation(runtime: &RuntimeCore, session: &SessionId) {
+    runtime
+        .with_session_actor(session, |actor| {
+            Box::pin(async move { actor.end_test_preparation() })
+        })
+        .await;
+}
+
+/// Drives one provider response, applying its events the way the session actor does.
+pub(super) async fn drive_stream(
+    runtime: RuntimeCore,
+    session: SessionId,
+    providers: ProviderManager,
+    request: kraai_agent::PendingStreamRequest,
+) -> super::super::stream_driver::StreamDriveResult {
+    let message_id = request.message_id.clone();
+    let (mailbox, mut events) = mpsc::unbounded_channel();
+    let reader = super::super::stream_driver::StreamReader {
+        session_id: session.clone(),
+        providers,
+        agent_manager: runtime.agent_manager.clone(),
+        session_store: runtime.session_store.clone(),
+        event_tx: runtime.event_tx.clone(),
+        barrier: runtime.sessions.barrier(&session),
+        auxiliary_usage_task: runtime.stream_tasks.auxiliary_token(&session),
+        mailbox,
+        generation: 0,
+    };
+    let drive = reader.drive(request);
+    tokio::pin!(drive);
+    loop {
+        tokio::select! {
+            result = &mut drive => {
+                while let Ok(message) = events.try_recv() {
+                    if let super::super::session::SessionMessage::Stream { event, .. } = message {
+                        super::super::session::apply_stream_event(&runtime, &session, &message_id, event).await;
+                    }
+                }
+                return result;
+            }
+            Some(message) = events.recv() => {
+                if let super::super::session::SessionMessage::Stream { event, .. } = message {
+                    super::super::session::apply_stream_event(&runtime, &session, &message_id, event).await;
+                }
+            }
+        }
+    }
+}
+
+impl RuntimeCore {
+    /// Runs `hook` inside the session's actor and returns its result.
+    pub(in crate::runtime) async fn with_session_actor<T: Send + 'static>(
+        &self,
+        session_id: &kraai_types::SessionId,
+        hook: impl for<'a> FnOnce(
+            &'a mut super::super::session::SessionActor,
+        ) -> futures::future::BoxFuture<'a, T>
+        + Send
+        + Sync
+        + 'static,
+    ) -> T {
+        let (response, result) = tokio::sync::oneshot::channel();
+        self.sessions.send(
+            self,
+            session_id,
+            super::super::session::SessionMessage::Hook(Box::new(move |actor| {
+                Box::pin(async move {
+                    let _ = response.send(hook(actor).await);
+                })
+            })),
+        );
+        result.await.expect("session actor ran the hook")
+    }
+}
+
+/// The assistant text an event streamed for `session`.
+pub(super) fn streamed_text<'a>(event: &'a Event, session: &SessionId) -> Option<&'a str> {
+    match event {
+        Event::ItemStarted {
+            session_id,
+            item: kraai_types::AssistantItem::Text { text, .. },
+            ..
+        }
+        | Event::ItemDelta {
+            session_id,
+            delta: text,
+            ..
+        } if session_id == session => Some(text),
+        _ => None,
+    }
+}
+
+/// Reads a session's whole history page by page, as a client would.
+pub(super) trait FullHistory {
+    async fn get_chat_history(
+        &self,
+        session_id: SessionId,
+    ) -> crate::RuntimeResult<
+        std::collections::BTreeMap<kraai_types::MessageId, kraai_types::Message>,
+    >;
+}
+
+impl FullHistory for RuntimeHandle {
+    async fn get_chat_history(
+        &self,
+        session_id: SessionId,
+    ) -> crate::RuntimeResult<
+        std::collections::BTreeMap<kraai_types::MessageId, kraai_types::Message>,
+    > {
+        let mut history = std::collections::BTreeMap::new();
+        let mut from = None;
+        loop {
+            let page = self.get_history_page(session_id.clone(), from, 2).await?;
+            history.extend(page.messages);
+            match page.older_history {
+                Some(older) => from = Some(older),
+                None => return Ok(history),
+            }
+        }
+    }
 }

@@ -1,11 +1,12 @@
 use super::super::*;
-use super::common::{cleanup_dir, test_manager};
+use super::common::{cleanup_dir, open_persistence, test_manager};
 use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{CompactionCheckpoint, SqliteCompactionStore};
 
 fn prompt(prefix: &str) -> prompts::TurnSystemPrompt {
     prompts::TurnSystemPrompt {
         prefix: prefix.to_string(),
+        instructions: Vec::new(),
         context_notifications: Vec::new(),
     }
 }
@@ -32,22 +33,23 @@ fn checkpoint(
     }
 }
 
-async fn context(manager: &AgentManager, session: &str) -> Result<Vec<Message>> {
+async fn context(manager: &AgentManager, session: &SessionId) -> Result<Vec<Message>> {
     let tip = manager
         .get_tip(session)
         .await?
         .ok_or_else(|| eyre!("missing tip"))?;
-    manager
+    Ok(manager
         .get_model_history(
             &tip,
             (&ProviderId::new("mock"), &ModelId::new("mock-model")),
+            false,
         )
-        .await
+        .await?)
 }
 
 #[tokio::test]
 async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let first = manager
         .add_message(&session, ChatRole::User, "old request".into(), None)
@@ -68,10 +70,10 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
         .await?;
     let providers = manager.cloned_provider_manager();
     drop(manager);
-    let persistence = kraai_persistence::Persistence::open(&data_dir).await?;
+    let persistence = open_persistence(&data_dir).await?;
     let reopened = AgentManager::new(providers, data_dir.clone(), persistence, data_dir.clone());
     for prefix in ["current instructions", "new instructions"] {
-        let (request, pending, _) = reopened
+        let built = reopened
             .build_model_context(
                 &session,
                 context(&reopened, &session).await?,
@@ -85,6 +87,8 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
                 },
             )
             .await?;
+        let pending = built.compact_first.then_some(());
+        let request = built.request;
         assert!(pending.is_none());
         assert_eq!(request.cacheable_messages, None);
         assert_eq!(request.messages.len(), 3);
@@ -118,7 +122,7 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
 
 #[tokio::test]
 async fn compaction_undo_past_boundary_excludes_abandoned_branch_checkpoint() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     manager
         .add_message(&session, ChatRole::User, "first request".into(), None)
@@ -155,7 +159,7 @@ async fn compaction_undo_past_boundary_excludes_abandoned_branch_checkpoint() ->
     manager
         .add_message(&session, ChatRole::User, "replacement request".into(), None)
         .await?;
-    let (request, _, _) = manager
+    let request = manager
         .build_model_context(
             &session,
             context(&manager, &session).await?,
@@ -168,7 +172,8 @@ async fn compaction_undo_past_boundary_excludes_abandoned_branch_checkpoint() ->
                 options: Default::default(),
             },
         )
-        .await?;
+        .await?
+        .request;
     let serialized = serde_json::to_string(&request.messages)?;
     assert!(serialized.contains("shared summary"));
     assert!(serialized.contains("replacement request"));
@@ -180,7 +185,7 @@ async fn compaction_undo_past_boundary_excludes_abandoned_branch_checkpoint() ->
 
 #[tokio::test]
 async fn compaction_keeps_latest_covered_user_verbatim_across_repeated_checkpoints() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let user = "Preserve this exact constraint: do not publish.";
     manager
@@ -194,7 +199,7 @@ async fn compaction_keeps_latest_covered_user_verbatim_across_repeated_checkpoin
         .save(&checkpoint(first.clone(), None, "first summary"))
         .await?;
     for iteration in 0..2 {
-        let (request, _, _) = manager
+        let request = manager
             .build_model_context(
                 &session,
                 context(&manager, &session).await?,
@@ -207,7 +212,8 @@ async fn compaction_keeps_latest_covered_user_verbatim_across_repeated_checkpoin
                     options: Default::default(),
                 },
             )
-            .await?;
+            .await?
+            .request;
         assert_eq!(
             request
                 .messages
@@ -246,16 +252,12 @@ async fn compaction_keeps_latest_covered_user_verbatim_across_repeated_checkpoin
 }
 
 #[tokio::test]
-async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+async fn compaction_triggers_at_eighty_percent_of_reported_usage_and_unreported_content()
+-> Result<()> {
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     manager
-        .add_message(
-            &session,
-            ChatRole::User,
-            "large input ".repeat(20000).into(),
-            None,
-        )
+        .add_message(&session, ChatRole::User, "large input".into(), None)
         .await?;
     let assistant = manager
         .add_message(&session, ChatRole::Assistant, "answer".into(), None)
@@ -268,7 +270,7 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
         name: "tool".into(),
         description: "tool instructions".into(),
     };
-    for (input, expected) in [(6799, false), (6800, true), (8800, true), (3200, false)] {
+    for (input, expected) in [(6794, false), (6795, true), (8800, true), (3200, false)] {
         let mut message = manager.message_store.get(&assistant).await?.unwrap();
         message.generation = Some(MessageGeneration {
             options: Default::default(),
@@ -287,7 +289,7 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
         manager.message_store.save(&message).await?;
         let displayed = manager.get_session_context_usage(&session).await?.unwrap();
         assert_eq!(displayed.usage.used_context_tokens(), input + 1200);
-        let (_, pending, _) = manager
+        let pending = manager
             .build_model_context(
                 &session,
                 context(&manager, &session).await?,
@@ -300,11 +302,12 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
                     options: Default::default(),
                 },
             )
-            .await?;
+            .await?
+            .due_compaction();
         assert_eq!(pending.is_some(), expected);
     }
     for limit in [None, Some(0), Some(usize::MAX)] {
-        let (_, pending, _) = manager
+        let pending = manager
             .build_model_context(
                 &session,
                 context(&manager, &session).await?,
@@ -317,7 +320,8 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
                     options: Default::default(),
                 },
             )
-            .await?;
+            .await?
+            .due_compaction();
         assert!(pending.is_none());
     }
     cleanup_dir(data_dir).await;
@@ -325,22 +329,17 @@ async fn compaction_triggers_at_eighty_percent_of_reported_context_usage() -> Re
 }
 
 #[tokio::test]
-async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+async fn compaction_does_not_reuse_usage_before_a_checkpoint() -> Result<()> {
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let boundary = manager
-        .add_message(
-            &session,
-            ChatRole::User,
-            "large input ".repeat(20000).into(),
-            None,
-        )
+        .add_message(&session, ChatRole::User, "large input".into(), None)
         .await?;
     let assistant = manager
         .add_message(&session, ChatRole::Assistant, "answer".into(), None)
         .await?;
     let system = prompt("instructions");
-    let (_, pending, _) = manager
+    let pending = manager
         .build_model_context(
             &session,
             context(&manager, &session).await?,
@@ -353,7 +352,8 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
                 options: Default::default(),
             },
         )
-        .await?;
+        .await?
+        .due_compaction();
     assert!(pending.is_none());
     let mut message = manager.message_store.get(&assistant).await?.unwrap();
     message.generation = Some(MessageGeneration {
@@ -392,7 +392,7 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
     manager
         .add_message(&session, ChatRole::User, "continue".into(), None)
         .await?;
-    let (_, pending, _) = manager
+    let pending = manager
         .build_model_context(
             &session,
             context(&manager, &session).await?,
@@ -405,7 +405,8 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
                 options: Default::default(),
             },
         )
-        .await?;
+        .await?
+        .due_compaction();
     assert!(pending.is_none());
     let next = manager
         .add_message(&session, ChatRole::Assistant, "new answer".into(), None)
@@ -413,7 +414,7 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
     let mut next_message = manager.message_store.get(&next).await?.unwrap();
     next_message.generation = message.generation;
     manager.message_store.save(&next_message).await?;
-    let (_, pending, _) = manager
+    let pending = manager
         .build_model_context(
             &session,
             context(&manager, &session).await?,
@@ -426,7 +427,8 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
                 options: Default::default(),
             },
         )
-        .await?;
+        .await?
+        .due_compaction();
     let pending = pending.ok_or_else(|| eyre!("expected compaction after new usage"))?;
     assert_eq!(pending.covered_through, Some(next));
     assert_eq!(pending.previous_boundary, Some(saved.covered_through));
@@ -436,7 +438,7 @@ async fn compaction_does_not_guess_usage_or_reuse_usage_before_a_checkpoint() ->
 
 #[tokio::test]
 async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     manager
         .add_message(&session, ChatRole::User, "original task".into(), None)
@@ -474,8 +476,10 @@ async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint()
     ] {
         let provider = ProviderId::new(provider);
         let model = ModelId::new(model);
-        let history = manager.get_model_history(&tip, (&provider, &model)).await?;
-        let (request, _, _) = manager
+        let history = manager
+            .get_model_history(&tip, (&provider, &model), false)
+            .await?;
+        let request = manager
             .build_model_context(
                 &session,
                 history,
@@ -488,7 +492,8 @@ async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint()
                     options: Default::default(),
                 },
             )
-            .await?;
+            .await?
+            .request;
         assert_eq!(
             request
                 .messages
@@ -505,6 +510,83 @@ async fn switching_provider_or_model_rebuilds_history_before_native_checkpoint()
         );
         assert_eq!(request.messages.iter().filter(|item| matches!(item, ConversationItem::User { content } if content.as_text() == Some("original task"))).count(), 1);
     }
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
+async fn projected_compaction(
+    manager: &AgentManager,
+    session: &SessionId,
+) -> Result<Option<crate::ContextCompaction>> {
+    Ok(manager
+        .build_model_context(
+            session,
+            context(manager, session).await?,
+            &prompt("instructions"),
+            None,
+            Some(10_000),
+            &kraai_types::ModelSelection {
+                provider_id: ProviderId::new("mock"),
+                model_id: ModelId::new("mock-model"),
+                options: Default::default(),
+            },
+        )
+        .await?
+        .due_compaction())
+}
+
+#[tokio::test]
+async fn compaction_triggers_on_the_projected_size_of_content_without_reported_usage() -> Result<()>
+{
+    let (manager, data_dir) = test_manager().await;
+    let unreported = manager.create_session().await?;
+    manager
+        .add_message(
+            &unreported,
+            ChatRole::User,
+            "x".repeat(kraai_types::BYTES_PER_TOKEN * 8_000).into(),
+            None,
+        )
+        .await?;
+    assert!(projected_compaction(&manager, &unreported).await?.is_some());
+
+    let reported = manager.create_session().await?;
+    manager
+        .add_message(&reported, ChatRole::User, "small".into(), None)
+        .await?;
+    let assistant = manager
+        .add_message(&reported, ChatRole::Assistant, "answer".into(), None)
+        .await?;
+    let mut message = manager.message_store.get(&assistant).await?.unwrap();
+    message.generation = Some(MessageGeneration {
+        options: Default::default(),
+        provider_id: ProviderId::new("mock"),
+        model_id: ModelId::new("mock-model"),
+        max_context: Some(10_000),
+        usage: Some(TokenUsage {
+            input_tokens: 4_000,
+            ..Default::default()
+        }),
+    });
+    manager.message_store.save(&message).await?;
+    manager
+        .add_message(
+            &reported,
+            ChatRole::User,
+            "x".repeat(kraai_types::BYTES_PER_TOKEN * 3_000).into(),
+            None,
+        )
+        .await?;
+    assert!(projected_compaction(&manager, &reported).await?.is_none());
+    manager
+        .add_message(
+            &reported,
+            ChatRole::User,
+            "x".repeat(kraai_types::BYTES_PER_TOKEN * 1_000).into(),
+            None,
+        )
+        .await?;
+    assert!(projected_compaction(&manager, &reported).await?.is_some());
     cleanup_dir(data_dir).await;
     Ok(())
 }

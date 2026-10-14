@@ -5,7 +5,7 @@ use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
 use tokio::process::Command;
 
 use crate::config::LaunchPlan;
@@ -14,7 +14,7 @@ use crate::error::SandboxError;
 use super::seccomp::restricted_network_seccomp_filter;
 
 const BWRAP_PROGRAM: &str = "bwrap";
-const BWRAP_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const BWRAP_PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const BWRAP_SECCOMP_STDIN_FD: &str = "0";
 
 type BwrapProbeCache = BTreeMap<(PathBuf, bool), Result<(), String>>;

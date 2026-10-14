@@ -1,11 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use kraai_persistence::{
-    ConversationSnapshot, MessageStore, SessionMeta, SessionStore, SqliteDatabase,
-    SqliteMessageStore,
-};
-use kraai_types::Message;
+use kraai_persistence::{ConversationSnapshot, MessageStore, SqliteDatabase, SqliteMessageStore};
+use kraai_types::{Message, SessionId};
 use tokio::sync::Mutex;
 
 use super::*;
@@ -22,7 +19,7 @@ impl MessageStore for ObservedSnapshots {
         self.inner.sqlite_database()
     }
 
-    async fn read_conversation(&self, session: &str) -> Result<Option<ConversationSnapshot>> {
+    async fn read_conversation(&self, session: &SessionId) -> Result<Option<ConversationSnapshot>> {
         self.inner.read_conversation(session).await
     }
 
@@ -63,14 +60,9 @@ impl MessageStore for ObservedSnapshots {
 
     async fn save_linked(
         &self,
-        message: &Message,
-        session: &SessionMeta,
-        expected_tip: Option<&MessageId>,
-        sessions: Arc<dyn SessionStore>,
-    ) -> Result<bool> {
-        self.inner
-            .save_linked(message, session, expected_tip, sessions)
-            .await
+        request: kraai_persistence::LinkRequest<'_>,
+    ) -> Result<Option<bool>> {
+        self.inner.save_linked(request).await
     }
 
     async fn delete(&self, id: &MessageId) -> Result<()> {

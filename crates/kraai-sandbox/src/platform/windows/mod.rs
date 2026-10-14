@@ -8,7 +8,7 @@ pub(crate) mod process;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf, Prefix};
 
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
 use windows_sys::Win32::Security::{SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES};
 
 use crate::SandboxError;
@@ -82,7 +82,10 @@ fn prepare_inner(
     runtime_roots
         .retain(|root| !root.starts_with(&plan.workspace_root) && !root.starts_with(&system_root));
     filesystem::check_roots(&plan.workspace_root, &runtime_roots, &temp_path)?;
-    let identity = Identity::create()?;
+    let writable = plan
+        .capabilities
+        .contains(SandboxCapability::WorkspaceWrite);
+    let identity = Identity::for_workspace(&plan.workspace_root, writable)?;
     let mut capabilities = identity::capability("registryRead")?;
     if plan.capabilities.contains(SandboxCapability::Network) {
         for name in [
@@ -95,13 +98,10 @@ fn prepare_inner(
         }
     }
     let mut grants = Grants::new(identity.sid.bytes());
-    let writable = plan
-        .capabilities
-        .contains(SandboxCapability::WorkspaceWrite);
     for root in runtime_roots {
-        grants.grant(&root, Access::Read)?;
+        grants.grant_persistent(&root, Access::Read)?;
     }
-    grants.grant(
+    grants.grant_persistent(
         &plan.workspace_root,
         if writable {
             Access::Write

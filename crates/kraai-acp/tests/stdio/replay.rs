@@ -45,7 +45,7 @@ async fn reading_client_loads_history_larger_than_output_capacity() -> Result<()
     }
     let mut metadata = persistence
         .sessions()
-        .get(&session)
+        .get(&kraai_types::SessionId::new(session.as_str()))
         .await?
         .ok_or_else(|| eyre!("missing persisted session"))?;
     metadata.tip_id = parent_id;

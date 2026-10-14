@@ -1,4 +1,4 @@
-import { createRuntime, type MessageContent, type ModelSelection, type RuntimeResult, type SessionSnapshot, type SettingsDocument } from '..';
+import { createRuntime, type EventSubscription, type MessageContent, type ModelSelection, type RuntimeResult, type SessionId, type SessionSnapshot, type SettingsDocument } from '..';
 
 const runtime = createRuntime({ storage_root: '/tmp/kraai-client' });
 const snapshot: Promise<RuntimeResult<SessionSnapshot>> = runtime.getSessionSnapshot('session');
@@ -21,15 +21,20 @@ async function consume() {
   if (event.type === 'event') {
     const sequence: number = event.value.sequence;
     void sequence;
-    if (typeof event.value.event === 'object' && 'StreamChunk' in event.value.event) {
-      const chunk: string = event.value.event.StreamChunk.chunk;
-      void chunk;
+    if (typeof event.value.event === 'object' && 'ItemDelta' in event.value.event) {
+      const delta: string = event.value.event.ItemDelta.delta;
+      const index: number = event.value.event.ItemDelta.item_index;
+      void delta;
+      void index;
     }
-    if (typeof event.value.event === 'object' && 'ScriptCall' in event.value.event) {
-      const input: string = event.value.event.ScriptCall.input;
-      const callId: string = event.value.event.ScriptCall.call_id;
-      void input;
-      void callId;
+    if (typeof event.value.event === 'object' && 'ItemStarted' in event.value.event) {
+      const item = event.value.event.ItemStarted.item;
+      if (item.type === 'script_call') {
+        const input: string = item.input;
+        const callId: string = item.call_id;
+        void input;
+        void callId;
+      }
     }
   } else if (event.type === 'lagged') {
     const skipped: number = event.skipped;
@@ -41,7 +46,7 @@ async function consume() {
 
 void consume;
 
-async function sendImage(bytes: number[]) {
+async function sendImage(bytes: Uint8Array) {
   const imported = await runtime.importImage(bytes);
   if ('Err' in imported) return;
   const content: MessageContent = [
@@ -51,6 +56,18 @@ async function sendImage(bytes: number[]) {
   await runtime.sendContent('session', content, 'model', 'provider', {});
   const restored: RuntimeResult<MessageContent | null> = await runtime.undoLastUserMessage('session');
   void restored;
+  const read = await runtime.readImage(imported.Ok);
+  if ('Ok' in read) {
+    const copy: Uint8Array = read.Ok;
+    void copy;
+  }
 }
 
 void sendImage;
+
+function sessionEvents(session: SessionId) {
+  const subscription: EventSubscription = runtime.subscribeSession(session);
+  subscription.close();
+}
+
+void sessionEvents;

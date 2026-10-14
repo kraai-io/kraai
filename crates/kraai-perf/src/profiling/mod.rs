@@ -239,6 +239,7 @@ impl Context<'_> {
         process::run(
             command,
             self.timeout,
+            process::TERMINATION_GRACE,
             self.interrupted,
             stdout.unwrap_or(&default_stdout),
             &self.directory.join(format!("{label}.stderr")),

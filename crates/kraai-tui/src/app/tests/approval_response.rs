@@ -3,6 +3,7 @@ use super::{
     ScriptPhase, pending_script, test_harness,
 };
 use crossbeam_channel::unbounded;
+use kraai_types::SessionId;
 use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
 
 fn rendered(harness: &super::TestHarness) -> String {
@@ -16,7 +17,7 @@ fn rendered(harness: &super::TestHarness) -> String {
 fn submitting_a_decision_hides_the_prompt_before_the_reply() {
     for action in [ScriptApprovalAction::Allow, ScriptApprovalAction::Reject] {
         let mut harness = test_harness();
-        harness.app.state.current_session_id = Some("session".into());
+        harness.app.state.current_session_id = Some(SessionId::new("session"));
         harness.app.state.pending_script = Some(pending_script("execution"));
         harness.app.enter_script_decision_phase();
         harness.app.state.script_approval_action = action;
@@ -48,20 +49,20 @@ fn submitting_a_decision_hides_the_prompt_before_the_reply() {
                     session_id,
                     execution_id,
                 }]
-            ) if session_id == "session" && execution_id == "execution"
+            ) if session_id.as_str() == "session" && execution_id == "execution"
         ));
 
         harness
             .app
-            .reset_chat_session(Some("other".into()), "Switched session");
+            .reset_chat_session(Some(SessionId::new("other")), "Switched session");
         harness
             .app
-            .reset_chat_session(Some("session".into()), "Switched session");
+            .reset_chat_session(Some(SessionId::new("session")), "Switched session");
         harness
             .app
             .handle_runtime_response(RuntimeResponse::SessionSnapshot {
                 model_save_id: 0,
-                session_id: "session".into(),
+                session_id: SessionId::new("session"),
                 result: Box::new(Ok(super::session_snapshot(Some(pending_script(
                     "execution",
                 ))))),
@@ -81,7 +82,7 @@ fn submitting_a_decision_hides_the_prompt_before_the_reply() {
 fn failed_decision_restores_the_prompt_and_allows_retry() {
     for action in [ScriptApprovalAction::Allow, ScriptApprovalAction::Reject] {
         let mut harness = test_harness();
-        harness.app.state.current_session_id = Some("session".into());
+        harness.app.state.current_session_id = Some(SessionId::new("session"));
         harness.app.state.pending_script = Some(pending_script("execution"));
         harness.app.enter_script_decision_phase();
         harness.app.state.script_approval_action = action;
@@ -106,7 +107,7 @@ fn failed_decision_restores_the_prompt_and_allows_retry() {
 #[test]
 fn undelivered_decision_is_not_marked_as_submitted() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.pending_script = Some(pending_script("execution"));
     harness.app.enter_script_decision_phase();
     let (runtime_tx, runtime_rx) = unbounded();
@@ -126,12 +127,12 @@ fn decision_response(
 ) -> RuntimeResponse {
     match action {
         ScriptApprovalAction::Allow => RuntimeResponse::ApproveScript {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             execution_id: execution_id.to_string(),
             result,
         },
         ScriptApprovalAction::Reject => RuntimeResponse::DenyScript {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             execution_id: execution_id.to_string(),
             result,
         },
@@ -142,7 +143,7 @@ fn decision_response(
 fn delayed_decision_reply_preserves_a_newer_approval_prompt() {
     for action in [ScriptApprovalAction::Allow, ScriptApprovalAction::Reject] {
         let mut harness = test_harness();
-        harness.app.state.current_session_id = Some(String::from("session"));
+        harness.app.state.current_session_id = Some(SessionId::new("session"));
         harness.app.state.pending_script = Some(pending_script("previous"));
         harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
         harness.app.state.script_approval_action = action;
@@ -158,25 +159,25 @@ fn delayed_decision_reply_preserves_a_newer_approval_prompt() {
         );
         let events = [
             Event::ScriptResultReady {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 execution_id: String::from("previous"),
                 call_id: String::from("call"),
                 output: Default::default(),
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
             },
             Event::StreamStart {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 message_id: String::from("continuation"),
             },
             Event::StreamComplete {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 message_id: String::from("continuation"),
             },
             Event::ScriptApprovalRequested {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 script: pending_script("current"),
             },
         ];
@@ -222,18 +223,18 @@ fn delayed_decision_reply_preserves_a_newer_approval_prompt() {
 fn delayed_decision_reply_does_not_restart_a_finished_script() {
     for action in [ScriptApprovalAction::Allow, ScriptApprovalAction::Reject] {
         let mut harness = test_harness();
-        harness.app.state.current_session_id = Some(String::from("session"));
+        harness.app.state.current_session_id = Some(SessionId::new("session"));
         harness.app.state.pending_script = Some(pending_script("previous"));
         harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
         harness.app.state.script_approval_action = action;
         harness.app.confirm_current_script_action();
         harness.app.handle_runtime_event(Event::ScriptResultReady {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             execution_id: String::from("previous"),
             call_id: String::from("call"),
             output: Default::default(),
-            outcome: kraai_types::ScriptExecutionOutcome {
-                status: kraai_types::ScriptExecutionStatus::Completed,
+            outcome: kraai_execution_types::ScriptExecutionOutcome {
+                status: kraai_execution_types::ScriptExecutionStatus::Completed,
                 exit_code: Some(0),
             },
         });
@@ -262,7 +263,7 @@ fn current_decision_reply_keeps_existing_success_status() {
         ),
     ] {
         let mut harness = test_harness();
-        harness.app.state.current_session_id = Some(String::from("session"));
+        harness.app.state.current_session_id = Some(SessionId::new("session"));
         harness.app.state.pending_script = Some(pending_script("current"));
         harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
 
@@ -282,7 +283,7 @@ fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
     use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
 
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.config_loaded = true;
     harness.app.state.selected_provider_id = Some("provider".into());
     harness.app.state.selected_model_id = Some("model".into());
@@ -295,7 +296,7 @@ fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot)),
         });
     assert_eq!(
@@ -337,13 +338,13 @@ fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
     assert!(matches!(
         harness.requests_rx.try_recv(),
         Ok(super::RuntimeRequest::SendMessage { session_id, message, .. })
-            if session_id == "session" && message.as_text() == Some("hello")
+            if session_id == SessionId::new("session") && message.as_text() == Some("hello")
     ));
     assert!(harness.app.state.input.is_empty());
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SendMessage {
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Err(kraai_runtime::RuntimeError::conflict(
                 "Owned by another runtime",
             )),
@@ -355,7 +356,7 @@ fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
 #[test]
 fn foreign_approval_keeps_the_execution_view_open() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some("session".into());
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.mode = crate::app::UiMode::Executions;
     let mut snapshot = super::session_snapshot(None);
     snapshot.activity = kraai_runtime::SessionActivity::AwaitingApproval;
@@ -364,7 +365,7 @@ fn foreign_approval_keeps_the_execution_view_open() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: "session".into(),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot)),
         });
     assert_eq!(harness.app.state.mode, crate::app::UiMode::Executions);

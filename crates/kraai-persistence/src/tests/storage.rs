@@ -4,7 +4,7 @@ use color_eyre::eyre::OptionExt;
 #[tokio::test]
 async fn message_ids_do_not_load_message_payloads() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
     connection.execute(
         "INSERT INTO records(kind, id, data) VALUES ('message', 'message', 'invalid JSON'), ('usage', 'usage', 'invalid JSON')",
@@ -27,24 +27,62 @@ async fn message_ids_do_not_load_message_payloads() -> Result<()> {
 #[tokio::test]
 async fn database_creation_records_the_schema_version() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    ensure!(version == 1);
-    let reopened = Persistence::open(directory.path()).await?;
-    ensure!(reopened.sessions().get("session").await?.is_some());
+    ensure!(version == 2);
+    let reopened = open_persistence(directory.path()).await?;
+    ensure!(
+        reopened
+            .sessions()
+            .get(&SessionId::new("session"))
+            .await?
+            .is_some()
+    );
     Ok(())
 }
 
 #[tokio::test]
+async fn version_one_databases_gain_lease_tokens() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
+    connection.execute_batch(
+        "CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            data TEXT NOT NULL,
+            tip_id TEXT,
+            revision INTEGER NOT NULL DEFAULT 0,
+            metadata_revision INTEGER NOT NULL DEFAULT 0,
+            lease_active INTEGER NOT NULL DEFAULT 0,
+            lease_expires_at INTEGER NOT NULL DEFAULT 0
+        );
+        PRAGMA user_version = 1;",
+    )?;
+    let persistence = open_persistence(directory.path()).await?;
+    persistence.sessions().save(&session("session")).await?;
+    let id = SessionId::new("session");
+    persistence.sessions().claim_turn(&id).await?;
+    ensure!(persistence.sessions().owns_turn(&id).await?);
+    let (version, token): (i64, i64) = (
+        connection.pragma_query_value(None, "user_version", |row| row.get(0))?,
+        connection.query_row(
+            "SELECT lease_token FROM sessions WHERE id = 'session'",
+            [],
+            |row| row.get(0),
+        )?,
+    );
+    ensure!(version == 2 && token == 1);
+    Ok(())
+}
+#[tokio::test]
 async fn unsupported_schema_version_is_rejected_without_changing_the_database() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
-    connection.pragma_update(None, "user_version", 2)?;
-    ensure!(Persistence::open(directory.path()).await.is_err());
+    connection.pragma_update(None, "user_version", 3)?;
+    ensure!(open_persistence(directory.path()).await.is_err());
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    ensure!(version == 2);
+    ensure!(version == 3);
     let tables: i64 = connection.query_row(
         "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table'",
         [],
@@ -57,7 +95,7 @@ async fn unsupported_schema_version_is_rejected_without_changing_the_database() 
 #[tokio::test]
 async fn deletion_preserves_branched_history_and_removes_unlinked_messages() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("original")).await?;
     let mut original_ids = Vec::new();
     for _ in 0..16 {
@@ -88,7 +126,10 @@ async fn deletion_preserves_branched_history_and_removes_unlinked_messages() -> 
     unlinked.id = MessageId::new("unlinked-original-message");
     unlinked.parent_id = original_ids.last().cloned();
     persistence.messages().save(&unlinked).await?;
-    persistence.sessions().delete("original").await?;
+    persistence
+        .sessions()
+        .delete(&SessionId::new("original"))
+        .await?;
     let retained = persistence.messages().list_ids().await?;
     ensure!(retained.len() == original_ids.len() + 1);
     ensure!(retained.contains(&fork_message_id));
@@ -96,12 +137,18 @@ async fn deletion_preserves_branched_history_and_removes_unlinked_messages() -> 
         ensure!(retained.contains(id));
     }
     ensure!(!retained.contains(&unlinked.id));
-    persistence.sessions().delete("fork").await?;
+    persistence
+        .sessions()
+        .delete(&SessionId::new("fork"))
+        .await?;
     ensure!(
         persistence.messages().list_ids().await?
             == original_ids.first().cloned().into_iter().collect()
     );
-    persistence.sessions().delete("other-fork").await?;
+    persistence
+        .sessions()
+        .delete(&SessionId::new("other-fork"))
+        .await?;
     ensure!(persistence.messages().list_ids().await?.is_empty());
     Ok(())
 }
@@ -109,7 +156,7 @@ async fn deletion_preserves_branched_history_and_removes_unlinked_messages() -> 
 #[tokio::test]
 async fn deletion_cannot_remove_another_clients_owned_unlinked_message() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let owner = Persistence::open(directory.path()).await?;
+    let owner = open_persistence(directory.path()).await?;
     owner.sessions().save(&session("owner")).await?;
     let root = owner
         .conversations()
@@ -120,15 +167,30 @@ async fn deletion_cannot_remove_another_clients_owned_unlinked_message() -> Resu
     owner.sessions().save(&fork).await?;
     let mut metadata = owner
         .sessions()
-        .get("owner")
+        .get(&SessionId::new("owner"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     metadata.tip_id = None;
     owner.sessions().save(&metadata).await?;
-    owner.sessions().claim_turn("owner").await?;
-    let observer = Persistence::open(directory.path()).await?;
-    ensure!(observer.sessions().delete("fork").await.is_err());
-    ensure!(observer.sessions().get("fork").await?.is_some());
+    owner
+        .sessions()
+        .claim_turn(&SessionId::new("owner"))
+        .await?;
+    let observer = open_persistence(directory.path()).await?;
+    ensure!(
+        observer
+            .sessions()
+            .delete(&SessionId::new("fork"))
+            .await
+            .is_err()
+    );
+    ensure!(
+        observer
+            .sessions()
+            .get(&SessionId::new("fork"))
+            .await?
+            .is_some()
+    );
     ensure!(observer.messages().get(&root.message.id).await?.is_some());
     Ok(())
 }
@@ -136,7 +198,7 @@ async fn deletion_cannot_remove_another_clients_owned_unlinked_message() -> Resu
 #[tokio::test]
 async fn last_used_model_survives_reopening_and_messages_without_generation() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     for (model, effort) in [("first", "light"), ("last", "deep")] {
         let mut request = request("session", "answer");
@@ -157,10 +219,10 @@ async fn last_used_model_survives_reopening_and_messages_without_generation() ->
         .conversations()
         .append_message(request("session", "next question"))
         .await?;
-    let reopened = Persistence::open(directory.path()).await?;
+    let reopened = open_persistence(directory.path()).await?;
     let saved = reopened
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     ensure!(
@@ -180,8 +242,8 @@ async fn last_used_model_survives_reopening_and_messages_without_generation() ->
 #[tokio::test]
 async fn repeated_message_reads_observe_changes_from_another_connection() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let reader = Persistence::open(directory.path()).await?;
-    let writer = Persistence::open(directory.path()).await?;
+    let reader = open_persistence(directory.path()).await?;
+    let writer = open_persistence(directory.path()).await?;
     let mut message = kraai_types::Message {
         id: MessageId::new("message"),
         parent_id: None,
@@ -232,7 +294,7 @@ async fn repeated_message_reads_observe_changes_from_another_connection() -> Res
 #[tokio::test]
 async fn message_read_errors_preserve_types_and_allow_recovery() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     let message = kraai_types::Message {
         id: MessageId::new("message"),
         parent_id: None,
@@ -290,5 +352,125 @@ async fn message_read_errors_preserve_types_and_allow_recovery() -> Result<()> {
                 .is_some_and(|stored| stored.content == message.content)
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn history_cursor_pages_double_and_detect_cycles_across_pages() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let persistence = open_persistence(directory.path()).await?;
+    persistence.sessions().save(&session("session")).await?;
+    persistence
+        .sessions()
+        .claim_turn(&SessionId::new("session"))
+        .await?;
+    let conversation = persistence.conversations();
+    let mut ids = Vec::new();
+    for index in 0..7 {
+        ids.push(
+            conversation
+                .append_message(request("session", &format!("message {index}")))
+                .await?
+                .message
+                .id,
+        );
+    }
+    ids.reverse();
+    let tip = ids.first().cloned();
+    let mut cursor = HistoryCursor::new(persistence.messages().as_ref(), tip.clone());
+    let mut pages = Vec::new();
+    while let Some(page) = cursor.next_page().await? {
+        pages.push(
+            page.into_iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+        );
+    }
+    ensure!(pages.iter().map(Vec::len).collect::<Vec<_>>() == [1, 2, 4]);
+    ensure!(pages.concat() == ids);
+
+    let root = ids.last().ok_or_eyre("missing root")?;
+    let mut message = persistence
+        .messages()
+        .get(root)
+        .await?
+        .ok_or_eyre("missing root message")?;
+    message.parent_id.clone_from(&tip);
+    persistence.messages().save(&message).await?;
+    let mut cursor = HistoryCursor::new(persistence.messages().as_ref(), tip);
+    let error = loop {
+        match cursor.next_page().await {
+            Ok(Some(_)) => {}
+            Ok(None) => color_eyre::eyre::bail!("cycle was not detected"),
+            Err(error) => break error,
+        }
+    };
+    ensure!(error.to_string().contains("cycle repeats message"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn stream_deltas_replay_idempotently_until_a_full_save() -> Result<()> {
+    use kraai_types::{AssistantItem, AssistantPhase, StreamId};
+    let directory = tempfile::tempdir()?;
+    let persistence = open_persistence(directory.path()).await?;
+    persistence.sessions().save(&session("session")).await?;
+    persistence
+        .sessions()
+        .claim_turn(&SessionId::new("session"))
+        .await?;
+    let mut streaming = request("session", "unused");
+    streaming.content = ConversationItem::Assistant { items: Vec::new() };
+    streaming.status = MessageStatus::Streaming {
+        stream_id: StreamId::new("stream"),
+    };
+    let mut message = persistence
+        .conversations()
+        .append_message(streaming)
+        .await?
+        .message;
+    let deltas = [
+        StreamDelta::Text {
+            index: 0,
+            phase: AssistantPhase::FinalAnswer,
+            text: "hello".into(),
+        },
+        StreamDelta::Text {
+            index: 0,
+            phase: AssistantPhase::FinalAnswer,
+            text: " world".into(),
+        },
+    ];
+    for delta in &deltas {
+        delta.apply(&mut message)?;
+    }
+    let messages = persistence.messages();
+    messages.append_stream_deltas(&message, 0, &deltas).await?;
+    messages.append_stream_deltas(&message, 0, &deltas).await?;
+    let reopened = open_persistence(directory.path()).await?;
+    let replayed = reopened
+        .messages()
+        .get(&message.id)
+        .await?
+        .ok_or_eyre("missing streamed message")?;
+    ensure!(replayed.content == message.content && replayed.status == message.status);
+
+    message.content = ConversationItem::Assistant {
+        items: vec![AssistantItem::Text {
+            phase: AssistantPhase::FinalAnswer,
+            text: "final".into(),
+        }],
+    };
+    message.status = MessageStatus::Complete;
+    messages.save(&message).await?;
+    let saved = messages
+        .get(&message.id)
+        .await?
+        .ok_or_eyre("missing saved message")?;
+    ensure!(saved.content == message.content && saved.status == message.status);
+    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
+    let remaining: i64 =
+        connection.query_row("SELECT COUNT(*) FROM stream_deltas", [], |row| row.get(0))?;
+    ensure!(remaining == 0);
     Ok(())
 }

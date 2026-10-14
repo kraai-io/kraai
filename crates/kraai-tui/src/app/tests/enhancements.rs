@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::{KeyCode, KeyEvent, KeyModifiers, UiMode};
+use kraai_types::SessionId;
 use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
 
 fn screen(state: &AppState, width: u16, height: u16) -> String {
@@ -80,10 +81,10 @@ fn session_filter_selects_and_deletes_the_visible_session() {
     let mut harness = test_harness();
     harness.app.state.mode = UiMode::SessionsMenu;
     let mut first = session_snapshot(None).session;
-    first.id = String::from("alpha");
+    first.id = SessionId::new("alpha");
     first.title = Some(String::from("First"));
     let mut second = first.clone();
-    second.id = String::from("beta");
+    second.id = SessionId::new("beta");
     second.title = Some(String::from("Xylophone"));
     harness.app.state.sessions = vec![first, second];
     harness
@@ -96,13 +97,13 @@ fn session_filter_selects_and_deletes_the_visible_session() {
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(
-        matches!(harness.requests_rx.try_recv(), Ok(RuntimeRequest::LoadSession { session_id, .. }) if session_id == "beta")
+        matches!(harness.requests_rx.try_recv(), Ok(RuntimeRequest::LoadSession { session_id, .. }) if session_id == SessionId::new("beta"))
     );
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
     assert!(
-        matches!(harness.requests_rx.try_recv(), Ok(RuntimeRequest::DeleteSession { session_id }) if session_id == "beta")
+        matches!(harness.requests_rx.try_recv(), Ok(RuntimeRequest::DeleteSession { session_id }) if session_id == SessionId::new("beta"))
     );
 }
 
@@ -219,8 +220,8 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
         id: MessageId::new("result"),
         parent_id: Some(call.id.clone()),
         content: ConversationItem::ScriptResult {
-            outcome: kraai_types::ScriptExecutionOutcome {
-                status: kraai_types::ScriptExecutionStatus::Completed,
+            outcome: kraai_execution_types::ScriptExecutionOutcome {
+                status: kraai_execution_types::ScriptExecutionStatus::Completed,
                 exit_code: Some(0),
             },
             call_id: ToolCallId::new("tool"),
@@ -273,8 +274,8 @@ fn execution_toggle_recovers_selection_after_tip_changes() {
             id: MessageId::new(id),
             parent_id: parent_id.map(MessageId::new),
             content: ConversationItem::ScriptResult {
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
                 call_id: ToolCallId::new(id),
@@ -369,8 +370,6 @@ fn model_search_preserves_order_unicode_and_cross_field_matches() {
             .collect();
         assert_eq!(actual, expected, "query: {query}");
     }
-
-    harness.app.startup_options.ci = true;
     harness.app.state.mode = UiMode::ModelMenu;
     harness.app.state.menu_search = String::from("Β ÉLAN");
     harness
@@ -477,8 +476,8 @@ fn execution_view_navigates_from_latest_and_preserves_draft() {
             id: MessageId::new(id),
             parent_id: parent_id.map(MessageId::new),
             content: ConversationItem::ScriptResult {
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
                 call_id: ToolCallId::new(id),
@@ -585,7 +584,7 @@ fn approval_closes_execution_view_and_empty_view_can_exit() {
 #[test]
 fn delayed_profile_response_closes_execution_view() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.open_executions();
     harness
         .app
@@ -596,7 +595,7 @@ fn delayed_profile_response_closes_execution_view() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SetSessionProfile {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             profile_id: String::from("agent"),
             result: Ok(()),
         });
@@ -819,7 +818,7 @@ fn animation_and_copy_feedback_expire_without_idle_redraws() {
 )]
 fn only_newly_finished_turns_show_completion_feedback() -> color_eyre::Result<()> {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     let timer = |active: bool| {
         serde_json::from_value::<kraai_runtime::TurnTimer>(serde_json::json!({
             "started_at": null,
@@ -829,16 +828,16 @@ fn only_newly_finished_turns_show_completion_feedback() -> color_eyre::Result<()
         }))
     };
     harness.app.handle_runtime_event(Event::TurnTimingChanged {
-        session_id: String::from("session"),
+        session_id: SessionId::new("session"),
         timer: timer(false)?,
     });
     assert!(harness.app.state.feedback.completion_until.is_none());
     harness.app.handle_runtime_event(Event::TurnTimingChanged {
-        session_id: String::from("session"),
+        session_id: SessionId::new("session"),
         timer: timer(true)?,
     });
     harness.app.handle_runtime_event(Event::TurnTimingChanged {
-        session_id: String::from("session"),
+        session_id: SessionId::new("session"),
         timer: timer(false)?,
     });
     assert!(harness.app.state.feedback.completion_until.is_some());
@@ -865,7 +864,7 @@ fn only_newly_finished_turns_show_completion_feedback() -> color_eyre::Result<()
     harness.app.state.last_error = None;
     harness.app.state.feedback.completion_until = Some(std::time::Instant::now());
     harness.app.handle_runtime_event(Event::StreamCancelled {
-        session_id: String::from("session"),
+        session_id: SessionId::new("session"),
         message_id: String::from("message"),
     });
     assert!(harness.app.state.feedback.completion_until.is_none());

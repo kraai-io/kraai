@@ -23,7 +23,7 @@ pub(crate) async fn prompt(
             }),
             acp::ContentBlock::Image(image) => {
                 if image.data.len()
-                    > kraai_types::image::MAX_IMAGE_BYTES
+                    > kraai_execution_types::image::MAX_IMAGE_BYTES
                         .saturating_mul(4)
                         .div_ceil(3)
                         + 4
@@ -76,7 +76,7 @@ pub(crate) async fn tool_result(
     runtime: &RuntimeHandle,
     call_id: String,
     output: &MessageContent,
-    outcome: kraai_types::ScriptExecutionOutcome,
+    outcome: kraai_execution_types::ScriptExecutionOutcome,
 ) -> Result<acp::SessionUpdate> {
     let status = if outcome.succeeded() {
         acp::ToolCallStatus::Completed

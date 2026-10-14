@@ -3,13 +3,14 @@ use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
 use futures::stream::BoxStream;
+use kraai_execution_types::{ScriptExecutionId, ScriptExecutionStatus};
 use kraai_provider_core::{Provider, ProviderManager, ProviderRequest, ProviderStreamEvent};
-use kraai_types::{AssistantPhase, ModelId, ProviderId, ScriptExecutionId, ScriptExecutionStatus};
+use kraai_test_support::hang_guard;
+use kraai_types::{AssistantPhase, ModelId, ProviderId};
 use tokio::sync::{Mutex, mpsc};
 
-use super::harness::{
-    RuntimeTestHarness, ScriptedChunk, TEST_TIMEOUT, create_session_with_profile,
-};
+use super::harness::FullHistory as _;
+use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::{Event, SessionActivity};
 
 pub(super) struct ControlledProvider {
@@ -89,7 +90,7 @@ async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_com
         delta: "partial".into(),
     }))?;
     observer.events.wait_for("observer update", |events| events.iter().any(|event| matches!(event, Event::HistoryUpdated { session_id } if session_id == &session))).await;
-    let snapshot = tokio::time::timeout(TEST_TIMEOUT, async {
+    let snapshot = hang_guard(async {
         loop {
             let snapshot = observer
                 .handle
@@ -217,7 +218,14 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
         phase: AssistantPhase::FinalAnswer,
         delta: "second request is running".into(),
     }))?;
-    owner.events.wait_for("queued request", |events| events.iter().any(|event| matches!(event, Event::StreamChunk { session_id, chunk, .. } if session_id == &session && chunk == "second request is running"))).await;
+    owner
+        .events
+        .wait_for("queued request", |events| {
+            events.iter().any(|event| {
+                super::harness::streamed_text(event, &session) == Some("second request is running")
+            })
+        })
+        .await;
     assert!(owner.runtime.session_store.owns_turn(&session).await?);
     assert!(
         observer
@@ -282,14 +290,7 @@ async fn continuation_during_a_live_stream_preserves_ownership() -> Result<()> {
             .await
             .is_err()
     );
-    assert!(
-        owner
-            .runtime
-            .agent_manager
-            .read()
-            .await
-            .is_turn_active(&session)
-    );
+    assert!(owner.runtime.agent_manager.is_turn_active(&session));
     drop(sender);
     owner.events.wait_for("owner completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id } if session_id == &session))).await;
     observer.shutdown().await;
@@ -388,64 +389,27 @@ async fn delayed_lease_cancellation_does_not_cancel_a_replacement_turn() -> Resu
         .await
         .expect("owner fixture");
     let session = create_session_with_profile(&owner.handle, "test-profile").await?;
-    owner.runtime.session_store.claim_turn(&session).await?;
-    let expected = owner
-        .runtime
-        .session_store
-        .observe(&session)
-        .await?
-        .expect("owned session")
-        .lease_expires_at;
-    let preparation = owner.runtime.session_preparations.begin(&session).await;
-    let runtime = owner.runtime.clone();
-    let cancellation = runtime.cancel_turn_if_lease_matches(session.clone(), expected);
-    tokio::pin!(cancellation);
-    assert!(futures::poll!(&mut cancellation).is_pending());
-    owner.runtime.session_store.release_turn(&session).await?;
-    owner.runtime.session_store.claim_turn(&session).await?;
-    let (providers, request) = {
-        let mut agent = owner.runtime.agent_manager.write().await;
-        let request = agent
-            .prepare_start_stream(
-                &session,
-                "replacement turn".into(),
-                ModelId::new("mock-model"),
-                ProviderId::new("mock"),
-                Default::default(),
-            )
-            .await?;
-        (agent.cloned_provider_manager(), request)
-    };
-    let guard = owner.runtime.session_state_barrier.read().await;
+    let store = &owner.runtime.session_store;
+    store.claim_turn(&session).await?;
+    let (_, stale_token) = store
+        .owned_turns()
+        .into_iter()
+        .find(|(id, _)| id == &session)
+        .expect("owned session");
+    store.release_turn(&session).await?;
     owner
-        .runtime
-        .start_stream_job(
-            super::super::streaming::StreamJobKind::Initial,
+        .handle
+        .send_message(
             session.clone(),
-            providers,
-            request,
+            "replacement turn".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
         )
-        .await;
-    drop(guard);
-    drop(preparation);
-    assert!(!cancellation.await?);
+        .await?;
+    assert!(!super::harness::cancel_if_lease_matches(&owner.runtime, &session, stale_token).await?);
     assert!(owner.runtime.session_store.owns_turn(&session).await?);
-    assert!(
-        owner
-            .runtime
-            .active_streams
-            .lock()
-            .await
-            .contains_key(&session)
-    );
-    assert!(
-        owner
-            .runtime
-            .agent_manager
-            .read()
-            .await
-            .is_turn_active(&session)
-    );
+    assert!(owner.runtime.agent_manager.is_turn_active(&session));
     drop(sender);
     owner.events.wait_for("replacement completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id, .. } if session_id == &session))).await;
     owner.shutdown().await;
@@ -508,8 +472,7 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
             .observe(&session)
             .await?
             .expect("lease");
-        let manager = owner.runtime.agent_manager.write().await;
-        tokio::time::timeout(Duration::from_secs(7), async {
+        hang_guard(async {
             loop {
                 let after = owner
                     .runtime
@@ -524,7 +487,6 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
             }
         })
         .await??;
-        drop(manager);
         assert!(
             observer
                 .runtime
@@ -534,12 +496,7 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
                 .is_err()
         );
     }
-    owner
-        .runtime
-        .pending_script_approvals
-        .lock()
-        .await
-        .remove(&session);
+    super::harness::take_pending_approval(&owner.runtime, &session).await;
     owner
         .runtime
         .execution_store

@@ -6,13 +6,14 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
+use kraai_test_support::{HANG_TIMEOUT, hang_guard};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::{Pid, setsid};
 use tokio_util::sync::CancellationToken;
 
 use super::{capabilities, temp_dir};
-use crate::{LaunchPlan, Termination, run};
+use crate::{LaunchPlan, OutputStream, Termination, run};
 
 struct DetachedFixture(PathBuf);
 
@@ -61,18 +62,37 @@ pub(super) async fn detached_output(mode: &str, capability: SandboxCapability, c
     plan.environment = std::env::vars_os().collect();
     plan.environment
         .insert("KRAAI_DETACHED_OUTPUT".into(), mode.into());
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    plan.output_events = Some(sender);
+    let (started, execution_started) = tokio::sync::oneshot::channel();
+    plan.execution_started = Some(execution_started);
     let cancellation = CancellationToken::new();
-    if cancelled {
-        let token = cancellation.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            token.cancel();
-        });
-    }
-    let result = tokio::time::timeout(Duration::from_secs(4), run(plan, cancellation))
+    let token = cancellation.clone();
+    let captured = async move {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        while let Some(event) = events.recv().await {
+            match event.stream {
+                OutputStream::Stdout => stdout.extend(event.bytes),
+                OutputStream::Stderr => stderr.extend(event.bytes),
+            }
+            if String::from_utf8_lossy(&stdout).contains("captured stdout")
+                && String::from_utf8_lossy(&stderr).contains("captured stderr")
+            {
+                if cancelled {
+                    token.cancel();
+                } else {
+                    let _ = started.send(tokio::time::Instant::now());
+                }
+                return;
+            }
+        }
+        panic!("process exited before writing its output");
+    };
+    let (result, ()) = hang_guard(async { tokio::join!(run(plan, cancellation), captured) })
         .await
-        .expect("detached output must not extend the execution timeout")
-        .expect("capture detached output");
+        .expect("detached output must not extend the execution timeout");
+    let result = result.expect("capture detached output");
     assert_eq!(
         result.termination,
         if cancelled {
@@ -119,7 +139,7 @@ fn detached_output_child() {
         .stderr(Stdio::inherit())
         .spawn()
         .expect("spawn detached helper");
-    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let deadline = std::time::Instant::now() + HANG_TIMEOUT;
     while !std::path::Path::new("detached.pid").exists() {
         assert!(std::time::Instant::now() < deadline, "child did not detach");
         std::thread::sleep(Duration::from_millis(5));
@@ -140,7 +160,7 @@ fn detached_pipe_holder() {
     }
     setsid().expect("detach output holder");
     std::fs::write("detached.pid", std::process::id().to_string()).expect("record detached child");
-    std::thread::sleep(Duration::from_secs(60));
+    std::thread::sleep(HANG_TIMEOUT * 2);
 }
 
 pub(super) async fn assert_process_group_stops(mode: &str, capability: SandboxCapability) {
@@ -157,17 +177,23 @@ pub(super) async fn assert_process_group_stops(mode: &str, capability: SandboxCa
         .push(shell.parent().expect("shell directory").to_path_buf());
     plan.environment = std::env::vars_os().collect();
     plan.environment.insert("MODE".into(), mode.into());
-    plan.args(["-c", r#"
+    let script = format!(
+        r#"
         (while ! test -e parent-finished; do sleep 0.02; done; sleep 0.2; printf escaped > escaped-child) >/dev/null 2>&1 &
         printf '%s' "$!" > detached.pid
         printf ready
-        if test "$MODE" != exit; then sleep 30; fi
-    "#]);
+        if test "$MODE" != exit; then sleep {}; fi
+    "#,
+        (HANG_TIMEOUT * 2).as_secs()
+    );
+    plan.args(["-c", script.as_str()]);
     let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
     plan.output_events = Some(sender);
     let cancellation = CancellationToken::new();
+    let (started, execution_started) = tokio::sync::oneshot::channel();
+    plan.execution_started = Some(execution_started);
     let execution = tokio::spawn(run(plan, cancellation.clone()));
-    tokio::time::timeout(Duration::from_secs(4), async {
+    hang_guard(async {
         let mut output = Vec::new();
         while let Some(event) = events.recv().await {
             output.extend(event.bytes);
@@ -179,15 +205,20 @@ pub(super) async fn assert_process_group_stops(mode: &str, capability: SandboxCa
     })
     .await
     .expect("descendant started");
-    if mode == "cancel" {
-        cancellation.cancel();
+    match mode {
+        "cancel" => cancellation.cancel(),
+        "timeout" => {
+            let _ = started.send(tokio::time::Instant::now());
+        }
+        _ => {}
     }
     if mode == "drop" {
         execution.abort();
         assert!(execution.await.expect_err("task aborted").is_cancelled());
     } else {
-        let output = execution
+        let output = hang_guard(execution)
             .await
+            .expect("execution finished")
             .expect("execution task")
             .expect("run process group");
         assert_eq!(

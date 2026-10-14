@@ -1,0 +1,15 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "kraai-providers"
+publish = false
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+async-trait = { workspace = true }
+color-eyre = { workspace = true }
+kraai-provider-core = { workspace = true }
+kraai-provider-openai-chat-completions = { workspace = true }
+kraai-provider-openai-codex = { workspace = true }
+tokio = { workspace = true }

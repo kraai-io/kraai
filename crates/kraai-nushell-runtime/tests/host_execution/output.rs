@@ -268,14 +268,14 @@ async fn external_text_and_complete_results_are_emitted_once() {
 #[tokio::test]
 async fn results_stream_before_a_pipeline_finishes_and_cancellation_still_works() {
     let workspace = TestWorkspace::new();
-    let source = r#"[1 2] | each {|n| if $n == 2 { sleep 30sec }; {n: $n} }"#;
+    let source = r#"[1 2] | each {|n| if $n == 2 { sleep 1hr }; {n: $n} }"#;
     let mut execution = plan(source.as_bytes().to_vec(), &workspace);
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     execution.output_events = Some(sender);
     let cancellation = CancellationToken::new();
     let run = tokio::spawn(execute(execution, cancellation.clone()));
     let mut received = Vec::new();
-    tokio::time::timeout(Duration::from_secs(5), async {
+    hang_guard(async {
         while let Some(event) = receiver.recv().await {
             received.extend_from_slice(&event.bytes);
             if String::from_utf8_lossy(&received).contains("{\"n\":1}") {

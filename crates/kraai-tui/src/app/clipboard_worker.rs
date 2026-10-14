@@ -6,9 +6,9 @@ use std::sync::{
 use std::time::Duration;
 
 use crossbeam_channel::{Sender, bounded};
+use kraai_execution_types::{ImageAttachment, image::MAX_IMAGE_BYTES};
 use kraai_io::read::{ReadLimitError, read_bounded_async};
 use kraai_runtime::{RuntimeError, RuntimeHandle, RuntimeResult};
-use kraai_types::{ImageAttachment, image::MAX_IMAGE_BYTES};
 use tokio::io::AsyncRead;
 
 use super::RuntimeResponse;

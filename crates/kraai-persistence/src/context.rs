@@ -1,8 +1,8 @@
 use crate::database::{Database, assert_owner, bump_revision, read_record, write_record};
 use color_eyre::eyre::{Result, ensure, eyre};
+use kraai_execution_types::{CommandInvocationId, ScriptExecutionId};
 use kraai_types::{
-    CommandInvocationId, ContextStateEvent, ContextStateEventSource, ContextStateMutation,
-    MessageId, ScriptExecutionId,
+    ContextStateEvent, ContextStateEventSource, ContextStateMutation, MessageId, SessionId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -13,6 +13,8 @@ pub struct ContextStateDocument {
     pub events: Vec<ContextStateEvent>,
     #[serde(default)]
     pub snapshots: Vec<FileContextSnapshot>,
+    #[serde(default)]
+    pub instructions: Vec<InstructionSnapshot>,
 }
 
 impl ContextStateDocument {
@@ -39,17 +41,27 @@ pub struct FileContextSnapshot {
     pub text: String,
 }
 
+/// One instruction section, such as an AGENTS.md file, placed in the conversation like a pinned file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstructionSnapshot {
+    pub key: String,
+    pub label: String,
+    /// The message this version follows; `None` places it before the whole conversation.
+    pub anchor: Option<MessageId>,
+    pub text: String,
+}
+
 #[async_trait::async_trait]
 pub trait ContextStateStore: Send + Sync {
-    async fn load(&self, session_id: &str) -> Result<ContextStateDocument>;
+    async fn load(&self, session_id: &SessionId) -> Result<ContextStateDocument>;
 
-    async fn list(&self, session_id: &str) -> Result<Vec<ContextStateEvent>> {
+    async fn list(&self, session_id: &SessionId) -> Result<Vec<ContextStateEvent>> {
         Ok(self.load(session_id).await?.events)
     }
 
     async fn append_command(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         execution_id: &ScriptExecutionId,
         sequence: u64,
         invocation_id: &CommandInvocationId,
@@ -59,24 +71,30 @@ pub trait ContextStateStore: Send + Sync {
 
     async fn append_runtime(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         component: &str,
         mutations: Vec<ContextStateMutation>,
     ) -> Result<ContextStateEvent>;
 
-    async fn snapshots(&self, session_id: &str) -> Result<Vec<FileContextSnapshot>> {
+    async fn snapshots(&self, session_id: &SessionId) -> Result<Vec<FileContextSnapshot>> {
         Ok(self.load(session_id).await?.snapshots)
     }
 
     async fn save_snapshots(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         through_event: Option<&str>,
         snapshots: Vec<FileContextSnapshot>,
         removals: Vec<ContextStateMutation>,
     ) -> Result<()>;
 
-    async fn delete(&self, session_id: &str) -> Result<()>;
+    async fn save_instructions(
+        &self,
+        session_id: &SessionId,
+        instructions: Vec<InstructionSnapshot>,
+    ) -> Result<()>;
+
+    async fn delete(&self, session_id: &SessionId) -> Result<()>;
 }
 
 pub struct SqliteContextStateStore {
@@ -93,7 +111,7 @@ impl SqliteContextStateStore {
 
     async fn append_event(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         source: ContextStateEventSource,
         mutations: Vec<ContextStateMutation>,
     ) -> Result<ContextStateEvent> {
@@ -101,10 +119,10 @@ impl SqliteContextStateStore {
             !mutations.is_empty(),
             "Context state events require at least one mutation"
         );
-        let session = session_id.to_string();
+        let session = session_id.clone();
         self.database.transaction(move |transaction, leases| {
             assert_owner(transaction, leases, &session)?;
-            let mut document = read_record::<ContextStateDocument>(transaction, "context", &session)?.unwrap_or_default();
+            let mut document = read_record::<ContextStateDocument>(transaction, "context", session.as_str())?.unwrap_or_default();
             if let ContextStateEventSource::Command { execution_id, sequence, invocation_id, .. } = &source {
                 ensure!(!document.events.iter().any(|event| matches!(&event.source,
                     ContextStateEventSource::Command { execution_id: other_execution, sequence: other_sequence, invocation_id: other_invocation, .. }
@@ -113,7 +131,7 @@ impl SqliteContextStateStore {
             }
             let event = ContextStateEvent { id: Ulid::generate().to_string(), source, mutations };
             document.push_event(event.clone());
-            write_record(transaction, "context", &session, Some(&session), &document)?;
+            write_record(transaction, "context", session.as_str(), Some(&session), &document)?;
             Ok(event)
         }).await
     }
@@ -121,18 +139,18 @@ impl SqliteContextStateStore {
 
 #[async_trait::async_trait]
 impl ContextStateStore for SqliteContextStateStore {
-    async fn load(&self, session_id: &str) -> Result<ContextStateDocument> {
-        let session = session_id.to_string();
+    async fn load(&self, session_id: &SessionId) -> Result<ContextStateDocument> {
+        let session = session_id.clone();
         self.database
-            .run(move |connection, _| {
-                Ok(read_record(connection, "context", &session)?.unwrap_or_default())
+            .read(move |connection, _| {
+                Ok(read_record(connection, "context", session.as_str())?.unwrap_or_default())
             })
             .await
     }
 
     async fn append_command(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         execution_id: &ScriptExecutionId,
         sequence: u64,
         invocation_id: &CommandInvocationId,
@@ -154,7 +172,7 @@ impl ContextStateStore for SqliteContextStateStore {
 
     async fn append_runtime(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         component: &str,
         mutations: Vec<ContextStateMutation>,
     ) -> Result<ContextStateEvent> {
@@ -170,18 +188,18 @@ impl ContextStateStore for SqliteContextStateStore {
 
     async fn save_snapshots(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         through_event: Option<&str>,
         snapshots: Vec<FileContextSnapshot>,
         removals: Vec<ContextStateMutation>,
     ) -> Result<()> {
-        let session = session_id.to_string();
+        let session = session_id.clone();
         let through_event = through_event.map(str::to_string);
         self.database
             .transaction(move |transaction, leases| {
                 assert_owner(transaction, leases, &session)?;
                 let mut document =
-                    read_record::<ContextStateDocument>(transaction, "context", &session)?
+                    read_record::<ContextStateDocument>(transaction, "context", session.as_str())?
                         .unwrap_or_default();
                 ensure!(
                     document.events.last().map(|event| &event.id) == through_event.as_ref(),
@@ -203,19 +221,52 @@ impl ContextStateStore for SqliteContextStateStore {
                         mutations: removals,
                     });
                 }
-                write_record(transaction, "context", &session, Some(&session), &document)
+                write_record(
+                    transaction,
+                    "context",
+                    session.as_str(),
+                    Some(&session),
+                    &document,
+                )
             })
             .await
     }
 
-    async fn delete(&self, session_id: &str) -> Result<()> {
-        let session = session_id.to_string();
+    async fn save_instructions(
+        &self,
+        session_id: &SessionId,
+        instructions: Vec<InstructionSnapshot>,
+    ) -> Result<()> {
+        let session = session_id.clone();
+        self.database
+            .transaction(move |transaction, leases| {
+                assert_owner(transaction, leases, &session)?;
+                let mut document =
+                    read_record::<ContextStateDocument>(transaction, "context", session.as_str())?
+                        .unwrap_or_default();
+                if document.instructions == instructions {
+                    return Ok(());
+                }
+                document.instructions = instructions;
+                write_record(
+                    transaction,
+                    "context",
+                    session.as_str(),
+                    Some(&session),
+                    &document,
+                )
+            })
+            .await
+    }
+
+    async fn delete(&self, session_id: &SessionId) -> Result<()> {
+        let session = session_id.clone();
         self.database
             .transaction(move |transaction, leases| {
                 assert_owner(transaction, leases, &session)?;
                 transaction.execute(
                     "DELETE FROM records WHERE kind = 'context' AND id = ?1",
-                    [&session],
+                    [session.as_str()],
                 )?;
                 bump_revision(transaction, &session)
             })

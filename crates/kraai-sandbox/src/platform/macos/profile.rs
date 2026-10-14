@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
 
 use crate::SandboxError;
 use crate::config::LaunchPlan;

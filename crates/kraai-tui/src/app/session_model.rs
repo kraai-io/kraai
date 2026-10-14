@@ -1,5 +1,5 @@
 use kraai_runtime::{RuntimeErrorKind, RuntimeResult, SessionSnapshot};
-use kraai_types::{ModelId, ModelSelection, ProviderId};
+use kraai_types::{ModelId, ModelSelection, ProviderId, SessionId};
 
 use super::*;
 
@@ -52,13 +52,13 @@ impl App {
 
     fn defer_session_model_selection(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         selection: ModelSelection,
     ) -> bool {
         let save = self
             .state
             .session_model_saves
-            .entry(session_id.to_owned())
+            .entry(session_id.clone())
             .or_default();
         save.desired = Some(selection);
         save.failed = false;
@@ -66,7 +66,7 @@ impl App {
     }
 
     pub(super) fn preserve_model_selection_after_creation(&mut self, pending: &PendingSubmit) {
-        let Some(session_id) = pending.session_id.as_deref() else {
+        let Some(session_id) = pending.session_id.as_ref() else {
             return;
         };
         let Some(selection) = self.current_model_selection() else {
@@ -111,18 +111,18 @@ impl App {
         }
     }
 
-    pub(super) fn flush_session_model_save(&mut self, session_id: &str) {
+    pub(super) fn flush_session_model_save(&mut self, session_id: &SessionId) {
         if self
             .state
             .pending_messages
             .iter()
-            .any(|message| message.session_id == session_id)
+            .any(|message| message.session_id == *session_id)
             || self
                 .state
                 .pending_submit
                 .as_ref()
-                .is_some_and(|pending| pending.session_id.as_deref() == Some(session_id))
-            || (self.state.current_session_id.as_deref() == Some(session_id)
+                .is_some_and(|pending| pending.session_id.as_ref() == Some(session_id))
+            || (self.state.current_session_id.as_ref() == Some(session_id)
                 && (self.state.runtime_is_active()
                     || self.state.pending_script.is_some()
                     || self.state.script_phase != ScriptPhase::Idle))
@@ -145,7 +145,7 @@ impl App {
             selection: selection.clone(),
         });
         if self.request(RuntimeRequest::SetSessionModel {
-            session_id: session_id.to_owned(),
+            session_id: session_id.clone(),
             save_id,
             selection,
         }) == RuntimeRequestDelivery::Disconnected
@@ -157,7 +157,7 @@ impl App {
 
     pub(super) fn handle_session_model_save(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         save_id: u64,
         result: RuntimeResult<()>,
     ) {
@@ -174,7 +174,7 @@ impl App {
         let Some(attempt) = save.in_flight.take() else {
             return;
         };
-        let is_foreground = self.state.current_session_id.as_deref() == Some(session_id);
+        let is_foreground = self.state.current_session_id.as_ref() == Some(session_id);
         match result {
             Ok(()) => {
                 save.last_saved_id = save_id;
@@ -186,7 +186,7 @@ impl App {
                 }
                 self.flush_session_model_save(session_id);
                 self.request(RuntimeRequest::GetSessionSnapshot {
-                    session_id: session_id.to_owned(),
+                    session_id: session_id.clone(),
                 });
                 self.request(RuntimeRequest::ListSessions);
             }
@@ -194,7 +194,7 @@ impl App {
                 if error.kind == RuntimeErrorKind::Conflict {
                     save.is_running = None;
                     self.request(RuntimeRequest::GetSessionSnapshot {
-                        session_id: session_id.to_owned(),
+                        session_id: session_id.clone(),
                     });
                 } else if matches!(
                     error.kind,
@@ -218,21 +218,21 @@ impl App {
 
     pub(super) fn observe_session_model_snapshot(
         &mut self,
-        session_id: &str,
+        session_id: &SessionId,
         model_save_id: u64,
         snapshot: &SessionSnapshot,
     ) {
         let save = self
             .state
             .session_model_saves
-            .entry(session_id.to_owned())
+            .entry(session_id.clone())
             .or_default();
         save.is_running = Some(
             snapshot.session.is_running
                 || snapshot.activity != kraai_runtime::SessionActivity::Idle
                 || snapshot.queued_messages != 0,
         );
-        if self.state.current_session_id.as_deref() != Some(session_id)
+        if self.state.current_session_id.as_ref() != Some(session_id)
             || model_save_id < save.last_saved_id
             || self.state.last_session_model == snapshot.session.selected_model
         {
@@ -250,10 +250,10 @@ impl App {
         }
     }
 
-    pub(super) fn mark_session_model_active(&mut self, session_id: &str) {
+    pub(super) fn mark_session_model_active(&mut self, session_id: &SessionId) {
         self.state
             .session_model_saves
-            .entry(session_id.to_owned())
+            .entry(session_id.clone())
             .or_default()
             .is_running = Some(true);
     }

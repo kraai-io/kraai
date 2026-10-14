@@ -5,8 +5,8 @@
     reason = "stdio fixture asserts protocol results"
 )]
 
+use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpConfig, McpHost, McpManager, ServerConfig, TransportConfig};
-use kraai_types::McpRequest;
 
 const FIXTURE: &str = r#"
 printf 'started\n' >> "$MCP_RECORD"
@@ -32,8 +32,8 @@ async fn stdio_negotiates_legacy_and_reuses_the_process() {
             ServerConfig {
                 enabled: true,
                 description: "Local fixture".into(),
-                startup_timeout_secs: 3,
-                call_timeout_secs: 3,
+                startup_timeout_secs: kraai_test_support::HANG_TIMEOUT.as_secs(),
+                call_timeout_secs: kraai_test_support::HANG_TIMEOUT.as_secs(),
                 transport: TransportConfig::Stdio {
                     command: "sh".into(),
                     args: vec!["-c".into(), FIXTURE.into()],
@@ -59,7 +59,7 @@ async fn stdio_negotiates_legacy_and_reuses_the_process() {
             .unwrap();
         assert_eq!(result["structuredContent"]["ok"], true);
     }
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    kraai_test_support::hang_guard(async {
         loop {
             let tools = manager
                 .execute(McpRequest::Tools {

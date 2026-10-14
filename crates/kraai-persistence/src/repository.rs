@@ -2,11 +2,13 @@ use crate::database::Database;
 use crate::{
     ContextStateStore, ConversationStore, FileImageStore, MessageStore, RequestUsageStore,
     SessionStore, SqliteCompactionStore, SqliteContextStateStore, SqliteMessageStore,
-    SqliteRequestUsageStore, SqliteScriptExecutionStore, SqliteSessionStore,
+    SqliteRequestUsageStore, SqliteScriptExecutionStore, SqliteSessionStore, TURN_LEASE_DURATION,
 };
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, ensure};
+use kraai_types::SessionId;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct Persistence {
@@ -21,9 +23,19 @@ pub struct Persistence {
 
 impl Persistence {
     pub async fn open(data_dir: &Path) -> Result<Self> {
+        Self::open_with_turn_lease(data_dir, TURN_LEASE_DURATION).await
+    }
+    pub async fn open_with_turn_lease(
+        data_dir: &Path,
+        turn_lease_duration: Duration,
+    ) -> Result<Self> {
+        ensure!(
+            !turn_lease_duration.is_zero(),
+            "Lease duration must be positive"
+        );
         let database = Database::new(data_dir);
         let messages = Arc::new(SqliteMessageStore::with_database(database.clone()));
-        Self::with_database(data_dir, database, messages).await
+        Self::with_database(data_dir, database, messages, turn_lease_duration).await
     }
     pub async fn open_with_messages(
         data_dir: &Path,
@@ -32,14 +44,18 @@ impl Persistence {
         let database = messages
             .sqlite_database()
             .unwrap_or_else(|| Database::new(data_dir));
-        Self::with_database(data_dir, database, messages).await
+        Self::with_database(data_dir, database, messages, TURN_LEASE_DURATION).await
     }
     async fn with_database(
         data_dir: &Path,
         database: Database,
         messages: Arc<dyn MessageStore>,
+        turn_lease_duration: Duration,
     ) -> Result<Self> {
-        let sessions = Arc::new(SqliteSessionStore::with_database(database.clone()));
+        let sessions = Arc::new(SqliteSessionStore::with_database(
+            database.clone(),
+            turn_lease_duration,
+        ));
         sessions.load().await?;
         Ok(Self {
             messages,
@@ -75,7 +91,7 @@ impl Persistence {
     pub fn compactions(&self) -> &SqliteCompactionStore {
         &self.compactions
     }
-    pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+    pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
         self.sessions.delete(session_id).await
     }
 }

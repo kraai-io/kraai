@@ -58,16 +58,9 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
     let mut edited = ptr::null_mut();
     let _edited;
     let dacl = if let Some(access) = access {
-        let (mode, mask) = match access {
-            Access::Read => (GRANT_ACCESS, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE),
-            Access::Write => (
-                GRANT_ACCESS,
-                FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-            ),
-        };
         let entry = EXPLICIT_ACCESS_W {
-            grfAccessPermissions: mask,
-            grfAccessMode: mode,
+            grfAccessPermissions: mask(access),
+            grfAccessMode: GRANT_ACCESS,
             grfInheritance: 3,
             Trustee: TRUSTEE_W {
                 pMultipleTrustee: ptr::null_mut(),
@@ -150,6 +143,81 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
         ));
     }
     Ok(())
+}
+
+fn mask(access: Access) -> u32 {
+    match access {
+        Access::Read => FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        Access::Write => FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+    }
+}
+
+/// Whether `file` already has an inheritable entry allowing `sid` at least `access`.
+pub(super) fn grants(file: &File, sid: &[u32], access: Access) -> Result<bool, SandboxError> {
+    let mut dacl = ptr::null_mut();
+    let mut descriptor = ptr::null_mut();
+    let result = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut dacl,
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if result != 0 {
+        return Err(code_error("read DACL (GetSecurityInfo)", result));
+    }
+    let _descriptor = Allocation(descriptor);
+    if dacl.is_null() || unsafe { IsValidAcl(dacl) } == 0 {
+        return Ok(false);
+    }
+    let mut info = ACL_SIZE_INFORMATION::default();
+    if unsafe {
+        GetAclInformation(
+            dacl,
+            (&raw mut info).cast(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+    {
+        return Err(error("inspect DACL size"));
+    }
+    let needed = mask(access);
+    for index in 0..info.AceCount {
+        let mut ace = ptr::null_mut();
+        if unsafe { GetAce(dacl, index, &mut ace) } == 0 {
+            return Err(error("inspect DACL entry"));
+        }
+        let header = std::ptr::NonNull::new(ace.cast::<ACE_HEADER>())
+            .ok_or_else(|| error("validate DACL entry"))?;
+        let header = unsafe { header.as_ref() };
+        // An access-allowed entry that both files and directories inherit.
+        if header.AceType != 0
+            || header.AceFlags & 3 != 3
+            || (header.AceSize as usize) < size_of::<ACE_HEADER>() + size_of::<u32>() + 8
+        {
+            continue;
+        }
+        let granted = unsafe {
+            ace.cast::<u8>()
+                .add(size_of::<ACE_HEADER>())
+                .cast::<u32>()
+                .read_unaligned()
+        };
+        let ace_sid = unsafe { ace.cast::<u8>().add(8) }.cast();
+        if granted & needed == needed
+            && unsafe { IsValidSid(ace_sid) } != 0
+            && unsafe { EqualSid(ace_sid, sid.as_ptr().cast_mut().cast()) } != 0
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn without_sid(dacl: *mut ACL, sid: &[u32]) -> Result<(Vec<u32>, bool), SandboxError> {

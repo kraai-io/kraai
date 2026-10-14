@@ -1,19 +1,22 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::eyre::{Context, Result, eyre};
+use kraai_execution_types::{
+    SandboxCapabilities, SandboxCapability, ScriptExecutionId, ScriptExecutionStatus,
+    ScriptOutputStream, ScriptProfileSnapshot,
+};
 use kraai_nushell_runtime::{RuntimeError, ScriptExecutionPlan};
 use kraai_persistence::{
     NewScriptExecution, PersistedScriptOutput, ScriptExecutionCompletion, ScriptExecutionRecord,
 };
 use kraai_sandbox::{OutputEvent, OutputStream, SandboxError, Termination};
-use kraai_script_protocol::{ToolCallResultView, render_tool_call_result};
-use kraai_types::{
-    MessageId, SandboxCapabilities, SandboxCapability, ScriptExecutionId, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, ToolCallId,
+use kraai_script_protocol::{
+    ToolCallResultView, channel_needs_output_file, render_tool_call_result,
 };
+use kraai_types::{MessageId, SessionId, ToolCallId};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
 
@@ -24,7 +27,7 @@ use super::state_effects::DurableStateEffects;
 #[derive(Clone)]
 pub(crate) struct EffectiveScriptRequest {
     pub(crate) id: ScriptExecutionId,
-    pub(crate) session_id: String,
+    pub(crate) session_id: SessionId,
     pub(crate) source_message_id: MessageId,
     pub(crate) call_id: ToolCallId,
     pub(crate) profile: ScriptProfileSnapshot,
@@ -49,7 +52,11 @@ pub(crate) struct PendingScriptApproval {
 }
 
 impl CompletedScriptExecution {
-    pub(crate) fn render_result(&self) -> Result<kraai_types::MessageContent> {
+    fn render_result(
+        &self,
+        stdout_file: Option<&Path>,
+        stderr_file: Option<&Path>,
+    ) -> Result<kraai_types::MessageContent> {
         let outcome = self.record.outcome()?;
         let text = render_tool_call_result(ToolCallResultView {
             status: outcome.status,
@@ -58,6 +65,8 @@ impl CompletedScriptExecution {
             stdout: &self.output.stdout,
             stderr: &self.output.stderr,
             diagnostic: self.record.error.as_deref(),
+            stdout_file,
+            stderr_file,
         });
         let mut content = kraai_types::MessageContent::from(text);
         content.0.extend(
@@ -72,6 +81,21 @@ impl CompletedScriptExecution {
 }
 
 impl RuntimeCore {
+    /// Renders a script result for the model, saving each channel it sees only part of to
+    /// the session's output directory.
+    pub(crate) async fn render_script_result(
+        &self,
+        completed: &CompletedScriptExecution,
+    ) -> Result<kraai_types::MessageContent> {
+        let directory = self.config.script_output_dir(&completed.record.session_id);
+        let id = &completed.record.id;
+        let (stdout_file, stderr_file) = tokio::join!(
+            save_output_channel(&directory, id, "stdout", &completed.output.stdout),
+            save_output_channel(&directory, id, "stderr", &completed.output.stderr),
+        );
+        completed.render_result(stdout_file.as_deref(), stderr_file.as_deref())
+    }
+
     pub(crate) async fn prepare_script_execution(
         &self,
         request: &EffectiveScriptRequest,
@@ -157,11 +181,7 @@ impl RuntimeCore {
             plan.runtime_roots.push(host_directory.to_path_buf());
         }
         plan.active_commands = request.profile.commands;
-        plan.mcp = self
-            .agent_manager
-            .read()
-            .await
-            .session_mcp(&request.session_id);
+        plan.mcp = self.agent_manager.session_mcp(&request.session_id);
         plan.nushell_startup = request.profile.nushell_startup;
         plan.output_events = Some(output_tx);
         plan.image_attachment_handler = Arc::new(super::images::DurableImageAttachments {
@@ -171,6 +191,7 @@ impl RuntimeCore {
             images: self.image_store.clone(),
             executions: self.execution_store.clone(),
         });
+        let barrier = self.sessions.barrier(&request.session_id);
         plan.state_effect_handler = Arc::new(DurableStateEffects {
             session_task: Arc::new(self.stream_tasks.session_token(&request.session_id)),
             execution_id: execution_id.clone(),
@@ -178,7 +199,7 @@ impl RuntimeCore {
             workspace_root: request.workspace_root,
             effective_capabilities: request.effective_capabilities,
             store: self.context_state_store.clone(),
-            barrier: self.session_state_barrier.clone(),
+            barrier,
         });
 
         let execution = kraai_nushell_runtime::execute(plan, cancellation).await;
@@ -215,21 +236,60 @@ async fn persist_output_events(
     execution_id: ScriptExecutionId,
     mut events: UnboundedReceiver<OutputEvent>,
 ) -> std::result::Result<(), String> {
-    let mut first_error = None;
-    while let Some(event) = events.recv().await {
+    let chunk = |event: OutputEvent| {
         let stream = match event.stream {
             OutputStream::Stdout => ScriptOutputStream::Stdout,
             OutputStream::Stderr => ScriptOutputStream::Stderr,
         };
-        if let Err(error) = store
-            .append_output(&execution_id, stream, event.bytes)
-            .await
+        (stream, event.bytes)
+    };
+    let mut first_error = None;
+    while let Some(event) = events.recv().await {
+        // Everything that arrived while the previous batch was being written goes in one write.
+        let mut batch = vec![chunk(event)];
+        while let Ok(event) = events.try_recv() {
+            batch.push(chunk(event));
+        }
+        if let Err(error) = store.append_output(&execution_id, batch).await
             && first_error.is_none()
         {
             first_error = Some(error.to_string());
         }
     }
     first_error.map_or(Ok(()), Err)
+}
+
+/// Saves `bytes` when the model sees only part of them; the result omits the path on failure.
+async fn save_output_channel(
+    directory: &Path,
+    id: &ScriptExecutionId,
+    channel: &str,
+    bytes: &[u8],
+) -> Option<PathBuf> {
+    if !channel_needs_output_file(bytes) {
+        return None;
+    }
+    let path = directory.join(format!("{id}.{channel}"));
+    let write = {
+        let directory = directory.to_path_buf();
+        let path = path.clone();
+        let bytes = bytes.to_vec();
+        tokio::task::spawn_blocking(move || {
+            kraai_io::fs::create_dir_all(&directory)?;
+            kraai_io::fs::atomic_replace_private_unsynced(&path, &bytes)
+        })
+    };
+    match write.await {
+        Ok(Ok(())) => Some(path),
+        Ok(Err(error)) => {
+            tracing::warn!("Failed to save {channel} of script execution {id}: {error}");
+            None
+        }
+        Err(error) => {
+            tracing::warn!("Saving {channel} of script execution {id} stopped: {error}");
+            None
+        }
+    }
 }
 
 fn completion_from_output(

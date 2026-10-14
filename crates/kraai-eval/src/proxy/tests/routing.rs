@@ -17,10 +17,9 @@ async fn routing_state_round_trips_without_credentials_and_counts_final_usage_on
         ulid::Ulid::generate()
     ));
     fs::create_dir(&root)?;
-    let result = tokio::time::timeout(
-        Duration::from_secs(20),
-        exercise_routing_round_trip(root.join("proxy.events.jsonl")),
-    )
+    let result = kraai_test_support::hang_guard(exercise_routing_round_trip(
+        root.join("proxy.events.jsonl"),
+    ))
     .await;
     fs::remove_dir_all(root)?;
     result??;
@@ -121,8 +120,11 @@ async fn exercise_routing_round_trip(log_path: PathBuf) -> Result<()> {
         base_path: String::from("/v1"),
         log_path: log_path.clone(),
         max_requests: 2,
+        shutdown_drain_timeout: kraai_test_support::HANG_TIMEOUT,
     })?;
-    let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+    let client = Client::builder()
+        .timeout(kraai_test_support::HANG_TIMEOUT)
+        .build()?;
     let mut routing = None;
     let mut turn_state = None;
     let proxy_token = proxy.token.clone();

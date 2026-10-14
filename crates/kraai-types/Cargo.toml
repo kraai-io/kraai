@@ -7,11 +7,12 @@ rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
+kraai-execution-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [features]
-typescript = ["dep:ts-rs"]
+typescript = ["dep:ts-rs", "kraai-execution-types/typescript"]
 
 [dependencies.ts-rs]
 optional = true

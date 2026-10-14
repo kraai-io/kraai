@@ -7,9 +7,9 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::symlink;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
+use kraai_test_support::HANG_TIMEOUT;
 use tokio_util::sync::CancellationToken;
 
 use super::{capabilities, temp_dir};
@@ -44,7 +44,7 @@ fn shell_plan(
         PathBuf::from("/bin/sh"),
         workspace.to_path_buf(),
         capabilities(granted),
-        Duration::from_secs(10),
+        HANG_TIMEOUT,
     );
     plan.args = vec![OsString::from("-c"), OsString::from(script)];
     plan.runtime_roots = vec![PathBuf::from("/bin")];
@@ -272,7 +272,7 @@ async fn network_capability_and_private_ipc_paths_are_enforced() {
             executable.clone(),
             fixture.workspace(),
             capabilities(granted),
-            Duration::from_secs(10),
+            HANG_TIMEOUT,
         );
         plan.args = [
             "--exact",
@@ -339,7 +339,7 @@ fn network_probe_child() {
         .expect("TCP probe address")
         .parse()
         .expect("valid TCP probe address");
-    let tcp = TcpStream::connect_timeout(&address, Duration::from_secs(2));
+    let tcp = TcpStream::connect_timeout(&address, HANG_TIMEOUT);
     let unlisted = UnixStream::connect(
         std::env::var_os("KRAAI_UNLISTED_SOCKET").expect("unlisted Unix probe path"),
     );

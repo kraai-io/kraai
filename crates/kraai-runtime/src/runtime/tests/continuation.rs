@@ -5,10 +5,12 @@ use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderManager, ProviderRequest, ProviderRequestContext,
     ProviderStreamEvent,
 };
+use kraai_test_support::hang_guard;
 use kraai_types::{AssistantPhase, ChatRole, ModelId, ProviderId};
 use tokio::sync::mpsc;
 
-use super::harness::{RuntimeTestHarness, TEST_TIMEOUT, create_session_with_profile};
+use super::harness::FullHistory as _;
+use super::harness::{RuntimeTestHarness, create_session_with_profile};
 use crate::ContinueSessionOutcome;
 
 struct RecordingProvider {
@@ -83,7 +85,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
         .expect("runtime fixture");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let original_tip = {
-        let mut agent = harness.runtime.agent_manager.write().await;
+        let agent = &harness.runtime.agent_manager;
         let first = agent
             .prepare_start_stream(
                 &session_id,
@@ -103,29 +105,22 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
             .await;
         agent.complete_message(&first.message_id).await?;
         agent.clear_active_turn(&session_id);
-        drop(agent);
         first.message_id
     };
     if queued {
-        harness
-            .runtime
-            .restore_queued_messages(
-                &session_id,
-                vec![super::super::core::QueuedMessage {
-                    options: Default::default(),
-                    message: "queued message".into(),
-                    model_id: ModelId::new("old-model"),
-                    provider_id: ProviderId::new("old-provider"),
-                }],
-            )
-            .await;
+        super::harness::enqueue(
+            &harness.runtime,
+            &session_id,
+            vec![super::harness::queued(
+                "queued message".into(),
+                ModelId::new("old-model"),
+                ProviderId::new("old-provider"),
+            )],
+        )
+        .await;
     }
     let outcome = if wait_for_preparation {
-        let preparation = harness
-            .runtime
-            .session_preparations
-            .begin(&session_id)
-            .await;
+        super::harness::hold_preparation(&harness.runtime, &session_id).await;
         let continuation = harness.handle.continue_turn(
             session_id.clone(),
             "selected-model".into(),
@@ -134,28 +129,19 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
         );
         tokio::pin!(continuation);
         assert!(poll!(&mut continuation).is_pending());
-        tokio::time::timeout(TEST_TIMEOUT, async {
-            while harness.runtime.session_state_barrier.try_write().is_ok() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await?;
         assert_eq!(
-            tokio::time::timeout(
-                TEST_TIMEOUT,
-                harness.handle.continue_session(
-                    session_id.clone(),
-                    "old-model".into(),
-                    "old-provider".into(),
-                    Default::default(),
-                )
-            )
+            hang_guard(harness.handle.continue_session(
+                session_id.clone(),
+                "old-model".into(),
+                "old-provider".into(),
+                Default::default(),
+            ))
             .await??,
             ContinueSessionOutcome::NothingToContinue
         );
         assert!(received.try_recv().is_err());
-        drop(preparation);
-        tokio::time::timeout(TEST_TIMEOUT, continuation).await??
+        super::harness::release_preparation(&harness.runtime, &session_id).await;
+        hang_guard(continuation).await??
     } else {
         harness
             .handle
@@ -168,7 +154,7 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
             .await?
     };
     assert_eq!(outcome, ContinueSessionOutcome::Started);
-    let (model, request) = tokio::time::timeout(TEST_TIMEOUT, received.recv())
+    let (model, request) = hang_guard(received.recv())
         .await?
         .expect("provider request");
     assert_eq!(model.as_str(), "selected-model");
@@ -189,8 +175,6 @@ async fn assert_selected_model(queued: bool, wait_for_preparation: bool) -> Resu
     let tip = harness
         .runtime
         .agent_manager
-        .read()
-        .await
         .get_tip(&session_id)
         .await?
         .expect("tip");
@@ -229,10 +213,9 @@ async fn continuing_empty_session_does_not_start_a_turn() -> Result<()> {
             .await?,
         ContinueSessionOutcome::NothingToContinue
     );
-    let agent = harness.runtime.agent_manager.read().await;
+    let agent = &harness.runtime.agent_manager;
     assert!(!agent.is_turn_active(&session_id));
     assert!(agent.get_tip(&session_id).await?.is_none());
-    drop(agent);
     harness.shutdown().await;
     Ok(())
 }

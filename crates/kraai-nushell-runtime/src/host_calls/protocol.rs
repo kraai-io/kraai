@@ -1,12 +1,13 @@
 use std::io::{Read, Write};
 
 use hmac::{Hmac, KeyInit, Mac};
-use kraai_types::ScriptExecutionId;
+use kraai_execution_types::ScriptExecutionId;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-const MAX_FRAME_BYTES: usize = kraai_types::image::MAX_IMAGE_BYTES.div_ceil(3) * 4 + 64 * 1024;
+const MAX_FRAME_BYTES: usize =
+    kraai_execution_types::image::MAX_IMAGE_BYTES.div_ceil(3) * 4 + 64 * 1024;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -235,7 +236,7 @@ mod tests {
         write_authenticated_async, write_authenticated_sync,
     };
     use hmac::{Hmac, KeyInit, Mac};
-    use kraai_types::{CommandInvocationId, ScriptExecutionId, StateEffectAck};
+    use kraai_execution_types::{CommandInvocationId, ScriptExecutionId, StateEffectAck};
 
     #[tokio::test]
     async fn serialization_failure_preserves_errors_and_writes_no_frame()

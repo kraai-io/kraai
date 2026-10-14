@@ -1,4 +1,5 @@
 use color_eyre::eyre::{Result, ensure};
+use kraai_test_support::hang_guard;
 
 use super::*;
 
@@ -74,7 +75,7 @@ async fn a_closed_catalog_waits_for_replacement_without_spinning() -> Result<()>
     ensure!(futures::poll!(&mut forwarding).is_pending());
     ensure!(matches!(received.try_recv()?.event, Event::ModelsUpdated));
     drop(catalogs);
-    tokio::time::timeout(std::time::Duration::from_secs(1), forwarding).await?;
+    hang_guard(forwarding).await?;
     Ok(())
 }
 
@@ -86,7 +87,7 @@ async fn aborting_catalog_forwarding_releases_its_subscriptions() -> Result<()> 
     let mut received = events.subscribe();
     updates.send_replace(1);
     let forwarding = tokio::spawn(forward_model_catalog_updates(receiver, events));
-    let event = tokio::time::timeout(std::time::Duration::from_secs(1), received.recv()).await??;
+    let event = hang_guard(received.recv()).await??;
     ensure!(matches!(event.event, Event::ModelsUpdated));
     ensure!(updates.receiver_count() == 2);
     forwarding.abort();

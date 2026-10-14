@@ -84,7 +84,7 @@ async fn aggregate_limits_reject_before_loading_any_image() {
     let resolver = Arc::new(Resolver(AtomicUsize::new(0)));
     let context = ProviderRequestContext::default().with_image_resolver(resolver.clone());
     let mut large = image();
-    large.byte_length = kraai_types::image::MAX_IMAGE_BYTES as u64;
+    large.byte_length = kraai_execution_types::image::MAX_IMAGE_BYTES as u64;
     assert!(
         ResolvedImages::resolve(&[message(vec![large; 4])], &context)
             .await

@@ -1,5 +1,6 @@
 use super::*;
-use kraai_types::image::MAX_IMAGE_ATTACHMENTS;
+use kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS;
+use kraai_types::SessionId;
 
 impl App {
     pub(super) fn paste_image(&mut self) {
@@ -47,7 +48,7 @@ impl App {
 
     pub(super) fn recover_session_message(
         &mut self,
-        session_id: Option<String>,
+        session_id: Option<SessionId>,
         message: MessageContent,
     ) {
         self.recover_session_messages(session_id, vec![message]);
@@ -55,7 +56,7 @@ impl App {
 
     pub(super) fn recover_session_messages(
         &mut self,
-        session_id: Option<String>,
+        session_id: Option<SessionId>,
         messages: Vec<MessageContent>,
     ) {
         if self.state.current_session_id == session_id {

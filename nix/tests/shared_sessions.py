@@ -8,7 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from shared_sessions_support import Fixture, wait_for
+from shared_sessions_support import HANG_TIMEOUT, Fixture, wait_for
 
 
 def completed(client, request):
@@ -29,7 +29,9 @@ def rejected(fixture, client, session, marker):
 
 
 def started(reply):
-    assert reply.started.wait(timeout=15), "Provider did not receive the prompt"
+    assert reply.started.wait(timeout=HANG_TIMEOUT), (
+        "Provider did not receive the prompt"
+    )
 
 
 def running(fixture, session):
@@ -94,7 +96,7 @@ def concurrent_clients(fixture):
     started(first_reply)
     wait_for(
         "stream persisted",
-        lambda: "first-process-partial" in json.dumps(fixture.records(shared)),
+        lambda: fixture.streaming_message(shared, "first-process-partial"),
     )
     rejected(fixture, second, shared, "rejected-shared-input")
     second_reply = fixture.provider.add(text="second-process-partial", held=True)
@@ -125,7 +127,7 @@ def script_heartbeat(fixture):
     second.load(session)
     release_file = fixture.root / "heartbeat-release"
     fixture.provider.add(
-        script="# timeout=90sec permissions=no-sandbox\nprint 'heartbeat-started'; "
+        script="# timeout=10min permissions=no-sandbox\nprint 'heartbeat-started'; "
         f"while not ({json.dumps(str(release_file))} | path exists) {{ sleep 100ms }}; "
         "print 'heartbeat-script'"
     )
@@ -166,7 +168,7 @@ def killed_owner(fixture):
     session = first.session()
     second.load(session)
     fixture.provider.add(
-        script="# timeout=120sec permissions=no-sandbox\nprint 'orphan-started'; sleep 90sec; print 'orphan-script'"
+        script="# timeout=20min permissions=no-sandbox\nprint 'orphan-started'; sleep 10min; print 'orphan-script'"
     )
     first.prompt(session, "crashed-script-input")
     first.approve()
@@ -177,7 +179,7 @@ def killed_owner(fixture):
     )
     first.track_descendants()
     first.process.kill()
-    first.process.wait(timeout=5)
+    first.process.wait(timeout=HANG_TIMEOUT)
     active, expiry = fixture.lease(session)
     assert active and expiry > time.time_ns()
     rejected(fixture, second, session, "rejected-before-crash-expiry")
@@ -208,16 +210,11 @@ def paused_owner(fixture):
     started(old_reply)
     old_id = wait_for(
         "old streaming placeholder",
-        lambda: next(
-            (
-                record_id
-                for record_id, record in fixture.records(session).items()
-                if "old-owner-partial" in json.dumps(record)
-            ),
-            None,
-        ),
+        lambda: fixture.streaming_message(session, "old-owner-partial"),
     )
-    with contextlib.closing(sqlite3.connect(fixture.database, timeout=5)) as connection:
+    with contextlib.closing(
+        sqlite3.connect(fixture.database, timeout=HANG_TIMEOUT)
+    ) as connection:
         connection.execute("BEGIN IMMEDIATE")
         first.process.send_signal(signal.SIGSTOP)
         wait_for(
@@ -236,7 +233,7 @@ def paused_owner(fixture):
     started(new_reply)
     wait_for(
         "new owner placeholder",
-        lambda: "new-owner-partial" in json.dumps(fixture.records(session)),
+        lambda: fixture.streaming_message(session, "new-owner-partial"),
     )
     assert old_id not in fixture.records(session)
     first.process.send_signal(signal.SIGCONT)

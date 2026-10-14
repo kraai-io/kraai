@@ -3213,9 +3213,12 @@ dependencies = [
  "color-eyre",
  "futures",
  "image",
+ "kraai-execution-types",
  "kraai-mcp",
  "kraai-persistence",
+ "kraai-providers",
  "kraai-runtime",
+ "kraai-test-support",
  "kraai-types",
  "serde",
  "serde_json",
@@ -3224,6 +3227,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "ulid",
 ]
 
 [[package]]
@@ -3234,12 +3238,15 @@ dependencies = [
  "color-eyre",
  "directories",
  "futures",
- "kraai-command-catalog",
+ "kraai-commands",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-mcp",
  "kraai-persistence",
  "kraai-provider-core",
  "kraai-provider-openai-chat-completions",
+ "kraai-script-protocol",
+ "kraai-test-support",
  "kraai-types",
  "kraai-workspace-fs",
  "rusqlite",
@@ -3253,92 +3260,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "kraai-command-catalog"
-version = "0.1.0"
-dependencies = [
- "kraai-types",
-]
-
-[[package]]
-name = "kraai-command-close-files"
-version = "0.1.0"
-dependencies = [
- "kraai-command-catalog",
- "kraai-command-core",
- "kraai-types",
- "kraai-workspace-fs",
- "nu-engine",
- "nu-protocol",
-]
-
-[[package]]
-name = "kraai-command-core"
-version = "0.1.0"
-dependencies = [
- "kraai-types",
- "nu-protocol",
- "serde_json",
-]
-
-[[package]]
-name = "kraai-command-edit-file"
-version = "0.1.0"
-dependencies = [
- "kraai-command-catalog",
- "kraai-command-core",
- "kraai-workspace-fs",
- "nu-engine",
- "nu-protocol",
-]
-
-[[package]]
-name = "kraai-command-mcp"
+name = "kraai-commands"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
- "kraai-command-catalog",
- "kraai-command-core",
- "kraai-types",
- "nu-engine",
- "nu-protocol",
- "serde_json",
-]
-
-[[package]]
-name = "kraai-command-open-files"
-version = "0.1.0"
-dependencies = [
- "kraai-command-catalog",
- "kraai-command-core",
- "kraai-types",
- "kraai-workspace-fs",
- "nu-engine",
- "nu-protocol",
-]
-
-[[package]]
-name = "kraai-command-view-image"
-version = "0.1.0"
-dependencies = [
- "kraai-command-catalog",
- "kraai-command-core",
+ "kraai-execution-types",
  "kraai-io",
- "kraai-types",
+ "kraai-workspace-fs",
  "nix 0.31.3",
  "nu-engine",
  "nu-protocol",
+ "serde_json",
  "tempfile",
-]
-
-[[package]]
-name = "kraai-command-web-search"
-version = "0.1.0"
-dependencies = [
- "kraai-command-catalog",
- "kraai-command-core",
- "kraai-types",
- "nu-engine",
- "nu-protocol",
 ]
 
 [[package]]
@@ -3352,12 +3285,14 @@ dependencies = [
  "clap",
  "color-eyre",
  "futures",
+ "kraai-headless",
  "kraai-io",
  "kraai-persistence",
  "kraai-provider-core",
  "kraai-provider-openai-chat-completions",
  "kraai-provider-openai-codex",
  "kraai-sandbox",
+ "kraai-test-support",
  "kraai-types",
  "reqwest 0.13.5",
  "serde",
@@ -3372,10 +3307,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "kraai-execution-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ts-rs",
+]
+
+[[package]]
+name = "kraai-headless"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "color-eyre",
+ "futures",
+ "kraai-providers",
+ "kraai-runtime",
+ "kraai-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "kraai-io"
 version = "0.1.0"
 dependencies = [
  "http",
+ "kraai-test-support",
  "nix 0.31.3",
  "reqwest 0.13.5",
  "rustix 1.1.5",
@@ -3396,8 +3360,9 @@ dependencies = [
  "color-eyre",
  "futures",
  "http",
+ "kraai-execution-types",
  "kraai-io",
- "kraai-types",
+ "kraai-test-support",
  "reqwest 0.13.5",
  "rmcp",
  "serde",
@@ -3420,18 +3385,12 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "hmac",
- "kraai-command-catalog",
- "kraai-command-close-files",
- "kraai-command-core",
- "kraai-command-edit-file",
- "kraai-command-mcp",
- "kraai-command-open-files",
- "kraai-command-view-image",
- "kraai-command-web-search",
+ "kraai-commands",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-mcp",
  "kraai-sandbox",
- "kraai-types",
+ "kraai-test-support",
  "kraai-web",
  "nix 0.31.3",
  "nu-cli",
@@ -3463,10 +3422,12 @@ dependencies = [
  "color-eyre",
  "futures",
  "kraai-agent",
+ "kraai-execution-types",
  "kraai-nushell-runtime",
  "kraai-persistence",
  "kraai-provider-core",
  "kraai-sandbox",
+ "kraai-test-support",
  "kraai-types",
  "nix 0.31.3",
  "rustix 1.1.5",
@@ -3488,7 +3449,9 @@ dependencies = [
  "color-eyre",
  "directories",
  "image",
+ "kraai-execution-types",
  "kraai-io",
+ "kraai-test-support",
  "kraai-types",
  "nix 0.31.3",
  "rusqlite",
@@ -3511,7 +3474,9 @@ dependencies = [
  "directories",
  "futures",
  "httpdate",
+ "kraai-execution-types",
  "kraai-io",
+ "kraai-test-support",
  "kraai-types",
  "rand 0.10.3",
  "reqwest 0.13.5",
@@ -3531,8 +3496,10 @@ dependencies = [
  "async-trait",
  "color-eyre",
  "futures",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-provider-core",
+ "kraai-test-support",
  "kraai-types",
  "reqwest 0.13.5",
  "serde",
@@ -3548,8 +3515,10 @@ dependencies = [
  "base64 0.23.1",
  "color-eyre",
  "futures",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-provider-core",
+ "kraai-test-support",
  "kraai-types",
  "rand 0.10.3",
  "reqwest 0.13.5",
@@ -3566,6 +3535,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kraai-providers"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "color-eyre",
+ "kraai-provider-core",
+ "kraai-provider-openai-chat-completions",
+ "kraai-provider-openai-codex",
+ "tokio",
+]
+
+[[package]]
 name = "kraai-runtime"
 version = "0.1.0"
 dependencies = [
@@ -3574,16 +3555,17 @@ dependencies = [
  "futures",
  "image",
  "kraai-agent",
- "kraai-command-catalog",
+ "kraai-commands",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-mcp",
  "kraai-nushell-runtime",
  "kraai-persistence",
  "kraai-provider-core",
- "kraai-provider-openai-chat-completions",
- "kraai-provider-openai-codex",
+ "kraai-providers",
  "kraai-sandbox",
  "kraai-script-protocol",
+ "kraai-test-support",
  "kraai-types",
  "notify 8.2.0",
  "rusqlite",
@@ -3603,6 +3585,7 @@ dependencies = [
 name = "kraai-runtime-node"
 version = "0.1.0"
 dependencies = [
+ "kraai-providers",
  "kraai-runtime",
  "kraai-types",
  "napi",
@@ -3619,7 +3602,8 @@ dependencies = [
 name = "kraai-sandbox"
 version = "0.1.0"
 dependencies = [
- "kraai-types",
+ "kraai-execution-types",
+ "kraai-test-support",
  "libc",
  "nix 0.31.3",
  "rand 0.10.3",
@@ -3633,7 +3617,14 @@ dependencies = [
 name = "kraai-script-protocol"
 version = "0.1.0"
 dependencies = [
- "kraai-types",
+ "kraai-execution-types",
+]
+
+[[package]]
+name = "kraai-test-support"
+version = "0.1.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]
@@ -3646,10 +3637,13 @@ dependencies = [
  "color-eyre",
  "crossbeam-channel",
  "image",
+ "kraai-execution-types",
  "kraai-io",
  "kraai-persistence",
+ "kraai-providers",
  "kraai-runtime",
  "kraai-sandbox",
+ "kraai-test-support",
  "kraai-types",
  "markdown",
  "ratatui",
@@ -3669,6 +3663,7 @@ dependencies = [
 name = "kraai-types"
 version = "0.1.0"
 dependencies = [
+ "kraai-execution-types",
  "serde",
  "serde_json",
  "ts-rs",
@@ -3679,8 +3674,9 @@ name = "kraai-web"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "kraai-execution-types",
  "kraai-io",
- "kraai-types",
+ "kraai-test-support",
  "reqwest 0.13.5",
  "serde_json",
  "tokio",
@@ -3691,6 +3687,7 @@ name = "kraai-workspace-fs"
 version = "0.1.0"
 dependencies = [
  "kraai-io",
+ "kraai-test-support",
  "nix 0.31.3",
  "thiserror 2.0.21",
  "ulid",

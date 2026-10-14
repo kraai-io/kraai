@@ -1,12 +1,11 @@
 use color_eyre::eyre::Result;
 use futures::poll;
 use kraai_persistence::{RequestUsageStore, SqliteRequestUsageStore};
-use kraai_types::{ModelId, ProviderId, TokenUsage};
+use kraai_test_support::hang_guard;
+use kraai_types::{ModelId, ProviderId, SessionId, TokenUsage};
 use std::sync::Arc;
-use tokio::sync::oneshot;
 
-use super::harness::{RuntimeTestHarness, TEST_TIMEOUT, create_session_with_profile};
-use crate::runtime::core::ActiveStream;
+use super::harness::{RuntimeTestHarness, create_session_with_profile};
 
 #[tokio::test]
 async fn cancellation_waits_for_received_usage_to_be_persisted() -> Result<()> {
@@ -30,12 +29,12 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
     let mut events = event_tx.subscribe();
     let recorder = kraai_agent::AuxiliaryUsageRecorder {
         store: Arc::new(SqliteRequestUsageStore::new(&directory)),
-        session_id: String::from("session"),
+        session_id: SessionId::new("session"),
         barrier: Some(barrier.clone()),
         on_usage: Some(super::super::stream_driver::auxiliary_usage_observer(
             event_tx,
-            String::from("session"),
-            tasks.session_token("session"),
+            SessionId::new("session"),
+            tasks.session_token(&SessionId::new("session")),
         )),
     };
     let providers = kraai_provider_core::ProviderManager::new();
@@ -46,7 +45,8 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
         tokio::pin!(starting);
         assert!(poll!(&mut starting).is_pending());
     }
-    let session = tasks.wait_session("session");
+    let session_id = SessionId::new("session");
+    let session = tasks.wait_session(&session_id);
     tokio::pin!(session);
     tasks.close();
     let all = tasks.wait();
@@ -55,7 +55,7 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
     assert!(poll!(&mut all).is_pending());
     assert!(barrier.try_write().is_err());
     assert!(events.try_recv().is_err());
-    tokio::time::timeout(TEST_TIMEOUT, async {
+    hang_guard(async {
         tokio::join!(session, all);
     })
     .await?;
@@ -69,94 +69,83 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
             "Expected persisted auxiliary usage notification"
         ));
     };
-    assert_eq!(session_id, "session");
+    assert_eq!(session_id, SessionId::new("session"));
     let reopened = SqliteRequestUsageStore::new(&directory);
     assert_eq!(
-        reopened.load("session").await?.get(&request.message_id),
+        reopened
+            .load(&SessionId::new("session"))
+            .await?
+            .get(&request.message_id),
         Some(request.as_ref())
     );
-    reopened.delete("session").await?;
-    assert!(reopened.load("session").await?.is_empty());
+    reopened.delete(&SessionId::new("session")).await?;
+    assert!(reopened.load(&SessionId::new("session")).await?.is_empty());
     tokio::fs::remove_dir_all(directory).await?;
     Ok(())
 }
 
 async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut providers = kraai_provider_core::ProviderManager::new();
+    providers.register_provider(
+        ProviderId::new("mock"),
+        Box::new(super::shared_sessions::ControlledProvider {
+            events: tokio::sync::Mutex::new(std::collections::VecDeque::from([receiver])),
+        }),
+    );
+    let harness = RuntimeTestHarness::new_with_parts(providers)
         .await
         .expect("runtime regression fixture must initialize");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let request = harness
-        .runtime
-        .agent_manager
-        .write()
-        .await
-        .prepare_start_stream(
-            &session_id,
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
             "hello".into(),
-            ModelId::new("mock-model"),
-            ProviderId::new("mock"),
+            "mock-model".into(),
+            "mock".into(),
             Default::default(),
         )
         .await?;
-    let message_id = request.message_id;
-    let manager = Arc::clone(&harness.runtime.agent_manager);
-    let task_message_id = message_id.clone();
-    let (started_tx, started_rx) = oneshot::channel();
-    let (release_tx, release_rx) = oneshot::channel();
-    let (saved_tx, saved_rx) = oneshot::channel();
-    let task = harness.runtime.stream_tasks.spawn(&session_id, async move {
-        let agent = manager.read().await;
-        started_tx.send(()).unwrap();
-        release_rx.await.unwrap();
-        let request = agent
-            .set_streaming_message_usage(
-                &task_message_id,
-                TokenUsage {
-                    total_tokens: 42,
-                    input_tokens: 30,
-                    output_tokens: 12,
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap()
-            .unwrap();
-        saved_tx.send(request).unwrap();
-        drop(agent);
-        std::future::pending::<()>().await;
-    });
-    started_rx.await?;
-    harness.runtime.active_streams.lock().await.insert(
-        session_id.clone(),
-        ActiveStream {
-            message_id: message_id.clone(),
-            abort_handle: task.abort_handle(),
+    let message_id = super::harness::started_stream(&harness.events.snapshot(), &session_id);
+    sender.send(Ok(kraai_provider_core::ProviderStreamEvent::Usage(
+        TokenUsage {
+            total_tokens: 42,
+            input_tokens: 30,
+            output_tokens: 12,
+            ..Default::default()
         },
-    );
-    let (cancelled, saved) = {
-        let cancellation = async {
-            if shutdown {
-                harness.runtime.stop_active_work().await;
-                Ok(true)
-            } else {
-                harness.runtime.cancel_stream(session_id.clone()).await
+    )))?;
+    let events = harness
+        .events
+        .wait_for("received usage", |events| {
+            events.iter().any(|event| {
+                matches!(event, crate::Event::RequestUsageUpdated { request, .. } if request.usage.is_some())
+            })
+        })
+        .await;
+    let saved = events
+        .iter()
+        .find_map(|event| match event {
+            crate::Event::RequestUsageUpdated { request, .. } if request.usage.is_some() => {
+                Some(request.as_ref().clone())
             }
-        };
-        tokio::pin!(cancellation);
-        assert!(poll!(&mut cancellation).is_pending());
-        assert!(!task.is_finished());
-        release_tx.send(()).unwrap();
-        tokio::time::timeout(TEST_TIMEOUT, async { tokio::join!(cancellation, saved_rx) }).await?
+            _ => None,
+        })
+        .expect("usage event");
+    let cancelled = if shutdown {
+        hang_guard(harness.runtime.stop_active_work()).await?;
+        true
+    } else {
+        hang_guard(harness.handle.cancel_stream(session_id.clone())).await??
     };
-    assert!(cancelled?);
-    let saved = saved?;
-    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(cancelled);
     let requests = SqliteRequestUsageStore::new(&harness.data_dir)
         .load(&session_id)
         .await?;
     assert_eq!(requests.len(), 1);
     assert_eq!(requests.get(&message_id), Some(&saved));
+    drop(sender);
     harness.shutdown().await;
     Ok(())
 }

@@ -163,7 +163,7 @@ fn test_policy() -> HttpRetryPolicy {
         max_attempts: 20,
         initial_backoff: Duration::from_millis(5),
         max_delay: Duration::from_millis(50),
-        max_elapsed: Duration::from_secs(2),
+        max_elapsed: kraai_test_support::HANG_TIMEOUT,
     }
 }
 
@@ -525,7 +525,7 @@ async fn stops_after_max_attempts() -> Result<()> {
         max_attempts: 3,
         initial_backoff: Duration::from_millis(1),
         max_delay: Duration::from_millis(10),
-        max_elapsed: Duration::from_secs(1),
+        max_elapsed: kraai_test_support::HANG_TIMEOUT,
     };
     let collector = Arc::new(RetryCollector::default());
     let Some(client) = test_client_or_skip() else {
@@ -569,7 +569,7 @@ async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
         max_attempts: 3,
         initial_backoff: Duration::from_millis(7),
         max_delay: Duration::from_millis(20),
-        max_elapsed: Duration::from_secs(1),
+        max_elapsed: kraai_test_support::HANG_TIMEOUT,
     };
     let collector = Arc::new(RetryCollector::default());
     let Some(client) = test_client_or_skip() else {
@@ -658,7 +658,7 @@ async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
         max_attempts: 2,
         initial_backoff: Duration::from_millis(11),
         max_delay: Duration::from_millis(20),
-        max_elapsed: Duration::from_secs(1),
+        max_elapsed: kraai_test_support::HANG_TIMEOUT,
     };
     let Some(client) = test_client_or_skip() else {
         return Ok(());
@@ -705,11 +705,37 @@ fn default_retry_policy_is_bounded_and_jitter_stays_within_limits() {
 }
 
 #[tokio::test]
-async fn clamps_oversized_retry_after_to_max_delay() -> Result<()> {
+async fn returns_rate_limit_when_retry_after_exceeds_the_budget() -> Result<()> {
+    let address = spawn_server(vec![ScriptedResponse::Status {
+        status_line: "429 Too Many Requests",
+        headers: vec![("Retry-After", String::from("999999"))],
+        body: "wait",
+    }])
+    .await?;
+    let collector = Arc::new(RetryCollector::default());
+    let Some(client) = test_client_or_skip() else {
+        return Ok(());
+    };
+
+    let response = send_with_retry(
+        "responses",
+        &test_policy(),
+        &ProviderRequestContext::with_retry_observer(collector.clone()),
+        || client.get(format!("http://{address}/")).send(),
+    )
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(collector.snapshot().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn honors_retry_after_longer_than_max_delay_within_the_budget() -> Result<()> {
     let address = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "429 Too Many Requests",
-            headers: vec![("Retry-After", String::from("999999"))],
+            headers: vec![("Retry-After", String::from("1"))],
             body: "wait",
         },
         ScriptedResponse::Status {
@@ -733,10 +759,9 @@ async fn clamps_oversized_retry_after_to_max_delay() -> Result<()> {
     .await?;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let events = collector.snapshot();
     assert_eq!(
-        events.first().map(|event| event.delay),
-        Some(Duration::from_millis(50))
+        collector.snapshot().first().map(|event| event.delay),
+        Some(Duration::from_secs(1))
     );
     Ok(())
 }
@@ -766,4 +791,62 @@ async fn zero_attempt_policy_is_normalized_to_one_attempt() -> Result<()> {
 
     assert_eq!(response.status(), StatusCode::OK);
     Ok(())
+}
+
+#[tokio::test]
+async fn shared_cooldown_beyond_the_budget_fails_fast_without_sending() -> Result<()> {
+    let cooldown = Arc::new(super::ProviderCooldown::default());
+    cooldown.defer(kraai_test_support::HANG_TIMEOUT * 2);
+    let context = ProviderRequestContext::default().with_cooldown(cooldown);
+    let sent = std::sync::atomic::AtomicBool::new(false);
+    let Some(client) = test_client_or_skip() else {
+        return Ok(());
+    };
+    let Err(error) = send_with_retry("responses", &test_policy(), &context, || {
+        sent.store(true, std::sync::atomic::Ordering::SeqCst);
+        client.get("http://127.0.0.1:9/").send()
+    })
+    .await
+    else {
+        panic!("cooldown must stop the request");
+    };
+    assert!(!sent.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(matches!(
+        error.downcast_ref::<crate::ProviderError>(),
+        Some(crate::ProviderError::RateLimited {
+            retry_after: Some(_),
+            ..
+        })
+    ));
+    assert!(crate::is_transient_error(&error));
+    Ok(())
+}
+
+#[test]
+fn statuses_classify_into_transient_and_permanent_failures() {
+    let classify = |status| crate::ProviderError::from_status(status, None, String::new());
+    for status in [
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        StatusCode::REQUEST_TIMEOUT,
+    ] {
+        assert!(classify(status).is_transient(), "{status}");
+    }
+    for status in [
+        StatusCode::BAD_REQUEST,
+        StatusCode::UNAUTHORIZED,
+        StatusCode::NOT_FOUND,
+    ] {
+        assert!(!classify(status).is_transient(), "{status}");
+    }
+    assert!(matches!(
+        crate::ProviderError::from_body(
+            StatusCode::BAD_REQUEST,
+            None,
+            r#"{"error":{"code":"context_length_exceeded"}}"#,
+            String::new()
+        ),
+        crate::ProviderError::ContextWindowExceeded(_)
+    ));
 }

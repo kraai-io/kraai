@@ -8,7 +8,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::{DetachedFixture, capabilities, temp_dir};
 use crate::{LaunchPlan, Termination, run};
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
+use kraai_test_support::{HANG_TIMEOUT, hang_guard};
 
 const PROBE: &str = "tests::process::group_change::changing_group_child";
 const MODE: &str = "KRAAI_GROUP_CHANGE";
@@ -39,7 +40,7 @@ fn changing_group_child() {
     std::io::stdout().flush().expect("flush announcement");
     close(libc::STDOUT_FILENO).expect("close stdout");
     close(libc::STDERR_FILENO).expect("close stderr");
-    std::thread::sleep(Duration::from_secs(30));
+    std::thread::sleep(HANG_TIMEOUT * 2);
     let _ = holder.wait();
 }
 
@@ -56,6 +57,8 @@ async fn changing_group_does_not_prevent_termination(cancelled: bool) {
     plan.environment.insert(MODE.into(), "parent".into());
     let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
     plan.output_events = Some(sender);
+    let (started, execution_started) = tokio::sync::oneshot::channel();
+    plan.execution_started = Some(execution_started);
     let cancellation = CancellationToken::new();
     let cancel = cancellation.clone();
     let ready = async move {
@@ -65,17 +68,17 @@ async fn changing_group_does_not_prevent_termination(cancelled: bool) {
             if output.windows(13).any(|bytes| bytes == b"group changed") {
                 if cancelled {
                     cancel.cancel();
+                } else {
+                    let _ = started.send(tokio::time::Instant::now());
                 }
                 return;
             }
         }
         panic!("process exited before changing groups");
     };
-    let (result, ()) = tokio::time::timeout(Duration::from_secs(8), async {
-        tokio::join!(run(plan, cancellation), ready)
-    })
-    .await
-    .expect("termination must not wait for the escaped main process");
+    let (result, ()) = hang_guard(async { tokio::join!(run(plan, cancellation), ready) })
+        .await
+        .expect("termination must not wait for the escaped main process");
     let output = result.expect("run changed process group");
     assert_eq!(
         output.termination,

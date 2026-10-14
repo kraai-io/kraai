@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use kraai_types::SessionId;
 use tokio::sync::broadcast;
 
 use crate::{Event, RuntimeEvent};
@@ -11,10 +12,10 @@ pub(crate) struct RuntimeEventSender {
 
 struct EventState {
     tx: broadcast::Sender<RuntimeEvent>,
-    sessions: std::collections::HashMap<String, broadcast::Sender<RuntimeEvent>>,
+    sessions: std::collections::HashMap<SessionId, broadcast::Sender<RuntimeEvent>>,
     capacity: usize,
     sequence: u64,
-    timers: std::collections::HashMap<String, crate::TurnTimer>,
+    timers: std::collections::HashMap<SessionId, crate::TurnTimer>,
 }
 
 impl RuntimeEventSender {
@@ -39,7 +40,7 @@ impl RuntimeEventSender {
         ) && let Some(session_id) = event.session_id()
         {
             let now = std::time::Instant::now();
-            let timer = state.timers.entry(session_id.to_string()).or_default();
+            let timer = state.timers.entry(session_id.clone()).or_default();
             let previous = *timer;
             match &event {
                 Event::StreamStart { .. } => timer.resume(now),
@@ -48,7 +49,7 @@ impl RuntimeEventSender {
             }
             if *timer != previous {
                 let timing = Event::TurnTimingChanged {
-                    session_id: session_id.to_string(),
+                    session_id: session_id.clone(),
                     timer: *timer,
                 };
                 Self::publish(&mut state, timing);
@@ -80,7 +81,7 @@ impl RuntimeEventSender {
         let _ = state.tx.send(event);
     }
 
-    pub(crate) fn remove_timer(&self, session_id: &str) {
+    pub(crate) fn remove_timer(&self, session_id: &SessionId) {
         self.state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -88,32 +89,32 @@ impl RuntimeEventSender {
             .remove(session_id);
     }
 
-    pub(crate) fn finish_timer(&self, session_id: &str) {
+    pub(crate) fn finish_timer(&self, session_id: &SessionId) {
         self.update_timer(session_id, crate::TurnTimer::finish);
     }
 
-    pub(crate) fn resume_timer(&self, session_id: &str) {
+    pub(crate) fn resume_timer(&self, session_id: &SessionId) {
         self.update_timer(session_id, crate::TurnTimer::resume);
     }
 
     fn update_timer(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         update: fn(&mut crate::TurnTimer, std::time::Instant),
     ) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let timer = state.timers.entry(session_id.to_string()).or_default();
+        let timer = state.timers.entry(session_id.clone()).or_default();
         let now = std::time::Instant::now();
         update(timer, now);
         let event = Event::TurnTimingChanged {
-            session_id: session_id.to_string(),
+            session_id: session_id.clone(),
             timer: *timer,
         };
         Self::publish(&mut state, event);
         drop(state);
     }
 
-    pub(crate) fn timer_snapshot(&self, session_id: &str) -> (u64, crate::TurnTimer) {
+    pub(crate) fn timer_snapshot(&self, session_id: &SessionId) -> (u64, crate::TurnTimer) {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         (
             state.sequence,
@@ -129,7 +130,10 @@ impl RuntimeEventSender {
             .subscribe()
     }
 
-    pub(crate) fn subscribe_session(&self, session_id: &str) -> broadcast::Receiver<RuntimeEvent> {
+    pub(crate) fn subscribe_session(
+        &self,
+        session_id: &SessionId,
+    ) -> broadcast::Receiver<RuntimeEvent> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state
             .sessions
@@ -137,7 +141,7 @@ impl RuntimeEventSender {
         let capacity = state.capacity;
         state
             .sessions
-            .entry(session_id.to_string())
+            .entry(session_id.clone())
             .or_insert_with(|| broadcast::channel(capacity).0)
             .subscribe()
     }
@@ -163,13 +167,14 @@ mod tests {
     fn scoped_subscribers_are_isolated_and_receive_service_failures()
     -> Result<(), broadcast::error::TryRecvError> {
         let sender = RuntimeEventSender::new(2);
-        let mut first = sender.subscribe_session("first");
-        let mut second = sender.subscribe_session("second");
+        let mut first = sender.subscribe_session(&SessionId::new("first"));
+        let mut second = sender.subscribe_session(&SessionId::new("second"));
         for _ in 0..1025 {
-            sender.send(Event::StreamChunk {
-                session_id: "second".into(),
+            sender.send(Event::ItemDelta {
+                session_id: SessionId::new("second"),
                 message_id: "message".into(),
-                chunk: "text".into(),
+                item_index: 0,
+                delta: "text".into(),
             });
         }
         assert!(matches!(
@@ -198,22 +203,23 @@ mod tests {
     fn scoped_channels_preserve_order_and_release_detached_sessions()
     -> Result<(), broadcast::error::TryRecvError> {
         let sender = RuntimeEventSender::new(4);
-        let mut first = sender.subscribe_session("first");
+        let mut first = sender.subscribe_session(&SessionId::new("first"));
         let mut global = sender.subscribe();
-        sender.send(Event::StreamChunk {
-            session_id: "first".into(),
+        sender.send(Event::ItemDelta {
+            session_id: SessionId::new("first"),
             message_id: "message".into(),
-            chunk: "text".into(),
+            item_index: 0,
+            delta: "text".into(),
         });
         assert_eq!(first.try_recv()?.sequence, global.try_recv()?.sequence);
         drop(first);
-        let _second = sender.subscribe_session("second");
+        let _second = sender.subscribe_session(&SessionId::new("second"));
         let state = sender
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        assert!(!state.sessions.contains_key("first"));
-        assert!(state.sessions.contains_key("second"));
+        assert!(!state.sessions.contains_key(&SessionId::new("first")));
+        assert!(state.sessions.contains_key(&SessionId::new("second")));
         drop(state);
         Ok(())
     }
@@ -221,30 +227,30 @@ mod tests {
     #[test]
     fn terminal_events_do_not_finish_a_turn_before_cleanup() {
         let sender = RuntimeEventSender::new(16);
-        sender.resume_timer("session");
-        let (_, timer) = sender.timer_snapshot("session");
+        sender.resume_timer(&SessionId::new("session"));
+        let (_, timer) = sender.timer_snapshot(&SessionId::new("session"));
         for event in [
             Event::StreamError {
-                session_id: "session".into(),
+                session_id: SessionId::new("session"),
                 message_id: "message".into(),
                 error: "rollback failed".into(),
             },
             Event::ContinuationFailed {
-                session_id: "session".into(),
+                session_id: SessionId::new("session"),
                 error: "rollback failed".into(),
             },
             Event::StreamCancelled {
-                session_id: "session".into(),
+                session_id: SessionId::new("session"),
                 message_id: "message".into(),
             },
         ] {
             sender.send(event);
-            assert_eq!(sender.timer_snapshot("session").1, timer);
+            assert_eq!(sender.timer_snapshot(&SessionId::new("session")).1, timer);
         }
-        sender.finish_timer("session");
+        sender.finish_timer(&SessionId::new("session"));
         assert!(
             sender
-                .timer_snapshot("session")
+                .timer_snapshot(&SessionId::new("session"))
                 .1
                 .elapsed(std::time::Instant::now())
                 .is_none()
@@ -256,24 +262,24 @@ mod tests {
         let sender = RuntimeEventSender::new(16);
         let receiver = sender.subscribe();
         sender.send(Event::StreamStart {
-            session_id: "first".into(),
+            session_id: SessionId::new("first"),
             message_id: "message".into(),
         });
-        let (_, first) = sender.timer_snapshot("first");
+        let (_, first) = sender.timer_snapshot(&SessionId::new("first"));
         drop(receiver);
         sender.send(Event::StreamStart {
-            session_id: "second".into(),
+            session_id: SessionId::new("second"),
             message_id: "other".into(),
         });
         sender.send(Event::StreamCancelled {
-            session_id: "second".into(),
+            session_id: SessionId::new("second"),
             message_id: "other".into(),
         });
         let _receiver = sender.subscribe();
-        assert_eq!(sender.timer_snapshot("first").1, first);
+        assert_eq!(sender.timer_snapshot(&SessionId::new("first")).1, first);
         assert!(first.elapsed(std::time::Instant::now()).is_some());
-        sender.finish_timer("first");
-        let finished = sender.timer_snapshot("first").1;
+        sender.finish_timer(&SessionId::new("first"));
+        let finished = sender.timer_snapshot(&SessionId::new("first")).1;
         assert!(finished.elapsed(std::time::Instant::now()).is_none());
         assert!(finished.last_duration().is_some());
     }

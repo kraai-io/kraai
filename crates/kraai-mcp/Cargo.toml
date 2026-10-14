@@ -12,8 +12,8 @@ base64.workspace = true
 color-eyre.workspace = true
 futures.workspace = true
 http.workspace = true
+kraai-execution-types.workspace = true
 kraai-io = { workspace = true, features = ["http"] }
-kraai-types.workspace = true
 reqwest.workspace = true
 rmcp.workspace = true
 serde.workspace = true
@@ -29,4 +29,5 @@ url.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+kraai-test-support = { workspace = true }
 tempfile.workspace = true

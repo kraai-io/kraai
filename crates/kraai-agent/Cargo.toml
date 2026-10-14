@@ -10,11 +10,13 @@ version = "0.1.0"
 color-eyre = { workspace = true }
 directories = { workspace = true }
 futures = { workspace = true }
-kraai-command-catalog = { workspace = true }
+kraai-commands = { workspace = true }
+kraai-execution-types.workspace = true
 kraai-io = { workspace = true, features = ["async"] }
 kraai-mcp.workspace = true
 kraai-persistence = { workspace = true }
 kraai-provider-core = { workspace = true }
+kraai-script-protocol = { workspace = true }
 kraai-types = { workspace = true }
 kraai-workspace-fs = { workspace = true }
 serde = { workspace = true }
@@ -28,5 +30,6 @@ ulid = { workspace = true }
 [dev-dependencies]
 async-trait = { workspace = true }
 kraai-provider-openai-chat-completions = { workspace = true }
+kraai-test-support = { workspace = true }
 rusqlite.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

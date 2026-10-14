@@ -12,7 +12,7 @@ async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() -> Resul
         let retained = root.join("retained.txt");
         let event = store
             .append_runtime(
-                "session",
+                &SessionId::new("session"),
                 "test",
                 vec![
                     ContextStateMutation::PinFile {
@@ -41,7 +41,12 @@ async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() -> Resul
             },
         ];
         store
-            .save_snapshots("session", Some(&event.id), snapshots.clone(), vec![])
+            .save_snapshots(
+                &SessionId::new("session"),
+                Some(&event.id),
+                snapshots.clone(),
+                vec![],
+            )
             .await?;
         let mutations = vec![ContextStateMutation::UnpinFile {
             path: closed.clone(),
@@ -51,7 +56,7 @@ async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() -> Resul
             "command" => {
                 store
                     .append_command(
-                        "session",
+                        &SessionId::new("session"),
                         &ScriptExecutionId::new("execution"),
                         0,
                         &CommandInvocationId::new("invocation"),
@@ -61,27 +66,39 @@ async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() -> Resul
                     .await?;
             }
             "runtime" => {
-                store.append_runtime("session", "test", mutations).await?;
+                store
+                    .append_runtime(&SessionId::new("session"), "test", mutations)
+                    .await?;
             }
             _ => {
                 store
-                    .save_snapshots("session", Some(&event.id), snapshots.clone(), mutations)
+                    .save_snapshots(
+                        &SessionId::new("session"),
+                        Some(&event.id),
+                        snapshots.clone(),
+                        mutations,
+                    )
                     .await?;
             }
         }
         let restarted = SqliteContextStateStore::new(&root);
-        let saved = restarted.load("session").await?;
+        let saved = restarted.load(&SessionId::new("session")).await?;
         ensure!(saved.snapshots == snapshots.get(1..).unwrap_or_default());
         ensure!(saved.events.len() == 2);
         ensure!(
             store
-                .save_snapshots("session", Some(&event.id), snapshots.clone(), vec![])
+                .save_snapshots(
+                    &SessionId::new("session"),
+                    Some(&event.id),
+                    snapshots.clone(),
+                    vec![]
+                )
                 .await
                 .is_err()
         );
         store
             .append_runtime(
-                "session",
+                &SessionId::new("session"),
                 "test",
                 vec![ContextStateMutation::PinFile {
                     path: closed,
@@ -89,7 +106,7 @@ async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() -> Resul
                 }],
             )
             .await?;
-        ensure!(store.snapshots("session").await? == saved.snapshots);
+        ensure!(store.snapshots(&SessionId::new("session")).await? == saved.snapshots);
         fs::remove_dir_all(root).await?;
     }
     Ok(())
@@ -103,7 +120,7 @@ async fn snapshot_commit_checks_event_revision_and_atomically_applies_removals()
     let path = root.join("file.txt");
     let event = store
         .append_runtime(
-            "session",
+            &SessionId::new("session"),
             "test",
             vec![ContextStateMutation::PinFile {
                 path: path.clone(),
@@ -118,13 +135,18 @@ async fn snapshot_commit_checks_event_revision_and_atomically_applies_removals()
         text: "original\r\n".into(),
     };
     store
-        .save_snapshots("session", Some(&event.id), vec![snapshot.clone()], vec![])
+        .save_snapshots(
+            &SessionId::new("session"),
+            Some(&event.id),
+            vec![snapshot.clone()],
+            vec![],
+        )
         .await?;
     let reopened = SqliteContextStateStore::new(&root);
-    ensure!(reopened.snapshots("session").await? == vec![snapshot.clone()]);
+    ensure!(reopened.snapshots(&SessionId::new("session")).await? == vec![snapshot.clone()]);
     let later = store
         .append_runtime(
-            "session",
+            &SessionId::new("session"),
             "test",
             vec![ContextStateMutation::PinFile {
                 path: path.clone(),
@@ -138,25 +160,45 @@ async fn snapshot_commit_checks_event_revision_and_atomically_applies_removals()
     }];
     ensure!(
         store
-            .save_snapshots("session", Some(&event.id), vec![], removals.clone())
+            .save_snapshots(
+                &SessionId::new("session"),
+                Some(&event.id),
+                vec![],
+                removals.clone()
+            )
             .await
             .is_err()
     );
-    ensure!(store.snapshots("session").await? == vec![snapshot.clone()]);
-    ensure!(store.list("session").await?.len() == 2);
+    ensure!(store.snapshots(&SessionId::new("session")).await? == vec![snapshot.clone()]);
+    ensure!(store.list(&SessionId::new("session")).await?.len() == 2);
     store
-        .save_snapshots("session", Some(&later.id), vec![], removals.clone())
+        .save_snapshots(
+            &SessionId::new("session"),
+            Some(&later.id),
+            vec![],
+            removals.clone(),
+        )
         .await?;
-    ensure!(store.snapshots("session").await?.is_empty());
-    let events = store.list("session").await?;
+    ensure!(
+        store
+            .snapshots(&SessionId::new("session"))
+            .await?
+            .is_empty()
+    );
+    let events = store.list(&SessionId::new("session")).await?;
     ensure!(
         events
             .last()
             .is_some_and(|event| event.mutations == removals)
     );
-    store.delete("session").await?;
-    ensure!(store.list("session").await?.is_empty());
-    ensure!(store.snapshots("session").await?.is_empty());
+    store.delete(&SessionId::new("session")).await?;
+    ensure!(store.list(&SessionId::new("session")).await?.is_empty());
+    ensure!(
+        store
+            .snapshots(&SessionId::new("session"))
+            .await?
+            .is_empty()
+    );
     fs::remove_dir_all(root).await?;
     Ok(())
 }

@@ -64,7 +64,7 @@ async fn image_requests_require_enabled_command_and_preserve_authenticated_bytes
         let (reader, writer) = tokio::io::split(server);
         let task = tokio::spawn(async move {
             let commands = if enabled {
-                vec![String::from(kraai_command_catalog::VIEW_IMAGE.id)]
+                vec![String::from(kraai_commands::view_image::METADATA.id)]
             } else {
                 vec![]
             };

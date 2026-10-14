@@ -1,6 +1,5 @@
 #![deny(unsafe_code)]
 
-mod commands;
 mod effects;
 mod execution;
 mod host;
@@ -52,13 +51,13 @@ pub fn run_host_process() -> i32 {
         request.event_secret,
         transport,
     ));
-    let context = kraai_command_core::CommandContext::new(
+    let context = kraai_commands::CommandContext::new(
         host_client.clone(),
         host_client.clone(),
         host_client.clone(),
         host_client,
     );
-    let registry = match commands::command_registry(context) {
+    let registry = match kraai_commands::command_registry(context) {
         Ok(registry) => registry,
         Err(error) => {
             report_host_error(format!("invalid built-in command registry: {error}"));

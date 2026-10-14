@@ -91,11 +91,12 @@ mod tests {
     fn running_timer_round_trips_with_elapsed_time() -> serde_json::Result<()> {
         let now = Instant::now();
         let mut timer = TurnTimer::default();
-        timer.start(now - Duration::from_secs(60));
+        timer.start(now);
         let restored: TurnTimer = serde_json::from_str(&serde_json::to_string(&timer)?)?;
-        let elapsed = restored.elapsed(Instant::now());
+        let checked = Instant::now() + Duration::from_secs(60);
+        let elapsed = restored.elapsed(checked);
         assert!(elapsed >= Some(Duration::from_secs(59)));
-        assert!(elapsed < Some(Duration::from_secs(62)));
+        assert!(elapsed < Some(checked.duration_since(now) + Duration::from_secs(2)));
         Ok(())
     }
 

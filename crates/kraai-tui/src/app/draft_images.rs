@@ -1,6 +1,7 @@
 use std::ops::Range;
 
-use kraai_types::{ContentPart, ImageAttachment, MessageContent};
+use kraai_execution_types::ImageAttachment;
+use kraai_types::{ContentPart, MessageContent};
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct DraftImages {

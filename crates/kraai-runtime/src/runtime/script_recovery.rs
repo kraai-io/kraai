@@ -1,14 +1,15 @@
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use color_eyre::eyre::Result;
+use kraai_execution_types::{ScriptExecutionPhase, ScriptExecutionStatus};
 use kraai_persistence::ScriptExecutionCompletion;
-use kraai_types::{MessageId, ScriptExecutionPhase, ScriptExecutionStatus};
+use kraai_types::{MessageId, SessionId};
 
 use super::core::RuntimeCore;
 use super::script_execution::CompletedScriptExecution;
 
 impl RuntimeCore {
-    pub(crate) async fn recover_session_executions(&self, session_id: &str) -> Result<()> {
+    pub(crate) async fn recover_session_executions(&self, session_id: &SessionId) -> Result<()> {
         if !self.session_store.owns_turn(session_id).await? {
             return Err(color_eyre::eyre::eyre!(
                 "Session recovery requires turn ownership"
@@ -18,8 +19,8 @@ impl RuntimeCore {
         if records.is_empty() {
             return Ok(());
         }
-        let sessions = self.agent_manager.read().await.list_session_ids().await?;
-        let mut sources: HashMap<String, HashSet<MessageId>> = HashMap::new();
+        let sessions = self.agent_manager.list_session_ids().await?;
+        let mut sources: HashMap<SessionId, HashSet<MessageId>> = HashMap::new();
         for record in &records {
             if sessions.contains(&record.session_id) {
                 sources
@@ -28,7 +29,7 @@ impl RuntimeCore {
                     .insert(record.source_message_id.clone());
             }
         }
-        let mut histories: HashMap<String, HashSet<MessageId>> = HashMap::new();
+        let mut histories: HashMap<SessionId, HashSet<MessageId>> = HashMap::new();
         for record in records {
             if !sessions.contains(&record.session_id) {
                 continue;
@@ -37,8 +38,6 @@ impl RuntimeCore {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => entry.insert(
                     self.agent_manager
-                        .read()
-                        .await
                         .reachable_message_ids(
                             &record.session_id,
                             sources.remove(&record.session_id).unwrap_or_default(),
@@ -49,7 +48,8 @@ impl RuntimeCore {
             if !history.contains(&record.source_message_id) {
                 continue;
             }
-            let completed = if record.phase == kraai_types::ScriptExecutionPhase::Finished {
+            let completed = if record.phase == kraai_execution_types::ScriptExecutionPhase::Finished
+            {
                 CompletedScriptExecution {
                     output: self.execution_store.read_output(&record.id).await?,
                     record,
@@ -74,12 +74,10 @@ impl RuntimeCore {
                 CompletedScriptExecution { record, output }
             };
 
-            let result = completed.render_result()?;
+            let result = self.render_script_result(&completed).await?;
             let result_message_id = completed.record.result_message_id.clone();
             let session_id = completed.record.session_id.clone();
             self.agent_manager
-                .write()
-                .await
                 .add_script_result_to_history(
                     &session_id,
                     result_message_id.clone(),

@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use kraai_execution_types::{SandboxCapabilities, SandboxCapability, ScriptExecutionId};
 use kraai_nushell_runtime::ScriptExecutionPlan;
 use kraai_sandbox::PrivateTempConfig;
-use kraai_types::{SandboxCapabilities, SandboxCapability, ScriptExecutionId};
+use kraai_test_support::{HANG_TIMEOUT, hang_guard};
 use ulid::Ulid;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -33,10 +34,10 @@ impl FakeHost {
             SandboxCapabilities::new([SandboxCapability::NoSandbox])?,
             timeout,
         );
-        plan.host_arguments = ["-c", "exec sleep 30"]
-            .into_iter()
-            .map(Into::into)
-            .collect();
+        plan.host_arguments = vec![
+            "-c".into(),
+            format!("exec sleep {}", (HANG_TIMEOUT * 2).as_secs()).into(),
+        ];
         plan.environment.insert(String::from("PATH"), path);
         plan.private_temp = private_temp;
         Ok(Self { plan, socket })
@@ -44,7 +45,7 @@ impl FakeHost {
 }
 
 pub async fn connect(path: &Path) -> TestResult<tokio::net::UnixStream> {
-    Ok(tokio::time::timeout(Duration::from_secs(2), async {
+    Ok(hang_guard(async {
         loop {
             match tokio::net::UnixStream::connect(path).await {
                 Ok(stream) => return Ok::<_, std::io::Error>(stream),

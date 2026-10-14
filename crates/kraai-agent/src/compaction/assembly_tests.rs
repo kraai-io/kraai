@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn assembly_preserves_history_and_file_snapshot_order() {
+fn assembly_preserves_history_and_context_section_order() {
     let user = ConversationItem::User {
         content: "request".into(),
     };
@@ -45,7 +45,23 @@ fn assembly_preserves_history_and_file_snapshot_order() {
     let file = |text: &str| ConversationItem::FileContext { text: text.into() };
     let request = assemble(
         "instructions",
-        &snapshots,
+        &crate::context_state::RefreshedContextState {
+            snapshots,
+            instructions: [
+                (None, "top instructions"),
+                (Some("old"), "compacted instructions"),
+                (Some("user"), "changed instructions"),
+            ]
+            .into_iter()
+            .map(|(anchor, text)| kraai_persistence::InstructionSnapshot {
+                key: text.into(),
+                label: text.into(),
+                anchor: anchor.map(MessageId::new),
+                text: text.into(),
+            })
+            .collect(),
+            ..Default::default()
+        },
         Some(&previous),
         vec![
             message("user", user.clone()),
@@ -61,9 +77,12 @@ fn assembly_preserves_history_and_file_snapshot_order() {
                 text: "instructions".into(),
             },
             replacement,
+            file("top instructions"),
+            file("compacted instructions"),
             file("first unanchored file"),
             file("second unanchored file"),
             user,
+            file("changed instructions"),
             file("first user file"),
             file("second user file"),
             reply,

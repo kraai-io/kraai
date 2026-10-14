@@ -12,13 +12,14 @@ const SUMMARY_PREFIX: &str = "Another language model worked on this task and pro
 impl ContextCompaction {
     pub(super) async fn summarize(
         &self,
+        original: &ProviderRequest,
         providers: &ProviderManager,
         provider_id: &ProviderId,
         model_id: &ModelId,
         native: bool,
         requests: &mut Vec<RequestUsage>,
     ) -> Result<ConversationItem> {
-        let mut request = self.original.clone();
+        let mut request = original.clone();
         request
             .messages
             .retain(|item| !matches!(item, ConversationItem::FileContext { .. }));
@@ -42,7 +43,7 @@ impl ContextCompaction {
             requests.push(observer.snapshot().await);
             let mut context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
                 observer.clone(),
-                self.session_id.clone(),
+                self.session_id.to_string(),
             );
             if let Some(resolver) = &self.image_resolver {
                 context = context.with_image_resolver(resolver.clone());
@@ -75,6 +76,11 @@ impl ContextCompaction {
                         ProviderStreamEvent::Usage(usage) => observer.save_usage(usage).await?,
                         ProviderStreamEvent::ScriptCall { .. } => {
                             return Err(eyre!("Compaction returned an unexpected tool call"));
+                        }
+                        ProviderStreamEvent::Finished {
+                            stop_reason: kraai_provider_core::StopReason::MaxOutputTokens,
+                        } => {
+                            return Err(eyre!("Compaction stopped at the output token limit"));
                         }
                         _ => {}
                     }

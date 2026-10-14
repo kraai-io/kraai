@@ -5,7 +5,7 @@ use color_eyre::eyre::Result;
 #[tokio::test]
 async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<()> {
     use kraai_persistence::MessageStore;
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let provider = ProviderId::new("mock");
     let request = manager
@@ -30,7 +30,16 @@ async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<(
             "Answer",
         )
         .await;
-    assert_eq!(visible.as_deref(), Some("Answer"));
+    assert_eq!(
+        visible,
+        Some(StreamedItem::Started {
+            index: 1,
+            item: AssistantItem::Text {
+                phase: AssistantPhase::FinalAnswer,
+                text: String::from("Answer"),
+            },
+        })
+    );
     manager.complete_message(&request.message_id).await?;
     manager.clear_active_turn(&session);
     let stored = kraai_persistence::SqliteMessageStore::new(&data_dir)
@@ -58,7 +67,7 @@ async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<(
 
 #[tokio::test]
 async fn cancelling_reasoning_only_stream_does_not_leave_an_orphan() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session = manager.create_session().await?;
     let request = manager
         .prepare_start_stream(
@@ -142,15 +151,17 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
     assert_eq!(restored.generation, original.generation);
     assert_eq!(restored.parent_id, original.parent_id);
     assert_eq!(
-        manager
-            .append_text_chunk(
-                &request.message_id,
-                "answer",
-                AssistantPhase::FinalAnswer,
-                " output",
-            )
-            .await
-            .as_deref(),
+        super::common::streamed_text(
+            manager
+                .append_text_chunk(
+                    &request.message_id,
+                    "answer",
+                    AssistantPhase::FinalAnswer,
+                    " output",
+                )
+                .await
+        )
+        .as_deref(),
         Some(" output")
     );
     manager.complete_message(&request.message_id).await?;
@@ -176,7 +187,7 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
 
 #[tokio::test]
 async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let first = manager
         .prepare_start_stream(
@@ -229,7 +240,7 @@ async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<
 
 #[tokio::test]
 async fn duplicate_continuation_trigger_is_ignored_while_stream_is_active() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     manager
@@ -270,7 +281,7 @@ async fn duplicate_continuation_trigger_is_ignored_while_stream_is_active() -> R
 
 #[tokio::test]
 async fn prepare_continuation_restarts_a_new_turn_after_previous_turn_is_cleared() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     manager
@@ -303,7 +314,7 @@ async fn prepare_continuation_restarts_a_new_turn_after_previous_turn_is_cleared
 
 #[tokio::test]
 async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
 
     let first = manager
@@ -333,8 +344,8 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
             String::from("coding"),
             call_id,
             String::from("42").into(),
-            kraai_types::ScriptExecutionOutcome {
-                status: kraai_types::ScriptExecutionStatus::Completed,
+            kraai_execution_types::ScriptExecutionOutcome {
+                status: kraai_execution_types::ScriptExecutionStatus::Completed,
                 exit_code: Some(0),
             },
         )
@@ -383,7 +394,7 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
 
 #[tokio::test]
 async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
 
     let first = manager
@@ -396,15 +407,17 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
         )
         .await?;
     assert_eq!(
-        manager
-            .append_text_chunk(
-                &first.message_id,
-                "commentary-1",
-                AssistantPhase::Commentary,
-                "I am partway through.",
-            )
-            .await
-            .as_deref(),
+        super::common::streamed_text(
+            manager
+                .append_text_chunk(
+                    &first.message_id,
+                    "commentary-1",
+                    AssistantPhase::Commentary,
+                    "I am partway through.",
+                )
+                .await
+        )
+        .as_deref(),
         Some("I am partway through.")
     );
     manager

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::RuntimeHandle;
+use kraai_types::SessionId;
 
 use crate::{error, session::Model};
 
@@ -14,7 +15,7 @@ mod refresh_tests;
 
 pub(crate) async fn options(
     runtime: &RuntimeHandle,
-    session_id: &str,
+    session_id: &SessionId,
 ) -> Result<Vec<acp::SessionConfigOption>> {
     let providers = runtime.list_models().await.map_err(error::runtime)?;
     options_with_models(runtime, session_id, &providers).await
@@ -22,15 +23,11 @@ pub(crate) async fn options(
 
 pub(crate) async fn options_with_models(
     runtime: &RuntimeHandle,
-    session_id: &str,
+    session_id: &SessionId,
     providers: &HashMap<String, Vec<kraai_runtime::Model>>,
 ) -> Result<Vec<acp::SessionConfigOption>> {
-    let selected = crate::session::selected_model_with_models(
-        runtime,
-        &acp::SessionId::new(session_id),
-        providers,
-    )
-    .await?;
+    let selected =
+        crate::session::selected_model_with_models(runtime, session_id, providers).await?;
     let model_options = providers
         .get(&selected.provider)
         .and_then(|models| models.iter().find(|model| model.id == selected.model))
@@ -55,7 +52,7 @@ pub(crate) async fn options_with_models(
         }
     }
     let profiles = runtime
-        .list_agent_profiles(session_id.to_owned())
+        .list_agent_profiles(session_id.clone())
         .await
         .map_err(error::runtime)?;
     let selected_profile = profiles
@@ -91,7 +88,7 @@ pub(crate) async fn options_with_models(
 
 pub(crate) async fn set(
     runtime: &RuntimeHandle,
-    session_id: &str,
+    session_id: &SessionId,
     config_id: &str,
     value: acp::SessionConfigOptionValue,
 ) -> Result<Vec<acp::SessionConfigOption>> {
@@ -110,12 +107,8 @@ pub(crate) async fn set(
     match config_id {
         "model" => {
             let providers = runtime.list_models().await.map_err(error::runtime)?;
-            let current = crate::session::selected_model_with_models(
-                runtime,
-                &acp::SessionId::new(session_id),
-                &providers,
-            )
-            .await?;
+            let current =
+                crate::session::selected_model_with_models(runtime, session_id, &providers).await?;
             let mut selected = providers
                 .into_iter()
                 .flat_map(|(provider, models)| {
@@ -131,14 +124,14 @@ pub(crate) async fn set(
                 selected.options = current.options;
             }
             runtime
-                .set_session_model(session_id.to_owned(), selected.selection()?)
+                .set_session_model(session_id.clone(), selected.selection()?)
                 .await
                 .map_err(error::runtime)?;
             options(runtime, session_id).await
         }
         "profile" => {
             runtime
-                .set_session_profile(session_id.to_owned(), value.0.to_string())
+                .set_session_profile(session_id.clone(), value.0.to_string())
                 .await
                 .map_err(error::runtime)?;
             options(runtime, session_id).await

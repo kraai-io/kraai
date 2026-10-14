@@ -1,24 +1,19 @@
 use super::*;
 
 impl AgentManager {
-    pub fn discard_turn_state(&mut self, session_id: &str) {
-        self.clear_active_turn(session_id);
-        self.pending_message_rollbacks.remove(session_id);
-    }
-
-    pub fn clear_active_turn(&mut self, session_id: &str) {
-        if let Some(state) = self.session_states.get_mut(session_id) {
+    pub fn clear_active_turn(&self, session_id: &SessionId) {
+        if let Some(state) = lock(&self.session_states).get_mut(session_id) {
             state.active_turn_profile = None;
         }
     }
 
-    pub fn is_turn_active(&self, session_id: &str) -> bool {
-        self.session_states
+    pub fn is_turn_active(&self, session_id: &SessionId) -> bool {
+        lock(&self.session_states)
             .get(session_id)
             .is_some_and(|state| state.active_turn_profile.is_some())
     }
 
-    pub async fn streaming_session_ids(&self) -> HashSet<String> {
+    pub async fn streaming_session_ids(&self) -> HashSet<SessionId> {
         self.streaming_messages
             .read()
             .await
@@ -27,8 +22,8 @@ impl AgentManager {
             .collect()
     }
 
-    pub async fn get_message(&self, id: &MessageId) -> Result<Option<Message>> {
-        self.message_store.get(id).await
+    pub async fn get_message(&self, id: &MessageId) -> AgentResult<Option<Message>> {
+        Ok(self.message_store.get(id).await?)
     }
 
     pub fn shared_session_store(&self) -> Arc<kraai_persistence::SqliteSessionStore> {
@@ -36,7 +31,7 @@ impl AgentManager {
     }
 
     pub fn cloned_provider_manager(&self) -> ProviderManager {
-        self.providers.clone()
+        read(&self.providers).clone()
     }
 
     pub fn new(
@@ -47,9 +42,9 @@ impl AgentManager {
     ) -> Self {
         let conversation_store = persistence.conversations();
         Self {
-            mcp: Arc::default(),
-            session_mcp: BTreeMap::new(),
-            providers,
+            mcp: StdRwLock::default(),
+            session_mcp: StdMutex::default(),
+            providers: StdRwLock::new(providers),
             default_workspace_dir,
             user_agents_path: Some(storage_root.join(AGENTS_MD_FILE_NAME)),
             storage_root,
@@ -59,29 +54,29 @@ impl AgentManager {
             context_state_store: persistence.context().clone(),
             usage_store: persistence.usage().clone(),
             persistence,
-            session_states: HashMap::new(),
-            pending_message_rollbacks: HashMap::new(),
-            last_used_profile_id: None,
+            session_states: StdMutex::default(),
+            last_used_profile_id: StdMutex::default(),
             streaming_messages: RwLock::new(BTreeMap::new()),
             streaming_persistence: Mutex::new(()),
+            history_observer: StdRwLock::new(None),
         }
     }
 
-    pub async fn create_session(&mut self) -> Result<String> {
+    pub async fn create_session(&self) -> AgentResult<SessionId> {
         self.create_session_with(None, None).await
     }
 
     pub async fn create_session_with(
-        &mut self,
+        &self,
         workspace_dir: Option<PathBuf>,
         profile_id: Option<String>,
-    ) -> Result<String> {
+    ) -> AgentResult<SessionId> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or(std::time::Duration::ZERO)
             .as_secs();
 
-        let session_id = Ulid::generate().to_string();
+        let session_id = SessionId::new(Ulid::generate());
         let workspace_dir = workspace_dir.unwrap_or_else(|| self.default_workspace_dir.clone());
         let resolved = self.resolve_profiles_for_workspace(&workspace_dir);
         let selected_profile_id =
@@ -91,9 +86,9 @@ impl AgentManager {
             .iter()
             .any(|profile| profile.id == selected_profile_id)
         {
-            return Err(eyre!(kraai_types::DomainError::not_found(format!(
+            return Err(AgentError::not_found(format!(
                 "Unknown profile: {selected_profile_id}"
-            ))));
+            )));
         }
         let session = SessionMeta {
             revision: 0,
@@ -108,8 +103,8 @@ impl AgentManager {
         };
 
         self.session_store.save(&session).await?;
-        self.ensure_runtime_state(&session_id, &session.workspace_dir);
-        self.last_used_profile_id = Some(selected_profile_id);
+        self.with_runtime_state(&session_id, &session.workspace_dir, |_| ());
+        *lock(&self.last_used_profile_id) = Some(selected_profile_id);
         Ok(session_id)
     }
 
@@ -138,17 +133,17 @@ impl AgentManager {
     }
 
     fn default_profile_for_profiles(&self, profiles: &[AgentProfile]) -> String {
-        self.last_used_profile_id
+        lock(&self.last_used_profile_id)
             .as_ref()
             .filter(|selected| profiles.iter().any(|profile| &profile.id == *selected))
             .cloned()
             .unwrap_or_else(|| DEFAULT_AGENT_PROFILE_ID.to_string())
     }
 
-    pub async fn prepare_session(&mut self, session_id: &str) -> Result<bool> {
+    pub async fn prepare_session(&self, session_id: &SessionId) -> AgentResult<bool> {
         match self.session_store.get(session_id).await? {
             Some(session) => {
-                self.ensure_runtime_state(session_id, &session.workspace_dir);
+                self.with_runtime_state(session_id, &session.workspace_dir, |_| ());
                 self.validate_history_for_session(&session).await?;
                 Ok(true)
             }
@@ -157,10 +152,10 @@ impl AgentManager {
     }
 
     pub async fn prepare_script_recovery(
-        &mut self,
-        session_id: &str,
+        &self,
+        session_id: &SessionId,
         source_message_id: &MessageId,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         let source = self
             .message_store
             .get(source_message_id)
@@ -177,17 +172,25 @@ impl AgentManager {
         )
         .await?;
         if !self.prepare_session(session_id).await? {
-            return Err(eyre!(kraai_types::DomainError::not_found(format!(
+            return Err(AgentError::not_found(format!(
                 "Session not found: {session_id}"
-            ))));
+            )));
         }
         let session = self.require_session(session_id).await?;
         let profile = self.resolve_selected_profile(&session)?;
-        let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
-        state.last_model = Some(generation.model_id);
-        state.last_provider = Some(generation.provider_id);
-        state.last_options = generation.options;
-        state.active_turn_profile = Some(Arc::new(profile));
+        self.with_runtime_state(session_id, &session.workspace_dir, |state| {
+            state.last_model = Some(generation.model_id);
+            state.last_provider = Some(generation.provider_id);
+            state.last_options = generation.options;
+            state.active_turn_profile = Some(Arc::new(profile));
+        });
+        Ok(())
+    }
+
+    /// Rolls back a streaming placeholder left by a stopped runtime; requires the session lease.
+    pub async fn recover_interrupted_session(&self, session_id: &SessionId) -> AgentResult<()> {
+        let session = self.require_session(session_id).await?;
+        self.recover_interrupted_stream(session).await?;
         Ok(())
     }
 
@@ -199,7 +202,7 @@ impl AgentManager {
     pub(super) async fn recover_interrupted_stream(
         &self,
         mut session: SessionMeta,
-    ) -> Result<SessionMeta> {
+    ) -> AgentResult<SessionMeta> {
         // A loaded background session can legitimately have a streaming tip. Only recover a
         // placeholder when this process has no corresponding active stream.
         if !self.persistence.sessions().owns_turn(&session.id).await? {
@@ -215,16 +218,15 @@ impl AgentManager {
             return Ok(session);
         };
         if tip.status == MessageStatus::Complete
-            && let ConversationItem::ScriptResult { call_id, .. } = &tip.content
-            && let Some(parent_id) = &tip.parent_id
-            && let Some(mut parent) = self.message_store.get(parent_id).await?
-            && matches!(parent.status, MessageStatus::Streaming { .. })
-            && matches!(&parent.content, ConversationItem::Assistant { items }
-                if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { call_id: parent_call, .. }
-                    if parent_call == call_id)))
+            && let Some((first_result, mut parent)) = self.answered_response(&tip).await?
         {
-            parent.status = MessageStatus::Complete;
-            self.message_store.save(&parent).await?;
+            if matches!(parent.status, MessageStatus::Streaming { .. }) {
+                parent.status = MessageStatus::Complete;
+                self.message_store.save(&parent).await?;
+                self.history_upserted(&session.id, &parent);
+            }
+            self.answer_skipped_calls(&session.id, &first_result)
+                .await?;
         }
         if !matches!(tip.status, MessageStatus::Streaming { .. }) {
             return Ok(session);
@@ -238,109 +240,116 @@ impl AgentManager {
                 session.title.clone(),
             )
             .await?;
+        self.history_removed(&session.id, vec![tip_id]);
         session.tip_id = tip.parent_id.clone();
         Ok(session)
     }
 
-    pub(super) async fn validate_history_for_session(&self, session: &SessionMeta) -> Result<()> {
-        let mut keep_ids = HashSet::new();
-
-        if let Some(tip_id) = &session.tip_id {
-            let mut current = Some(tip_id.clone());
-            while let Some(id) = current {
-                if !keep_ids.insert(id.clone()) {
-                    return Err(eyre!(
-                        "Corrupt message parent graph: cycle repeats message {id}"
-                    ));
+    /// For a script result at the tip, the first result of its response and the assistant
+    /// message that made the call it answers.
+    async fn answered_response(&self, tip: &Message) -> AgentResult<Option<(Message, Message)>> {
+        let mut result = tip.clone();
+        loop {
+            let ConversationItem::ScriptResult { call_id, .. } = &result.content else {
+                return Ok(None);
+            };
+            let Some(parent) = result.parent_id.as_ref() else {
+                return Ok(None);
+            };
+            let Some(parent) = self.message_store.get(parent).await? else {
+                return Ok(None);
+            };
+            match &parent.content {
+                ConversationItem::Assistant { items }
+                    if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { call_id: called, .. } if called == call_id)) =>
+                {
+                    return Ok(Some((result, parent)));
                 }
-                if let Some(msg) = self.message_store.get(&id).await? {
-                    current = msg.parent_id;
-                } else {
-                    break;
-                }
+                ConversationItem::ScriptResult { .. } => result = parent,
+                _ => return Ok(None),
             }
         }
+    }
 
+    pub(super) async fn validate_history_for_session(
+        &self,
+        session: &SessionMeta,
+    ) -> AgentResult<()> {
+        HistoryCursor::new(self.message_store.as_ref(), session.tip_id.clone())
+            .read_to_root()
+            .await?;
         Ok(())
     }
 
-    pub async fn list_sessions(&self) -> Result<Vec<SessionMeta>> {
-        self.session_store.list().await
+    pub async fn list_sessions(&self) -> AgentResult<Vec<SessionMeta>> {
+        Ok(self.session_store.list().await?)
     }
 
-    pub async fn list_session_ids(&self) -> Result<HashSet<String>> {
-        self.session_store.list_ids().await
+    pub async fn list_session_ids(&self) -> AgentResult<HashSet<SessionId>> {
+        Ok(self.session_store.list_ids().await?)
     }
 
-    pub async fn list_user_input_history(&self, limit: usize) -> Result<Vec<String>> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-
+    pub async fn list_user_input_history(&self, limit: usize) -> AgentResult<Vec<String>> {
         let mut history = Vec::new();
+        if limit == 0 {
+            return Ok(history);
+        }
+        let in_flight = self.capture_in_flight_messages(None).await;
         for session in self.session_store.list().await? {
-            let Some(tip_id) = session.tip_id else {
-                continue;
-            };
-
-            let mut limit_reached = false;
-            self.visit_history_context(&tip_id, |message| {
-                if history.len() >= limit {
-                    limit_reached = true;
-                    return;
+            let mut messages = HistoryCursor::new(self.message_store.as_ref(), session.tip_id)
+                .with_overlay(&in_flight);
+            while let Some(page) = messages.next_page().await? {
+                for message in page {
+                    if history.len() >= limit {
+                        return Ok(history);
+                    }
+                    if let ConversationItem::User { content } = &message.content {
+                        let content = content.text_only().trim().to_string();
+                        if !content.is_empty() {
+                            history.push(content);
+                        }
+                    }
                 }
-                if message.role() != ChatRole::User {
-                    return;
-                }
-
-                let content = match &message.content {
-                    ConversationItem::User { content } => content.text_only().trim().to_string(),
-                    _ => String::new(),
-                };
-                if !content.is_empty() {
-                    history.push(content);
-                }
-            })
-            .await?;
-            if limit_reached {
-                return Ok(history);
             }
         }
-
         Ok(history)
     }
 
-    pub async fn delete_session(&mut self, session_id: &str) -> Result<()> {
+    pub async fn delete_session(&self, session_id: &SessionId) -> AgentResult<()> {
         self.persistence
             .sessions()
             .ensure_writable(session_id)
             .await?;
         self.abort_streaming_messages_for_session(session_id)
             .await?;
-        if let Some(mcp) = self.session_mcp.remove(session_id) {
+        let mcp = lock(&self.session_mcp).remove(session_id);
+        if let Some(mcp) = mcp {
             mcp.shutdown().await;
         }
-        self.session_states.remove(session_id);
-        self.pending_message_rollbacks.remove(session_id);
-        self.persistence.delete_session(session_id).await
+        lock(&self.session_states).remove(session_id);
+        Ok(self.persistence.delete_session(session_id).await?)
     }
 
     pub async fn set_workspace_dir(
-        &mut self,
-        session_id: &str,
+        &self,
+        session_id: &SessionId,
         workspace_dir: PathBuf,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         let mut session = self.require_session(session_id).await?;
         session.workspace_dir = workspace_dir.clone();
         session.updated_at = current_unix_timestamp();
         self.session_store.save(&session).await?;
 
-        self.ensure_runtime_state(session_id, &session.workspace_dir)
-            .pending_workspace_dir = Some(workspace_dir);
+        self.with_runtime_state(session_id, &session.workspace_dir, |state| {
+            state.pending_workspace_dir = Some(workspace_dir);
+        });
         Ok(())
     }
 
-    pub async fn list_agent_profiles(&self, session_id: &str) -> Result<AgentProfilesState> {
+    pub async fn list_agent_profiles(
+        &self,
+        session_id: &SessionId,
+    ) -> AgentResult<AgentProfilesState> {
         let session = self.require_session(session_id).await?;
         let resolved = self.resolve_profiles_for_workspace(&session.workspace_dir);
         let profile_locked = self.is_profile_locked(session_id);
@@ -357,14 +366,14 @@ impl AgentManager {
     }
 
     pub async fn set_session_profile(
-        &mut self,
-        session_id: &str,
+        &self,
+        session_id: &SessionId,
         profile_id: String,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         if self.is_profile_locked(session_id) {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "Cannot change profile while the current turn is active"
-            )));
+            return Err(AgentError::conflict(
+                "Cannot change profile while the current turn is active",
+            ));
         }
 
         let mut session = self.require_session(session_id).await?;
@@ -374,9 +383,9 @@ impl AgentManager {
             .iter()
             .any(|profile| profile.id == profile_id);
         if !exists {
-            return Err(eyre!(kraai_types::DomainError::not_found(format!(
+            return Err(AgentError::not_found(format!(
                 "Unknown profile: {profile_id}"
-            ))));
+            )));
         }
 
         session.selected_profile_id = Some(profile_id);
@@ -387,20 +396,20 @@ impl AgentManager {
 
     pub async fn get_session_model(
         &self,
-        session_id: &str,
-    ) -> Result<Option<kraai_types::ModelSelection>> {
+        session_id: &SessionId,
+    ) -> AgentResult<Option<kraai_types::ModelSelection>> {
         Ok(self.require_session(session_id).await?.selected_model)
     }
 
     pub async fn set_session_model(
-        &mut self,
-        session_id: &str,
+        &self,
+        session_id: &SessionId,
         selection: kraai_types::ModelSelection,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         if self.is_turn_active(session_id) {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "Cannot change model while the current turn is active"
-            )));
+            return Err(AgentError::conflict(
+                "Cannot change model while the current turn is active",
+            ));
         }
         self.require_session(session_id).await?;
         self.validate_model_options(
@@ -415,9 +424,9 @@ impl AgentManager {
 
     pub(super) async fn persist_model_selection(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         selection: &kraai_types::ModelSelection,
-    ) -> Result<()> {
+    ) -> AgentResult<()> {
         let mut session = self.require_session(session_id).await?;
         if session.selected_model.as_ref() != Some(selection) {
             session.selected_model = Some(selection.clone());
@@ -433,71 +442,69 @@ impl AgentManager {
         model_id: &ModelId,
         options: &ModelOptionValues,
         require_all: bool,
-    ) -> Result<()> {
-        let provider = self.providers.get_provider(provider_id).ok_or_else(|| {
-            eyre!(kraai_types::DomainError::not_found(format!(
-                "Unknown provider: {provider_id}"
-            )))
-        })?;
-        let model = provider.get_model(model_id).await.ok_or_else(|| {
-            eyre!(kraai_types::DomainError::not_found(format!(
-                "Unknown model: {model_id}"
-            )))
-        })?;
+    ) -> AgentResult<()> {
+        let provider = read(&self.providers)
+            .get_provider(provider_id)
+            .ok_or_else(|| AgentError::not_found(format!("Unknown provider: {provider_id}")))?;
+        let model = provider
+            .get_model(model_id)
+            .await
+            .ok_or_else(|| AgentError::not_found(format!("Unknown model: {model_id}")))?;
         kraai_types::validate_model_option_values(&model.options, options, require_all).map_err(
             |errors| {
-                eyre!(kraai_types::DomainError::invalid_argument(
+                AgentError::invalid_argument(
                     errors
                         .into_iter()
                         .map(|error| format!("{}: {}", error.option, error.message))
                         .collect::<Vec<_>>()
-                        .join("; ")
-                ))
+                        .join("; "),
+                )
             },
         )?;
-        kraai_provider_core::validate_model_option_effects(&model.options, options).map_err(
-            |error| {
-                eyre!(kraai_types::DomainError::invalid_argument(
-                    error.to_string()
-                ))
-            },
-        )
+        kraai_provider_core::validate_model_option_effects(&model.options, options)
+            .map_err(|error| AgentError::invalid_argument(error.to_string()))
     }
 
     pub async fn get_workspace_dir_state(
-        &mut self,
-        session_id: &str,
-    ) -> Result<Option<(PathBuf, bool)>> {
+        &self,
+        session_id: &SessionId,
+    ) -> AgentResult<Option<(PathBuf, bool)>> {
         let Some(session) = self.session_store.get(session_id).await? else {
             return Ok(None);
         };
 
-        let state = self.ensure_runtime_state(session_id, &session.workspace_dir);
-        Ok(Some((
-            state.effective_workspace_dir(),
-            state.pending_workspace_dir.is_some(),
+        Ok(Some(self.with_runtime_state(
+            session_id,
+            &session.workspace_dir,
+            |state| {
+                (
+                    state.effective_workspace_dir(),
+                    state.pending_workspace_dir.is_some(),
+                )
+            },
         )))
     }
 
-    pub fn is_profile_locked(&self, session_id: &str) -> bool {
-        self.session_states
-            .get(session_id)
-            .is_some_and(|state| state.active_turn_profile.is_some())
+    pub fn is_profile_locked(&self, session_id: &SessionId) -> bool {
+        self.is_turn_active(session_id)
     }
 
     pub async fn set_providers(
-        &mut self,
+        &self,
         config: ProviderManagerConfig,
         registry: ProviderRegistry,
-    ) -> Result<()> {
-        self.providers.load_config(config, registry).await
+    ) -> AgentResult<()> {
+        let mut providers = self.cloned_provider_manager();
+        let result = providers.load_config(config, registry).await;
+        *write(&self.providers) = providers;
+        Ok(result?)
     }
 
     pub async fn list_models(&self) -> HashMap<ProviderId, Vec<Model>> {
-        self.providers.list_all_models().await
+        self.cloned_provider_manager().list_all_models().await
     }
 
-    pub async fn get_tip(&self, session_id: &str) -> Result<Option<MessageId>> {
+    pub async fn get_tip(&self, session_id: &SessionId) -> AgentResult<Option<MessageId>> {
         Ok(self
             .session_store
             .get(session_id)
@@ -506,7 +513,11 @@ impl AgentManager {
     }
 
     #[cfg(test)]
-    pub(super) async fn set_tip(&self, session_id: &str, new_tip: Option<MessageId>) -> Result<()> {
+    pub(super) async fn set_tip(
+        &self,
+        session_id: &SessionId,
+        new_tip: Option<MessageId>,
+    ) -> AgentResult<()> {
         if let Some(mut session) = self.session_store.get(session_id).await? {
             session.tip_id = new_tip;
             session.updated_at = current_unix_timestamp();
@@ -516,14 +527,15 @@ impl AgentManager {
         Ok(())
     }
 
-    pub(super) fn ensure_runtime_state(
-        &mut self,
-        session_id: &str,
+    pub(super) fn with_runtime_state<T>(
+        &self,
+        session_id: &SessionId,
         workspace_dir: &Path,
-    ) -> &mut SessionRuntimeState {
-        let state = self
-            .session_states
-            .entry(session_id.to_string())
+        update: impl FnOnce(&mut SessionRuntimeState) -> T,
+    ) -> T {
+        let mut states = lock(&self.session_states);
+        let state = states
+            .entry(session_id.clone())
             .or_insert_with(|| SessionRuntimeState::new(workspace_dir.to_path_buf()));
         if state.active_turn_profile.is_none() {
             state.active_workspace_dir = workspace_dir.to_path_buf();
@@ -535,7 +547,9 @@ impl AgentManager {
                 state.pending_workspace_dir = None;
             }
         }
-        state
+        let result = update(state);
+        drop(states);
+        result
     }
 
     pub(super) fn resolve_profiles_for_workspace(&self, workspace_dir: &Path) -> ResolvedProfiles {
@@ -546,11 +560,12 @@ impl AgentManager {
         )
     }
 
-    pub(super) fn resolve_selected_profile(&self, session: &SessionMeta) -> Result<AgentProfile> {
+    pub(super) fn resolve_selected_profile(
+        &self,
+        session: &SessionMeta,
+    ) -> AgentResult<AgentProfile> {
         let Some(profile_id) = session.selected_profile_id.as_ref() else {
-            return Err(eyre!(kraai_types::DomainError::conflict(
-                "No profile selected for this session"
-            )));
+            return Err(AgentError::conflict("No profile selected for this session"));
         };
 
         self.resolve_profiles_for_workspace(&session.workspace_dir)
@@ -558,34 +573,32 @@ impl AgentManager {
             .into_iter()
             .find(|profile| &profile.id == profile_id)
             .ok_or_else(|| {
-                eyre!(kraai_types::DomainError::not_found(format!(
-                    "Selected profile is unavailable: {profile_id}"
-                )))
+                AgentError::not_found(format!("Selected profile is unavailable: {profile_id}"))
             })
     }
 
-    pub(super) async fn require_session(&self, session_id: &str) -> Result<SessionMeta> {
-        self.session_store.get(session_id).await?.ok_or_else(|| {
-            eyre!(kraai_types::DomainError::not_found(format!(
-                "Session not found: {session_id}"
-            )))
-        })
+    pub(super) async fn require_session(&self, session_id: &SessionId) -> AgentResult<SessionMeta> {
+        self.session_store
+            .get(session_id)
+            .await?
+            .ok_or_else(|| AgentError::not_found(format!("Session not found: {session_id}")))
     }
 
-    pub fn script_turn_context(&self, session_id: &str) -> Result<ScriptTurnContext> {
-        let state = self.session_states.get(session_id).ok_or_else(|| {
-            eyre!(kraai_types::DomainError::not_found(format!(
+    pub fn script_turn_context(&self, session_id: &SessionId) -> AgentResult<ScriptTurnContext> {
+        let states = lock(&self.session_states);
+        let state = states.get(session_id).ok_or_else(|| {
+            AgentError::not_found(format!(
                 "Session runtime state is unavailable: {session_id}"
-            )))
+            ))
         })?;
         let profile = state.active_turn_profile.as_ref().ok_or_else(|| {
-            eyre!(kraai_types::DomainError::conflict(format!(
-                "Session has no active turn: {session_id}"
-            )))
+            AgentError::conflict(format!("Session has no active turn: {session_id}"))
         })?;
-        Ok(ScriptTurnContext {
+        let context = ScriptTurnContext {
             workspace_dir: state.active_workspace_dir.clone(),
             profile: profile.snapshot(),
-        })
+        };
+        drop(states);
+        Ok(context)
     }
 }

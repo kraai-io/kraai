@@ -3,7 +3,7 @@ use super::common::{cleanup_dir, test_manager};
 
 #[tokio::test]
 async fn source_ancestry_queries_stop_after_finding_all_candidates() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let older = manager
         .add_message(&session_id, ChatRole::User, "older".into(), None)
@@ -37,7 +37,7 @@ async fn source_ancestry_queries_stop_after_finding_all_candidates() -> Result<(
 
 #[tokio::test]
 async fn source_ancestry_queries_distinguish_roots_missing_messages_and_cycles() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let missing = MessageId::new("missing");
     let root = manager

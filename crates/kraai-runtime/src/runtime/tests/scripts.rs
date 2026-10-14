@@ -1,11 +1,10 @@
 use color_eyre::eyre::Result;
+use kraai_execution_types::{ScriptExecutionPhase, ScriptExecutionStatus};
 use kraai_persistence::{ScriptExecutionStore, SqliteScriptExecutionStore};
-use kraai_types::{
-    AssistantItem, AssistantPhase, ChatRole, ScriptExecutionPhase, ScriptExecutionStatus,
-    TokenUsage,
-};
+use kraai_types::{AssistantItem, AssistantPhase, ChatRole, TokenUsage};
 
 use super::super::stream_driver::POST_BOUNDARY_DRAIN_YIELD_INTERVAL;
+use super::harness::FullHistory as _;
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
 
@@ -99,7 +98,18 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
         .expect("assistant items");
     assert!(matches!(
         items.first(),
-        Some(AssistantItem::Reasoning { provider_id, payload }) if provider_id.as_str() == "mock-native" && payload == &reasoning
+        Some(AssistantItem::Reasoning { provider_id, payload }) if provider_id.as_str() == "mock-native" && payload.is_null()
+    ));
+    let stored = harness
+        .runtime
+        .agent_manager
+        .get_chat_history(&session_id)
+        .await?
+        .remove(&assistant.id)
+        .expect("stored assistant message");
+    assert!(matches!(
+        stored.content.assistant_items().and_then(<[_]>::first),
+        Some(AssistantItem::Reasoning { payload, .. }) if payload == &reasoning
     ));
     assert!(
         !assistant
@@ -264,13 +274,11 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
         harness.runtime.event_tx.timer_snapshot(&session_id).1,
         paused_timer
     );
-    let continuation_guard = harness.runtime.session_state_barrier.write().await;
+    let barrier = harness.runtime.sessions.barrier(&session_id);
+    let continuation_guard = barrier.write().await;
     harness
-        .runtime
-        .deny_pending_script(
-            session_id.clone(),
-            kraai_types::ScriptExecutionId::new(script.execution_id.clone()),
-        )
+        .handle
+        .deny_script(session_id.clone(), script.execution_id.clone())
         .await?;
     let delay_started = std::time::Instant::now();
     let elapsed_before_delay = harness
@@ -568,12 +576,7 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
             })
         })
         .await;
-    harness
-        .runtime
-        .pending_script_approvals
-        .lock()
-        .await
-        .remove(&session_id);
+    super::harness::take_pending_approval(&harness.runtime, &session_id).await;
 
     harness
         .runtime
@@ -636,6 +639,277 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
         1
     );
 
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn transient_pre_boundary_failure_reissues_the_request() -> Result<()> {
+    let Some(harness) = RuntimeTestHarness::new(vec![
+        vec![
+            ScriptedChunk::plain("partial answer"),
+            ScriptedChunk::interrupted("connection reset"),
+        ],
+        vec![ScriptedChunk::plain("complete answer")],
+    ])
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("answer"),
+            String::from("mock-model"),
+            String::from("mock"),
+            Default::default(),
+        )
+        .await?;
+    let events = harness
+        .events
+        .wait_for("reissued stream completion", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::StreamComplete { session_id: id, .. } if id == &session_id)
+                    || matches!(event, Event::StreamError { session_id: id, .. } if id == &session_id)
+            })
+        })
+        .await;
+    assert!(events.iter().any(|event| {
+        matches!(event, Event::StreamRestarted { session_id: id, .. } if id == &session_id)
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(event, Event::StreamError { session_id: id, .. } if id == &session_id)
+    }));
+    let history = harness.handle.get_chat_history(session_id.clone()).await?;
+    let replies: Vec<_> = history
+        .values()
+        .filter(|message| message.role() == kraai_types::ChatRole::Assistant)
+        .map(|message| message.display_text().into_owned())
+        .collect();
+    assert_eq!(replies, vec![String::from("complete answer")]);
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_runtime_that_lost_the_session_does_not_reissue_the_request() -> Result<()> {
+    let harness = RuntimeTestHarness::new(vec![
+        vec![
+            ScriptedChunk::plain("partial answer"),
+            ScriptedChunk::interrupted("connection reset"),
+        ],
+        vec![ScriptedChunk::plain("answer for the new owner")],
+    ])
+    .await
+    .expect("runtime fixture");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let agent = &harness.runtime.agent_manager;
+    let request = agent
+        .prepare_start_stream(
+            &session_id,
+            String::from("answer").into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+            Default::default(),
+        )
+        .await?;
+    let store = &harness.runtime.session_store;
+    if !store.owns_turn(&session_id).await? {
+        store.claim_turn(&session_id).await?;
+    }
+    store.release_turn(&session_id).await?;
+    let result = super::harness::drive_stream(
+        harness.runtime.clone(),
+        session_id.clone(),
+        agent.cloned_provider_manager(),
+        request,
+    )
+    .await;
+    let super::super::stream_driver::StreamDriveResult::FailedDuringStream { error } = result
+    else {
+        return Err(color_eyre::eyre::eyre!(
+            "a deposed runtime reissued the request: {result:?}"
+        ));
+    };
+    assert!(error.contains("owned by another instance"), "{error}");
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn long_script_output_is_excerpted_and_saved_where_scripts_can_read_it() -> Result<()> {
+    let harness = RuntimeTestHarness::new(vec![
+        vec![ScriptedChunk::native_call(
+            "call-1",
+            "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
+        )],
+        vec![ScriptedChunk::plain("done")],
+    ])
+    .await
+    .expect("runtime fixture");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            "change it".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
+        )
+        .await?;
+    harness
+        .events
+        .wait_for("script approval", |events| {
+            events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id: id, .. } if id == &session_id))
+        })
+        .await;
+    let output_dir = harness.runtime.config.script_output_dir(&session_id);
+    let stdout: String = (0..5000).map(|line| format!("line {line}\n")).collect();
+    let full_output = stdout.clone();
+    let request = harness
+        .runtime
+        .with_session_actor(&session_id, move |actor| {
+            Box::pin(async move {
+                let pending = actor.take_pending_approval().expect("pending script");
+                let store = actor.runtime.execution_store.clone();
+                store
+                    .mark_running(&pending.request.id)
+                    .await
+                    .expect("start execution");
+                let record = store
+                    .finish(
+                        &pending.request.id,
+                        kraai_persistence::ScriptExecutionCompletion {
+                            status: ScriptExecutionStatus::Completed,
+                            exit_code: Some(0),
+                            sandbox_denied: false,
+                            error: None,
+                            stdout: stdout.into_bytes(),
+                            stderr: Vec::new(),
+                        },
+                    )
+                    .await
+                    .expect("finish execution");
+                let output = store.read_output(&record.id).await.expect("read output");
+                actor
+                    .finish_script(super::super::script_execution::CompletedScriptExecution {
+                        record,
+                        output,
+                    })
+                    .await
+                    .expect("finish script");
+                pending.request
+            })
+        })
+        .await;
+    assert!(request.runtime_roots.contains(&output_dir));
+
+    let events = harness
+        .events
+        .wait_for("script result", |events| {
+            events.iter().any(|event| matches!(event, Event::ScriptResultReady { session_id: id, .. } if id == &session_id))
+        })
+        .await;
+    let rendered = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ScriptResultReady { output, .. } => output.as_text().map(str::to_string),
+            _ => None,
+        })
+        .expect("rendered result");
+    let saved = output_dir.join(format!("{}.stdout", request.id));
+    assert!(rendered.len() < full_output.len() / 2);
+    assert!(rendered.contains(&format!("full_output=\"{}\"", saved.display())));
+    assert!(rendered.contains("bytes omitted]"));
+    assert_eq!(tokio::fs::read_to_string(&saved).await?, full_output);
+
+    harness
+        .events
+        .wait_for("turn completed", |events| {
+            events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id: id } if id == &session_id))
+        })
+        .await;
+    harness.handle.delete_session(session_id).await?;
+    assert!(!tokio::fs::try_exists(&output_dir).await?);
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn only_the_first_script_call_of_a_response_runs_and_the_others_are_answered() -> Result<()> {
+    let harness = RuntimeTestHarness::new(vec![
+        vec![
+            ScriptedChunk::native_call(
+                "call-1",
+                "# timeout=30sec permissions=workspace-write\n^cargo test",
+            ),
+            ScriptedChunk::native_call("call-2", "# timeout=30sec\nls"),
+        ],
+        vec![ScriptedChunk::plain("Both calls are answered.")],
+    ])
+    .await
+    .expect("runtime fixture");
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            "test it".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
+        )
+        .await?;
+    harness
+        .events
+        .wait_for("approval of the first call", |events| {
+            events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id: id, .. } if id == &session_id))
+        })
+        .await;
+    let pending = harness
+        .handle
+        .get_pending_script(session_id.clone())
+        .await?
+        .expect("pending script");
+    assert_eq!(pending.call_id, "call-1");
+    harness
+        .handle
+        .deny_script(session_id.clone(), pending.execution_id)
+        .await?;
+    harness
+        .events
+        .wait_for("continuation", |events| {
+            events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id: id } if id == &session_id))
+        })
+        .await;
+
+    let history = harness
+        .runtime
+        .agent_manager
+        .get_chat_history(&session_id)
+        .await?;
+    let results: Vec<_> = history
+        .values()
+        .filter_map(|message| match &message.content {
+            kraai_types::ConversationItem::ScriptResult {
+                call_id, outcome, ..
+            } => Some((call_id.as_str().to_string(), outcome.status)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert!(results.contains(&("call-1".into(), ScriptExecutionStatus::Denied)));
+    assert!(results.contains(&("call-2".into(), ScriptExecutionStatus::Cancelled)));
+    let calls = history
+        .values()
+        .filter_map(|message| message.content.assistant_items())
+        .flatten()
+        .filter(|item| matches!(item, AssistantItem::ScriptCall { .. }))
+        .count();
+    assert_eq!(calls, 2);
     harness.shutdown().await;
     Ok(())
 }

@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use kraai_execution_types::ImageAttachment;
 use kraai_runtime::{
     AgentProfileCatalog, Model, ProviderDefinition, Session, SessionSnapshot, SettingsDocument,
 };
-use kraai_types::{ImageAttachment, Message, MessageContent, MessageId, TokenUsage};
+use kraai_types::{MessageContent, MessageId, SessionId, TokenUsage};
 
 use super::auth::ProviderAuthStatus;
 
@@ -11,12 +12,8 @@ type RuntimeResult<T> = Result<T, kraai_runtime::RuntimeError>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StartupOptions {
-    pub ci: bool,
-    pub provider_id: Option<String>,
-    pub model_id: Option<String>,
     pub agent_profile_id: Option<String>,
     pub message: Option<String>,
-    pub options: Vec<String>,
 }
 
 pub(super) enum SubmissionSource {
@@ -113,7 +110,7 @@ pub(super) struct OptimisticMessage {
 
 #[derive(Clone, Debug)]
 pub(super) struct PendingMessage {
-    pub(super) session_id: String,
+    pub(super) session_id: SessionId,
     pub(super) message: MessageContent,
     pub(super) local_id: Option<String>,
 }
@@ -121,7 +118,7 @@ pub(super) struct PendingMessage {
 #[derive(Clone, Debug)]
 pub(super) struct PendingSubmit {
     pub(super) creation_id: u64,
-    pub(super) session_id: Option<String>,
+    pub(super) session_id: Option<SessionId>,
     pub(super) message: MessageContent,
     pub(super) model_id: String,
     pub(super) provider_id: String,
@@ -147,7 +144,7 @@ pub(super) enum RuntimeRequest {
     GetAgentProfileCatalog,
     ListProviderDefinitions,
     GetSettings,
-    GetOpenAiCodexAuthStatus,
+    GetProviderAuthStatuses,
     GetMcpAuthStatuses,
     StartMcpLogin {
         server: String,
@@ -159,25 +156,31 @@ pub(super) enum RuntimeRequest {
     LogoutMcp {
         server: String,
     },
-    StartOpenAiCodexBrowserLogin,
-    StartOpenAiCodexDeviceCodeLogin,
-    CancelOpenAiCodexLogin,
-    LogoutOpenAiCodexAuth,
+    StartProviderLogin {
+        provider_type: String,
+        method: kraai_runtime::LoginMethod,
+    },
+    CancelProviderLogin {
+        provider_type: String,
+    },
+    LogoutProvider {
+        provider_type: String,
+    },
     CreateSession {
         creation_id: u64,
         profile_id: Option<String>,
     },
     SetSessionProfile {
-        session_id: String,
+        session_id: SessionId,
         profile_id: String,
     },
     SetSessionModel {
-        session_id: String,
+        session_id: SessionId,
         save_id: u64,
         selection: kraai_types::ModelSelection,
     },
     SendMessage {
-        session_id: String,
+        session_id: SessionId,
         message: MessageContent,
         model_id: String,
         provider_id: String,
@@ -189,42 +192,40 @@ pub(super) enum RuntimeRequest {
     SaveSettings {
         settings: SettingsDocument,
     },
-    GetChatHistory {
-        session_id: String,
+    GetHistoryPage {
+        session_id: SessionId,
+        from: MessageId,
     },
     GetSessionSnapshot {
-        session_id: String,
-    },
-    GetCurrentTip {
-        session_id: String,
+        session_id: SessionId,
     },
     UndoLastUserMessage {
-        session_id: String,
+        session_id: SessionId,
     },
     LoadSession {
         load_id: u64,
-        session_id: String,
+        session_id: SessionId,
     },
     ListSessions,
     ListUserInputHistory {
         limit: usize,
     },
     DeleteSession {
-        session_id: String,
+        session_id: SessionId,
     },
     ApproveScript {
-        session_id: String,
+        session_id: SessionId,
         execution_id: String,
     },
     DenyScript {
-        session_id: String,
+        session_id: SessionId,
         execution_id: String,
     },
     CancelStream {
-        session_id: String,
+        session_id: SessionId,
     },
     ContinueSession {
-        session_id: String,
+        session_id: SessionId,
         model_id: String,
         provider_id: String,
         options: kraai_types::ModelOptionValues,
@@ -237,7 +238,7 @@ pub(super) enum RuntimeResponse {
     AgentProfileCatalog(RuntimeResult<AgentProfileCatalog>),
     ProviderDefinitions(RuntimeResult<Vec<ProviderDefinition>>),
     Settings(RuntimeResult<SettingsDocument>),
-    OpenAiCodexAuthStatus(RuntimeResult<ProviderAuthStatus>),
+    ProviderAuthStatuses(RuntimeResult<Vec<ProviderAuthStatus>>),
     McpAuthStatuses(RuntimeResult<Vec<kraai_runtime::McpAuthStatus>>),
     StartMcpLogin {
         server: String,
@@ -245,26 +246,23 @@ pub(super) enum RuntimeResponse {
         result: RuntimeResult<kraai_runtime::McpAuthStatus>,
     },
     McpAuthStatus(RuntimeResult<kraai_runtime::McpAuthStatus>),
-    StartOpenAiCodexBrowserLogin(RuntimeResult<ProviderAuthStatus>),
-    StartOpenAiCodexDeviceCodeLogin(RuntimeResult<ProviderAuthStatus>),
-    CancelOpenAiCodexLogin(RuntimeResult<ProviderAuthStatus>),
-    LogoutOpenAiCodexAuth(RuntimeResult<ProviderAuthStatus>),
+    ProviderAuthStatus(RuntimeResult<ProviderAuthStatus>),
     CreateSession {
         creation_id: u64,
-        result: RuntimeResult<String>,
+        result: RuntimeResult<SessionId>,
     },
     SetSessionProfile {
-        session_id: String,
+        session_id: SessionId,
         profile_id: String,
         result: RuntimeResult<()>,
     },
     SetSessionModel {
-        session_id: String,
+        session_id: SessionId,
         save_id: u64,
         result: RuntimeResult<()>,
     },
     SendMessage {
-        session_id: String,
+        session_id: SessionId,
         result: RuntimeResult<kraai_runtime::SubmitMessageOutcome>,
     },
     PasteImage {
@@ -272,41 +270,37 @@ pub(super) enum RuntimeResponse {
         result: RuntimeResult<Option<ImageAttachment>>,
     },
     SaveSettings(RuntimeResult<()>),
-    ChatHistory {
-        session_id: String,
-        result: RuntimeResult<BTreeMap<MessageId, Message>>,
+    HistoryPage {
+        session_id: SessionId,
+        result: RuntimeResult<kraai_runtime::HistoryPage>,
     },
     SessionSnapshot {
-        session_id: String,
+        session_id: SessionId,
         model_save_id: u64,
         result: Box<RuntimeResult<SessionSnapshot>>,
     },
-    CurrentTip {
-        session_id: String,
-        result: RuntimeResult<Option<String>>,
-    },
     UndoLastUserMessage {
-        session_id: String,
+        session_id: SessionId,
         result: RuntimeResult<Option<MessageContent>>,
     },
     LoadSession {
         load_id: u64,
-        session_id: String,
+        session_id: SessionId,
         result: RuntimeResult<bool>,
     },
     Sessions(RuntimeResult<Vec<Session>>),
     UserInputHistory(RuntimeResult<Vec<String>>),
     DeleteSession {
-        session_id: String,
+        session_id: SessionId,
         result: RuntimeResult<()>,
     },
     ApproveScript {
-        session_id: String,
+        session_id: SessionId,
         execution_id: String,
         result: RuntimeResult<()>,
     },
     DenyScript {
-        session_id: String,
+        session_id: SessionId,
         execution_id: String,
         result: RuntimeResult<()>,
     },

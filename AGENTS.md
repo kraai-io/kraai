@@ -2,7 +2,9 @@
 
 ## Task Completion Requirements
 
-1. Run `just check` before committing to format, lint, and test
+1. Run `just check` before pushing or opening a pull request.
+2. While iterating, run the narrower checks for what you touched
+   (for example `just lint` or `cargo nextest run -p <crate>`).
 
 ## Project Overview
 
@@ -25,28 +27,6 @@ If a tradeoff is required, choose correctness and robustness over short-term con
 ## Maintainability
 
 Long term maintainability is a core priority. If you add new functionality, first check if there are shared logic that can be extracted to a separate module. Duplicate logic across mulitple files is a code smell and should be avoided. Don't be afraid to change existing code. Don't take shortcuts by just adding local logic to solve a problem.
-
-## Architecture
-
-```
-crates/
-  kraai-agent/           - Core agent logic, profiles, prompts, and context state
-  kraai-runtime/         - Agent runtime and script execution lifecycle
-  kraai-persistence/     - Message, execution, effect, and turn persistence
-  kraai-types/           - Shared protocol, profile, policy, and execution types
-  kraai-script-protocol/ - Streaming XML envelope and result rendering
-  kraai-sandbox/         - Capability-based process sandbox and output capture
-  kraai-nushell-runtime/ - Embedded Nushell host and authenticated effect transport
-  kraai-command-catalog/ - Production native command metadata and registry
-  kraai-command-core/    - Native command declarations and registration contracts
-  kraai-workspace-fs/    - Shared workspace filesystem operations
-  commands/
-    kraai-command-*/     - One crate per native model-facing Kraai command
-  llm-providers/
-    kraai-provider-core/ - LLM provider trait definitions
-    kraai-provider-*/    - LLM provider implementations
-  kraai-tui/             - Terminal UI
-```
 
 ## Commands
 

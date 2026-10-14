@@ -8,7 +8,7 @@ use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::MessageStore;
 
 use super::super::*;
-use super::common::{cleanup_dir, test_manager};
+use super::common::{cleanup_dir, open_persistence, test_manager};
 
 #[tokio::test]
 async fn restart_after_cancelled_result_save_failure_recovers_the_interrupted_tip() -> Result<()> {
@@ -94,8 +94,8 @@ async fn restart_after_cancellation_failure(
         .await?;
     drop(manager);
 
-    let persistence = kraai_persistence::Persistence::open(&data_dir).await?;
-    let mut reopened = AgentManager::new(
+    let persistence = open_persistence(&data_dir).await?;
+    let reopened = AgentManager::new(
         providers,
         "/tmp/default-workspace".into(),
         persistence,
@@ -133,7 +133,7 @@ async fn restart_after_cancellation_failure(
                 .filter(|message| matches!(&message.content,
             ConversationItem::ScriptResult { call_id, outcome, .. }
                 if call_id.as_str() == "cancelled-call"
-                    && outcome.status == kraai_types::ScriptExecutionStatus::Cancelled
+                    && outcome.status == kraai_execution_types::ScriptExecutionStatus::Cancelled
                     && outcome.exit_code.is_none()))
                 .count(),
             1
@@ -184,7 +184,7 @@ async fn script_result_recovery_requires_a_matching_direct_parent_and_no_live_st
         (false, false, true),
         (false, true, false),
     ] {
-        let (mut manager, data_dir) = test_manager().await;
+        let (manager, data_dir) = test_manager().await;
         let session_id = manager.create_session().await?;
         let request = manager
             .prepare_start_stream(
@@ -229,8 +229,8 @@ async fn script_result_recovery_requires_a_matching_direct_parent_and_no_live_st
                 "coding".into(),
                 ToolCallId::new(if matching { "call" } else { "different-call" }),
                 "cancelled".into(),
-                kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Cancelled,
+                kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Cancelled,
                     exit_code: None,
                 },
             )

@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::time::Duration;
 
 use color_eyre::eyre::Result;
 use kraai_provider_core::{ProviderManager, ProviderStreamEvent};
@@ -58,41 +57,30 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
     old_owner
         .events
         .wait_for("old stream started", |events| {
-            events.iter().any(|event| {
-                matches!(event, Event::StreamChunk { session_id, .. } if session_id == &session)
-            })
+            events
+                .iter()
+                .any(|event| super::harness::streamed_text(event, &session).is_some())
         })
         .await;
     old_owner
         .runtime
         .agent_manager
-        .read()
-        .await
         .publish_streaming_snapshots()
         .await?;
-    let old_message = old_owner
-        .runtime
-        .active_streams
-        .lock()
-        .await
-        .get(&session)
-        .expect("old stream")
-        .message_id
-        .clone();
-    let old_expiry = old_owner
+    let old_message = super::harness::started_stream(&old_owner.events.snapshot(), &session);
+    let old_token = old_owner
         .runtime
         .session_store
         .owned_turns()
-        .await?
         .into_iter()
         .find(|(id, _)| id == &session)
         .expect("old lease")
         .1;
     let connection = rusqlite::Connection::open(old_owner.data_dir.join("kraai.sqlite3"))?;
-    connection.busy_timeout(Duration::from_secs(1))?;
+    connection.busy_timeout(kraai_test_support::HANG_TIMEOUT)?;
     connection.execute(
         "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
-        [&session],
+        [session.as_str()],
     )?;
     new_owner
         .handle
@@ -108,8 +96,6 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         new_owner
             .runtime
             .agent_manager
-            .read()
-            .await
             .get_message(&old_message)
             .await?
             .is_none()
@@ -129,10 +115,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         })
         .await;
     old_owner.runtime.stream_tasks.wait_session(&session).await;
-    old_owner
-        .runtime
-        .cancel_turn_if_lease_matches(session.clone(), old_expiry)
-        .await?;
+    super::harness::cancel_if_lease_matches(&old_owner.runtime, &session, old_token).await?;
     assert!(new_owner.runtime.session_store.owns_turn(&session).await?);
     takeover_sender.send(Ok(ProviderStreamEvent::TextDelta {
         item_id: "new-text".into(),
@@ -151,16 +134,12 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
     old_owner
         .runtime
         .agent_manager
-        .read()
-        .await
         .publish_streaming_snapshots()
         .await?;
     assert!(
         new_owner
             .runtime
             .agent_manager
-            .read()
-            .await
             .get_message(&old_message)
             .await?
             .is_none(),

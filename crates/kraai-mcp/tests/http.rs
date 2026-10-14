@@ -17,8 +17,9 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::post,
 };
+use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpConfig, McpHost, McpManager, ServerConfig, TransportConfig};
-use kraai_types::McpRequest;
+use kraai_test_support::{HANG_TIMEOUT, hang_guard};
 use serde_json::{Value, json};
 
 #[derive(Default)]
@@ -85,7 +86,7 @@ async fn endpoint(
             state.calls.fetch_add(1, Ordering::SeqCst);
             if request["params"]["name"] == "bad-request" { return StatusCode::BAD_REQUEST.into_response(); }
             if request["params"]["name"] == "slow" {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                std::future::pending::<()>().await;
             }
             json!({"resultType": "complete", "content": [{"type": "text", "text": "echoed"}], "structuredContent": request["params"]["arguments"]})
         }
@@ -116,8 +117,8 @@ async fn fixture_with_protocol(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/mcp", listener.local_addr().unwrap());
     let state = Arc::new(Fixture {
-        url: url.clone(),
-        headers: headers.clone(),
+        url,
+        headers,
         legacy,
         reject_discovery,
         ..Default::default()
@@ -129,26 +130,30 @@ async fn fixture_with_protocol(
     let task = tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    let config = McpConfig {
+    let manager = McpManager::new(fixture_config(&state, HANG_TIMEOUT.as_secs())).unwrap();
+    (manager, state, task)
+}
+
+fn fixture_config(fixture: &Fixture, call_timeout_secs: u64) -> McpConfig {
+    McpConfig {
         prompt_max_bytes: 16384,
         servers: [(
             "fixture".into(),
             ServerConfig {
                 enabled: true,
                 description: "Fixture".into(),
-                startup_timeout_secs: 2,
-                call_timeout_secs: 1,
+                startup_timeout_secs: HANG_TIMEOUT.as_secs(),
+                call_timeout_secs,
                 transport: TransportConfig::Http {
-                    url,
-                    headers,
+                    url: fixture.url.clone(),
+                    headers: fixture.headers.clone(),
                     bearer_token_env: None,
                     oauth: None,
                 },
             },
         )]
         .into(),
-    };
-    (McpManager::new(config).unwrap(), state, task)
+    }
 }
 
 #[path = "http/legacy.rs"]
@@ -192,17 +197,19 @@ async fn http_discovery_paginates_caches_and_preserves_structured_results() {
 
 #[tokio::test]
 async fn timed_out_calls_are_not_replayed() {
-    let (manager, state, task) = fixture().await;
-    let result = manager
-        .execute(McpRequest::Call {
-            server: "fixture".into(),
-            tool: "slow".into(),
-            arguments: Default::default(),
-        })
-        .await;
+    let (unused, state, task) = fixture().await;
+    let manager = McpManager::new(fixture_config(&state, 1)).unwrap();
+    let result = hang_guard(manager.execute(McpRequest::Call {
+        server: "fixture".into(),
+        tool: "slow".into(),
+        arguments: Default::default(),
+    }))
+    .await
+    .unwrap();
     assert!(result.unwrap_err().contains("may have completed"));
     assert_eq!(state.calls.load(Ordering::SeqCst), 1);
     manager.shutdown().await;
+    unused.shutdown().await;
     task.abort();
 }
 
@@ -220,7 +227,7 @@ async fn dropping_a_call_does_not_replay_it_or_break_the_connection() {
             })
             .await
     });
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    hang_guard(async {
         while state.calls.load(Ordering::SeqCst) == 0 {
             tokio::task::yield_now().await;
         }

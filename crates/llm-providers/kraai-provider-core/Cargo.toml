@@ -13,6 +13,7 @@ color-eyre = { workspace = true }
 directories.workspace = true
 futures = { workspace = true }
 httpdate = { workspace = true }
+kraai-execution-types.workspace = true
 kraai-io = { workspace = true, features = ["http"] }
 kraai-types = { workspace = true }
 rand = { workspace = true }
@@ -23,6 +24,9 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
+
+[dev-dependencies]
+kraai-test-support = { workspace = true }
 
 [features]
 typescript = ["dep:ts-rs", "kraai-types/typescript"]

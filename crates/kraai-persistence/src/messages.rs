@@ -1,13 +1,14 @@
-use crate::database::{Database, assert_owner, list_records, read_record, record_session};
+use crate::SessionMeta;
+use crate::database::{Database, assert_owner, list_records, record_session};
+use crate::history::read_history_chain;
 use crate::message_references::{
     assert_message_owners, delete_message_record, write_message_record,
 };
-use crate::{SessionMeta, SessionStore};
+use crate::stream_deltas::read_message;
 use color_eyre::eyre::{Result, ensure};
-use kraai_types::{Message, MessageId};
+use kraai_types::{Message, MessageId, SessionId};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
 pub struct ConversationSnapshot {
     pub session: SessionMeta,
     pub history: BTreeMap<MessageId, Message>,
@@ -16,7 +17,10 @@ pub struct ConversationSnapshot {
 
 #[async_trait::async_trait]
 pub trait MessageStore: Send + Sync {
-    async fn read_conversation(&self, _session_id: &str) -> Result<Option<ConversationSnapshot>> {
+    async fn read_conversation(
+        &self,
+        _session_id: &SessionId,
+    ) -> Result<Option<ConversationSnapshot>> {
         Ok(None)
     }
 
@@ -27,22 +31,46 @@ pub trait MessageStore: Send + Sync {
     /// Get a message by ID
     async fn get(&self, id: &MessageId) -> Result<Option<Message>>;
 
-    async fn read_parent_id(&self, id: &MessageId) -> Result<Option<MessageId>> {
-        Ok(self.get(id).await?.and_then(|message| message.parent_id))
+    /// Reads up to `limit` messages from `from` toward the root, tip first.
+    async fn read_history(&self, from: &MessageId, limit: usize) -> Result<Vec<Message>> {
+        let mut history = Vec::new();
+        let mut visited = HashSet::new();
+        let mut cursor = Some(from.clone());
+        while let Some(id) = cursor
+            && history.len() < limit
+        {
+            if !visited.insert(id.clone()) {
+                return Err(crate::history::history_cycle(&id));
+            }
+            let message = self
+                .get(&id)
+                .await?
+                .ok_or_else(|| crate::history::missing_history_message(&id))?;
+            cursor = message.parent_id.clone();
+            history.push(message);
+        }
+        Ok(history)
     }
 
     /// Save a message
     async fn save(&self, message: &Message) -> Result<()>;
 
-    async fn save_linked(
+    /// Durably appends incremental changes to a streaming message. Deltas are
+    /// numbered from `first_sequence`, so resending an already stored delta is a
+    /// no-op. `message` is the streaming message with every delta applied.
+    async fn append_stream_deltas(
         &self,
         message: &Message,
-        session: &SessionMeta,
-        expected_tip: Option<&MessageId>,
-        sessions: Arc<dyn SessionStore>,
-    ) -> Result<bool> {
-        self.save(message).await?;
-        sessions.save_if_tip_matches(session, expected_tip).await
+        _first_sequence: u64,
+        _deltas: &[crate::StreamDelta],
+    ) -> Result<()> {
+        self.save(message).await
+    }
+
+    /// Links messages atomically, or returns `None` when this store cannot, in which case
+    /// the caller saves them individually.
+    async fn save_linked(&self, _request: LinkRequest<'_>) -> Result<Option<bool>> {
+        Ok(None)
     }
 
     /// Delete a message
@@ -70,39 +98,30 @@ impl SqliteMessageStore {
 
 #[async_trait::async_trait]
 impl MessageStore for SqliteMessageStore {
-    async fn read_conversation(&self, session_id: &str) -> Result<Option<ConversationSnapshot>> {
-        let session_id = session_id.to_string();
+    async fn read_conversation(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<ConversationSnapshot>> {
+        let session_id = session_id.clone();
         self.database
-            .run(move |connection, _| {
-                let transaction = connection.transaction()?;
-                let Some(session) = crate::sessions::read_session(&transaction, &session_id)?
-                else {
+            .read(move |connection, _| {
+                let Some(session) = crate::sessions::read_session(connection, &session_id)? else {
                     return Ok(None);
                 };
-                let mut history = BTreeMap::new();
-                let mut cursor = session.tip_id.clone();
-                let mut visited = HashSet::new();
-                while let Some(id) = cursor {
-                    ensure!(
-                        visited.insert(id.clone()),
-                        "Corrupt message parent graph: cycle repeats message {id}"
-                    );
-                    let message = read_record::<Message>(&transaction, "message", id.as_str())?
-                        .ok_or_else(|| {
-                            color_eyre::eyre::eyre!("History references missing message {id}")
-                        })?;
-                    cursor = message.parent_id.clone();
-                    history.entry(message.id.clone()).or_insert(message);
-                }
+                let history = match &session.tip_id {
+                    Some(tip) => {
+                        crate::history_by_id(read_history_chain(connection, tip, usize::MAX)?)
+                    }
+                    None => BTreeMap::new(),
+                };
                 let requests = list_records::<kraai_types::RequestUsage>(
-                    &transaction,
+                    connection,
                     "usage",
                     Some(&session_id),
                 )?
                 .into_iter()
                 .map(|request| (request.message_id.clone(), request))
                 .collect();
-                transaction.commit()?;
                 Ok(Some(ConversationSnapshot {
                     session,
                     history,
@@ -119,7 +138,34 @@ impl MessageStore for SqliteMessageStore {
     async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
         let id = id.to_string();
         self.database
-            .run(move |connection, _| read_record(connection, "message", &id))
+            .read(move |connection, _| read_message(connection, &id))
+            .await
+    }
+
+    async fn read_history(&self, from: &MessageId, limit: usize) -> Result<Vec<Message>> {
+        let from = from.clone();
+        self.database
+            .read(move |connection, _| read_history_chain(connection, &from, limit))
+            .await
+    }
+
+    async fn append_stream_deltas(
+        &self,
+        message: &Message,
+        first_sequence: u64,
+        deltas: &[crate::StreamDelta],
+    ) -> Result<()> {
+        let (message_id, deltas) = (message.id.clone(), deltas.to_vec());
+        self.database
+            .transaction(move |transaction, leases| {
+                crate::stream_deltas::append_stream_deltas(
+                    transaction,
+                    leases,
+                    &message_id,
+                    first_sequence,
+                    &deltas,
+                )
+            })
             .await
     }
 
@@ -130,7 +176,7 @@ impl MessageStore for SqliteMessageStore {
                 let mut session = record_session(transaction, "message", message.id.as_str())?;
                 let associated_session_exists: bool = transaction.query_row(
                     "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1)",
-                    [session.as_deref()],
+                    [session.as_ref().map(SessionId::as_str)],
                     |row| row.get(0),
                 )?;
                 if !associated_session_exists && let Some(parent) = &message.parent_id {
@@ -144,23 +190,18 @@ impl MessageStore for SqliteMessageStore {
                     leases,
                     "message",
                     message.id.as_str(),
-                    session.as_deref(),
+                    session.as_ref(),
                     &message,
                 )
             })
             .await
     }
 
-    async fn save_linked(
-        &self,
-        message: &Message,
-        session: &SessionMeta,
-        expected_tip: Option<&MessageId>,
-        _sessions: Arc<dyn SessionStore>,
-    ) -> Result<bool> {
-        let message = message.clone();
-        let session = session.clone();
-        let expected = expected_tip.cloned();
+    async fn save_linked(&self, request: LinkRequest<'_>) -> Result<Option<bool>> {
+        let messages = request.messages.to_vec();
+        let session = request.session.clone();
+        let expected = request.expected_tip.cloned();
+        let consumed_queue_through = request.consumed_queue_through;
         self.database
             .transaction(move |transaction, leases| {
                 assert_owner(transaction, leases, &session.id)?;
@@ -172,26 +213,30 @@ impl MessageStore for SqliteMessageStore {
                     return Ok(false);
                 }
                 crate::sessions::assert_session_revision(current.as_ref(), &session)?;
-                if let Some(existing) =
-                    read_record::<Message>(transaction, "message", message.id.as_str())?
-                {
-                    ensure!(
-                        serde_json::to_value(&existing)? == serde_json::to_value(&message)?,
-                        "Message ID reused with different content"
-                    );
+                for message in &messages {
+                    if let Some(existing) = read_message(transaction, message.id.as_str())? {
+                        ensure!(
+                            serde_json::to_value(&existing)? == serde_json::to_value(message)?,
+                            "Message ID reused with different content"
+                        );
+                    }
+                    write_message_record(
+                        transaction,
+                        leases,
+                        "message",
+                        message.id.as_str(),
+                        Some(&session.id),
+                        message,
+                    )?;
                 }
-                write_message_record(
-                    transaction,
-                    leases,
-                    "message",
-                    message.id.as_str(),
-                    Some(&session.id),
-                    &message,
-                )?;
                 crate::sessions::save_session(transaction, &session)?;
+                if let Some(through) = consumed_queue_through {
+                    crate::queue::consume_queued_messages(transaction, &session.id, through)?;
+                }
                 Ok(true)
             })
             .await
+            .map(Some)
     }
 
     async fn delete(&self, id: &MessageId) -> Result<()> {
@@ -208,7 +253,7 @@ impl MessageStore for SqliteMessageStore {
     }
     async fn list_ids(&self) -> Result<HashSet<MessageId>> {
         self.database
-            .run(|connection, _| {
+            .read(|connection, _| {
                 let mut statement =
                     connection.prepare("SELECT id FROM records WHERE kind = 'message'")?;
                 let ids = statement.query_map([], |row| row.get::<_, String>(0))?;
@@ -219,4 +264,12 @@ impl MessageStore for SqliteMessageStore {
             })
             .await
     }
+}
+
+/// Messages to link after `expected_tip`, optionally consuming queued messages in the same step.
+pub struct LinkRequest<'a> {
+    pub messages: &'a [Message],
+    pub session: &'a SessionMeta,
+    pub expected_tip: Option<&'a MessageId>,
+    pub consumed_queue_through: Option<i64>,
 }

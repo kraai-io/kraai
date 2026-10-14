@@ -1,7 +1,7 @@
 use color_eyre::eyre::Result;
 use kraai_runtime::{
-    OpenAiCodexAuthStatus as RuntimeOpenAiCodexAuthStatus,
-    OpenAiCodexLoginState as RuntimeOpenAiCodexLoginState,
+    ProviderAuthStatus as RuntimeProviderAuthStatus,
+    ProviderLoginState as RuntimeProviderLoginState,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -15,6 +15,7 @@ pub(super) enum ProviderAuthState {
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct ProviderAuthStatus {
+    pub(super) provider_type: String,
     pub(super) sequence: u64,
     pub(super) state: ProviderAuthState,
     pub(super) plan_type: Option<String>,
@@ -25,13 +26,12 @@ pub(super) struct ProviderAuthStatus {
     pub(super) error: Option<String>,
 }
 
-pub(super) fn map_openai_codex_auth_status(
-    status: RuntimeOpenAiCodexAuthStatus,
-) -> ProviderAuthStatus {
+pub(super) fn map_provider_auth_status(status: RuntimeProviderAuthStatus) -> ProviderAuthStatus {
     let mut mapped = ProviderAuthStatus {
+        provider_type: status.provider_type,
         sequence: status.sequence,
         state: ProviderAuthState::SignedOut,
-        plan_type: status.plan_type,
+        plan_type: status.plan,
         last_refresh: status.last_refresh_unix.map(|value| value.to_string()),
         auth_url: None,
         verification_url: None,
@@ -40,17 +40,17 @@ pub(super) fn map_openai_codex_auth_status(
     };
 
     mapped.state = match status.state {
-        RuntimeOpenAiCodexLoginState::SignedOut => ProviderAuthState::SignedOut,
-        RuntimeOpenAiCodexLoginState::BrowserPending(pending) => {
+        RuntimeProviderLoginState::SignedOut => ProviderAuthState::SignedOut,
+        RuntimeProviderLoginState::BrowserPending(pending) => {
             mapped.auth_url = Some(pending.auth_url);
             ProviderAuthState::BrowserPending
         }
-        RuntimeOpenAiCodexLoginState::DeviceCodePending(pending) => {
+        RuntimeProviderLoginState::DeviceCodePending(pending) => {
             mapped.verification_url = Some(pending.verification_url);
             mapped.user_code = Some(pending.user_code);
             ProviderAuthState::DeviceCodePending
         }
-        RuntimeOpenAiCodexLoginState::Authenticated => ProviderAuthState::Authenticated,
+        RuntimeProviderLoginState::Authenticated => ProviderAuthState::Authenticated,
     };
 
     mapped
@@ -124,7 +124,7 @@ mod tests {
             marker.with_extension("ready"),
             std::process::id().to_string(),
         )?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + kraai_test_support::HANG_TIMEOUT;
         while !marker.exists() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -145,7 +145,7 @@ mod tests {
             .stderr(std::process::Stdio::null());
         let waiter = spawn_external_target(command)?;
         let ready = marker.with_extension("ready");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + kraai_test_support::HANG_TIMEOUT;
         while !ready.exists() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }

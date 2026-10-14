@@ -2,6 +2,8 @@ const assert = require('node:assert/strict');
 const { createServer } = require('node:http');
 const { once } = require('node:events');
 
+const HANG_TIMEOUT = 300_000;
+
 async function localProvider(t, replies, { codex = false } = {}) {
   const tokenEnv = 'KRAAI_TEST_CODEX_PROXY_TOKEN';
   if (codex) {
@@ -76,4 +78,4 @@ function readRecord(storage, kind, id) {
   }
 }
 
-module.exports = { localProvider, unwrap, readRecord };
+module.exports = { HANG_TIMEOUT, localProvider, unwrap, readRecord };

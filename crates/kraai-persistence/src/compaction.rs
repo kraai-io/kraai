@@ -3,6 +3,7 @@ use crate::message_references::{delete_message_record, write_message_record};
 use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_types::{ConversationItem, MessageId, ModelId, ProviderId, TokenUsage};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,13 +63,40 @@ impl SqliteCompactionStore {
     pub async fn get(&self, boundary: &MessageId) -> Result<Option<CompactionCheckpoint>> {
         let boundary = boundary.to_string();
         self.database
-            .run(move |connection, _| {
+            .read(move |connection, _| {
                 let checkpoint =
                     read_record::<CompactionCheckpoint>(connection, "compaction", &boundary)?;
                 if let Some(checkpoint) = &checkpoint {
                     checkpoint.validate()?;
                 }
                 Ok(checkpoint)
+            })
+            .await
+    }
+    pub async fn compatible_checkpoints(
+        &self,
+        boundaries: impl IntoIterator<Item = &MessageId>,
+        provider_id: &ProviderId,
+        model_id: &ModelId,
+    ) -> Result<HashMap<MessageId, CompactionCheckpoint>> {
+        let boundaries = serde_json::to_string(&boundaries.into_iter().collect::<Vec<_>>())?;
+        let (provider_id, model_id) = (provider_id.clone(), model_id.clone());
+        self.database
+            .read(move |connection, _| {
+                let mut statement = connection.prepare_cached(
+                    "SELECT data FROM records WHERE kind = 'compaction'
+                     AND id IN (SELECT value FROM json_each(?1))",
+                )?;
+                let rows = statement.query_map([boundaries], |row| row.get::<_, String>(0))?;
+                let mut checkpoints = HashMap::new();
+                for row in rows {
+                    let checkpoint: CompactionCheckpoint = serde_json::from_str(&row?)?;
+                    checkpoint.validate()?;
+                    if checkpoint.compatible_with(&provider_id, &model_id) {
+                        checkpoints.insert(checkpoint.covered_through.clone(), checkpoint);
+                    }
+                }
+                Ok(checkpoints)
             })
             .await
     }
@@ -84,7 +112,7 @@ impl SqliteCompactionStore {
                     leases,
                     "compaction",
                     boundary,
-                    session.as_deref(),
+                    session.as_ref(),
                     &checkpoint,
                 )
             })

@@ -5,7 +5,7 @@ use super::forwarding::relay_response;
 
 #[tokio::test]
 async fn request_parser_preserves_header_octets_and_rejects_invalid_syntax() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(10), async {
+    kraai_test_support::hang_guard(async {
         let request = parse_raw_request(
             b"POST /v1/responses HTTP/1.1\r\nContent-Length: 2\r\nX-Codex-Turn-State:\t \xc2\xa0opaque-\xff\xc2\xa0 \t\r\n\r\n{}",
         )
@@ -158,7 +158,12 @@ async fn listener_failure_drains_tasks_and_records_failed_requests() -> Result<(
         }
     };
     let (_shutdown_tx, shutdown_rx) = oneshot::channel();
-    let server = serve_connections(accept, Arc::clone(&state), shutdown_rx);
+    let server = serve_connections(
+        accept,
+        Arc::clone(&state),
+        shutdown_rx,
+        kraai_test_support::HANG_TIMEOUT,
+    );
     let client = async {
         let mut stream = TcpStream::connect(address).await?;
         stream.write_all(b"POST /v1/responses HTTP/1.1\r\nAuthorization: Bearer client-token\r\nContent-Length: 2\r\n\r\n{}").await?;
@@ -177,10 +182,9 @@ async fn listener_failure_drains_tasks_and_records_failed_requests() -> Result<(
         stream.read_to_end(&mut response).await?;
         Ok::<_, color_eyre::Report>(())
     };
-    let (server, upstream, client) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::join!(server, upstream_request, client)
-    })
-    .await?;
+    let (server, upstream, client) =
+        kraai_test_support::hang_guard(async { tokio::join!(server, upstream_request, client) })
+            .await?;
     upstream?;
     client?;
     let error = server
@@ -250,6 +254,7 @@ async fn proxy_injects_real_credential_streams_and_rejects_unallowed_requests() 
         base_path: String::from("/v1"),
         log_path: log_path.clone(),
         max_requests: 1,
+        shutdown_drain_timeout: kraai_test_support::HANG_TIMEOUT,
     })?;
     let client = Client::new();
 
@@ -373,6 +378,7 @@ async fn finish_drains_in_flight_response_before_snapshotting_metrics() -> Resul
         base_path: String::from("/v1"),
         log_path: log_path.clone(),
         max_requests: 1,
+        shutdown_drain_timeout: kraai_test_support::HANG_TIMEOUT,
     })?;
     let mut downstream = std::net::TcpStream::connect(proxy.address)?;
     downstream.write_all(
@@ -454,6 +460,7 @@ price_output = "8"
         base_path: String::from("/v1"),
         log_path: root.join("proxy.events.jsonl"),
         max_requests: 2,
+        shutdown_drain_timeout: Duration::from_millis(50),
     })?;
     proxy.pricing.config = Some(pricing_config);
     let client = Client::new();
@@ -481,7 +488,14 @@ price_output = "8"
             .as_bytes(),
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), accepted_rx).await??;
+    kraai_test_support::hang_guard(accepted_rx).await??;
+    kraai_test_support::hang_guard(async {
+        while proxy.metrics()?.requests < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Ok::<_, color_eyre::Report>(())
+    })
+    .await??;
 
     let metrics = tokio::task::spawn_blocking(move || proxy.finish()).await??;
     let _ = release_tx.send(());
@@ -521,6 +535,7 @@ async fn accounting_errors_preserve_measured_proxy_metrics() -> Result<()> {
             base_path: String::from("/v1"),
             log_path: log_path.clone(),
             max_requests: 1,
+            shutdown_drain_timeout: kraai_test_support::HANG_TIMEOUT,
         })?;
         let rejected = Client::new()
             .get(format!("http://{}/v1/models", proxy.address))
@@ -741,6 +756,7 @@ async fn codex_proxy_keeps_subscription_tokens_outside_client_and_adds_account_h
         base_path: String::from("/backend-api"),
         log_path: log_path.clone(),
         max_requests: 1,
+        shutdown_drain_timeout: kraai_test_support::HANG_TIMEOUT,
     })?;
     let response = Client::new()
         .post(format!("{}/codex/responses", proxy.base_url()))

@@ -1,73 +1,182 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Context, Result, ensure, eyre};
+use kraai_types::SessionId;
 use rusqlite::{
     Connection, OptionalExtension, Transaction, TransactionBehavior, params, types::ValueRef,
 };
 use serde::{Serialize, de::DeserializeOwned};
+use tokio::sync::Semaphore;
 
-pub(crate) type LeaseTokens = BTreeMap<String, i64>;
+const SCHEMA_VERSION: i64 = 2;
+const READER_CONNECTIONS: usize = 4;
+
+#[derive(Default)]
+pub(crate) struct LeaseTokens(Mutex<BTreeMap<SessionId, i64>>);
+
+impl LeaseTokens {
+    fn tokens(&self) -> std::sync::MutexGuard<'_, BTreeMap<SessionId, i64>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn get(&self, session: &SessionId) -> Option<i64> {
+        self.tokens().get(session).copied()
+    }
+
+    pub(crate) fn insert(&self, session: SessionId, token: i64) {
+        self.tokens().insert(session, token);
+    }
+
+    pub(crate) fn remove(&self, session: &SessionId) -> Option<i64> {
+        self.tokens().remove(session)
+    }
+
+    pub(crate) fn snapshot(&self) -> Vec<(SessionId, i64)> {
+        self.tokens()
+            .iter()
+            .map(|(session, token)| (session.clone(), *token))
+            .collect()
+    }
+}
 
 #[derive(Clone)]
 pub struct Database {
     path: PathBuf,
-    state: Arc<Mutex<DatabaseState>>,
-}
-
-#[derive(Default)]
-struct DatabaseState {
-    connection: Option<Connection>,
-    leases: LeaseTokens,
+    writer: Arc<Mutex<Option<Connection>>>,
+    initialized: Arc<AtomicBool>,
+    readers: Arc<Mutex<Vec<Connection>>>,
+    reader_permits: Arc<Semaphore>,
+    leases: Arc<LeaseTokens>,
 }
 
 impl Database {
     pub(crate) fn new(directory: &Path) -> Self {
         Self {
             path: directory.join("kraai.sqlite3"),
-            state: Arc::default(),
+            writer: Arc::default(),
+            initialized: Arc::default(),
+            readers: Arc::default(),
+            reader_permits: Arc::new(Semaphore::new(READER_CONNECTIONS)),
+            leases: Arc::default(),
         }
+    }
+
+    pub(crate) fn leases(&self) -> &LeaseTokens {
+        &self.leases
+    }
+
+    fn open_writer(&self) -> Result<Connection> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| eyre!("Database has no parent"))?;
+        kraai_io::fs::create_dir_all(parent)?;
+        let mut connection = Connection::open(&self.path)
+            .with_context(|| format!("Failed to open database {}", self.path.display()))?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.execute_batch(
+            "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;",
+        )?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version: i64 =
+            transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        ensure!(
+            (0..=SCHEMA_VERSION).contains(&version),
+            "Unsupported SQLite schema version {version}"
+        );
+        if version == 1 {
+            transaction.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN lease_token INTEGER NOT NULL DEFAULT 0",
+            )?;
+        }
+        transaction.execute_batch(include_str!("schema.sql"))?;
+        transaction.commit()?;
+        Ok(connection)
+    }
+
+    fn open_reader(&self) -> Result<Connection> {
+        let connection = Connection::open(&self.path)
+            .with_context(|| format!("Failed to open database {}", self.path.display()))?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.execute_batch("PRAGMA query_only = ON")?;
+        Ok(connection)
+    }
+
+    fn with_writer<T>(
+        &self,
+        operation: impl FnOnce(&mut Connection, &LeaseTokens) -> Result<T>,
+    ) -> Result<T> {
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_poisoned| eyre!("Database mutex poisoned"))?;
+        if writer.is_none() {
+            *writer = Some(self.open_writer()?);
+            self.initialized.store(true, Ordering::Release);
+        }
+        let result = operation(
+            writer
+                .as_mut()
+                .ok_or_else(|| eyre!("Database was not initialized"))?,
+            &self.leases,
+        );
+        drop(writer);
+        result
     }
 
     pub(crate) async fn run<T: Send + 'static>(
         &self,
-        operation: impl FnOnce(&mut Connection, &mut LeaseTokens) -> Result<T> + Send + 'static,
+        operation: impl FnOnce(&mut Connection, &LeaseTokens) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let database = self.clone();
+        tokio::task::spawn_blocking(move || database.with_writer(operation))
+            .await
+            .context("Database task failed")?
+    }
+
+    /// Runs `operation` inside one read transaction, so all of its queries see the same commit.
+    pub(crate) async fn read<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&Connection, &LeaseTokens) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let permit = self
+            .reader_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .context("Database reader pool closed")?;
+        let database = self.clone();
         tokio::task::spawn_blocking(move || {
-            let mut state = database
-                .state
-                .lock()
-                .map_err(|_poisoned| eyre!("Database mutex poisoned"))?;
-            if state.connection.is_none() {
-                let parent = database
-                    .path
-                    .parent()
-                    .ok_or_else(|| eyre!("Database has no parent"))?;
-                kraai_io::fs::create_dir_all(parent)?;
-                let connection = Connection::open(&database.path).with_context(|| {
-                    format!("Failed to open database {}", database.path.display())
-                })?;
-                connection.busy_timeout(Duration::from_secs(5))?;
-                let version: i64 =
-                    connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-                ensure!(
-                    matches!(version, 0 | 1),
-                    "Unsupported SQLite schema version {version}"
-                );
-                connection.execute_batch(include_str!("schema.sql"))?;
-                state.connection = Some(connection);
+            if !database.initialized.load(Ordering::Acquire) {
+                database.with_writer(|_, _| Ok(()))?;
             }
-            let DatabaseState { connection, leases } = &mut *state;
-            let result = operation(
-                connection
-                    .as_mut()
-                    .ok_or_else(|| eyre!("Database was not initialized"))?,
-                leases,
-            );
-            drop(state);
+            let idle = database
+                .readers
+                .lock()
+                .map_err(|_poisoned| eyre!("Database reader pool poisoned"))?
+                .pop();
+            let mut connection = match idle {
+                Some(connection) => connection,
+                None => database.open_reader()?,
+            };
+            let result = connection
+                .transaction()
+                .map_err(Into::into)
+                .and_then(|transaction| operation(&transaction, &database.leases));
+            if connection.is_autocommit() {
+                database
+                    .readers
+                    .lock()
+                    .map_err(|_poisoned| eyre!("Database reader pool poisoned"))?
+                    .push(connection);
+            }
+            drop(permit);
             result
         })
         .await
@@ -98,44 +207,44 @@ pub(crate) fn now_nanos() -> Result<i64> {
 pub(crate) fn assert_owner(
     connection: &Connection,
     leases: &LeaseTokens,
-    session: &str,
+    session: &SessionId,
 ) -> Result<()> {
     let ownership: Option<(bool, i64)> = connection
         .query_row(
-            "SELECT lease_active, lease_expires_at FROM sessions WHERE id = ?1",
-            [session],
+            "SELECT lease_active, lease_token FROM sessions WHERE id = ?1",
+            [session.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    if let Some((active, expiry)) = ownership {
+    if let Some((active, token)) = ownership {
         if let Some(expected) = leases.get(session) {
             ensure!(
-                active && *expected == expiry,
-                kraai_types::DomainError::conflict(format!(
+                active && expected == token,
+                kraai_execution_types::DomainError::conflict(format!(
                     "Ownership of session {session} was lost"
                 ))
             );
         } else {
             ensure!(
                 !active,
-                kraai_types::DomainError::conflict(format!(
+                kraai_execution_types::DomainError::conflict(format!(
                     "Session {session} is owned by another runtime"
                 ))
             );
         }
     } else {
         ensure!(
-            !leases.contains_key(session),
+            leases.get(session).is_none(),
             "Owned session {session} was deleted"
         );
     }
     Ok(())
 }
 
-pub(crate) fn bump_revision(connection: &Connection, session: &str) -> Result<()> {
+pub(crate) fn bump_revision(connection: &Connection, session: &SessionId) -> Result<()> {
     connection.execute(
         "UPDATE sessions SET revision = revision + 1 WHERE id = ?1",
-        [session],
+        [session.as_str()],
     )?;
     Ok(())
 }
@@ -159,26 +268,32 @@ pub(crate) fn read_record<T: DeserializeOwned>(
     Ok(Some(serde_json::from_str(json)?))
 }
 
+pub(crate) fn parse_session_id(value: String) -> Result<SessionId> {
+    SessionId::try_new(value).map_err(|error| eyre!("Invalid stored session id: {error}"))
+}
+
 pub(crate) fn record_session(
     connection: &Connection,
     kind: &str,
     id: &str,
-) -> Result<Option<String>> {
-    Ok(connection
+) -> Result<Option<SessionId>> {
+    connection
         .query_row(
             "SELECT session_id FROM records WHERE kind = ?1 AND id = ?2",
             params![kind, id],
-            |row| row.get(0),
+            |row| row.get::<_, Option<String>>(0),
         )
         .optional()?
-        .flatten())
+        .flatten()
+        .map(parse_session_id)
+        .transpose()
 }
 
 pub(crate) fn write_record(
     connection: &Connection,
     kind: &str,
     id: &str,
-    session: Option<&str>,
+    session: Option<&SessionId>,
     value: &impl Serialize,
 ) -> Result<()> {
     let json = serde_json::to_string(value)?;
@@ -186,7 +301,7 @@ pub(crate) fn write_record(
         "INSERT INTO records(kind, id, session_id, data) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(kind, id) DO UPDATE SET data = excluded.data,
          session_id = COALESCE(records.session_id, excluded.session_id)",
-        params![kind, id, session, json],
+        params![kind, id, session.map(SessionId::as_str), json],
     )?;
     if let Some(session) = session {
         bump_revision(connection, session)?;
@@ -197,11 +312,13 @@ pub(crate) fn write_record(
 pub(crate) fn list_records<T: DeserializeOwned>(
     connection: &Connection,
     kind: &str,
-    session: Option<&str>,
+    session: Option<&SessionId>,
 ) -> Result<Vec<T>> {
     let mut statement = connection.prepare(
         "SELECT data FROM records WHERE kind = ?1 AND (?2 IS NULL OR session_id = ?2) ORDER BY id",
     )?;
-    let rows = statement.query_map(params![kind, session], |row| row.get::<_, String>(0))?;
+    let rows = statement.query_map(params![kind, session.map(SessionId::as_str)], |row| {
+        row.get::<_, String>(0)
+    })?;
     rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
 }

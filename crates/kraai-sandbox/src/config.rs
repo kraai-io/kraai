@@ -3,7 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use kraai_types::SandboxCapabilities;
+use kraai_execution_types::SandboxCapabilities;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::output::OutputEvent;

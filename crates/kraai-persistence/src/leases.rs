@@ -1,6 +1,7 @@
 use crate::SqliteSessionStore;
 use crate::database::now_nanos;
 use color_eyre::eyre::{Result, ensure, eyre};
+use kraai_types::SessionId;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::time::Duration;
 
@@ -13,58 +14,77 @@ pub struct SessionObservation {
     pub lease_expires_at: i64,
 }
 
-fn claimable_lease(connection: &Connection, session: &str) -> Result<(i64, i64)> {
-    let (active, previous): (bool, i64) = connection
+fn ensure_claimable(connection: &Connection, session: &SessionId) -> Result<i64> {
+    let (active, expires_at): (bool, i64) = connection
         .query_row(
             "SELECT lease_active, lease_expires_at FROM sessions WHERE id = ?1",
-            [session],
+            [session.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?
         .ok_or_else(|| {
-            eyre!(kraai_types::DomainError::not_found(format!(
+            eyre!(kraai_execution_types::DomainError::not_found(format!(
                 "Session not found: {session}"
             )))
         })?;
     let now = now_nanos()?;
     ensure!(
-        !active || previous < now,
-        kraai_types::DomainError::conflict(format!(
+        !active || expires_at < now,
+        kraai_execution_types::DomainError::conflict(format!(
             "Session {session} is already running in another instance"
         ))
     );
-    Ok((previous, now))
+    Ok(now)
+}
+
+fn lease_expiry(now: i64, duration: Duration) -> Result<i64> {
+    now.checked_add(i64::try_from(duration.as_nanos())?)
+        .ok_or_else(|| eyre!("Lease expiry overflow"))
 }
 
 impl SqliteSessionStore {
-    pub async fn observe(&self, session_id: &str) -> Result<Option<SessionObservation>> {
-        let session = session_id.to_string();
-        self.database.run(move |connection, _| Ok(connection.query_row(
-            "SELECT revision, lease_active AND lease_expires_at >= ?2, lease_expires_at FROM sessions WHERE id = ?1", params![session, now_nanos()?],
-            |row| Ok(SessionObservation { revision: row.get(0)?, lease_active: row.get(1)?, lease_expires_at: row.get(2)? }),
-        ).optional()?)).await
+    pub async fn observe(&self, session_id: &SessionId) -> Result<Option<SessionObservation>> {
+        let session = session_id.clone();
+        self.database
+            .read(move |connection, _| {
+                Ok(connection
+                    .query_row(
+                        "SELECT revision, lease_active AND lease_expires_at >= ?2, lease_expires_at
+                         FROM sessions WHERE id = ?1",
+                        params![session.as_str(), now_nanos()?],
+                        |row| {
+                            Ok(SessionObservation {
+                                revision: row.get(0)?,
+                                lease_active: row.get(1)?,
+                                lease_expires_at: row.get(2)?,
+                            })
+                        },
+                    )
+                    .optional()?)
+            })
+            .await
     }
 
-    pub async fn ensure_writable(&self, session_id: &str) -> Result<()> {
-        let session = session_id.to_string();
+    pub async fn ensure_writable(&self, session_id: &SessionId) -> Result<()> {
+        let session = session_id.clone();
         self.database
-            .run(move |connection, leases| {
+            .read(move |connection, leases| {
                 crate::database::assert_owner(connection, leases, &session)
             })
             .await
     }
 
-    pub async fn owns_turn(&self, session_id: &str) -> Result<bool> {
-        let session = session_id.to_string();
+    pub async fn owns_turn(&self, session_id: &SessionId) -> Result<bool> {
+        let Some(expected) = self.database.leases().get(session_id) else {
+            return Ok(false);
+        };
+        let session = session_id.clone();
         self.database
-            .run(move |connection, leases| {
-                let Some(expected) = leases.get(&session) else {
-                    return Ok(false);
-                };
+            .read(move |connection, _| {
                 Ok(connection
                     .query_row(
-                        "SELECT lease_active AND lease_expires_at = ?2 FROM sessions WHERE id = ?1",
-                        params![session, expected],
+                        "SELECT lease_active AND lease_token = ?2 FROM sessions WHERE id = ?1",
+                        params![session.as_str(), expected],
                         |row| row.get(0),
                     )
                     .optional()?
@@ -73,73 +93,177 @@ impl SqliteSessionStore {
             .await
     }
 
-    pub async fn claim_turn(&self, session_id: &str) -> Result<()> {
-        self.claim_turn_for(session_id, TURN_LEASE_DURATION).await
-    }
-
-    pub async fn claim_turn_for(&self, session_id: &str, duration: Duration) -> Result<()> {
-        ensure!(!duration.is_zero(), "Lease duration must be positive");
-        let session = session_id.to_string();
-        self.database.run(move |connection, leases| {
-            claimable_lease(connection, &session)?;
-            let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let (previous, now) = claimable_lease(&transaction, &session)?;
-            let expiry = now.checked_add(i64::try_from(duration.as_nanos())?).ok_or_else(|| eyre!("Lease expiry overflow"))?;
-            ensure!(expiry > previous, kraai_types::DomainError::conflict("Clock has not advanced enough to issue a new session lease"));
-            transaction.execute("UPDATE sessions SET lease_active = 1, lease_expires_at = ?2, revision = revision + 1 WHERE id = ?1", params![session, expiry])?;
-            transaction.commit()?;
-            leases.insert(session, expiry);
-            Ok(())
-        }).await
-    }
-
-    pub async fn renew_turn(&self, session_id: &str) -> Result<()> {
-        let session = session_id.to_string();
-        self.database.run(move |connection, leases| {
-            let expected = *leases.get(&session).ok_or_else(|| eyre!("Session is not owned by this runtime"))?;
-            let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let expiry = now_nanos()?.checked_add(i64::try_from(TURN_LEASE_DURATION.as_nanos())?).ok_or_else(|| eyre!("Lease expiry overflow"))?;
-            ensure!(expiry > expected, "Clock moved backwards while renewing session lease");
-            let updated = transaction.execute("UPDATE sessions SET lease_expires_at = ?3 WHERE id = ?1 AND lease_active = 1 AND lease_expires_at = ?2", params![session, expected, expiry])?;
-            ensure!(updated == 1, kraai_types::DomainError::conflict(format!("Ownership of session {session} was lost")));
-            transaction.commit()?;
-            leases.insert(session, expiry);
-            Ok(())
-        }).await
-    }
-
-    pub async fn release_turn(&self, session_id: &str) -> Result<bool> {
-        let session = session_id.to_string();
-        self.database.run(move |connection, leases| {
-            let Some(expected) = leases.remove(&session) else { return Ok(false); };
-            let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let updated = transaction.execute("UPDATE sessions SET lease_active = 0, revision = revision + 1 WHERE id = ?1 AND lease_active = 1 AND lease_expires_at = ?2", params![session, expected])?;
-            transaction.commit()?;
-            Ok(updated == 1)
-        }).await
-    }
-
-    pub async fn owned_sessions(&self) -> Result<Vec<String>> {
-        self.database
-            .run(|_, leases| Ok(leases.keys().cloned().collect()))
+    pub async fn claim_turn(&self, session_id: &SessionId) -> Result<()> {
+        self.claim_turn_for(session_id, self.turn_lease_duration)
             .await
     }
 
-    pub async fn owned_turns(&self) -> Result<Vec<(String, i64)>> {
+    pub async fn claim_turn_for(&self, session_id: &SessionId, duration: Duration) -> Result<()> {
+        ensure!(!duration.is_zero(), "Lease duration must be positive");
+        let session = session_id.clone();
         self.database
-            .run(|_, leases| {
-                Ok(leases
-                    .iter()
-                    .map(|(session, expiry)| (session.clone(), *expiry))
-                    .collect())
+            .run(move |connection, leases| {
+                ensure_claimable(connection, &session)?;
+                let transaction =
+                    connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let now = ensure_claimable(&transaction, &session)?;
+                let token: i64 = transaction.query_row(
+                    "UPDATE sessions SET lease_active = 1, lease_token = lease_token + 1,
+                     lease_expires_at = ?2, revision = revision + 1
+                     WHERE id = ?1 RETURNING lease_token",
+                    params![session.as_str(), lease_expiry(now, duration)?],
+                    |row| row.get(0),
+                )?;
+                transaction.commit()?;
+                leases.insert(session, token);
+                Ok(())
             })
             .await
     }
 
-    pub async fn lease_token_matches(&self, session_id: &str, expected: i64) -> Result<bool> {
-        let session = session_id.to_string();
+    pub async fn renew_turn(&self, session_id: &SessionId) -> Result<()> {
+        let expected = self
+            .database
+            .leases()
+            .get(session_id)
+            .ok_or_else(|| eyre!("Session is not owned by this runtime"))?;
+        let session = session_id.clone();
+        let duration = self.turn_lease_duration;
         self.database
-            .run(move |_, leases| Ok(leases.get(&session) == Some(&expected)))
+            .run(move |connection, _| {
+                let updated = connection.execute(
+                    "UPDATE sessions SET lease_expires_at = ?3
+                     WHERE id = ?1 AND lease_active = 1 AND lease_token = ?2",
+                    params![
+                        session.as_str(),
+                        expected,
+                        lease_expiry(now_nanos()?, duration)?
+                    ],
+                )?;
+                ensure!(
+                    updated == 1,
+                    kraai_execution_types::DomainError::conflict(format!(
+                        "Ownership of session {session} was lost"
+                    ))
+                );
+                Ok(())
+            })
+            .await
+    }
+
+    pub async fn release_turn(&self, session_id: &SessionId) -> Result<bool> {
+        let session = session_id.clone();
+        self.database
+            .run(move |connection, leases| {
+                let Some(expected) = leases.remove(&session) else {
+                    return Ok(false);
+                };
+                let updated = connection.execute(
+                    "UPDATE sessions SET lease_active = 0, revision = revision + 1
+                     WHERE id = ?1 AND lease_active = 1 AND lease_token = ?2",
+                    params![session.as_str(), expected],
+                )?;
+                Ok(updated == 1)
+            })
+            .await
+    }
+
+    pub fn owned_sessions(&self) -> Vec<SessionId> {
+        self.database
+            .leases()
+            .snapshot()
+            .into_iter()
+            .map(|(session, _)| session)
+            .collect()
+    }
+
+    pub fn owned_turns(&self) -> Vec<(SessionId, i64)> {
+        self.database.leases().snapshot()
+    }
+
+    pub fn lease_token_matches(&self, session_id: &SessionId, expected: i64) -> bool {
+        self.database.leases().get(session_id) == Some(expected)
+    }
+}
+
+impl SqliteSessionStore {
+    /// Sessions whose owner stopped without releasing a lease that has since expired.
+    pub async fn expired_leases(&self) -> Result<Vec<SessionId>> {
+        self.database
+            .read(|connection, _| {
+                let mut statement = connection.prepare(
+                    "SELECT id FROM sessions WHERE lease_active = 1 AND lease_expires_at < ?1 ORDER BY id",
+                )?;
+                let rows = statement.query_map([now_nanos()?], |row| row.get::<_, String>(0))?;
+                rows.map(|id| crate::database::parse_session_id(id?))
+                    .collect()
+            })
+            .await
+    }
+}
+
+/// What a session leased by another runtime is doing, as far as this runtime can observe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ForeignSessionActivity {
+    pub awaiting_approval: bool,
+    pub streaming: bool,
+}
+
+impl SqliteSessionStore {
+    pub async fn foreign_session_activity(
+        &self,
+    ) -> Result<std::collections::HashMap<SessionId, ForeignSessionActivity>> {
+        self.database
+            .read(|connection, leases| {
+                let mut statement = connection.prepare(
+                    "SELECT id, lease_token, tip_id FROM sessions
+                     WHERE lease_active = 1 AND lease_expires_at >= ?1",
+                )?;
+                let rows = statement
+                    .query_map([now_nanos()?], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut activity = std::collections::HashMap::new();
+                for (id, token, tip) in rows {
+                    let session = crate::database::parse_session_id(id)?;
+                    if leases.get(&session) == Some(token) {
+                        continue;
+                    }
+                    let awaiting_approval = crate::database::list_records::<
+                        crate::ScriptExecutionRecord,
+                    >(
+                        connection, "execution", Some(&session)
+                    )?
+                    .iter()
+                    .any(|record| {
+                        record.phase
+                            == kraai_execution_types::ScriptExecutionPhase::AwaitingApproval
+                    });
+                    let streaming = match tip {
+                        Some(tip) => crate::stream_deltas::read_message(connection, &tip)?
+                            .is_some_and(|message| {
+                                matches!(
+                                    message.status,
+                                    kraai_types::MessageStatus::Streaming { .. }
+                                )
+                            }),
+                        None => false,
+                    };
+                    activity.insert(
+                        session,
+                        ForeignSessionActivity {
+                            awaiting_approval,
+                            streaming,
+                        },
+                    );
+                }
+                Ok(activity)
+            })
             .await
     }
 }

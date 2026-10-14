@@ -1,12 +1,47 @@
 use super::*;
 
 #[tokio::test]
+async fn a_pooled_read_sees_one_commit_across_its_queries() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let persistence = open_persistence(directory.path()).await?;
+    persistence.sessions().save(&session("session")).await?;
+    let path = directory.path().join("kraai.sqlite3");
+    let (before, after) = persistence
+        .sessions()
+        .sqlite_database()
+        .read(move |connection, _| {
+            let revision = |connection: &rusqlite::Connection| {
+                connection.query_row(
+                    "SELECT revision FROM sessions WHERE id = 'session'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            };
+            let before = revision(connection)?;
+            rusqlite::Connection::open(&path)?.execute(
+                "UPDATE sessions SET revision = revision + 1 WHERE id = 'session'",
+                [],
+            )?;
+            Ok((before, revision(connection)?))
+        })
+        .await?;
+    ensure!(
+        before == after,
+        "A read observed a commit made between its queries"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn active_lease_rejection_does_not_require_the_database_write_lock() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let owner = Persistence::open(directory.path()).await?;
+    let owner = open_persistence(directory.path()).await?;
     owner.sessions().save(&session("session")).await?;
-    owner.sessions().claim_turn("session").await?;
-    let observer = Persistence::open(directory.path()).await?;
+    owner
+        .sessions()
+        .claim_turn(&SessionId::new("session"))
+        .await?;
+    let observer = open_persistence(directory.path()).await?;
     observer
         .sessions()
         .sqlite_database()
@@ -20,25 +55,30 @@ async fn active_lease_rejection_does_not_require_the_database_write_lock() -> Re
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let error = observer
         .sessions()
-        .claim_turn("session")
+        .claim_turn(&SessionId::new("session"))
         .await
         .err()
         .ok_or_else(|| color_eyre::eyre::eyre!("An active foreign lease must reject the claim"))?;
     ensure!(
         error
-            .downcast_ref::<kraai_types::DomainError>()
-            .is_some_and(|error| error.kind() == kraai_types::DomainErrorKind::Conflict),
+            .downcast_ref::<kraai_execution_types::DomainError>()
+            .is_some_and(|error| error.kind() == kraai_execution_types::DomainErrorKind::Conflict),
         "Expected an ownership conflict while the writer is held, got {error}"
     );
     transaction.rollback()?;
-    ensure!(owner.sessions().owns_turn("session").await?);
+    ensure!(
+        owner
+            .sessions()
+            .owns_turn(&SessionId::new("session"))
+            .await?
+    );
     Ok(())
 }
 
 #[tokio::test]
 async fn lease_and_usage_updates_do_not_invalidate_metadata_writes() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let root = persistence
         .conversations()
@@ -46,14 +86,17 @@ async fn lease_and_usage_updates_do_not_invalidate_metadata_writes() -> Result<(
         .await?;
     let mut metadata = persistence
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
-    persistence.sessions().claim_turn("session").await?;
+    persistence
+        .sessions()
+        .claim_turn(&SessionId::new("session"))
+        .await?;
     persistence
         .usage()
         .save(
-            "session",
+            &SessionId::new("session"),
             &kraai_types::RequestUsage {
                 message_id: root.message.id.clone(),
                 provider_id: kraai_types::ProviderId::new("provider"),
@@ -69,7 +112,7 @@ async fn lease_and_usage_updates_do_not_invalidate_metadata_writes() -> Result<(
     persistence.sessions().save(&metadata).await?;
     let mut metadata = persistence
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     persistence.messages().save(&root.message).await?;
@@ -79,17 +122,17 @@ async fn lease_and_usage_updates_do_not_invalidate_metadata_writes() -> Result<(
     metadata.tip_id = Some(message.id.clone());
     let linked = persistence
         .messages()
-        .save_linked(
-            &message,
-            &metadata,
-            Some(&root.message.id),
-            persistence.sessions().clone(),
-        )
+        .save_linked(LinkRequest {
+            messages: std::slice::from_ref(&message),
+            session: &metadata,
+            expected_tip: Some(&root.message.id),
+            consumed_queue_through: None,
+        })
         .await?;
-    ensure!(linked);
+    ensure!(linked == Some(true));
     let saved = persistence
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     ensure!(saved.title.as_deref() == Some("changed-title"));
@@ -97,7 +140,7 @@ async fn lease_and_usage_updates_do_not_invalidate_metadata_writes() -> Result<(
     ensure!(
         persistence
             .usage()
-            .load("session")
+            .load(&SessionId::new("session"))
             .await?
             .contains_key(&root.message.id)
     );
@@ -107,8 +150,8 @@ async fn lease_and_usage_updates_do_not_invalidate_metadata_writes() -> Result<(
 #[tokio::test]
 async fn stale_tip_conditional_save_preserves_concurrent_metadata_changes() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     let root = a
         .conversations()
@@ -116,12 +159,12 @@ async fn stale_tip_conditional_save_preserves_concurrent_metadata_changes() -> R
         .await?;
     let mut stale = a
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     let mut current = b
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     current.selected_profile_id = Some("changed-profile".into());
@@ -135,7 +178,7 @@ async fn stale_tip_conditional_save_preserves_concurrent_metadata_changes() -> R
     ensure!(result.is_err());
     let saved = b
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     ensure!(saved.tip_id.as_ref() == Some(&root.message.id));
@@ -147,22 +190,27 @@ async fn stale_tip_conditional_save_preserves_concurrent_metadata_changes() -> R
 #[tokio::test]
 async fn stale_metadata_cannot_resurrect_a_deleted_session() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     a.conversations()
         .append_message(request("session", "root"))
         .await?;
     let mut stale = a
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
-    b.sessions().delete("session").await?;
+    b.sessions().delete(&SessionId::new("session")).await?;
     stale.title = Some("late update".into());
     let result = a.sessions().save(&stale).await;
     ensure!(result.is_err());
-    ensure!(b.sessions().get("session").await?.is_none());
+    ensure!(
+        b.sessions()
+            .get(&SessionId::new("session"))
+            .await?
+            .is_none()
+    );
     ensure!(b.messages().list_ids().await?.is_empty());
     Ok(())
 }
@@ -170,8 +218,8 @@ async fn stale_metadata_cannot_resurrect_a_deleted_session() -> Result<()> {
 #[tokio::test]
 async fn stale_linked_message_does_not_overwrite_concurrent_metadata() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let a = Persistence::open(directory.path()).await?;
-    let b = Persistence::open(directory.path()).await?;
+    let a = open_persistence(directory.path()).await?;
+    let b = open_persistence(directory.path()).await?;
     a.sessions().save(&session("session")).await?;
     let root = a
         .conversations()
@@ -179,12 +227,12 @@ async fn stale_linked_message_does_not_overwrite_concurrent_metadata() -> Result
         .await?;
     let mut stale = a
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     let mut current = b
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     current.selected_profile_id = Some("changed-profile".into());
@@ -195,17 +243,17 @@ async fn stale_linked_message_does_not_overwrite_concurrent_metadata() -> Result
     stale.tip_id = Some(message.id.clone());
     let result = a
         .messages()
-        .save_linked(
-            &message,
-            &stale,
-            Some(&root.message.id),
-            a.sessions().clone(),
-        )
+        .save_linked(LinkRequest {
+            messages: std::slice::from_ref(&message),
+            session: &stale,
+            expected_tip: Some(&root.message.id),
+            consumed_queue_through: None,
+        })
         .await;
     ensure!(result.is_err());
     let saved = b
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     ensure!(saved.tip_id.as_ref() == Some(&root.message.id));
@@ -217,33 +265,42 @@ async fn stale_linked_message_does_not_overwrite_concurrent_metadata() -> Result
 #[tokio::test]
 async fn failed_release_stops_renewing_the_abandoned_claim() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     persistence
         .sessions()
-        .claim_turn_for("session", Duration::from_millis(1))
+        .claim_turn_for(&SessionId::new("session"), Duration::from_millis(1))
         .await?;
     let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
     connection.execute_batch("CREATE TRIGGER fail_release BEFORE UPDATE OF lease_active ON sessions WHEN NEW.lease_active = 0 BEGIN SELECT RAISE(FAIL, 'injected release failure'); END;")?;
     ensure!(
         persistence
             .sessions()
-            .release_turn("session")
+            .release_turn(&SessionId::new("session"))
             .await
             .is_err()
     );
-    ensure!(persistence.sessions().owned_sessions().await?.is_empty());
-    ensure!(persistence.sessions().renew_turn("session").await.is_err());
+    ensure!(persistence.sessions().owned_sessions().is_empty());
+    ensure!(
+        persistence
+            .sessions()
+            .renew_turn(&SessionId::new("session"))
+            .await
+            .is_err()
+    );
     tokio::time::sleep(Duration::from_millis(5)).await;
-    let observer = Persistence::open(directory.path()).await?;
-    observer.sessions().claim_turn("session").await?;
+    let observer = open_persistence(directory.path()).await?;
+    observer
+        .sessions()
+        .claim_turn(&SessionId::new("session"))
+        .await?;
     Ok(())
 }
 
 #[tokio::test]
 async fn failed_tip_commit_rolls_back_the_message_and_title() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
     connection.execute_batch("CREATE TRIGGER fail_tip BEFORE UPDATE OF tip_id ON sessions BEGIN SELECT RAISE(FAIL, 'injected tip failure'); END;")?;
@@ -257,7 +314,7 @@ async fn failed_tip_commit_rolls_back_the_message_and_title() -> Result<()> {
     ensure!(persistence.messages().list_ids().await?.is_empty());
     let saved = persistence
         .sessions()
-        .get("session")
+        .get(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     ensure!(saved.tip_id.is_none() && saved.title.is_none());
@@ -272,7 +329,7 @@ async fn failed_tip_commit_rolls_back_the_message_and_title() -> Result<()> {
 #[tokio::test]
 async fn failed_execution_finish_preserves_both_output_streams_and_running_phase() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let record = persistence
         .executions()
@@ -282,7 +339,7 @@ async fn failed_execution_finish_preserves_both_output_streams_and_running_phase
     for stream in [ScriptOutputStream::Stdout, ScriptOutputStream::Stderr] {
         persistence
             .executions()
-            .append_output(&record.id, stream, b"prefix".to_vec())
+            .append_output(&record.id, vec![(stream, b"prefix".to_vec())])
             .await?;
     }
     let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
@@ -319,7 +376,7 @@ async fn failed_execution_finish_preserves_both_output_streams_and_running_phase
 #[tokio::test]
 async fn retries_link_one_stable_message_and_reject_changed_content() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let conversations = persistence.conversations();
     let id = MessageId::new("stable");
@@ -352,7 +409,7 @@ async fn retries_link_one_stable_message_and_reject_changed_content() -> Result<
 #[tokio::test]
 async fn failed_session_deletion_restores_history_and_execution_data() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let message = persistence
         .conversations()
@@ -364,8 +421,20 @@ async fn failed_session_deletion_restores_history_and_execution_data() -> Result
         .await?;
     let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
     connection.execute_batch("CREATE TRIGGER fail_delete BEFORE DELETE ON execution_sources BEGIN SELECT RAISE(FAIL, 'injected deletion failure'); END;")?;
-    ensure!(persistence.sessions().delete("session").await.is_err());
-    ensure!(persistence.sessions().get("session").await?.is_some());
+    ensure!(
+        persistence
+            .sessions()
+            .delete(&SessionId::new("session"))
+            .await
+            .is_err()
+    );
+    ensure!(
+        persistence
+            .sessions()
+            .get(&SessionId::new("session"))
+            .await?
+            .is_some()
+    );
     ensure!(
         persistence
             .messages()
@@ -376,7 +445,10 @@ async fn failed_session_deletion_restores_history_and_execution_data() -> Result
     ensure!(persistence.executions().get(&execution.id).await?.is_some());
     ensure!(persistence.executions().read_source(&execution.id).await? == b"print hello");
     connection.execute_batch("DROP TRIGGER fail_delete")?;
-    persistence.sessions().delete("session").await?;
+    persistence
+        .sessions()
+        .delete(&SessionId::new("session"))
+        .await?;
     ensure!(persistence.messages().list_ids().await?.is_empty());
     ensure!(persistence.executions().list_all().await?.is_empty());
     Ok(())
@@ -385,7 +457,7 @@ async fn failed_session_deletion_restores_history_and_execution_data() -> Result
 #[tokio::test]
 async fn compaction_validation_preserves_the_saved_checkpoint() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let persistence = Persistence::open(directory.path()).await?;
+    let persistence = open_persistence(directory.path()).await?;
     persistence.sessions().save(&session("session")).await?;
     let message = persistence
         .conversations()
@@ -420,7 +492,7 @@ async fn compaction_validation_preserves_the_saved_checkpoint() -> Result<()> {
     ] {
         ensure!(persistence.compactions().save(&invalid).await.is_err());
     }
-    let reopened = Persistence::open(directory.path()).await?;
+    let reopened = open_persistence(directory.path()).await?;
     ensure!(
         reopened
             .compactions()
@@ -436,10 +508,13 @@ async fn compaction_validation_preserves_the_saved_checkpoint() -> Result<()> {
             .await?
             .is_some_and(|message| message.content.text() == Some("original"))
     );
-    persistence.sessions().claim_turn("session").await?;
+    persistence
+        .sessions()
+        .claim_turn(&SessionId::new("session"))
+        .await?;
     let before = reopened
         .sessions()
-        .observe("session")
+        .observe(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     ensure!(
@@ -455,7 +530,7 @@ async fn compaction_validation_preserves_the_saved_checkpoint() -> Result<()> {
         .await?;
     let after = reopened
         .sessions()
-        .observe("session")
+        .observe(&SessionId::new("session"))
         .await?
         .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
     ensure!(after.revision == before.revision + 1);

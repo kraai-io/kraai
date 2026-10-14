@@ -18,6 +18,7 @@ pub struct ProviderManager {
     providers: Arc<BTreeMap<ProviderId, Arc<dyn Provider>>>,
     pricing: crate::pricing::Pricing,
     pub(crate) cache_warming: crate::cache_warming::CacheWarming,
+    cooldowns: Arc<std::sync::Mutex<HashMap<ProviderId, Arc<crate::http_retry::ProviderCooldown>>>>,
 }
 
 impl ProviderManager {
@@ -40,6 +41,15 @@ impl ProviderManager {
         provider.set_model_catalog(self.pricing.catalog.clone());
         Arc::make_mut(&mut self.providers).insert(id, Arc::from(provider));
         self.cache_warming = Default::default();
+    }
+
+    fn cooldown(&self, id: &ProviderId) -> Arc<crate::http_retry::ProviderCooldown> {
+        self.cooldowns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(id.clone())
+            .or_default()
+            .clone()
     }
 
     pub fn has_provider(&self, id: &ProviderId) -> bool {
@@ -248,6 +258,7 @@ impl ProviderManager {
             .get(provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
         let pricing_model = provider.pricing_model_id(model_id).await?;
+        let context = context.with_cooldown(self.cooldown(provider_id));
         let stream = provider.compact_stream(model_id, request, &context).await?;
         Ok(self
             .pricing
@@ -279,6 +290,7 @@ impl ProviderManager {
             }
         };
         let pricing_model = provider.pricing_model_id(model_id).await?;
+        let request_context = request_context.with_cooldown(self.cooldown(&provider_id));
         let stream = provider
             .generate_reply_stream(model_id, request, &request_context)
             .await?;
@@ -583,10 +595,8 @@ mod tests {
                     result = &mut loading => Err(eyre!(
                         "startup completed before pricing I/O was released: {result:?}"
                     )),
-                    result = tokio::time::timeout(
-                        Duration::from_secs(2),
-                        cache_started.notified(),
-                    ) => result.map_err(|error| eyre!("model discovery did not start: {error}")),
+                    result = kraai_test_support::hang_guard(cache_started.notified())
+                        => result.map_err(|error| eyre!("model discovery did not start: {error}")),
                 };
                 let still_pending = observed.is_ok() && futures::poll!(&mut loading).is_pending();
                 drop(loading);

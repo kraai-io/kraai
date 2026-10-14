@@ -1,6 +1,6 @@
 use color_eyre::eyre::Result;
+use kraai_execution_types::ScriptExecutionStatus;
 use kraai_persistence::ScriptExecutionCompletion;
-use kraai_types::ScriptExecutionStatus;
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
@@ -33,32 +33,32 @@ async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_session
     harness.events.wait_for("script approval", |events| {
         events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id: id, .. } if id == &session_id))
     }).await;
-    let pending = harness
-        .runtime
-        .pending_script_approvals
-        .lock()
-        .await
-        .remove(&session_id)
-        .expect("pending script");
-    let store = &harness.runtime.execution_store;
     let message = "Incompatible Nushell sibling; rebuild both binaries with `just build`";
-    let record = store
-        .finish(
-            &pending.request.id,
-            ScriptExecutionCompletion {
-                status: ScriptExecutionStatus::HostUnavailable,
-                exit_code: None,
-                sandbox_denied: false,
-                error: Some(message.into()),
-                stdout: Vec::new(),
-                stderr: Vec::new(),
-            },
-        )
-        .await?;
-    let output = store.read_output(&record.id).await?;
     harness
         .runtime
-        .finalize_script_turn(&session_id, CompletedScriptExecution { record, output })
+        .with_session_actor(&session_id, move |actor| {
+            Box::pin(async move {
+                let pending = actor.take_pending_approval().expect("pending script");
+                let store = actor.runtime.execution_store.clone();
+                let record = store
+                    .finish(
+                        &pending.request.id,
+                        ScriptExecutionCompletion {
+                            status: ScriptExecutionStatus::HostUnavailable,
+                            exit_code: None,
+                            sandbox_denied: false,
+                            error: Some(message.into()),
+                            stdout: Vec::new(),
+                            stderr: Vec::new(),
+                        },
+                    )
+                    .await?;
+                let output = store.read_output(&record.id).await?;
+                actor
+                    .finish_script(CompletedScriptExecution { record, output })
+                    .await
+            })
+        })
         .await?;
 
     harness.events.wait_for("host error in UI", |events| {
@@ -73,16 +73,9 @@ async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_session
         .runtime
         .recover_session_executions(&session_id)
         .await?;
-    assert!(
-        !harness
-            .runtime
-            .agent_manager
-            .read()
-            .await
-            .is_turn_active(&session_id)
-    );
+    assert!(!harness.runtime.agent_manager.is_turn_active(&session_id));
     harness.handle.delete_session(session_id.clone()).await?;
-    assert!(store.list_all().await?.is_empty());
+    assert!(harness.runtime.execution_store.list_all().await?.is_empty());
     assert!(harness.handle.list_sessions().await?.is_empty());
     harness.shutdown().await;
     Ok(())

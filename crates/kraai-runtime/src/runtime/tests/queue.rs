@@ -1,236 +1,118 @@
-use std::sync::Arc;
-use std::time::Duration;
-
 use color_eyre::eyre::Result;
-use futures::poll;
-use tokio::sync::mpsc;
+use kraai_test_support::hang_guard;
 
+use super::harness::FullHistory as _;
 use super::harness::{RuntimeTestHarness, create_session_with_profile};
-use crate::handle::Command;
+use crate::Event;
+
+async fn drain(harness: &RuntimeTestHarness, session_id: &kraai_types::SessionId) {
+    harness
+        .runtime
+        .with_session_actor(session_id, |actor| {
+            Box::pin(async move { actor.drain().await })
+        })
+        .await;
+}
 
 #[tokio::test]
-async fn failed_queue_preparation_restores_batch_and_allows_later_retry() -> Result<()> {
+async fn failed_queue_preparation_keeps_the_batch_and_allows_later_retry() -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new())
         .await
         .expect("runtime fixture");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let runtime = &harness.runtime;
-    runtime
-        .restore_queued_messages(
-            &session_id,
-            ["one", "two"]
-                .into_iter()
-                .map(|message| crate::runtime::core::QueuedMessage {
-                    options: Default::default(),
-                    message: message.into(),
-                    model_id: kraai_types::ModelId::new("mock-model"),
-                    provider_id: kraai_types::ProviderId::new("missing-provider"),
-                })
-                .collect(),
-        )
-        .await;
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        runtime.handle_start_queued_messages(session_id.clone()),
+    super::harness::enqueue(
+        runtime,
+        &session_id,
+        ["one", "two"].into_iter().map(|message| {
+            super::harness::queued(
+                message.into(),
+                kraai_types::ModelId::new("mock-model"),
+                kraai_types::ProviderId::new("missing-provider"),
+            )
+        }),
     )
-    .await?;
-    assert!(
-        !runtime
-            .agent_manager
-            .read()
-            .await
-            .is_turn_active(&session_id)
-    );
-    let mut messages = runtime.take_queued_messages(&session_id).await;
+    .await;
+    drain(&harness, &session_id).await;
+    harness
+        .events
+        .wait_for("queued preparation failure", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::SessionError { session_id: id, .. } if id == &session_id)
+            })
+        })
+        .await;
+    assert!(!runtime.agent_manager.is_turn_active(&session_id));
+    let mut messages = super::harness::take_queue(runtime, &session_id).await;
     assert_eq!(
         messages
             .iter()
-            .map(|message| message.message.as_text().unwrap_or(""))
+            .map(|message| message.content.as_text().unwrap_or(""))
             .collect::<Vec<_>>(),
         vec!["one", "two"]
     );
-    assert!(
-        runtime
-            .agent_manager
-            .read()
-            .await
-            .get_tip(&session_id)
-            .await?
-            .is_none()
-    );
+    assert!(runtime.agent_manager.get_tip(&session_id).await?.is_none());
     for message in &mut messages {
-        message.provider_id = kraai_types::ProviderId::new("mock");
+        message.selection.provider_id = kraai_types::ProviderId::new("mock");
     }
-    runtime.restore_queued_messages(&session_id, messages).await;
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        runtime.handle_start_queued_messages(session_id.clone()),
-    )
-    .await?;
-    assert!(runtime.take_queued_messages(&session_id).await.is_empty());
-    harness.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn full_command_channel_and_queued_snapshot_do_not_block_terminal_drain() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime fixture");
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let mut runtime = harness.runtime.clone();
-    let (commands, mut receiver) = mpsc::channel(1);
-    runtime.command_tx = commands;
-    runtime.queue_drains = Arc::default();
-    runtime
-        .command_tx
-        .try_send(Command::LoadConfig)
-        .expect("fill command channel");
-    let guard = runtime.session_state_barrier.read().await;
-    let snapshot = runtime.build_session_snapshot(&session_id);
-    tokio::pin!(snapshot);
-    assert!(poll!(&mut snapshot).is_pending());
-
-    runtime
-        .restore_queued_messages(
-            &session_id,
-            vec![crate::runtime::core::QueuedMessage {
-                options: Default::default(),
-                message: "queued".into(),
-                model_id: kraai_types::ModelId::new("mock-model"),
-                provider_id: kraai_types::ProviderId::new("missing-provider"),
-            }],
-        )
+    super::harness::enqueue(runtime, &session_id, messages).await;
+    drain(&harness, &session_id).await;
+    harness
+        .events
+        .wait_for("queued stream", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::StreamStart { session_id: id, .. } if id == &session_id)
+            })
+        })
         .await;
-
-    // A failed continuation clears turn state and schedules a drain under the
-    // caller's barrier. It must finish even though no command slot can free up.
-    let result = tokio::time::timeout(
-        Duration::from_secs(1),
-        runtime.start_continuation(
-            session_id.clone(),
-            kraai_types::ModelId::new("mock-model"),
-            kraai_types::ProviderId::new("missing-provider"),
-            Default::default(),
-        ),
-    )
-    .await?;
-    assert!(result.is_err());
-    drop(guard);
-    tokio::time::timeout(Duration::from_secs(1), snapshot).await??;
-
-    runtime.schedule_queue_drain(&session_id);
-    let expected_session = session_id.clone();
-    let mut drain_received = false;
-    let mut command_received = false;
-    for _ in 0..2 {
-        match tokio::time::timeout(Duration::from_secs(1), runtime.next_command(&mut receiver))
-            .await?
-        {
-            Some(Command::StartQueuedMessages { session_id }) => {
-                assert_eq!(session_id, expected_session);
-                drain_received = true;
-            }
-            Some(Command::LoadConfig) => command_received = true,
-            _ => panic!("unexpected command"),
-        }
-    }
-    assert!(drain_received && command_received);
+    assert!(super::harness::queue(runtime, &session_id).await.is_empty());
     harness.shutdown().await;
     Ok(())
 }
 
 #[tokio::test]
-async fn drains_coalesce_without_losing_sessions_or_rescheduled_work() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime fixture");
-    let mut runtime = harness.runtime.clone();
-    runtime.queue_drains = Arc::default();
-    let (_commands, mut receiver) = mpsc::channel(1);
-    for session in ["first", "first", "second", "first", "second"] {
-        runtime.schedule_queue_drain(session);
-    }
-    for expected in ["first", "second"] {
-        let Some(Command::StartQueuedMessages { session_id }) =
-            tokio::time::timeout(Duration::from_secs(1), runtime.next_command(&mut receiver))
-                .await?
-        else {
-            panic!("missing drain");
-        };
-        assert_eq!(session_id, expected);
-    }
-    {
-        let next = runtime.next_command(&mut receiver);
-        tokio::pin!(next);
-        assert!(
-            poll!(&mut next).is_pending(),
-            "duplicate drain survived coalescing"
-        );
-    }
-    runtime.schedule_queue_drain("first");
-    assert!(
-        matches!(tokio::time::timeout(Duration::from_secs(1), runtime.next_command(&mut receiver)).await?, Some(Command::StartQueuedMessages { session_id }) if session_id == "first")
-    );
-    harness.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn overlapping_preparations_preserve_queue_order_after_failure() -> Result<()> {
+async fn failed_continuation_preserves_queue_order_with_messages_queued_meanwhile() -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new()).await.expect("fixture");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let mut runtime = harness.runtime.clone();
-    runtime.queue_drains = Arc::default();
-    let message = |text: &str| crate::runtime::core::QueuedMessage {
-        options: Default::default(),
-        message: text.into(),
-        model_id: kraai_types::ModelId::new("mock-model"),
-        provider_id: kraai_types::ProviderId::new("mock"),
+    let message = |text: &str| {
+        super::harness::queued(
+            text.into(),
+            kraai_types::ModelId::new("missing-model"),
+            kraai_types::ProviderId::new("mock"),
+        )
     };
-    runtime
-        .restore_queued_messages(&session_id, vec![message("first")])
+    super::harness::enqueue(&harness.runtime, &session_id, vec![message("first")]).await;
+    let second = message("second");
+    let (failed, overlapping) = harness
+        .runtime
+        .with_session_actor(&session_id, move |actor| {
+            Box::pin(async move {
+                let (failed_response, failed) = tokio::sync::oneshot::channel();
+                actor.continue_session(None, Some(failed_response)).await;
+                actor
+                    .runtime
+                    .session_store
+                    .enqueue_message(&actor.session_id, &second)
+                    .await
+                    .expect("enqueue during preparation");
+                let (overlapping_response, overlapping) = tokio::sync::oneshot::channel();
+                actor
+                    .continue_session(None, Some(overlapping_response))
+                    .await;
+                (failed, overlapping)
+            })
+        })
         .await;
-    let agent = runtime.agent_manager.write().await;
-    let first = runtime.start_continuation(
-        session_id.clone(),
-        kraai_types::ModelId::new("mock-model"),
-        kraai_types::ProviderId::new("missing"),
-        Default::default(),
-    );
-    tokio::pin!(first);
-    assert!(poll!(&mut first).is_pending());
     assert_eq!(
-        runtime
-            .enqueue_message(&session_id, message("second"))
-            .await,
-        2
-    );
-    assert!(matches!(
-        runtime
-            .start_continuation(
-                session_id.clone(),
-                kraai_types::ModelId::new("mock-model"),
-                kraai_types::ProviderId::new("mock"),
-                Default::default(),
-            )
-            .await?,
+        hang_guard(overlapping).await???,
         crate::ContinueSessionOutcome::NothingToContinue
-    ));
-    // Both entry points must coalesce before trying to acquire the agent lock.
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        runtime.handle_start_queued_messages(session_id.clone()),
-    )
-    .await?;
-    drop(agent);
-    assert!(first.await.is_err());
-    assert!(!runtime.session_preparations.is_active(&session_id));
-    let restored = runtime.take_queued_messages(&session_id).await;
+    );
+    assert!(hang_guard(failed).await??.is_err());
+    let restored = super::harness::take_queue(&harness.runtime, &session_id).await;
     assert_eq!(
         restored
             .iter()
-            .map(|m| m.message.as_text().unwrap_or(""))
+            .map(|m| m.content.as_text().unwrap_or(""))
             .collect::<Vec<_>>(),
         vec!["first", "second"]
     );
@@ -242,108 +124,46 @@ async fn overlapping_preparations_preserve_queue_order_after_failure() -> Result
 async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new()).await.expect("fixture");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let mut runtime = harness.runtime.clone();
-    runtime.queue_drains = Arc::default();
-    let preparation = runtime
-        .session_preparations
-        .try_begin(&session_id)
-        .expect("first preparation");
-    let agent = runtime.agent_manager.write().await;
-    let send = runtime.handle_send_message(
-        session_id.clone(),
-        "new message".into(),
-        kraai_types::ModelId::new("mock-model"),
-        kraai_types::ProviderId::new("mock"),
-        Default::default(),
-    );
-    tokio::pin!(send);
-    assert!(poll!(&mut send).is_pending());
-    // Preserve the decision to queue even if preparation finishes while this
-    // submission is waiting to inspect turn state.
-    let other = runtime
-        .session_preparations
-        .try_begin("another-session")
-        .expect("independent session");
-    drop(other);
-    drop(preparation);
-    drop(agent);
-    let outcome = send.await?;
+    super::harness::hold_preparation(&harness.runtime, &session_id).await;
+    let outcome = harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            "new message".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
+        )
+        .await?;
     assert!(matches!(
         outcome,
         crate::SubmitMessageOutcome::Queued { position: 1 }
     ));
     assert!(
-        runtime
+        harness
+            .runtime
             .agent_manager
-            .read()
-            .await
             .get_tip(&session_id)
             .await?
             .is_none()
     );
-    assert!(
-        runtime
-            .session_preparations
-            .try_begin(&session_id)
-            .is_some()
-    );
-    harness.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn preparation_starting_during_admission_queues_the_message() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new()).await.expect("fixture");
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let mut runtime = harness.runtime.clone();
-    runtime.queue_drains = Arc::default();
-    let agent = runtime.agent_manager.write().await;
-    let send = runtime.handle_send_message(
-        session_id.clone(),
-        "new message".into(),
-        kraai_types::ModelId::new("mock-model"),
-        kraai_types::ProviderId::new("mock"),
-        Default::default(),
-    );
-    tokio::pin!(send);
-    assert!(poll!(&mut send).is_pending());
-    let preparation = runtime
-        .session_preparations
-        .try_begin(&session_id)
-        .expect("continuation preparation");
-    drop(agent);
-    assert!(matches!(
-        send.await?,
-        crate::SubmitMessageOutcome::Queued { position: 1 }
-    ));
-    let queued = runtime.take_queued_messages(&session_id).await;
-    assert_eq!(queued.len(), 1);
+    let queued = super::harness::queue(&harness.runtime, &session_id).await;
     assert_eq!(
-        queued.first().expect("queued message").message,
-        "new message".into()
+        queued.first().map(|message| &message.content),
+        Some(&"new message".into())
     );
-    assert!(
-        runtime
-            .agent_manager
-            .read()
-            .await
-            .get_tip(&session_id)
-            .await?
-            .is_none()
-    );
-    drop(preparation);
+    super::harness::release_preparation(&harness.runtime, &session_id).await;
     harness.shutdown().await;
     Ok(())
 }
 
 #[tokio::test]
-async fn rejected_interception_preserves_turn_and_pending_workspace() -> Result<()> {
+async fn rejected_continuation_preserves_turn_and_pending_workspace() -> Result<()> {
     let harness = RuntimeTestHarness::new(Vec::new()).await.expect("fixture");
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let mut runtime = harness.runtime.clone();
-    runtime.queue_drains = Arc::default();
+    let runtime = &harness.runtime;
     let (tip, workspace) = {
-        let mut agent = runtime.agent_manager.write().await;
+        let agent = &runtime.agent_manager;
         let request = agent
             .prepare_start_stream(
                 &session_id,
@@ -365,53 +185,119 @@ async fn rejected_interception_preserves_turn_and_pending_workspace() -> Result<
         agent
             .set_workspace_dir(&session_id, pending_workspace)
             .await?;
-        drop(agent);
         (request.message_id, turn.workspace_dir.join("pending"))
     };
-    runtime
-        .restore_queued_messages(
-            &session_id,
-            vec![crate::runtime::core::QueuedMessage {
-                options: Default::default(),
-                message: "queued".into(),
-                model_id: kraai_types::ModelId::new("mock-model"),
-                provider_id: kraai_types::ProviderId::new("missing"),
-            }],
-        )
-        .await;
+    super::harness::enqueue(
+        runtime,
+        &session_id,
+        vec![super::harness::queued(
+            "queued".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("missing"),
+        )],
+    )
+    .await;
     assert!(
-        tokio::time::timeout(
-            Duration::from_secs(1),
-            runtime.start_continuation(
-                session_id.clone(),
-                kraai_types::ModelId::new("mock-model"),
-                kraai_types::ProviderId::new("missing"),
-                Default::default(),
-            ),
-        )
+        hang_guard(harness.handle.continue_session(
+            session_id.clone(),
+            "mock-model".into(),
+            "missing".into(),
+            Default::default(),
+        ),)
         .await?
         .is_err()
     );
-    let agent = runtime.agent_manager.read().await;
-    assert!(agent.is_turn_active(&session_id));
+    assert!(runtime.agent_manager.is_turn_active(&session_id));
     assert!(runtime.session_store.owns_turn(&session_id).await?);
-    assert_eq!(agent.get_tip(&session_id).await?, Some(tip));
-    drop(agent);
+    assert_eq!(runtime.agent_manager.get_tip(&session_id).await?, Some(tip));
     assert_eq!(
         runtime
             .agent_manager
-            .write()
-            .await
             .get_workspace_dir_state(&session_id)
             .await?,
         Some((workspace, true))
     );
-    let queued = runtime.take_queued_messages(&session_id).await;
+    let queued = super::harness::take_queue(runtime, &session_id).await;
     assert_eq!(queued.len(), 1);
     assert_eq!(
-        queued.first().expect("restored message").message,
+        queued.first().expect("restored message").content,
         "queued".into()
     );
     harness.shutdown().await;
+    Ok(())
+}
+#[tokio::test]
+async fn queued_messages_survive_restart_and_drain_on_the_next_send() -> Result<()> {
+    let previous = RuntimeTestHarness::new(Vec::new())
+        .await
+        .expect("previous runtime");
+    let session_id = create_session_with_profile(&previous.handle, "test-profile").await?;
+    super::harness::enqueue(
+        &previous.runtime,
+        &session_id,
+        [super::harness::queued(
+            "queued before restart".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )],
+    )
+    .await;
+    let restarted = RuntimeTestHarness::new_shared(
+        vec![vec![super::harness::ScriptedChunk::plain("both handled")]],
+        previous.data_dir.clone(),
+    )
+    .await
+    .expect("restarted runtime");
+    let snapshot = restarted
+        .handle
+        .get_session_snapshot(session_id.clone())
+        .await?;
+    assert_eq!(snapshot.queued_messages, 1);
+    assert!(!snapshot.session.is_running);
+    assert!(snapshot.history.is_empty());
+
+    assert_eq!(
+        restarted
+            .handle
+            .send_message(
+                session_id.clone(),
+                "sent after restart".into(),
+                "mock-model".into(),
+                "mock".into(),
+                Default::default(),
+            )
+            .await?,
+        crate::SubmitMessageOutcome::Queued { position: 2 }
+    );
+    restarted
+        .events
+        .wait_for("queued turn", |events| {
+            events.iter().any(|event| {
+                matches!(event, crate::Event::TurnCompleted { session_id: id } if id == &session_id)
+            })
+        })
+        .await;
+    let users: Vec<_> = restarted
+        .handle
+        .get_chat_history(session_id.clone())
+        .await?
+        .into_values()
+        .filter_map(|message| match message.content {
+            kraai_types::ConversationItem::User { content } => {
+                content.as_text().map(str::to_string)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(users.len(), 2);
+    assert!(users.contains(&"queued before restart".to_string()));
+    assert!(users.contains(&"sent after restart".to_string()));
+    assert!(
+        super::harness::queue(&restarted.runtime, &session_id)
+            .await
+            .is_empty()
+    );
+    restarted.shutdown().await;
+    previous.shutdown().await;
     Ok(())
 }

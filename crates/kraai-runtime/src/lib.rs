@@ -10,16 +10,19 @@ pub use timing::TurnTimer;
 
 pub use api::{
     AgentProfileCatalog, ContinueSessionOutcome, CreateSessionRequest, Event, EventCallback,
-    FieldViolation, Model, OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin,
-    PendingDeviceCodeLogin, PendingScriptInfo, RuntimeError, RuntimeErrorKind, RuntimeEvent,
-    RuntimeResult, RuntimeStartupState, Session, SessionActivity, SessionContextUsage,
-    SessionSnapshot, SubmitMessageOutcome, WorkspaceState,
+    FieldViolation, HistoryPage, LoginMethod, Model, PROTOCOL_VERSION, PendingBrowserLogin,
+    PendingDeviceCodeLogin, PendingScriptInfo, ProviderAuthStatus, ProviderLoginState,
+    RuntimeError, RuntimeErrorKind, RuntimeEvent, RuntimeResult, RuntimeStartupState, Session,
+    SessionActivity, SessionContextUsage, SessionSnapshot, SubmitMessageOutcome, WorkspaceState,
 };
 pub use handle::RuntimeHandle;
-pub use kraai_mcp::{McpAuthState, McpAuthStatus};
+pub use kraai_mcp::{McpAuthState, McpAuthStatus, McpConfig};
 pub use kraai_provider_core::{
     DynamicValue as SettingsValue, FieldDefinition, FieldValueKind, ProviderDefinition,
+    ProviderSet, ProviderSetup,
 };
+#[doc(hidden)]
+pub use kraai_types as __types;
 pub use kraai_types::{
     AgentProfileSource, AgentProfileSummary, AgentProfileWarning, AgentProfilesState, Message,
     MessageId, TokenUsage,

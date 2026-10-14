@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::Report;
 use futures::{StreamExt, stream};
-use kraai_types::{DomainError, McpRequest};
+use kraai_execution_types::{DomainError, McpRequest};
 use serde_json::{Value, json};
 
 pub use auth::{McpAuthState, McpAuthStatus};
@@ -56,11 +56,20 @@ impl McpManager {
         storage_root: std::path::PathBuf,
         root: std::path::PathBuf,
     ) -> Result<Self, String> {
+        Self::with_auth_storage_lock_timeout(config, storage_root, root, auth::DEFAULT_LOCK_TIMEOUT)
+    }
+
+    pub fn with_auth_storage_lock_timeout(
+        config: McpConfig,
+        storage_root: std::path::PathBuf,
+        root: std::path::PathBuf,
+        lock_timeout: std::time::Duration,
+    ) -> Result<Self, String> {
         Self::build(
             config,
-            Some(Arc::new(kraai_io::fs::DirectoryBootstrap::new(
-                storage_root,
-                root,
+            Some(Arc::new(auth::Storage::new(
+                kraai_io::fs::DirectoryBootstrap::new(storage_root, root),
+                lock_timeout,
             ))),
             tokio::sync::broadcast::channel(64).0,
         )
@@ -68,7 +77,7 @@ impl McpManager {
 
     fn build(
         config: McpConfig,
-        root: Option<Arc<kraai_io::fs::DirectoryBootstrap>>,
+        root: Option<Arc<auth::Storage>>,
         auth_events: tokio::sync::broadcast::Sender<McpAuthStatus>,
     ) -> Result<Self, String> {
         config.validate()?;

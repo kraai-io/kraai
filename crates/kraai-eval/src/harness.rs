@@ -65,9 +65,8 @@ impl HarnessProfile {
         Self {
             schema_version: 1,
             name: String::from("kraai"),
-            program: PathBuf::from("kraai"),
+            program: PathBuf::from("kraai-headless"),
             args: [
-                "--ci",
                 "--provider",
                 "{provider_id}",
                 "--model",

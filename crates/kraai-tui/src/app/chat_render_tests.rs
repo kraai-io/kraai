@@ -61,8 +61,8 @@ fn completed_calls_preserve_mixed_text_pending_calls_and_queued_messages() {
         "result",
         Some("call"),
         ConversationItem::ScriptResult {
-            outcome: kraai_types::ScriptExecutionOutcome {
-                status: kraai_types::ScriptExecutionStatus::Completed,
+            outcome: kraai_execution_types::ScriptExecutionOutcome {
+                status: kraai_execution_types::ScriptExecutionStatus::Completed,
                 exit_code: Some(0),
             },
             call_id: ToolCallId::new("completed"),
@@ -294,8 +294,8 @@ fn duplicate_completed_call_sources_use_last_item_and_update_cached_result() {
         "result",
         Some("second"),
         ConversationItem::ScriptResult {
-            outcome: kraai_types::ScriptExecutionOutcome {
-                status: kraai_types::ScriptExecutionStatus::Completed,
+            outcome: kraai_execution_types::ScriptExecutionOutcome {
+                status: kraai_execution_types::ScriptExecutionStatus::Completed,
                 exit_code: Some(0),
             },
             call_id: ToolCallId::new(String::from("same-call")),
@@ -349,8 +349,8 @@ fn duplicate_completed_call_sources_use_last_item_and_update_cached_result() {
 fn consecutive_scripts_group_across_hidden_calls_but_not_visible_messages() {
     let result = |id: &str, parent: Option<&str>, exit: u8| {
         message(id, parent, ConversationItem::ScriptResult {
-        outcome: kraai_types::ScriptExecutionOutcome {
-            status: kraai_types::ScriptExecutionStatus::Completed,
+        outcome: kraai_execution_types::ScriptExecutionOutcome {
+            status: kraai_execution_types::ScriptExecutionStatus::Completed,
             exit_code: Some(i32::from(exit)),
         },
         call_id: ToolCallId::new(id),

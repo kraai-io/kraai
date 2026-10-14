@@ -1,9 +1,9 @@
 use super::super::*;
-use super::common::{cleanup_dir, test_manager};
+use super::common::{cleanup_dir, open_persistence, test_manager};
 use kraai_persistence::{CompactionCheckpoint, SqliteCompactionStore};
 use kraai_types::{ContextStateMutation, PinnedFileScope};
 
-async fn open(manager: &AgentManager, session: &str, path: &Path) -> Result<()> {
+async fn open(manager: &AgentManager, session: &SessionId, path: &Path) -> Result<()> {
     manager
         .context_state_store
         .append_runtime(
@@ -18,7 +18,7 @@ async fn open(manager: &AgentManager, session: &str, path: &Path) -> Result<()> 
     Ok(())
 }
 
-async fn close(manager: &AgentManager, session: &str, path: &Path) -> Result<()> {
+async fn close(manager: &AgentManager, session: &SessionId, path: &Path) -> Result<()> {
     manager
         .context_state_store
         .append_runtime(
@@ -33,20 +33,23 @@ async fn close(manager: &AgentManager, session: &str, path: &Path) -> Result<()>
     Ok(())
 }
 
-async fn request(manager: &AgentManager, session: &str) -> Result<ProviderRequest> {
+async fn request(manager: &AgentManager, session: &SessionId) -> Result<ProviderRequest> {
     let tip = manager
         .get_tip(session)
         .await?
         .ok_or_else(|| eyre!("missing tip"))?;
     let provider = ProviderId::new("mock");
     let model = ModelId::new("mock-model");
-    let history = manager.get_model_history(&tip, (&provider, &model)).await?;
-    let (request, _, _) = manager
+    let history = manager
+        .get_model_history(&tip, (&provider, &model), false)
+        .await?;
+    let request = manager
         .build_model_context(
             session,
             history,
             &prompts::TurnSystemPrompt {
                 prefix: "instructions".into(),
+                instructions: Vec::new(),
                 context_notifications: vec![],
             },
             None,
@@ -57,7 +60,8 @@ async fn request(manager: &AgentManager, session: &str) -> Result<ProviderReques
                 options: Default::default(),
             },
         )
-        .await?;
+        .await?
+        .request;
     assert!(request.cacheable_messages.is_none());
     Ok(request)
 }
@@ -72,7 +76,7 @@ fn texts(request: &ProviderRequest) -> Vec<String> {
 
 #[tokio::test]
 async fn unchanged_files_stay_in_place_and_refresh_only_moves_the_changed_file() -> Result<()> {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     let a = root.join("a.txt");
     let b = root.join("b.txt");
@@ -140,7 +144,7 @@ async fn unchanged_files_stay_in_place_and_refresh_only_moves_the_changed_file()
 
 #[tokio::test]
 async fn snapshot_anchors_survive_manager_restart() -> Result<()> {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     let path = root.join("file.txt");
     tokio::fs::write(&path, "persistent\n").await?;
@@ -155,7 +159,7 @@ async fn snapshot_anchors_survive_manager_restart() -> Result<()> {
     let before = request(&manager, &session).await?;
     let providers = manager.cloned_provider_manager();
     drop(manager);
-    let persistence = kraai_persistence::Persistence::open(&root).await?;
+    let persistence = open_persistence(&root).await?;
     let manager = AgentManager::new(providers, root.clone(), persistence, root.clone());
     assert_eq!(request(&manager, &session).await?.messages, before.messages);
     cleanup_dir(root).await;
@@ -164,7 +168,7 @@ async fn snapshot_anchors_survive_manager_restart() -> Result<()> {
 
 #[tokio::test]
 async fn compaction_reanchors_snapshots_once_and_closed_files_do_not_return() -> Result<()> {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     let path = root.join("file.txt");
     tokio::fs::write(&path, "exact snapshot\n").await?;
@@ -219,7 +223,7 @@ async fn compaction_reanchors_snapshots_once_and_closed_files_do_not_return() ->
 
 #[tokio::test]
 async fn unreadable_files_do_not_leave_stale_contents_and_recovery_refreshes_them() -> Result<()> {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     let path = root.join("file.txt");
     tokio::fs::write(&path, "before\n").await?;
@@ -278,7 +282,7 @@ async fn unreadable_files_do_not_leave_stale_contents_and_recovery_refreshes_the
 #[tokio::test]
 async fn abandoned_anchors_move_to_the_current_tip_without_changing_recorded_history() -> Result<()>
 {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     let path = root.join("file.txt");
     tokio::fs::write(&path, "contents\n").await?;
@@ -308,7 +312,7 @@ async fn abandoned_anchors_move_to_the_current_tip_without_changing_recorded_his
 #[tokio::test]
 async fn refreshing_with_the_same_tip_appends_after_other_snapshots_and_keeps_that_order()
 -> Result<()> {
-    let (mut manager, root) = test_manager().await;
+    let (manager, root) = test_manager().await;
     let session = manager.create_session().await?;
     manager
         .add_message(&session, ChatRole::User, "task".into(), None)

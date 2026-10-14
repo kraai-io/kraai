@@ -1,41 +1,57 @@
 use super::*;
 use crate::compaction::{ContextCompaction, assemble};
 
+pub(super) struct ModelContext {
+    pub(super) request: ProviderRequest,
+    /// Present whenever there is history to summarize.
+    pub(super) compaction: Option<ContextCompaction>,
+    /// Whether the request is projected to fill most of the model's context window.
+    pub(super) compact_first: bool,
+    pub(super) notifications: Vec<String>,
+}
+
+impl ModelContext {
+    #[cfg(test)]
+    pub(super) fn due_compaction(self) -> Option<ContextCompaction> {
+        self.compaction.filter(|_| self.compact_first)
+    }
+}
+
 impl AgentManager {
     pub(super) async fn get_model_history(
         &self,
         from: &MessageId,
         identity: (&ProviderId, &ModelId),
-    ) -> Result<Vec<Message>> {
+        latest_user_pending: bool,
+    ) -> AgentResult<Vec<Message>> {
         let store = self.persistence.compactions().clone();
-        let mut cursor = Some(from.clone());
-        let mut visited = HashSet::new();
+        let mut cursor = HistoryCursor::new(self.message_store.as_ref(), Some(from.clone()));
         let mut history = Vec::new();
         let mut covered = false;
-        let mut found_user = false;
-        while let Some(id) = cursor {
-            if !visited.insert(id.clone()) {
-                return Err(eyre!("Cycle in model context history at {id}"));
-            }
-            let message = self
-                .message_store
-                .get(&id)
-                .await?
-                .ok_or_else(|| eyre!("Missing model context message {id}"))?;
-            cursor = message.parent_id.clone();
-            let user = matches!(message.content, ConversationItem::User { .. });
-            if !covered || (!found_user && user) {
-                history.push(message);
-            }
-            found_user |= user;
-            if !covered {
-                covered = store
-                    .get(&id)
+        let mut found_user = latest_user_pending;
+        'walk: while let Some(page) = cursor.next_page().await? {
+            let boundaries = if covered {
+                HashMap::new()
+            } else {
+                store
+                    .compatible_checkpoints(
+                        page.iter().map(|message| &message.id),
+                        identity.0,
+                        identity.1,
+                    )
                     .await?
-                    .is_some_and(|checkpoint| checkpoint.compatible_with(identity.0, identity.1));
-            }
-            if covered && found_user {
-                break;
+            };
+            for message in page {
+                let user = matches!(message.content, ConversationItem::User { .. });
+                let boundary = boundaries.contains_key(&message.id);
+                if !covered || (!found_user && user) {
+                    history.push(message);
+                }
+                found_user |= user;
+                covered |= boundary;
+                if covered && found_user {
+                    break 'walk;
+                }
             }
         }
         history.reverse();
@@ -44,25 +60,31 @@ impl AgentManager {
 
     pub(super) async fn build_model_context(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         history: Vec<Message>,
         prompt: &prompts::TurnSystemPrompt,
         script_tool: Option<ScriptToolDefinition>,
         max_context: Option<usize>,
         selection: &kraai_types::ModelSelection,
-    ) -> Result<(ProviderRequest, Option<ContextCompaction>, Vec<String>)> {
+    ) -> AgentResult<ModelContext> {
         let store = self.persistence.compactions().clone();
-        let mut previous = None;
-        let mut start = 0;
-        for (index, message) in history.iter().enumerate().rev() {
-            if let Some(checkpoint) = store.get(&message.id).await?
-                && checkpoint.compatible_with(&selection.provider_id, &selection.model_id)
-            {
-                previous = Some(checkpoint);
-                start = index + 1;
-                break;
-            }
-        }
+        let mut checkpoints = store
+            .compatible_checkpoints(
+                history.iter().map(|message| &message.id),
+                &selection.provider_id,
+                &selection.model_id,
+            )
+            .await?;
+        let (start, previous) = history
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, message)| {
+                checkpoints
+                    .remove(&message.id)
+                    .map(|checkpoint| (index + 1, Some(checkpoint)))
+            })
+            .unwrap_or((0, None));
         let latest_user = history
             .iter()
             .enumerate()
@@ -89,22 +111,31 @@ impl AgentManager {
             previous
                 .as_ref()
                 .map(|checkpoint| &checkpoint.covered_through),
+            prompt.instructions.clone(),
         )
         .await?;
         let superseded_usage: HashSet<_> = previous
             .iter()
             .flat_map(|checkpoint| &checkpoint.superseded_usage)
             .collect();
-        let used_context_tokens = history
+        let reported = history
             .iter()
+            .enumerate()
             .rev()
-            .filter(|message| !superseded_usage.contains(&message.id))
-            .find_map(snapshot::message_context_usage)
-            .map(|context| context.usage.used_context_tokens());
+            .filter(|(_, message)| !superseded_usage.contains(&message.id))
+            .find_map(|(index, message)| {
+                snapshot::message_context_usage(message)
+                    .map(|context| (index, context.usage.used_context_tokens()))
+            });
+        let unreported_tokens: usize = history
+            .iter()
+            .skip(reported.map_or(0, |(index, _)| index + 1))
+            .map(|message| message.content.estimated_tokens())
+            .sum();
         let covered_through = history.last().map(|message| message.id.clone());
         let mut request = assemble(
             &prompt.prefix,
-            &files.snapshots,
+            &files,
             previous.as_ref(),
             history,
             script_tool,
@@ -120,26 +151,35 @@ impl AgentManager {
             request.messages.insert(1, user.clone());
         }
         crate::context_state::append_notifications(&mut request, &files.notifications);
-        let compaction = max_context
-            .filter(|limit| {
-                *limit > 0
-                    && used_context_tokens
-                        .is_some_and(|used| (used as u128) * 100 >= (*limit as u128) * 80)
-            })
-            .map(|_| ContextCompaction {
-                store,
-                usage_store: self.usage_store.clone(),
-                session_id: session_id.to_string(),
-                original: request.clone(),
-                prefix: prompt.prefix.clone(),
-                snapshots: files.snapshots,
-                file_notifications: files.notifications.clone(),
-                covered_through,
-                previous_boundary: previous.map(|checkpoint| checkpoint.covered_through),
-                on_usage: None,
-                usage_barrier: None,
-                image_resolver: None,
-            });
-        Ok((request, compaction, files.notifications))
+        let request_tokens: usize = request
+            .messages
+            .iter()
+            .map(ConversationItem::estimated_tokens)
+            .sum();
+        let projected_tokens = reported
+            .map_or(0, |(_, used)| used.saturating_add(unreported_tokens))
+            .max(request_tokens);
+        let compact_first = max_context.is_some_and(|limit| {
+            limit > 0 && (projected_tokens as u128) * 100 >= (limit as u128) * 80
+        });
+        let notifications = files.notifications.clone();
+        let compaction = covered_through.is_some().then(|| ContextCompaction {
+            store,
+            usage_store: self.usage_store.clone(),
+            session_id: session_id.clone(),
+            prefix: prompt.prefix.clone(),
+            context: files,
+            covered_through,
+            previous_boundary: previous.map(|checkpoint| checkpoint.covered_through),
+            on_usage: None,
+            usage_barrier: None,
+            image_resolver: None,
+        });
+        Ok(ModelContext {
+            request,
+            compaction,
+            compact_first,
+            notifications,
+        })
     }
 }

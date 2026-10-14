@@ -1,71 +1,6 @@
 use std::collections::HashMap;
 
 #[test]
-fn streaming_prefix_extension_preserves_phase_normalization_and_buffer() {
-    use kraai_types::{AssistantItem, AssistantPhase, ConversationItem};
-
-    let mut text = String::with_capacity(128);
-    text.push('é');
-    let pointer = text.as_ptr();
-    let mut cached = ConversationItem::Assistant {
-        items: vec![AssistantItem::Text {
-            phase: AssistantPhase::Commentary,
-            text,
-        }],
-    };
-    let mut events = String::from("é\nnext");
-    assert!(super::merge_stream_chunk_into_cached_content(
-        &mut cached,
-        &mut events,
-        "\nnext",
-    ));
-    assert!(matches!(
-        &cached,
-        ConversationItem::Assistant { items }
-            if matches!(items.as_slice(), [AssistantItem::Text { phase, text }]
-                if *phase == AssistantPhase::FinalAnswer
-                    && text == "é\nnext"
-                    && text.as_ptr() == pointer)
-    ));
-    assert!(!super::merge_stream_chunk_into_cached_content(
-        &mut cached,
-        &mut events,
-        "\nnext",
-    ));
-    assert_eq!(events, "é\nnext");
-}
-
-#[test]
-fn streaming_prefix_extension_still_collapses_multiple_items() {
-    use kraai_types::{AssistantItem, AssistantPhase, ConversationItem};
-
-    let mut cached = ConversationItem::Assistant {
-        items: ["", "é", ""]
-            .into_iter()
-            .map(|text| AssistantItem::Text {
-                phase: AssistantPhase::Commentary,
-                text: text.into(),
-            })
-            .collect(),
-    };
-    let mut events = String::from("é\nnext");
-    assert!(super::merge_stream_chunk_into_cached_content(
-        &mut cached,
-        &mut events,
-        "\nnext",
-    ));
-    assert_eq!(
-        cached,
-        ConversationItem::Assistant {
-            items: vec![AssistantItem::Text {
-                phase: AssistantPhase::FinalAnswer,
-                text: "é\nnext".into(),
-            }],
-        }
-    );
-}
-
-#[test]
 fn wheel_scrolling_moves_three_lines_and_resumes_following_at_bottom() {
     use super::{KeyModifiers, MouseEvent, MouseEventKind};
 
@@ -112,14 +47,12 @@ fn wheel_scrolling_moves_three_lines_and_resumes_following_at_bottom() {
     assert_eq!(harness.app.state.scroll, 0);
 }
 
-use std::io;
-
 use crossbeam_channel::{Receiver, unbounded};
 use kraai_runtime::{
     AgentProfilesState, Event, PendingScriptInfo, RuntimeEvent, Session, SessionActivity,
     SessionSnapshot,
 };
-use kraai_types::{Message, MessageId, MessageStatus};
+use kraai_types::{Message, MessageId, MessageStatus, SessionId};
 
 use super::runtime_bridge::RuntimeEventBridgeMessage;
 use super::{
@@ -135,7 +68,7 @@ struct TestHarness {
 #[test]
 fn escape_cancels_an_executing_script() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.script_phase = ScriptPhase::Executing;
 
     harness.app.handle_key_event(super::KeyEvent::new(
@@ -145,7 +78,7 @@ fn escape_cancels_an_executing_script() {
 
     assert!(matches!(
         harness.requests_rx.try_recv(),
-        Ok(RuntimeRequest::CancelStream { session_id }) if session_id == "session"
+        Ok(RuntimeRequest::CancelStream { session_id }) if session_id == SessionId::new("session")
     ));
     assert_eq!(harness.app.state.script_phase, ScriptPhase::Executing);
 }
@@ -160,18 +93,11 @@ fn test_harness() -> TestHarness {
             runtime_tx,
             runtime_rx,
             clipboard: None,
-            ci_output: Box::new(io::sink()),
-            ci_output_needs_newline: false,
-            ci_turn_completion_pending: false,
-            ci_metrics_history_pending: false,
-            ci_metrics_context_pending: false,
             startup_options: StartupOptions::default(),
+            persist_workspace_preferences: false,
             startup_message_sent: false,
             startup_sync: super::StartupSync::Complete,
-            ci_error: None,
-            stream_event_content: HashMap::new(),
             state: AppState::default(),
-            last_stream_history_request: None,
             last_statusline_animation_tick: None,
             last_runtime_event_sequence: 0,
             last_session_event_sequences: HashMap::new(),
@@ -180,6 +106,7 @@ fn test_harness() -> TestHarness {
             event_lag_script_resync_pending: false,
             runtime_bridge_connected: true,
             runtime_bridge_error: None,
+            runtime_event_batch_budget: std::time::Duration::MAX,
         },
         requests_rx,
     }
@@ -198,6 +125,7 @@ impl TestHarness {
 fn pending_script(execution_id: &str) -> PendingScriptInfo {
     PendingScriptInfo {
         execution_id: execution_id.to_string(),
+        call_id: String::from("call"),
         source: String::from("^cargo test"),
         requested_capabilities: vec![String::from("workspace-write")],
         capability_additions: vec![String::from("workspace-write")],
@@ -223,7 +151,7 @@ fn session_snapshot_at(
         turn_timer: Default::default(),
         event_sequence,
         session: Session {
-            id: String::from("session"),
+            id: SessionId::new("session"),
             tip_id: None,
             workspace_dir: String::from("/workspace"),
             created_at: 0,
@@ -237,6 +165,7 @@ fn session_snapshot_at(
             is_running: pending_script.is_some(),
         },
         history: std::collections::BTreeMap::new(),
+        older_history: None,
         context_usage: None,
         pending_script,
         profiles: AgentProfilesState {
@@ -253,12 +182,12 @@ fn session_snapshot_at(
 #[test]
 fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("other-session"));
+    harness.app.state.current_session_id = Some(SessionId::new("other-session"));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(session_snapshot_at(10, None))),
         });
 
@@ -267,7 +196,7 @@ fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
         .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Event(RuntimeEvent {
             sequence: 9,
             event: Event::ContextStateChanged {
-                session_id: String::from("other-session"),
+                session_id: SessionId::new("other-session"),
                 notifications: vec![String::from("other session event was delivered")],
             },
         }));
@@ -276,13 +205,13 @@ fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
         "other session event was delivered"
     );
 
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
         .app
         .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Event(RuntimeEvent {
             sequence: 10,
             event: Event::ContextStateChanged {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 notifications: vec![String::from("covered event should be ignored")],
             },
         }));
@@ -292,13 +221,13 @@ fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
 #[test]
 fn snapshot_is_rejected_only_when_a_newer_event_for_its_session_was_applied() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
         .app
         .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Event(RuntimeEvent {
             sequence: 11,
             event: Event::ContextStateChanged {
-                session_id: String::from("session"),
+                session_id: SessionId::new("session"),
                 notifications: vec![String::from("newer session state")],
             },
         }));
@@ -306,7 +235,7 @@ fn snapshot_is_rejected_only_when_a_newer_event_for_its_session_was_applied() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(session_snapshot_at(10, None))),
         });
 
@@ -315,18 +244,18 @@ fn snapshot_is_rejected_only_when_a_newer_event_for_its_session_was_applied() {
         !harness
             .app
             .session_snapshot_sequences
-            .contains_key("session")
+            .contains_key(&SessionId::new("session"))
     );
 }
 
 #[test]
 fn script_approval_event_enters_single_script_decision_state() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
         .app
         .handle_runtime_event(Event::ScriptApprovalRequested {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             script: pending_script("execution"),
         });
 
@@ -350,33 +279,13 @@ fn script_approval_event_enters_single_script_decision_state() {
 }
 
 #[test]
-fn ci_script_approval_fails_closed() {
-    let mut harness = test_harness();
-    harness.app.startup_options.ci = true;
-    harness.app.state.current_session_id = Some(String::from("session"));
-
-    harness
-        .app
-        .handle_runtime_event(Event::ScriptApprovalRequested {
-            session_id: String::from("session"),
-            script: pending_script("execution"),
-        });
-
-    assert_eq!(
-        harness.app.ci_error.as_deref(),
-        Some("CI mode cannot answer a script capability escalation prompt")
-    );
-    assert!(harness.drain_requests().is_empty());
-}
-
-#[test]
 fn foreground_context_state_changes_are_reported_to_the_user() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
         .app
         .handle_runtime_event(Event::ContextStateChanged {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             notifications: vec![String::from(
                 "src/removed.rs was automatically unpinned because it no longer exists.",
             )],
@@ -388,13 +297,13 @@ fn foreground_context_state_changes_are_reported_to_the_user() {
 #[test]
 fn background_script_approval_does_not_replace_foreground_state() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("foreground"));
+    harness.app.state.current_session_id = Some(SessionId::new("foreground"));
     harness.app.state.pending_script = Some(pending_script("foreground-execution"));
 
     harness
         .app
         .handle_runtime_event(Event::ScriptApprovalRequested {
-            session_id: String::from("background"),
+            session_id: SessionId::new("background"),
             script: pending_script("background-execution"),
         });
 
@@ -418,7 +327,7 @@ fn background_script_approval_does_not_replace_foreground_state() {
 #[test]
 fn confirming_script_approval_sends_execution_scoped_request() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.pending_script = Some(pending_script("execution"));
     harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
 
@@ -429,14 +338,14 @@ fn confirming_script_approval_sends_execution_scoped_request() {
         [RuntimeRequest::ApproveScript {
             session_id,
             execution_id,
-        }] if session_id == "session" && execution_id == "execution"
+        }] if session_id.as_str() == "session" && execution_id == "execution"
     ));
 }
 
 #[test]
 fn rejecting_script_sends_denial_for_exact_execution() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.pending_script = Some(pending_script("execution"));
     harness.app.state.script_approval_action = ScriptApprovalAction::Reject;
 
@@ -447,21 +356,21 @@ fn rejecting_script_sends_denial_for_exact_execution() {
         [RuntimeRequest::DenyScript {
             session_id,
             execution_id,
-        }] if session_id == "session" && execution_id == "execution"
+        }] if session_id.as_str() == "session" && execution_id == "execution"
     ));
 }
 
 #[test]
 fn approval_response_is_correlated_to_foreground_session_and_execution() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.pending_script = Some(pending_script("current"));
     harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
 
     harness
         .app
         .handle_runtime_response(RuntimeResponse::ApproveScript {
-            session_id: String::from("other"),
+            session_id: SessionId::new("other"),
             execution_id: String::from("current"),
             result: Ok(()),
         });
@@ -473,7 +382,7 @@ fn approval_response_is_correlated_to_foreground_session_and_execution() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::ApproveScript {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             execution_id: String::from("stale"),
             result: Ok(()),
         });
@@ -491,14 +400,14 @@ fn approval_response_is_correlated_to_foreground_session_and_execution() {
 #[test]
 fn approved_script_transitions_to_executing() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.pending_script = Some(pending_script("execution"));
     harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
 
     harness
         .app
         .handle_runtime_response(RuntimeResponse::ApproveScript {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             execution_id: String::from("execution"),
             result: Ok(()),
         });
@@ -510,7 +419,7 @@ fn approved_script_transitions_to_executing() {
 #[test]
 fn pending_script_resync_clears_stale_approval_state() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.pending_script = Some(pending_script("execution"));
     harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
 
@@ -518,7 +427,7 @@ fn pending_script_resync_clears_stale_approval_state() {
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(session_snapshot(None))),
         });
 
@@ -541,40 +450,15 @@ fn execution_phase_counts_as_active_and_blocks_commands() {
 }
 
 #[test]
-fn evaluation_metrics_count_script_results() {
-    let mut harness = test_harness();
-    harness.app.state.chat_history.insert(
-        MessageId::new("result"),
-        Message {
-            id: MessageId::new("result"),
-            parent_id: None,
-            content: kraai_types::ConversationItem::ScriptResult {
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
-                    exit_code: Some(0),
-                },
-                call_id: kraai_types::ToolCallId::new("call-1"),
-                output: String::from("<tool_call_result status=\"completed\" />").into(),
-            },
-            status: MessageStatus::Complete,
-            agent_profile_id: Some(String::from("coding")),
-            generation: None,
-        },
-    );
-
-    let metrics = harness.app.evaluation_metrics();
-    assert_eq!(metrics["script_executions"], 1);
-    assert!(metrics.get("tool_calls").is_none());
-}
-
-#[test]
 fn session_sync_requests_atomic_snapshot() {
     let mut harness = test_harness();
-    harness.app.request_sync_for_session("session");
+    harness
+        .app
+        .request_sync_for_session(&SessionId::new("session"));
     assert!(harness.drain_requests().iter().any(|request| {
         matches!(
             request,
-            RuntimeRequest::GetSessionSnapshot { session_id } if session_id == "session"
+            RuntimeRequest::GetSessionSnapshot { session_id } if session_id.as_str() == "session"
         )
     }));
 }
@@ -594,9 +478,9 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
     }))?;
     harness
         .app
-        .reset_chat_session(Some(String::from("other")), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("other")), "Session loaded");
     harness.app.handle_runtime_event(Event::TurnTimingChanged {
-        session_id: String::from("session"),
+        session_id: SessionId::new("session"),
         timer,
     });
     assert_eq!(
@@ -605,7 +489,7 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
     );
     harness
         .app
-        .reset_chat_session(Some(String::from("session")), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
     let mut snapshot = session_snapshot(None);
     snapshot.activity = SessionActivity::Streaming;
     snapshot.session.is_streaming = true;
@@ -614,7 +498,7 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
         .app
         .handle_runtime_response(RuntimeResponse::SessionSnapshot {
             model_save_id: 0,
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot)),
         });
     assert_eq!(harness.app.state.turn_timer, timer);

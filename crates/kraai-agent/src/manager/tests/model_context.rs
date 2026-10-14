@@ -1,5 +1,5 @@
 use super::super::*;
-use super::common::{cleanup_dir, test_manager};
+use super::common::{cleanup_dir, open_persistence, test_manager};
 use futures::stream::BoxStream;
 use kraai_provider_core::{Provider, ProviderRequestContext, ProviderStreamEvent};
 use kraai_types::ModelSelection;
@@ -55,7 +55,7 @@ impl Provider for ContextProvider {
 async fn model_switches_use_current_context_limits_after_restarting() -> Result<()> {
     let (mut manager, data_dir) = test_manager().await;
     for (id, standard_limit) in [("first", 10_000), ("second", 30_000)] {
-        manager.providers.register_provider(
+        super::super::write(&manager.providers).register_provider(
             ProviderId::new(id),
             Box::new(ContextProvider {
                 id: ProviderId::new(id),
@@ -83,7 +83,7 @@ async fn model_switches_use_current_context_limits_after_restarting() -> Result<
             .await?;
         let providers = manager.cloned_provider_manager();
         drop(manager);
-        let persistence = kraai_persistence::Persistence::open(&data_dir).await?;
+        let persistence = open_persistence(&data_dir).await?;
         manager = AgentManager::new(providers, data_dir.clone(), persistence, data_dir.clone());
         let snapshot = manager
             .capture_session_snapshot(&session)
@@ -102,7 +102,7 @@ async fn model_switches_use_current_context_limits_after_restarting() -> Result<
                 selection.options,
             )
             .await?;
-        assert_eq!(request.context_compaction.is_some(), compact);
+        assert_eq!(request.compact_first, compact);
         let generation = manager
             .get_chat_history(&session)
             .await?

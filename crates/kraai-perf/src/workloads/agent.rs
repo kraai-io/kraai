@@ -1,6 +1,7 @@
 use color_eyre::eyre::{Result, ensure};
 use kraai_agent::AgentManager;
 use kraai_persistence::Persistence;
+use kraai_types::SessionId;
 
 use crate::benchmark::{Benchmark, Context};
 use crate::fixtures::{agent, provider};
@@ -9,7 +10,7 @@ pub(super) struct Case;
 
 impl Benchmark for Case {
     type Fixture = ();
-    type Output = (AgentManager, Persistence, String);
+    type Output = (AgentManager, Persistence, SessionId);
 
     const NAME: &str = "agent-manager-startup";
     const OPERATIONS: u64 = 1;
@@ -22,7 +23,7 @@ impl Benchmark for Case {
     }
 
     async fn run(context: &Context, _fixture: &mut Self::Fixture) -> Result<Self::Output> {
-        let (mut manager, persistence) = agent::create(&context.directory).await?;
+        let (manager, persistence) = agent::create(&context.directory).await?;
         let session = manager
             .create_session_with(None, Some(agent::PROFILE.into()))
             .await?;

@@ -1,6 +1,5 @@
 use super::*;
 use color_eyre::eyre::{ensure, eyre};
-use std::time::Duration;
 
 fn text_event() -> ProviderStreamEvent {
     ProviderStreamEvent::TextDelta {
@@ -15,8 +14,7 @@ async fn completion_drains_pending_events_without_waiting_for_transport() -> Res
     let source = stream::iter([Ok(SseEvent::Done)])
         .chain(stream::pending())
         .boxed();
-    let events = tokio::time::timeout(
-        Duration::from_secs(1),
+    let events = kraai_test_support::hang_guard(
         adapt_provider_stream(source, "interrupted", |_, pending| {
             pending.extend([
                 text_event(),
@@ -44,8 +42,7 @@ async fn decoder_failure_preserves_emitted_events_and_terminates_once() -> Resul
     let source = stream::iter([Ok(SseEvent::Data(String::new()))])
         .chain(stream::pending())
         .boxed();
-    let events = tokio::time::timeout(
-        Duration::from_secs(1),
+    let events = kraai_test_support::hang_guard(
         adapt_provider_stream(source, "interrupted", |_, pending| {
             pending.push_back(text_event());
             Err(eyre!("invalid response"))
@@ -78,8 +75,7 @@ async fn transport_failure_and_eof_are_reported_once() -> Result<()> {
             "connection lost",
         ),
     ] {
-        let events = tokio::time::timeout(
-            Duration::from_secs(1),
+        let events = kraai_test_support::hang_guard(
             adapt_provider_stream(source, "interrupted", |_, _| Ok(StreamStatus::Continue))
                 .collect::<Vec<_>>(),
         )

@@ -2,31 +2,28 @@
 members = [
   "crates/kraai-io",
   "crates/kraai-mcp",
-  "crates/commands/kraai-command-mcp",
   "crates/kraai-acp",
   "crates/kraai-agent",
   "crates/kraai-web",
-  "crates/commands/kraai-command-web-search",
-  "crates/commands/kraai-command-view-image",
-  "crates/commands/kraai-command-open-files",
-  "crates/commands/kraai-command-close-files",
-  "crates/commands/kraai-command-edit-file",
-  "crates/kraai-command-catalog",
-  "crates/kraai-command-core",
+  "crates/kraai-commands",
   "crates/kraai-nushell-runtime",
   "crates/kraai-sandbox",
   "crates/kraai-script-protocol",
+  "crates/kraai-execution-types",
   "crates/kraai-eval",
+  "crates/kraai-headless",
   "crates/kraai-persistence",
   "crates/kraai-perf",
   "crates/kraai-runtime",
   "crates/kraai-runtime-node",
+  "crates/kraai-test-support",
   "crates/kraai-tui",
   "crates/kraai-types",
   "crates/kraai-workspace-fs",
   "crates/llm-providers/kraai-provider-core",
   "crates/llm-providers/kraai-provider-openai-chat-completions",
   "crates/llm-providers/kraai-provider-openai-codex",
+  "crates/llm-providers/kraai-providers",
 ]
 resolver = "3"
 
@@ -34,6 +31,12 @@ resolver = "3"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.96.0"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 codegen-units = 1 # Allows compiler to perform better optimization.
@@ -49,14 +52,9 @@ strip = false
 [workspace.dependencies]
 agent-client-protocol = "2.2.0"
 kraai-agent = { path = "crates/kraai-agent" }
-kraai-command-catalog = { path = "crates/kraai-command-catalog" }
-kraai-command-close-files = { path = "crates/commands/kraai-command-close-files" }
-kraai-command-core = { path = "crates/kraai-command-core" }
-kraai-command-edit-file = { path = "crates/commands/kraai-command-edit-file" }
-kraai-command-mcp = { path = "crates/commands/kraai-command-mcp" }
-kraai-command-open-files = { path = "crates/commands/kraai-command-open-files" }
-kraai-command-view-image = { path = "crates/commands/kraai-command-view-image" }
-kraai-command-web-search = { path = "crates/commands/kraai-command-web-search" }
+kraai-commands = { path = "crates/kraai-commands" }
+kraai-execution-types = { path = "crates/kraai-execution-types" }
+kraai-headless = { path = "crates/kraai-headless", default-features = false }
 kraai-io = { path = "crates/kraai-io" }
 kraai-mcp = { path = "crates/kraai-mcp" }
 kraai-nushell-runtime = { path = "crates/kraai-nushell-runtime" }
@@ -64,9 +62,11 @@ kraai-persistence = { path = "crates/kraai-persistence" }
 kraai-provider-core = { path = "crates/llm-providers/kraai-provider-core" }
 kraai-provider-openai-chat-completions = { path = "crates/llm-providers/kraai-provider-openai-chat-completions" }
 kraai-provider-openai-codex = { path = "crates/llm-providers/kraai-provider-openai-codex" }
+kraai-providers = { path = "crates/llm-providers/kraai-providers" }
 kraai-runtime = { path = "crates/kraai-runtime" }
 kraai-sandbox = { path = "crates/kraai-sandbox" }
 kraai-script-protocol = { path = "crates/kraai-script-protocol" }
+kraai-test-support = { path = "crates/kraai-test-support" }
 kraai-types = { path = "crates/kraai-types" }
 kraai-web = { path = "crates/kraai-web" }
 kraai-workspace-fs = { path = "crates/kraai-workspace-fs" }

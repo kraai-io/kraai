@@ -11,6 +11,7 @@ async-trait.workspace = true
 color-eyre.workspace = true
 directories.workspace = true
 image.workspace = true
+kraai-execution-types.workspace = true
 kraai-io = { workspace = true, features = ["async"] }
 kraai-types = { workspace = true }
 rusqlite.workspace = true
@@ -22,6 +23,7 @@ tracing.workspace = true
 ulid.workspace = true
 
 [dev-dependencies]
+kraai-test-support = { workspace = true }
 tempfile.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]

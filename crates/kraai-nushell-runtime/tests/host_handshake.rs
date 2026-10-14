@@ -5,22 +5,35 @@ mod support;
 use std::time::Duration;
 
 use kraai_nushell_runtime::{RuntimeError, execute};
+use kraai_test_support::{HANG_TIMEOUT, hang_guard};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
-async fn rejected_host(
+async fn timed_out_host(
     greeting: Option<&[u8]>,
-    expected: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    rejected_host_with_timeout(greeting, expected, Duration::from_secs(30)).await
-}
-
-async fn rejected_host_with_timeout(
-    greeting: Option<&[u8]>,
-    expected: &str,
     timeout: Duration,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fixture = support::FakeHost::new(timeout, b"'must not execute'".to_vec())?;
+    if fixture.plan.startup_timeout != Duration::from_secs(5) {
+        return Err("default startup timeout changed".into());
+    }
+    rejected_host(fixture, greeting, "handshake timed out").await
+}
+
+async fn invalid_host(
+    greeting: &[u8],
+    expected: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut fixture = support::FakeHost::new(HANG_TIMEOUT * 2, b"'must not execute'".to_vec())?;
+    fixture.plan.startup_timeout = HANG_TIMEOUT * 2;
+    rejected_host(fixture, Some(greeting), expected).await
+}
+
+async fn rejected_host(
+    fixture: support::FakeHost,
+    greeting: Option<&[u8]>,
+    expected: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let directory = fixture
         .socket
         .parent()
@@ -28,9 +41,6 @@ async fn rejected_host_with_timeout(
         .to_path_buf();
     let socket = fixture.socket;
     let plan = fixture.plan;
-    if plan.startup_timeout != Duration::from_secs(5) {
-        return Err("default startup timeout changed".into());
-    }
     let cancellation = CancellationToken::new();
     let _guard = cancellation.clone().drop_guard();
     let execution = execute(plan, cancellation);
@@ -48,10 +58,7 @@ async fn rejected_host_with_timeout(
         );
         Ok(())
     };
-    let (result, client_result) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::join!(execution, client)
-    })
-    .await?;
+    let (result, client_result) = hang_guard(async { tokio::join!(execution, client) }).await?;
     client_result?;
     assert!(
         matches!(&result, Err(RuntimeError::Transport(message)) if message.contains(expected)),
@@ -67,35 +74,35 @@ async fn rejected_host_with_timeout(
 #[tokio::test]
 async fn short_script_timeout_does_not_hide_an_unversioned_host()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    rejected_host_with_timeout(Some(&[1]), "handshake timed out", Duration::from_secs(1)).await
+    timed_out_host(Some(&[1]), Duration::from_secs(1)).await
 }
 
 #[tokio::test]
 async fn host_without_a_connection_fails_during_startup()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    rejected_host(None, "handshake timed out").await
+    timed_out_host(None, Duration::from_secs(30)).await
 }
 
 #[tokio::test]
 async fn host_without_a_greeting_fails_during_startup()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    rejected_host(Some(&[]), "handshake timed out").await
+    timed_out_host(Some(&[]), Duration::from_secs(30)).await
 }
 
 #[tokio::test]
 async fn host_with_an_unversioned_greeting_fails_during_startup()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    rejected_host(Some(&[1]), "handshake timed out").await
+    timed_out_host(Some(&[1]), Duration::from_secs(30)).await
 }
 
 #[tokio::test]
 async fn host_with_an_incompatible_version_is_rejected()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    rejected_host(Some(&[1, 0, 0, 0, 0]), "incompatible Nushell host protocol").await
+    invalid_host(&[1, 0, 0, 0, 0], "incompatible Nushell host protocol").await
 }
 
 #[tokio::test]
 async fn host_with_an_invalid_greeting_is_rejected()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    rejected_host(Some(&[255]), "invalid transport greeting").await
+    invalid_host(&[255], "invalid transport greeting").await
 }

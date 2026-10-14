@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, TS)]
+#[ts(export_to = "types.d.ts")]
 #[serde(default, deny_unknown_fields)]
 pub struct OAuthConfig {
     pub client_id: Option<String>,
@@ -13,7 +15,8 @@ pub struct OAuthConfig {
     pub redirect_port: u16,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[ts(export_to = "types.d.ts")]
 #[serde(default, deny_unknown_fields)]
 pub struct McpConfig {
     pub prompt_max_bytes: usize,
@@ -29,7 +32,8 @@ impl Default for McpConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[ts(export_to = "types.d.ts")]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     #[serde(default = "enabled")]
@@ -55,7 +59,8 @@ impl ServerConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[ts(export_to = "types.d.ts")]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum TransportConfig {
     Stdio {

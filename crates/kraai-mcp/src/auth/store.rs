@@ -1,5 +1,5 @@
 use kraai_io::lock::{FileLock, open_private_lock_file};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,10 +8,30 @@ use rmcp::transport::auth::{
 };
 use serde::{Deserialize, Serialize};
 
+pub(crate) const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub(crate) struct Storage {
+    directory: kraai_io::fs::DirectoryBootstrap,
+    lock_timeout: Duration,
+}
+
+impl Storage {
+    pub(crate) fn new(directory: kraai_io::fs::DirectoryBootstrap, lock_timeout: Duration) -> Self {
+        Self {
+            directory,
+            lock_timeout,
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        self.directory.path()
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct FileStore {
     path: PathBuf,
-    directory: Arc<kraai_io::fs::DirectoryBootstrap>,
+    storage: Arc<Storage>,
     generation: u64,
 }
 
@@ -27,13 +47,10 @@ fn error(error: impl std::fmt::Display) -> AuthError {
 }
 
 impl FileStore {
-    pub(super) fn current(
-        path: PathBuf,
-        directory: Arc<kraai_io::fs::DirectoryBootstrap>,
-    ) -> Result<Self, AuthError> {
+    pub(super) fn current(path: PathBuf, storage: Arc<Storage>) -> Result<Self, AuthError> {
         let mut store = Self {
             path,
-            directory,
+            storage,
             generation: 0,
         };
         store.generation = store.read()?.generation;
@@ -56,9 +73,9 @@ impl FileStore {
 
     pub(super) async fn lock(&self) -> Result<FileLock, AuthError> {
         let path = self.path.clone();
-        let directory = self.directory.clone();
+        let storage = self.storage.clone();
         let file = tokio::task::spawn_blocking(move || {
-            directory.create_private()?;
+            storage.directory.create_private()?;
             open_private_lock_file(&path.with_extension("lock"))
         })
         .await
@@ -66,7 +83,7 @@ impl FileStore {
         .map_err(error)?;
         FileLock::acquire_until(
             file,
-            Some(tokio::time::Instant::now() + Duration::from_secs(10)),
+            Some(tokio::time::Instant::now() + self.storage.lock_timeout),
             Duration::from_millis(20),
         )
         .await
@@ -92,7 +109,7 @@ impl FileStore {
             })?;
             Ok(Self {
                 path: store.path,
-                directory: store.directory,
+                storage: store.storage,
                 generation,
             })
         })
@@ -178,6 +195,8 @@ impl CredentialStore for FileStore {
     reason = "credential commit tests assert cancellation and lock ownership"
 )]
 mod tests {
+    use kraai_test_support::HANG_TIMEOUT;
+
     use super::*;
 
     #[tokio::test]
@@ -186,9 +205,12 @@ mod tests {
         let path = directory.path().join("auth/credentials.json");
         let store = FileStore::current(
             path.clone(),
-            Arc::new(kraai_io::fs::DirectoryBootstrap::new(
-                directory.path().to_path_buf(),
-                directory.path().join("auth"),
+            Arc::new(Storage::new(
+                kraai_io::fs::DirectoryBootstrap::new(
+                    directory.path().to_path_buf(),
+                    directory.path().join("auth"),
+                ),
+                HANG_TIMEOUT,
             )),
         )
         .unwrap()

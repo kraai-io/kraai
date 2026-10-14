@@ -1,5 +1,5 @@
 use super::*;
-use kraai_types::McpRequest;
+use kraai_execution_types::McpRequest;
 use serde_json::{Value, json};
 
 struct FixtureMcp;
@@ -141,13 +141,13 @@ async fn cancelling_execution_drops_the_mcp_request()
     let mut task = Box::pin(execute(plan, cancellation.clone()));
     tokio::select! {
         result = &mut task => return Err(format!("MCP call exited early: {result:?}").into()),
-        result = tokio::time::timeout(Duration::from_secs(5), entered.cancelled()) => result?,
+        result = hang_guard(entered.cancelled()) => result?,
     }
     cancellation.cancel();
-    let result = tokio::time::timeout(Duration::from_secs(5), task).await??;
+    let result = hang_guard(task).await??;
     if result.output.termination != Termination::Cancelled {
         return Err("MCP script did not cancel".into());
     }
-    tokio::time::timeout(Duration::from_secs(5), dropped.cancelled()).await?;
+    hang_guard(dropped.cancelled()).await?;
     Ok(())
 }

@@ -11,8 +11,9 @@ impl App {
                 &event,
                 Event::SessionError { .. }
                     | Event::StreamStart { .. }
-                    | Event::StreamChunk { .. }
-                    | Event::ScriptCall { .. }
+                    | Event::ItemStarted { .. }
+                    | Event::ItemDelta { .. }
+                    | Event::StreamRestarted { .. }
                     | Event::StreamComplete { .. }
                     | Event::StreamError { .. }
                     | Event::ContinuationFailed { .. }
@@ -37,7 +38,7 @@ impl App {
                 );
             }
             Event::TurnTimingChanged { session_id, timer } => {
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     let now = Instant::now();
                     if timer.elapsed(now).is_some() {
                         self.state.feedback.completion_until = None;
@@ -63,29 +64,20 @@ impl App {
             }
             Event::ServiceError { error } => {
                 self.set_error(format!("Runtime error: {error}"));
-                self.fail_ci(format!("Runtime error: {error}"));
             }
             Event::SessionError { session_id, error } => {
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.set_error(format!("Session error: {error}"));
                     self.request_sync_for_session(&session_id);
-                    self.fail_ci(format!("Session error: {error}"));
                 } else {
                     self.request(RuntimeRequest::ListSessions);
                 }
             }
-            Event::StreamStart {
-                session_id,
-                message_id,
-            } => {
+            Event::StreamStart { session_id, .. } => {
                 self.mark_session_model_active(&session_id);
                 self.request(RuntimeRequest::ListSessions);
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
-                }
-                if self.is_ci_mode() {
-                    self.ci_output_needs_newline = false;
-                    self.ci_turn_completion_pending = false;
                 }
                 if !apply_state {
                     return;
@@ -97,62 +89,66 @@ impl App {
                 self.state.profile_lock_stale_after_terminal_event = false;
                 self.state.statusline_animation_frame = 0;
                 self.last_statusline_animation_tick = None;
-                self.last_stream_history_request = None;
-                self.stream_event_content
-                    .insert(MessageId::new(message_id), StreamEventContent::default());
-                self.request_stream_history_sync(&session_id, Instant::now());
             }
-            Event::StreamChunk {
+            Event::ItemStarted {
                 session_id,
                 message_id,
-                chunk,
+                item_index,
+                item,
             } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
                 }
-                if self.is_ci_mode() {
-                    self.write_ci_output(&chunk);
-                    if self.state.exit {
-                        return;
-                    }
-                }
-                if apply_state && !self.append_stream_chunk_to_cached_message(&message_id, &chunk) {
-                    self.request_stream_history_sync(&session_id, Instant::now());
+                if apply_state && !self.apply_item_started(&message_id, item_index, item) {
+                    self.request_sync_for_session(&session_id);
                 }
             }
-            Event::ScriptCall {
+            Event::ItemDelta {
                 session_id,
                 message_id,
-                call_id,
-                name,
-                input,
+                item_index,
+                delta,
             } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
                     return;
                 }
-                if self.is_ci_mode() {
-                    self.write_ci_output(&format!("\n\n```nu\n{input}\n```\n"));
+                if apply_state && !self.apply_item_delta(&message_id, item_index, &delta) {
+                    self.request_sync_for_session(&session_id);
                 }
-                if apply_state {
-                    let message_id = MessageId::new(message_id);
-                    let event_content = self
-                        .stream_event_content
-                        .entry(message_id.clone())
-                        .or_default();
-                    event_content.script_call = Some(AssistantItem::ScriptCall {
-                        call_id,
-                        name,
-                        input,
-                    });
-                    if let Some(message) = self.state.chat_history.get_mut(&message_id) {
-                        if matches!(message.status, MessageStatus::Streaming { .. }) {
-                            event_content.merge_into(&mut message.content);
-                            self.invalidate_chat_cache();
-                            self.clamp_chat_scroll();
+            }
+            Event::ReasoningDelta { .. } => {}
+            Event::MessageUpserted {
+                session_id,
+                message,
+            } => {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
+                    self.upsert_message(*message);
+                }
+            }
+            Event::MessagesRemoved {
+                session_id,
+                message_ids,
+            } => {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
+                    self.remove_messages(&message_ids);
+                }
+            }
+            Event::SessionStateChanged {
+                session_id,
+                activity,
+                ..
+            } => {
+                self.request(RuntimeRequest::ListSessions);
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
+                    self.state.is_streaming = activity == kraai_runtime::SessionActivity::Streaming;
+                    self.state.script_phase = match activity {
+                        kraai_runtime::SessionActivity::AwaitingApproval => {
+                            ScriptPhase::AwaitingApproval
                         }
-                    } else {
-                        self.request_stream_history_sync(&session_id, Instant::now());
-                    }
+                        kraai_runtime::SessionActivity::ExecutingScript => ScriptPhase::Executing,
+                        kraai_runtime::SessionActivity::Idle
+                        | kraai_runtime::SessionActivity::Streaming => ScriptPhase::Idle,
+                    };
                 }
             }
             Event::StreamComplete {
@@ -164,75 +160,69 @@ impl App {
                 self.request(RuntimeRequest::ListUserInputHistory {
                     limit: INPUT_HISTORY_LIMIT,
                 });
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     if apply_state {
                         self.state.is_streaming = false;
                         self.state.retry_waiting = false;
                         self.state.statusline_animation_frame = 0;
                         self.last_statusline_animation_tick = None;
-                        self.last_stream_history_request = None;
-                        self.stream_event_content.remove(&message_id);
                     }
                     self.request_sync_for_session(&session_id);
-                    if self.is_ci_mode() {
-                        self.finish_ci_output_line();
-                        self.ci_turn_completion_pending = true;
-                        self.ci_metrics_history_pending = true;
-                        self.ci_metrics_context_pending = true;
-                    }
                 }
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
                     self.request_sync_for_session(&session_id);
                 }
                 self.request(RuntimeRequest::ListSessions);
             }
             Event::StreamError {
-                session_id,
-                message_id,
-                error,
+                session_id, error, ..
             } => {
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     if apply_state {
                         self.state.is_streaming = false;
                         self.state.retry_waiting = false;
                         self.state.statusline_animation_frame = 0;
                         self.last_statusline_animation_tick = None;
-                        self.last_stream_history_request = None;
-                        self.stream_event_content
-                            .remove(&MessageId::new(message_id));
                         self.state.profile_lock_stale_after_terminal_event =
                             self.state.profile_locked;
                     }
                     self.set_error(format!("Stream error: {error}"));
                     self.request_sync_for_session(&session_id);
                 }
-                self.fail_ci(format!("Stream error: {error}"));
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
                     self.request_sync_for_session(&session_id);
                 }
                 self.request(RuntimeRequest::ListSessions);
             }
-            Event::StreamCancelled {
-                session_id,
-                message_id,
-            } => {
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+            Event::StreamCancelled { session_id, .. } => {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.state.is_streaming = false;
                     self.state.retry_waiting = false;
                     self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
-                    self.last_stream_history_request = None;
-                    self.stream_event_content
-                        .remove(&MessageId::new(message_id));
                     self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
                     self.state.feedback.completion_until = None;
                     self.state.status = String::from("Stream cancelled");
                     self.request_sync_for_session(&session_id);
                 }
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
                     self.request_sync_for_session(&session_id);
                 }
                 self.request(RuntimeRequest::ListSessions);
+            }
+            Event::StreamRestarted {
+                session_id,
+                message_id,
+                ..
+            } => {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
+                    return;
+                }
+                if apply_state {
+                    self.discard_streamed_content(&message_id);
+                    self.state.status =
+                        String::from("Provider stream failed, retrying the response");
+                }
             }
             Event::ProviderRetryScheduled {
                 session_id,
@@ -240,7 +230,7 @@ impl App {
                 delay_seconds,
                 ..
             } => {
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.state.retry_waiting = true;
                     self.state.profile_lock_stale_after_terminal_event = false;
                     self.state.status =
@@ -251,30 +241,19 @@ impl App {
                 session_id,
                 notifications,
             } => {
-                if self.is_ci_mode() {
-                    for notification in &notifications {
-                        if let Err(error) = std::io::Write::write_fmt(
-                            &mut std::io::stderr(),
-                            format_args!("{notification}\n"),
-                        ) {
-                            tracing::warn!(%error, "Unable to write context notification");
-                        }
-                    }
-                }
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str())
+                if self.state.current_session_id.as_ref() == Some(&session_id)
                     && !notifications.is_empty()
                 {
                     self.state.status = notifications.join(" ");
                 }
             }
             Event::ContinuationFailed { session_id, error } => {
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     if apply_state {
                         self.state.is_streaming = false;
                         self.state.retry_waiting = false;
                         self.state.statusline_animation_frame = 0;
                         self.last_statusline_animation_tick = None;
-                        self.last_stream_history_request = None;
                         self.state.profile_lock_stale_after_terminal_event =
                             self.state.profile_locked;
                     }
@@ -283,10 +262,9 @@ impl App {
                 } else {
                     self.request(RuntimeRequest::ListSessions);
                 }
-                self.fail_ci(format!("Continuation failed: {error}"));
             }
             Event::HistoryUpdated { session_id } => {
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.clamp_chat_scroll();
                     self.request_sync_for_session(&session_id);
                 } else {
@@ -296,27 +274,23 @@ impl App {
                     self.request(RuntimeRequest::ListSessions);
                 }
             }
-            Event::OpenAiCodexAuthUpdated { status } => {
-                if self.apply_openai_codex_auth_status(map_openai_codex_auth_status(status))
+            Event::ProviderAuthUpdated { status } => {
+                let status = map_provider_auth_status(status);
+                let settled = pending_auth_target(&status).is_none();
+                if self.apply_provider_auth_status(status)
                     && self.state.mode == UiMode::ProvidersMenu
                     && matches!(self.state.providers_view, ProvidersView::Detail)
-                    && pending_auth_target(&self.state.openai_codex_auth).is_none()
+                    && settled
                 {
-                    self.state.status = String::from("OpenAI auth updated");
+                    self.state.status = String::from("Provider sign-in updated");
                 }
             }
             Event::McpAuthUpdated { status } => {
                 self.apply_mcp_auth_status(status);
             }
             Event::ScriptApprovalRequested { session_id, script } => {
-                if self.state.current_session_id.as_deref() != Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() != Some(&session_id) {
                     self.request(RuntimeRequest::ListSessions);
-                    return;
-                }
-                if self.is_ci_mode() {
-                    self.fail_ci(String::from(
-                        "CI mode cannot answer a script capability escalation prompt",
-                    ));
                     return;
                 }
                 if !apply_state {
@@ -332,7 +306,7 @@ impl App {
                 outcome,
                 ..
             } => {
-                if self.state.current_session_id.as_deref() == Some(session_id.as_str()) {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.state.pending_script = None;
                     self.state.script_phase = ScriptPhase::Idle;
                     self.state.profile_lock_stale_after_terminal_event = false;

@@ -1,7 +1,7 @@
 use std::path::Path;
-use std::time::Duration;
 
-use kraai_types::SandboxCapability;
+use kraai_execution_types::SandboxCapability;
+use kraai_test_support::HANG_TIMEOUT;
 use tokio_util::sync::CancellationToken;
 
 use super::{capabilities, find_bwrap, shell_plan, temp_dir};
@@ -39,7 +39,7 @@ async fn assert_read_only_network_file(path: &Path) {
         &workspace,
         "while IFS= read -r line || [ -n \"$line\" ]; do printf '%s\\n' \"$line\"; done < \"$1\"; if ( : >> \"$1\" ) 2>/dev/null; then exit 1; fi",
         capabilities([SandboxCapability::WorkspaceRead, SandboxCapability::Network]),
-        Duration::from_secs(5),
+        HANG_TIMEOUT,
     );
     plan.arg("network-file-test").arg(path);
     plan.executable = plan.executable.canonicalize().expect("resolve shell");

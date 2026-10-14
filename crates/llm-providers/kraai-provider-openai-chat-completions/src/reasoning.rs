@@ -26,6 +26,19 @@ impl Reasoning {
             && self.reasoning_details.as_ref().is_none_or(Vec::is_empty)
     }
 
+    /// The readable reasoning text in this fragment, if any.
+    pub fn display_text(&self) -> Option<&str> {
+        [
+            &self.reasoning_content,
+            &self.reasoning,
+            &self.reasoning_text,
+        ]
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .find(|text| !text.is_empty())
+    }
+
     pub fn append(&mut self, delta: Self) -> Result<()> {
         if delta.is_empty() {
             return Ok(());

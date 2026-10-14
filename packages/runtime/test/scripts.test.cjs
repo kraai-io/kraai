@@ -4,10 +4,10 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { test } = require('node:test');
 const { createRuntime } = require('..');
-const { localProvider, unwrap, readRecord } = require('./fixtures.cjs');
+const { HANG_TIMEOUT, localProvider, unwrap, readRecord } = require('./fixtures.cjs');
 
 for (const profile of ['coding', 'coding-no-sandbox']) {
-  test(`packaged host executes ${profile} with explicit asset roots and isolated instructions`, { timeout: 120000 }, async t => {
+  test(`packaged host executes ${profile} with explicit asset roots and isolated instructions`, { timeout: HANG_TIMEOUT }, async t => {
     const directory = mkdtempSync(join(tmpdir(), 'kraai-node-script-'));
     const storage = join(directory, 'storage');
     const workspace = join(directory, 'workspace');
@@ -15,7 +15,7 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
     mkdirSync(workspace);
     writeFileSync(join(storage, 'AGENTS.md'), 'Use the storage-root-only instruction.');
     const provider = await localProvider(t, [
-      { input: '# timeout=10sec permissions=workspace-read\n42' },
+      { input: '# timeout=10min permissions=workspace-read\n42' },
       'Completed',
     ]);
     const runtime = createRuntime({ storage_root: storage });
@@ -23,7 +23,7 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
       await runtime.shutdown();
       rmSync(directory, { recursive: true, force: true });
     });
-    assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+    assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
     unwrap(await runtime.saveSettings(provider.settings));
     const session = unwrap(await runtime.createSessionWith({ workspace_dir: workspace, profile_id: profile }));
     const events = runtime.subscribe();
@@ -35,9 +35,9 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
       const event = read.value.event;
       if (typeof event !== 'object') continue;
       assert.ok(!('SessionError' in event) && !('StreamError' in event), JSON.stringify(event));
-      if ('ScriptCall' in event) call = event.ScriptCall;
+      if ('ItemStarted' in event && event.ItemStarted.item.type === 'script_call') call = event.ItemStarted.item;
       if ('ScriptResultReady' in event) {
-        const history = unwrap(await runtime.getChatHistory(session));
+        const history = unwrap(await runtime.getHistoryPage(session, null, 200)).messages;
         const result = Object.values(history).find(message => message.content.type === 'script_result');
         assert.equal(call.name, 'kraai_nushell');
         assert.equal(call.call_id, result.content.call_id);
@@ -57,14 +57,14 @@ for (const profile of ['coding', 'coding-no-sandbox']) {
 const fileContextCases = [false, true].flatMap(codex =>
   [false, true].map(symlinked => ({ codex, symlinked })));
 for (const { codex, symlinked } of fileContextCases) {
-  test(`opened files reach ${codex ? 'Codex' : 'Chat Completions'} HTTP requests after real commands${symlinked ? ' in a symlinked workspace' : ''}`, { timeout: 120000 }, async t => {
+  test(`opened files reach ${codex ? 'Codex' : 'Chat Completions'} HTTP requests after real commands${symlinked ? ' in a symlinked workspace' : ''}`, { timeout: HANG_TIMEOUT }, async t => {
     const directory = mkdtempSync(join(tmpdir(), 'kraai-file-context-'));
     const workspace = join(directory, 'workspace');
     mkdirSync(workspace);
     writeFileSync(join(workspace, 'sample.txt'), 'original\r\nsecond line\n');
     const sessionWorkspace = symlinked ? join(directory, 'workspace-link') : workspace;
     if (symlinked) symlinkSync(workspace, sessionWorkspace, process.platform === 'win32' ? 'junction' : 'dir');
-    const script = source => ({ input: `# timeout=10sec\n${source}` });
+    const script = source => ({ input: `# timeout=10min\n${source}` });
     const provider = await localProvider(t, [
       script('kraai-open-files sample.txt'),
       script('42'),
@@ -78,7 +78,7 @@ for (const { codex, symlinked } of fileContextCases) {
       await runtime.shutdown();
       rmSync(directory, { recursive: true, force: true });
     });
-    assert.equal(unwrap(await runtime.waitForStartup()), 'Ready');
+    assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
     unwrap(await runtime.saveSettings(provider.settings));
     const session = unwrap(await runtime.createSessionWith({ workspace_dir: sessionWorkspace, profile_id: 'coding-no-sandbox' }));
     const events = runtime.subscribe();
@@ -109,7 +109,7 @@ for (const { codex, symlinked } of fileContextCases) {
     assert.equal(files(messages[4]).length, 0);
     assert.equal(files(messages[5]).length, 1);
     assert.match(text(messages[5].at(-1)), /1\|updated\r\n/);
-    const history = unwrap(await runtime.getChatHistory(session));
+    const history = unwrap(await runtime.getHistoryPage(session, null, 200)).messages;
     assert.ok(!Object.values(history).some(message => message.content.type === 'file_context'));
     const context = readRecord(join(directory, 'storage'), 'context', session);
     const pins = context.events.flatMap(event => event.mutations)

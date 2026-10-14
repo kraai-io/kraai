@@ -2,19 +2,25 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use kraai_agent::PendingStreamRequest;
+use futures::stream::BoxStream;
+use kraai_agent::{ContextCompaction, PendingStreamRequest};
+use kraai_execution_types::SandboxCapabilities;
 use kraai_provider_core::{
-    ProviderManager, ProviderRequestContext, ProviderStreamEvent, ScriptToolDefinition,
+    ProviderManager, ProviderRequest, ProviderRequestContext, ProviderStreamEvent,
+    ScriptToolDefinition,
 };
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock, parse_script_input};
-use kraai_types::{SandboxCapabilities, ToolCallId};
+use kraai_types::{MessageId, ModelId, ProviderId, SessionId, ToolCallId};
+use tokio::sync::{RwLock, mpsc};
 
-use super::core::{RuntimeCore, emit_event};
+use super::core::emit_event;
 use super::request_usage::RuntimeRetryObserver;
+use super::session::{SessionMessage, StreamEvent};
 use crate::api::Event;
 use crate::handle::RuntimeEventSender;
 
 const POST_BOUNDARY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_STREAM_REISSUES: u32 = 2;
 pub(super) const POST_BOUNDARY_DRAIN_YIELD_INTERVAL: usize = 256;
 
 struct CompletedProtocolBoundary {
@@ -34,16 +40,16 @@ pub(super) enum StreamDriveResult {
 
 #[derive(Debug)]
 pub(super) struct CompletedStreamOutput {
-    pub(super) session_id: String,
     pub(super) call_id: Option<ToolCallId>,
     pub(super) script: Option<ScriptBlock>,
     pub(super) invalid_script: Option<InvalidScriptBlock>,
     pub(super) protocol_error: Option<ProtocolError>,
+    pub(super) reached_output_limit: bool,
 }
 
 pub(super) fn auxiliary_usage_observer(
     event_tx: RuntimeEventSender,
-    session_id: String,
+    session_id: SessionId,
     task: super::stream_tasks::SessionTaskToken,
 ) -> Arc<dyn Fn(kraai_types::RequestUsage) + Send + Sync> {
     Arc::new(move |request| {
@@ -58,384 +64,537 @@ pub(super) fn auxiliary_usage_observer(
     })
 }
 
-impl RuntimeCore {
-    pub(super) async fn drive_stream(
-        session_id: String,
-        request: PendingStreamRequest,
-        providers: ProviderManager,
-        agent_manager: Arc<tokio::sync::RwLock<kraai_agent::AgentManager>>,
-        event_tx: RuntimeEventSender,
-        session_state_barrier: Arc<tokio::sync::RwLock<()>>,
-        auxiliary_usage_task: super::stream_tasks::SessionTaskToken,
-    ) -> StreamDriveResult {
+/// Reads one provider response and forwards its events to the session actor, which applies
+/// them. The reader never mutates the streaming message itself.
+pub(super) struct StreamReader {
+    pub(super) session_id: SessionId,
+    pub(super) providers: ProviderManager,
+    pub(super) agent_manager: Arc<kraai_agent::AgentManager>,
+    pub(super) session_store: Arc<kraai_persistence::SqliteSessionStore>,
+    pub(super) event_tx: RuntimeEventSender,
+    pub(super) barrier: Arc<RwLock<()>>,
+    pub(super) auxiliary_usage_task: super::stream_tasks::SessionTaskToken,
+    pub(super) mailbox: mpsc::UnboundedSender<SessionMessage>,
+    pub(super) generation: u64,
+}
+
+struct ResponseRequest {
+    message_id: MessageId,
+    provider_id: ProviderId,
+    model_id: ModelId,
+    provider_request: ProviderRequest,
+    context: ProviderRequestContext,
+    /// Used once if the provider reports that the request overflowed the context window.
+    compaction: Option<ContextCompaction>,
+}
+
+impl StreamReader {
+    pub(super) async fn drive(self, request: PendingStreamRequest) -> StreamDriveResult {
         let PendingStreamRequest {
             message_id,
             provider_id,
             model_id,
-            mut provider_request,
+            provider_request,
             context_notifications: _,
             context_compaction,
+            compact_first,
         } = request;
-        let on_auxiliary_usage =
-            auxiliary_usage_observer(event_tx.clone(), session_id.clone(), auxiliary_usage_task);
-        if let Some(compaction) = context_compaction {
-            let compaction = compaction
-                .observe_usage(session_state_barrier.clone(), on_auxiliary_usage.clone())
-                .with_image_resolver(Arc::new(super::images::StoredImageResolver(
-                    agent_manager.read().await.image_store(),
-                )));
-            emit_event(
-                &event_tx,
-                Event::ContextStateChanged {
-                    session_id: session_id.clone(),
-                    notifications: vec![String::from("Compacting conversation context.")],
-                },
-            );
-            let result = compaction.run(&providers, &provider_id, &model_id).await;
-            match result {
-                Ok(outcome) => {
-                    provider_request = outcome.request;
-                    emit_event(
-                        &event_tx,
-                        Event::ContextStateChanged {
-                            session_id: session_id.clone(),
-                            notifications: vec![outcome.notification],
-                        },
-                    );
-                }
-                Err(error) => {
-                    emit_event(
-                        &event_tx,
-                        Event::ContextStateChanged {
-                            session_id: session_id.clone(),
-                            notifications: vec![String::from(
-                                "Conversation context compaction failed.",
-                            )],
-                        },
-                    );
-                    return StreamDriveResult::FailedToStart {
-                        error: format!("{error:#}"),
-                    };
+        let on_auxiliary_usage = auxiliary_usage_observer(
+            self.event_tx.clone(),
+            self.session_id.clone(),
+            self.auxiliary_usage_task.clone(),
+        );
+        let mut compaction = context_compaction.map(|compaction| {
+            compaction
+                .observe_usage(self.barrier.clone(), on_auxiliary_usage.clone())
+                .with_image_resolver(self.image_resolver())
+        });
+        let provider_request = match compaction.take_if(|_| compact_first) {
+            Some(compaction) => {
+                match self
+                    .compact(&compaction, &provider_request, &provider_id, &model_id)
+                    .await
+                {
+                    Ok(request) => request,
+                    Err(error) => return StreamDriveResult::FailedToStart { error },
                 }
             }
-        }
-        #[cfg(debug_assertions)]
-        for (position, item) in provider_request.messages.iter().enumerate() {
-            if let kraai_types::ConversationItem::FileContext { text } = item {
-                tracing::info!(
-                    session_id = %session_id,
-                    request_id = %message_id,
-                    position,
-                    bytes = text.len(),
-                    "Provider request file context"
-                );
-            }
-        }
-        let warmup = match providers.prepare_cache_warmup(
+            None => provider_request,
+        };
+        log_file_contexts(&self.session_id, &message_id, &provider_request);
+        self.warm_cache(
             &provider_id,
             &model_id,
-            &session_id,
             &provider_request,
-        ) {
-            Ok(warmup) => warmup,
-            Err(error) => {
-                tracing::warn!(error = %format!("{error:#}"), "Cache warming failed; continuing with the conversation");
-                None
-            }
-        };
-        if let Some(warmup) = warmup {
-            let store = agent_manager.read().await.request_usage_store();
-            let recorder = kraai_agent::AuxiliaryUsageRecorder {
-                store,
-                session_id: session_id.clone(),
-                barrier: Some(session_state_barrier.clone()),
-                on_usage: Some(on_auxiliary_usage),
-            };
-            if let Err(error) = super::cache_warming::warm_cache(
-                &providers,
-                &provider_id,
-                &model_id,
-                warmup,
-                recorder,
-                Arc::new(super::images::StoredImageResolver(
-                    agent_manager.read().await.image_store(),
-                )),
-            )
-            .await
-            {
-                tracing::warn!(error = %format!("{error:#}"), "Cache warming failed; continuing with the conversation");
-            }
+            on_auxiliary_usage,
+        )
+        .await;
+        if let Err(error) = self.record_request_started(&message_id).await {
+            return StreamDriveResult::FailedToStart { error };
         }
-        let request_context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
+        let context = ProviderRequestContext::with_retry_observer_and_prompt_cache_key(
             Arc::new(RuntimeRetryObserver {
-                session_id: session_id.clone(),
+                session_id: self.session_id.clone(),
                 provider_id: provider_id.clone(),
                 model_id: model_id.clone(),
-                event_tx: event_tx.clone(),
+                event_tx: self.event_tx.clone(),
                 message_id: message_id.clone(),
-                agent_manager: Arc::clone(&agent_manager),
-                session_state_barrier: Arc::clone(&session_state_barrier),
+                agent_manager: Arc::clone(&self.agent_manager),
+                session_state_barrier: Arc::clone(&self.barrier),
             }),
-            session_id.clone(),
+            self.session_id.to_string(),
         )
-        .with_image_resolver(Arc::new(super::images::StoredImageResolver(
-            agent_manager.read().await.image_store(),
-        )));
+        .with_image_resolver(self.image_resolver());
+        self.read(ResponseRequest {
+            message_id,
+            provider_id,
+            model_id,
+            provider_request,
+            context,
+            compaction,
+        })
+        .await
+    }
+
+    fn image_resolver(&self) -> Arc<super::images::StoredImageResolver> {
+        Arc::new(super::images::StoredImageResolver(
+            self.agent_manager.image_store(),
+        ))
+    }
+
+    fn notify(&self, notification: String) {
+        emit_event(
+            &self.event_tx,
+            Event::ContextStateChanged {
+                session_id: self.session_id.clone(),
+                notifications: vec![notification],
+            },
+        );
+    }
+
+    /// Returns false once the actor no longer accepts this stream's events.
+    fn forward(&self, event: StreamEvent) -> bool {
+        self.mailbox
+            .send(SessionMessage::Stream {
+                generation: self.generation,
+                event,
+            })
+            .is_ok()
+    }
+
+    async fn compact(
+        &self,
+        compaction: &ContextCompaction,
+        original: &ProviderRequest,
+        provider_id: &ProviderId,
+        model_id: &ModelId,
+    ) -> Result<ProviderRequest, String> {
+        self.notify(String::from("Compacting conversation context."));
+        match compaction
+            .run(original, &self.providers, provider_id, model_id)
+            .await
         {
-            let _state_guard = session_state_barrier.read().await;
-            match agent_manager
-                .read()
-                .await
-                .record_request_started(&message_id)
-                .await
-            {
-                Ok(Some(request)) => emit_event(
-                    &event_tx,
+            Ok(outcome) => {
+                self.notify(outcome.notification);
+                Ok(outcome.request)
+            }
+            Err(error) => {
+                self.notify(String::from("Conversation context compaction failed."));
+                Err(format!("{error:#}"))
+            }
+        }
+    }
+
+    async fn warm_cache(
+        &self,
+        provider_id: &ProviderId,
+        model_id: &ModelId,
+        provider_request: &ProviderRequest,
+        on_auxiliary_usage: Arc<dyn Fn(kraai_types::RequestUsage) + Send + Sync>,
+    ) {
+        let warmup = match self.providers.prepare_cache_warmup(
+            provider_id,
+            model_id,
+            self.session_id.as_str(),
+            provider_request,
+        ) {
+            Ok(Some(warmup)) => warmup,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(error = %format!("{error:#}"), "Cache warming failed; continuing with the conversation");
+                return;
+            }
+        };
+        let recorder = kraai_agent::AuxiliaryUsageRecorder {
+            store: self.agent_manager.request_usage_store(),
+            session_id: self.session_id.clone(),
+            barrier: Some(self.barrier.clone()),
+            on_usage: Some(on_auxiliary_usage),
+        };
+        if let Err(error) = super::cache_warming::warm_cache(
+            &self.providers,
+            provider_id,
+            model_id,
+            warmup,
+            recorder,
+            self.image_resolver(),
+        )
+        .await
+        {
+            tracing::warn!(error = %format!("{error:#}"), "Cache warming failed; continuing with the conversation");
+        }
+    }
+
+    async fn record_request_started(&self, message_id: &MessageId) -> Result<(), String> {
+        let _state_guard = self.barrier.read().await;
+        match self.agent_manager.record_request_started(message_id).await {
+            Ok(Some(request)) => {
+                emit_event(
+                    &self.event_tx,
                     Event::RequestUsageUpdated {
-                        session_id: session_id.clone(),
+                        session_id: self.session_id.clone(),
                         request: Box::new(request),
                     },
-                ),
-                Ok(None) => {}
+                );
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(error) => Err(format!("{error:#}")),
+        }
+    }
+
+    async fn read(&self, request: ResponseRequest) -> StreamDriveResult {
+        let ResponseRequest {
+            message_id,
+            provider_id,
+            model_id,
+            mut provider_request,
+            context,
+            mut compaction,
+        } = request;
+        let mut response = ResponseState::default();
+        let mut reissues = 0_u32;
+        loop {
+            let started = Instant::now();
+            let stream = match self
+                .providers
+                .generate_reply_stream(
+                    provider_id.clone(),
+                    &model_id,
+                    provider_request.clone(),
+                    context.clone(),
+                )
+                .await
+            {
+                Ok(stream) => stream,
                 Err(error) => {
-                    return StreamDriveResult::FailedToStart {
-                        error: format!("{error:#}"),
-                    };
+                    if kraai_provider_core::is_context_overflow_error(&error)
+                        && let Some(compaction) = compaction.take()
+                    {
+                        if let Err(error) = self.ensure_turn_owned().await {
+                            return StreamDriveResult::FailedToStart { error };
+                        }
+                        match self
+                            .compact(&compaction, &provider_request, &provider_id, &model_id)
+                            .await
+                        {
+                            Ok(compacted) => {
+                                provider_request = compacted;
+                                continue;
+                            }
+                            Err(error) => return StreamDriveResult::FailedToStart { error },
+                        }
+                    }
+                    let error = format!(
+                        "Provider request {message_id} failed to start after {} ms: {error:#}",
+                        started.elapsed().as_millis()
+                    );
+                    tracing::error!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
+                        elapsed_ms = started.elapsed().as_millis(), error = %error,
+                        "Provider request failed to start");
+                    return StreamDriveResult::FailedToStart { error };
+                }
+            };
+            match self
+                .read_response(stream, &provider_id, &mut response)
+                .await
+            {
+                ResponseEnd::Finished => return response.finish(),
+                ResponseEnd::Stopped => return StreamDriveResult::Stopped,
+                ResponseEnd::Failed(error) => {
+                    return StreamDriveResult::FailedDuringStream { error };
+                }
+                ResponseEnd::Interrupted {
+                    error,
+                    transient,
+                    overflow,
+                } => {
+                    let error = format!(
+                        "Provider request {message_id} stream failed after {} ms: {error}",
+                        started.elapsed().as_millis()
+                    );
+                    tracing::warn!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
+                        elapsed_ms = started.elapsed().as_millis(), error = %error,
+                        completed_script = response.boundary.is_some(), "Provider stream failed");
+                    if response.boundary.is_some() {
+                        return response.finish();
+                    }
+                    if overflow && let Some(compaction) = compaction.take() {
+                        if let Err(error) = self.ensure_turn_owned().await {
+                            return StreamDriveResult::FailedDuringStream { error };
+                        }
+                        if !self.forward(StreamEvent::Restart { reason: error }) {
+                            return StreamDriveResult::Stopped;
+                        }
+                        response = ResponseState::default();
+                        match self
+                            .compact(&compaction, &provider_request, &provider_id, &model_id)
+                            .await
+                        {
+                            Ok(compacted) => provider_request = compacted,
+                            Err(error) => return StreamDriveResult::FailedDuringStream { error },
+                        }
+                        continue;
+                    }
+                    if !transient || reissues >= MAX_STREAM_REISSUES {
+                        return StreamDriveResult::FailedDuringStream { error };
+                    }
+                    if let Err(error) = self.ensure_turn_owned().await {
+                        return StreamDriveResult::FailedDuringStream { error };
+                    }
+                    reissues += 1;
+                    response = ResponseState::default();
+                    if !self.forward(StreamEvent::Restart { reason: error }) {
+                        return StreamDriveResult::Stopped;
+                    }
                 }
             }
         }
-        let request_started = Instant::now();
-        let mut stream = match providers
-            .generate_reply_stream(
-                provider_id.clone(),
-                &model_id,
-                provider_request,
-                request_context,
-            )
-            .await
-        {
-            Ok(stream) => stream,
-            Err(error) => {
-                let error = format!(
-                    "Provider request {message_id} failed to start after {} ms: {error:#}",
-                    request_started.elapsed().as_millis()
-                );
-                tracing::error!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
-                    elapsed_ms = request_started.elapsed().as_millis(), error = %error,
-                    "Provider request failed to start");
-                return StreamDriveResult::FailedToStart { error };
-            }
-        };
+    }
 
-        let mut completed_boundary = None;
-        let mut post_boundary_deadline = None;
-        let mut post_boundary_events = 0_usize;
+    /// A runtime that lost the session to another instance must not issue model requests for it.
+    async fn ensure_turn_owned(&self) -> Result<(), String> {
+        match self.session_store.owns_turn(&self.session_id).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!(
+                "Session {} is owned by another instance; not reissuing the model request",
+                self.session_id
+            )),
+            Err(error) => Err(format!(
+                "Could not confirm ownership of session {} before reissuing the model request: {error:#}",
+                self.session_id
+            )),
+        }
+    }
 
+    async fn read_response(
+        &self,
+        mut stream: BoxStream<'static, color_eyre::Result<ProviderStreamEvent>>,
+        provider_id: &ProviderId,
+        response: &mut ResponseState,
+    ) -> ResponseEnd {
+        let mut drain_deadline = None;
+        let mut drained_events = 0_usize;
         loop {
-            let next_event = if let Some(deadline) = post_boundary_deadline {
-                match tokio::time::timeout_at(deadline, stream.next()).await {
+            let next = match drain_deadline {
+                Some(deadline) => match tokio::time::timeout_at(deadline, stream.next()).await {
                     Ok(event) => event,
                     Err(_) => {
                         tracing::warn!(
                             timeout_millis = POST_BOUNDARY_DRAIN_TIMEOUT.as_millis(),
                             "Stopping provider stream drain after timeout"
                         );
-                        break;
+                        return ResponseEnd::Finished;
                     }
-                }
-            } else {
-                stream.next().await
+                },
+                None => stream.next().await,
             };
-            let Some(chunk_result) = next_event else {
-                break;
+            let Some(event) = next else {
+                return ResponseEnd::Finished;
             };
-            let draining_after_boundary = completed_boundary.is_some();
-            if draining_after_boundary {
-                post_boundary_events = post_boundary_events.saturating_add(1);
-                if post_boundary_events.is_multiple_of(POST_BOUNDARY_DRAIN_YIELD_INTERVAL) {
+            let draining = response.boundary.is_some();
+            if draining {
+                drained_events = drained_events.saturating_add(1);
+                if drained_events.is_multiple_of(POST_BOUNDARY_DRAIN_YIELD_INTERVAL) {
                     tokio::task::yield_now().await;
                 }
             }
-            match chunk_result {
-                Ok(ProviderStreamEvent::Compaction { .. }) => {
-                    return StreamDriveResult::FailedDuringStream {
-                        error: "Unexpected compaction item in a conversation response".into(),
+            let forwarded = match event {
+                Err(error) => {
+                    return ResponseEnd::Interrupted {
+                        transient: kraai_provider_core::is_transient_error(&error),
+                        overflow: kraai_provider_core::is_context_overflow_error(&error),
+                        error: format!("{error:#}"),
                     };
                 }
-                Ok(ProviderStreamEvent::Reasoning { payload }) => {
-                    let _state_guard = session_state_barrier.read().await;
-                    if agent_manager
-                        .read()
-                        .await
-                        .append_reasoning(&message_id, provider_id.clone(), payload)
-                        .await
-                        .is_none()
-                    {
-                        return StreamDriveResult::Stopped;
+                Ok(ProviderStreamEvent::Compaction { .. }) => {
+                    return ResponseEnd::Failed(
+                        "Unexpected compaction item in a conversation response".into(),
+                    );
+                }
+                Ok(ProviderStreamEvent::ReasoningDelta { item_id, delta }) => {
+                    if draining {
+                        continue;
                     }
+                    self.forward(StreamEvent::ReasoningDelta { item_id, delta })
+                }
+                Ok(ProviderStreamEvent::Reasoning { payload }) => {
+                    self.forward(StreamEvent::Reasoning {
+                        provider_id: provider_id.clone(),
+                        payload,
+                    })
                 }
                 Ok(ProviderStreamEvent::TextDelta {
                     item_id,
                     phase,
                     delta,
                 }) => {
-                    if completed_boundary.is_some() {
+                    if draining {
                         tracing::trace!(
                             discarded_bytes = delta.len(),
                             "Discarding text after script protocol boundary"
                         );
                         continue;
                     }
-                    let _state_guard = session_state_barrier.read().await;
-                    let visible = {
-                        let agent = agent_manager.read().await;
-                        agent
-                            .append_text_chunk(&message_id, &item_id, phase, &delta)
-                            .await
-                    };
-                    let Some(visible) = visible else {
-                        return StreamDriveResult::Stopped;
-                    };
-                    if !visible.is_empty() {
-                        emit_event(
-                            &event_tx,
-                            Event::StreamChunk {
-                                session_id: session_id.clone(),
-                                message_id: message_id.to_string(),
-                                chunk: visible,
-                            },
-                        );
-                    }
+                    self.forward(StreamEvent::Text {
+                        item_id,
+                        phase,
+                        delta,
+                    })
                 }
                 Ok(ProviderStreamEvent::ScriptCall {
                     call_id,
                     name,
                     input,
                 }) => {
-                    if completed_boundary.is_some() {
-                        return StreamDriveResult::FailedDuringStream {
-                            error: String::from(
-                                "provider emitted more than one script call in one response",
-                            ),
-                        };
-                    }
-                    if name != ScriptToolDefinition::NAME {
-                        return StreamDriveResult::FailedDuringStream {
-                            error: format!("provider called unexpected tool '{name}'"),
-                        };
-                    }
-
-                    let (script, invalid_script, protocol_error) = match parse_script_input(&input)
-                    {
-                        Ok(script) => (Some(script), None, None),
-                        Err(error) => (
-                            None,
-                            Some(InvalidScriptBlock {
-                                input: input.clone(),
-                                source: input.as_bytes().to_vec(),
-                                timeout: None,
-                                requested_capabilities: SandboxCapabilities::default(),
-                            }),
-                            Some(error),
-                        ),
-                    };
-                    let _state_guard = session_state_barrier.read().await;
-                    let appended = {
-                        let agent = agent_manager.read().await;
-                        agent
-                            .append_script_call(
-                                &message_id,
-                                call_id.clone(),
-                                name.clone(),
-                                input.clone(),
-                            )
-                            .await
-                    };
-                    if appended.is_none() {
-                        return StreamDriveResult::Stopped;
-                    }
-                    emit_event(
-                        &event_tx,
-                        Event::ScriptCall {
-                            session_id: session_id.clone(),
-                            message_id: message_id.to_string(),
-                            call_id: call_id.clone(),
+                    if draining {
+                        // Only the first call runs; later ones stay in the response and get a
+                        // result saying they did not run.
+                        tracing::debug!(%call_id, "Keeping a script call after the first without running it");
+                        if !self.forward(StreamEvent::ScriptCall {
+                            call_id,
                             name,
                             input,
-                        },
-                    );
-                    completed_boundary = Some(CompletedProtocolBoundary {
-                        call_id,
-                        script,
-                        invalid_script,
-                        protocol_error,
-                    });
-                    post_boundary_deadline =
+                        }) {
+                            return ResponseEnd::Stopped;
+                        }
+                        continue;
+                    }
+                    if name != ScriptToolDefinition::NAME {
+                        return ResponseEnd::Failed(format!(
+                            "provider called unexpected tool '{name}'"
+                        ));
+                    }
+                    response.boundary = Some(protocol_boundary(call_id.clone(), &input));
+                    drain_deadline =
                         Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
+                    self.forward(StreamEvent::ScriptCall {
+                        call_id,
+                        name,
+                        input,
+                    })
+                }
+                Ok(ProviderStreamEvent::Finished { stop_reason }) => {
+                    response.reached_output_limit =
+                        stop_reason == kraai_provider_core::StopReason::MaxOutputTokens;
+                    true
                 }
                 Ok(ProviderStreamEvent::Usage(usage)) => {
-                    let _state_guard = session_state_barrier.read().await;
-                    let agent = agent_manager.read().await;
-                    match agent.set_streaming_message_usage(&message_id, usage).await {
-                        Ok(Some(request)) => emit_event(
-                            &event_tx,
-                            Event::RequestUsageUpdated {
-                                session_id: session_id.clone(),
-                                request: Box::new(request),
-                            },
-                        ),
-                        Ok(None) => return StreamDriveResult::Stopped,
-                        Err(error) => {
-                            return StreamDriveResult::FailedDuringStream {
-                                error: format!("{error:#}"),
-                            };
-                        }
+                    if !self.forward(StreamEvent::Usage(usage)) {
+                        return ResponseEnd::Stopped;
                     }
-                    drop(agent);
-                    if draining_after_boundary {
+                    if draining {
                         tracing::debug!(
-                            drained_events = post_boundary_events,
+                            drained_events,
                             "Provider usage received after script protocol boundary"
                         );
-                        break;
+                        return ResponseEnd::Finished;
                     }
+                    true
                 }
-                Err(error) => {
-                    let error = format!(
-                        "Provider request {message_id} stream failed after {} ms: {error:#}",
-                        request_started.elapsed().as_millis()
-                    );
-                    tracing::warn!(request_id = %message_id, provider_id = %provider_id, model_id = %model_id,
-                        elapsed_ms = request_started.elapsed().as_millis(), error = %error,
-                        completed_script = completed_boundary.is_some(), "Provider stream failed");
-                    if completed_boundary.is_some() {
-                        break;
-                    }
-                    return StreamDriveResult::FailedDuringStream { error };
-                }
+            };
+            if !forwarded {
+                return ResponseEnd::Stopped;
             }
         }
+    }
+}
 
-        if let Some(boundary) = completed_boundary {
-            tracing::debug!(
-                drained_events = post_boundary_events,
-                "Provider stream drain finished after script protocol boundary"
-            );
-            return StreamDriveResult::Completed(Box::new(CompletedStreamOutput {
-                session_id,
-                call_id: Some(boundary.call_id),
-                script: boundary.script,
-                invalid_script: boundary.invalid_script,
-                protocol_error: boundary.protocol_error,
-            }));
-        }
+#[derive(Default)]
+struct ResponseState {
+    boundary: Option<CompletedProtocolBoundary>,
+    reached_output_limit: bool,
+}
 
+impl ResponseState {
+    fn finish(self) -> StreamDriveResult {
+        let (call_id, script, invalid_script, protocol_error) = match self.boundary {
+            Some(boundary) => (
+                Some(boundary.call_id),
+                boundary.script,
+                boundary.invalid_script,
+                boundary.protocol_error,
+            ),
+            None => (None, None, None, None),
+        };
         StreamDriveResult::Completed(Box::new(CompletedStreamOutput {
-            session_id,
-            call_id: None,
-            script: None,
-            invalid_script: None,
-            protocol_error: None,
+            call_id,
+            script,
+            invalid_script,
+            protocol_error,
+            reached_output_limit: self.reached_output_limit,
         }))
     }
 }
+
+enum ResponseEnd {
+    Finished,
+    Stopped,
+    Failed(String),
+    Interrupted {
+        error: String,
+        transient: bool,
+        /// The request did not fit the model's context window.
+        overflow: bool,
+    },
+}
+
+fn protocol_boundary(call_id: ToolCallId, input: &str) -> CompletedProtocolBoundary {
+    match parse_script_input(input) {
+        Ok(script) => CompletedProtocolBoundary {
+            call_id,
+            script: Some(script),
+            invalid_script: None,
+            protocol_error: None,
+        },
+        Err(error) => CompletedProtocolBoundary {
+            call_id,
+            script: None,
+            invalid_script: Some(InvalidScriptBlock {
+                input: input.to_string(),
+                source: input.as_bytes().to_vec(),
+                timeout: None,
+                requested_capabilities: SandboxCapabilities::default(),
+            }),
+            protocol_error: Some(error),
+        },
+    }
+}
+
+#[cfg(debug_assertions)]
+fn log_file_contexts(session_id: &SessionId, message_id: &MessageId, request: &ProviderRequest) {
+    for (position, item) in request.messages.iter().enumerate() {
+        if let kraai_types::ConversationItem::FileContext { text } = item {
+            tracing::info!(
+                session_id = %session_id,
+                request_id = %message_id,
+                position,
+                bytes = text.len(),
+                "Provider request file context"
+            );
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn log_file_contexts(_: &SessionId, _: &MessageId, _: &ProviderRequest) {}

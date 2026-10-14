@@ -3,13 +3,15 @@ use std::collections::VecDeque;
 use color_eyre::eyre::{Result, eyre};
 use futures::stream::BoxStream;
 use kraai_provider_core::{Model, Provider, ProviderManager, ProviderRequest, ProviderStreamEvent};
+use kraai_test_support::hang_guard;
 use kraai_types::{
     AssistantPhase, ModelId, ModelOptionBinding, ModelOptionChoice, ModelOptionDefinition,
     ModelOptionKind, ModelOptionValue, ModelOptionValues, ModelSelection, ProviderId,
 };
 use tokio::sync::{Mutex, mpsc};
 
-use super::harness::{RuntimeTestHarness, TEST_TIMEOUT, create_session_with_profile};
+use super::harness::FullHistory as _;
+use super::harness::{RuntimeTestHarness, create_session_with_profile};
 use crate::{RuntimeErrorKind, SubmitMessageOutcome};
 
 type OutputReceiver = mpsc::UnboundedReceiver<Result<ProviderStreamEvent>>;
@@ -236,9 +238,7 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
             values("low"),
         )
         .await?;
-    let first = tokio::time::timeout(TEST_TIMEOUT, received.recv())
-        .await?
-        .expect("first request");
+    let first = hang_guard(received.recv()).await?.expect("first request");
     assert_eq!(first.options, values("low"));
     let before = harness.handle.get_chat_history(session.clone()).await?;
     let error = harness
@@ -254,13 +254,9 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
         .expect_err("invalid queued settings are rejected");
     assert_eq!(error.kind, RuntimeErrorKind::InvalidArgument);
     assert!(
-        harness
-            .runtime
-            .queued_messages
-            .lock()
+        super::harness::queue(&harness.runtime, &session)
             .await
-            .get(&session)
-            .is_none()
+            .is_empty()
     );
     assert_eq!(
         serde_json::to_value(before)?,
@@ -283,14 +279,11 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
         SubmitMessageOutcome::Queued { position: 1 }
     );
     assert_eq!(
-        harness
-            .runtime
-            .queued_messages
-            .lock()
+        super::harness::queue(&harness.runtime, &session)
             .await
-            .get(&session)
-            .and_then(|queue| queue.front())
+            .first()
             .expect("queued snapshot")
+            .selection
             .options,
         queued
     );
@@ -300,9 +293,7 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
         delta: "first answer".into(),
     }))?;
     drop(first_output);
-    let second = tokio::time::timeout(TEST_TIMEOUT, received.recv())
-        .await?
-        .expect("queued request");
+    let second = hang_guard(received.recv()).await?.expect("queued request");
     assert_eq!(second.options, queued);
     let snapshot = harness.handle.get_session_snapshot(session.clone()).await?;
     assert_eq!(

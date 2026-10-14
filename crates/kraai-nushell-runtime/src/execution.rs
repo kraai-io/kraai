@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use kraai_execution_types::{NushellStartup, SandboxCapabilities, ScriptExecutionId};
 use kraai_sandbox::{ExecutionOutput, LaunchPlan, OutputEvent, PrivateTempConfig};
-use kraai_types::{NushellStartup, SandboxCapabilities, ScriptExecutionId};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
@@ -28,6 +29,7 @@ pub struct ScriptExecutionPlan {
     pub capabilities: SandboxCapabilities,
     pub timeout: Duration,
     pub startup_timeout: Duration,
+    pub execution_started: Option<tokio::sync::oneshot::Receiver<tokio::time::Instant>>,
     pub active_commands: Vec<String>,
     pub nushell_startup: NushellStartup,
     pub output_events: Option<UnboundedSender<OutputEvent>>,
@@ -58,6 +60,7 @@ impl ScriptExecutionPlan {
             capabilities,
             timeout,
             startup_timeout: Duration::from_secs(5),
+            execution_started: None,
             active_commands: Vec::new(),
             nushell_startup: NushellStartup::Clean,
             output_events: None,
@@ -102,7 +105,7 @@ pub async fn execute(
         restrict_network: !plan.capabilities.is_unsandboxed()
             && !plan
                 .capabilities
-                .contains(kraai_types::SandboxCapability::Network),
+                .contains(kraai_execution_types::SandboxCapability::Network),
     };
 
     let private_temp = plan.private_temp.reserve();
@@ -135,36 +138,58 @@ pub async fn execute(
     launch.process_spawned = Some(spawned_tx);
     let (execution_tx, execution_rx) = tokio::sync::oneshot::channel();
     launch.execution_started = Some(execution_rx);
+    let (timeout_started_tx, mut timeout_started) = tokio::sync::watch::channel(None);
+    let requested_start = plan.execution_started;
 
     let channel_execution_id = execution_id.clone();
-    let execution_started = Arc::new(OnceLock::new());
-    let started_for_task = execution_started.clone();
+    let connected = Arc::new(AtomicBool::new(false));
+    let connected_for_task = connected.clone();
     let mut channel_task = AbortOnDropHandle::new(tokio::spawn(async move {
         let transport = transport::accept(listener, spawned_rx, startup_timeout)
             .await
             .map_err(|error| ChannelError::Accept(error.to_string()))?;
-        let started = tokio::time::Instant::now();
-        let _ = started_for_task.set(started);
-        let _ = execution_tx.send(started);
-        let (channel_reader, mut channel_writer) = tokio::io::split(transport);
-        write_request(&mut channel_writer, &host_request)
+        let connected_at = tokio::time::Instant::now();
+        connected_for_task.store(true, Ordering::Release);
+        let start_timeout = async move {
+            let started = match requested_start {
+                Some(requested) => requested
+                    .await
+                    .map_or(connected_at, |requested| requested.max(connected_at)),
+                None => connected_at,
+            };
+            timeout_started_tx.send_replace(Some(started));
+            let _ = execution_tx.send(started);
+        };
+        let session = async move {
+            let (channel_reader, mut channel_writer) = tokio::io::split(transport);
+            write_request(&mut channel_writer, &host_request)
+                .await
+                .map_err(|error| ChannelError::Request(error.to_string()))?;
+            serve(
+                channel_reader,
+                channel_writer,
+                channel_execution_id,
+                secret,
+                HostServices {
+                    effects: plan.state_effect_handler,
+                    web: plan.web_search,
+                    mcp: plan.mcp,
+                    images: plan.image_attachment_handler,
+                },
+                &host_request.active_commands,
+            )
             .await
-            .map_err(|error| ChannelError::Request(error.to_string()))?;
-        serve(
-            channel_reader,
-            channel_writer,
-            channel_execution_id,
-            secret,
-            HostServices {
-                effects: plan.state_effect_handler,
-                web: plan.web_search,
-                mcp: plan.mcp,
-                images: plan.image_attachment_handler,
-            },
-            &host_request.active_commands,
-        )
-        .await
-        .map_err(|error| ChannelError::Host(error.to_string()))
+            .map_err(|error| ChannelError::Host(error.to_string()))
+        };
+        tokio::pin!(start_timeout, session);
+        let mut timeout_pending = true;
+        loop {
+            tokio::select! {
+                biased;
+                () = &mut start_timeout, if timeout_pending => timeout_pending = false,
+                result = &mut session => return result,
+            }
+        }
     }));
     let host_cancellation = cancellation.child_token();
     let output = kraai_sandbox::run(launch, host_cancellation.clone());
@@ -189,17 +214,22 @@ pub async fn execute(
                 output.termination,
                 kraai_sandbox::Termination::Exited { .. }
             ) {
-                if execution_started.get().is_none() && !channel_task.is_finished() {
+                if !connected.load(Ordering::Acquire) && !channel_task.is_finished() {
                     channel_task.abort();
                     Err(RuntimeError::Transport(String::from(
                         "Nushell host exited before connecting to the private transport",
                     )))
                 } else {
                     let deadline = async {
-                        let Some(started) = execution_started.get() else {
+                        let started = timeout_started
+                            .wait_for(Option::is_some)
+                            .await
+                            .ok()
+                            .and_then(|started| *started);
+                        let Some(started) = started else {
                             return std::future::pending::<()>().await;
                         };
-                        tokio::time::sleep_until(*started + timeout).await;
+                        tokio::time::sleep_until(started + timeout).await;
                     };
                     tokio::select! {
                         biased;

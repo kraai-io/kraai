@@ -82,11 +82,10 @@ async fn truncated_http_response_records_original_status_and_error_chain() -> Re
         ensure!(body.is_err());
         Ok::<_, color_eyre::Report>(())
     };
-    let (served, responded, received) =
-        Box::pin(tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(serve, respond, receive)
-        }))
-        .await?;
+    let (served, responded, received) = Box::pin(kraai_test_support::hang_guard(async {
+        tokio::join!(serve, respond, receive)
+    }))
+    .await?;
     ensure!(served.is_err());
     responded?;
     received?;

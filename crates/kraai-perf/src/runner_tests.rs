@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, bail, ensure};
+use kraai_test_support::HANG_TIMEOUT;
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill, raise};
 use nix::sys::wait::{WaitPidFlag, waitpid};
@@ -68,11 +69,17 @@ fn wrapper_cleanup_fixture() -> Result<()> {
     #[cfg(target_os = "linux")]
     nix::sys::prctl::set_child_subreaper(true)?;
     let directory = tempfile::tempdir()?;
+    #[cfg(target_os = "linux")]
+    let orphan = {
+        let directory = directory.path().to_path_buf();
+        std::thread::spawn(move || reap_orphan(&directory))
+    };
     let mut command = fixture_command(module_path!(), "early_exit_wrapper_fixture")?;
     command.env(FIXTURE_DIRECTORY, directory.path());
     process::run(
         &mut command,
-        Duration::from_secs(10),
+        HANG_TIMEOUT,
+        HANG_TIMEOUT,
         &AtomicBool::new(false),
         &directory.path().join("stdout"),
         &directory.path().join("stderr"),
@@ -83,15 +90,34 @@ fn wrapper_cleanup_fixture() -> Result<()> {
     );
     #[cfg(target_os = "linux")]
     {
-        let descendant_pid =
-            Pid::from_raw(fs::read_to_string(directory.path().join("child-pid"))?.parse()?);
-        let status = waitpid(descendant_pid, None)?;
+        let status = orphan
+            .join()
+            .map_err(|_panic_payload| color_eyre::eyre::eyre!("orphan reaper panicked"))??;
         ensure!(
             matches!(status, nix::sys::wait::WaitStatus::Exited(_, 0)),
             "orphan did not exit after graceful termination"
         );
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn reap_orphan(directory: &Path) -> Result<nix::sys::wait::WaitStatus> {
+    wait_for_file(&directory.join("child-ready"))?;
+    let pid = Pid::from_raw(fs::read_to_string(directory.join("child-pid"))?.parse()?);
+    let deadline = Instant::now() + HANG_TIMEOUT;
+    loop {
+        match waitpid(pid, None) {
+            Err(Errno::ECHILD | Errno::EINTR) => {
+                ensure!(
+                    Instant::now() < deadline,
+                    "orphan was not reparented to the subreaper"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            result => return Ok(result?),
+        }
+    }
 }
 
 #[test]
@@ -114,7 +140,7 @@ fn orphan_descendant_fixture() -> Result<()> {
     signal_hook::flag::register(signal_hook::consts::SIGTERM, terminated.clone())?;
     fs::write(directory.join("child-pid"), getpid().to_string())?;
     fs::write(directory.join("child-ready"), b"ready")?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + HANG_TIMEOUT;
     while !terminated.load(Ordering::Relaxed) {
         ensure!(
             Instant::now() < deadline,
@@ -163,6 +189,7 @@ fn interrupted_process_does_not_create_output_files() -> Result<()> {
     let result = process::run(
         &mut command,
         Duration::from_secs(1),
+        process::TERMINATION_GRACE,
         &AtomicBool::new(true),
         &stdout,
         &stderr,
@@ -224,7 +251,7 @@ fn worker_with_child_fixture() -> Result<()> {
     wait_for_file(&directory.join("child-ready"))?;
     fs::write(directory.join("worker-pid"), getpid().to_string())?;
     fs::write(directory.join("worker-ready"), b"ready")?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG_TIMEOUT;
     while !terminated.load(Ordering::Relaxed) {
         ensure!(
             Instant::now() < deadline,
@@ -246,7 +273,7 @@ fn descendant_fixture() -> Result<()> {
     let directory = fixture_directory()?;
     fs::write(directory.join("child-pid"), getpid().to_string())?;
     fs::write(directory.join("child-ready"), b"ready")?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG_TIMEOUT;
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -272,7 +299,8 @@ fn spawn_fixture(
     Ok(std::thread::spawn(move || {
         process::run(
             &mut command,
-            Duration::from_secs(10),
+            HANG_TIMEOUT,
+            HANG_TIMEOUT,
             &interrupted,
             &stdout,
             &stderr,
@@ -281,7 +309,7 @@ fn spawn_fixture(
 }
 
 fn wait_for_file(path: &Path) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG_TIMEOUT;
     while !path.exists() {
         ensure!(
             Instant::now() < deadline,

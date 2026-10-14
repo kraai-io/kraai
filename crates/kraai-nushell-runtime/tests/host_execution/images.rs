@@ -3,8 +3,8 @@
     reason = "integration tests assert after fallible host execution"
 )]
 use super::*;
+use kraai_execution_types::ImageAttachment;
 use kraai_nushell_runtime::ImageAttachmentHandler;
-use kraai_types::ImageAttachment;
 
 #[derive(Default)]
 struct RecordingImages(Mutex<Vec<Vec<u8>>>);
@@ -13,7 +13,10 @@ struct McpImages;
 
 #[async_trait::async_trait]
 impl kraai_mcp::McpHost for McpImages {
-    async fn execute(&self, _: kraai_types::McpRequest) -> Result<serde_json::Value, String> {
+    async fn execute(
+        &self,
+        _: kraai_execution_types::McpRequest,
+    ) -> Result<serde_json::Value, String> {
         Ok(serde_json::json!({"content": [
             {"type": "image", "mimeType": "image/png", "data": "aGVsbG8="},
             {"type": "image", "mimeType": "image/png", "data": "d29ybGQ="}

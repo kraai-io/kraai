@@ -85,8 +85,8 @@ mod tests {
                 encrypted.clone(),
                 call.clone(),
                 ConversationItem::ScriptResult {
-                    outcome: kraai_types::ScriptExecutionOutcome {
-                        status: kraai_types::ScriptExecutionStatus::Completed,
+                    outcome: kraai_execution_types::ScriptExecutionOutcome {
+                        status: kraai_execution_types::ScriptExecutionStatus::Completed,
                         exit_code: Some(0),
                     },
                     call_id: ToolCallId::new("call"),
@@ -111,7 +111,7 @@ mod tests {
     fn truncated_images_remain_reopenable_without_resolving_the_blobs() {
         let images: Vec<_> = ["a", "b"]
             .into_iter()
-            .map(|id| kraai_types::ImageAttachment {
+            .map(|id| kraai_execution_types::ImageAttachment {
                 id: id.repeat(64),
                 mime_type: "image/png".into(),
                 width: 2,
@@ -128,8 +128,8 @@ mod tests {
         );
         let mut request = ProviderRequest {
             messages: vec![ConversationItem::ScriptResult {
-                outcome: kraai_types::ScriptExecutionOutcome {
-                    status: kraai_types::ScriptExecutionStatus::Completed,
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                 },
                 call_id: ToolCallId::new("call"),

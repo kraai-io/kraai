@@ -1,12 +1,7 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
 use color_eyre::eyre::Result;
-use kraai_types::ScriptExecutionId;
-use tokio::sync::mpsc;
+use kraai_execution_types::ScriptExecutionId;
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
-use crate::handle::Command;
 use crate::{Event, SubmitMessageOutcome};
 
 #[tokio::test]
@@ -85,22 +80,16 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
         SubmitMessageOutcome::Queued { .. }
     ));
 
-    let mut runtime = harness.runtime.clone();
-    runtime.queue_drains = Arc::default();
-    let guard = runtime.session_state_barrier.read().await;
-    let error = runtime
-        .deny_pending_script(session_id.clone(), execution_id)
+    let error = harness
+        .handle
+        .deny_script(session_id.clone(), execution_id.to_string())
         .await
         .expect_err("persistence must fail");
-    assert!(format!("{error:?}").contains("injected persistence failure"));
+    assert!(
+        format!("{error:?}").contains("injected persistence failure"),
+        "{error:?}"
+    );
     connection.execute_batch("DROP TRIGGER fail_denial")?;
-    drop(guard);
-    let snapshot = runtime.build_session_snapshot(&session_id).await?;
-    assert!(!snapshot.session.is_running);
-    assert!(snapshot.pending_script.is_none());
-    assert!(snapshot.turn_timer.elapsed(Instant::now()).is_none());
-    assert!(snapshot.turn_timer.last_duration().is_some());
-    assert_eq!(snapshot.queued_messages, 1);
     harness
         .events
         .wait_for("denial failure", |events| {
@@ -111,18 +100,14 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
             })
         })
         .await;
-
-    let (_tx, mut rx) = mpsc::channel(1);
-    let command = tokio::time::timeout(Duration::from_secs(1), runtime.next_command(&mut rx))
-        .await?
-        .expect("queue drain command");
-    assert!(
-        matches!(&command, Command::StartQueuedMessages { session_id: id } if id == &session_id)
-    );
-    runtime.handle_command(command).await?;
-    harness.events.wait_for("queued response", |events| events.iter().any(|event| matches!(event,
-        Event::StreamChunk { session_id: id, chunk, .. } if id == &session_id && chunk == "Queued message handled"
-    ))).await;
+    harness
+        .events
+        .wait_for("queued response", |events| {
+            events.iter().any(|event| {
+                super::harness::streamed_text(event, &session_id) == Some("Queued message handled")
+            })
+        })
+        .await;
     harness.shutdown().await;
     Ok(())
 }

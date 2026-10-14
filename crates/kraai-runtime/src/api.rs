@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
 
+use kraai_execution_types::{DomainError, DomainErrorKind};
 use kraai_mcp::McpAuthStatus;
 use kraai_persistence::SessionMeta;
-pub use kraai_provider_openai_codex::{
-    OpenAiCodexAuthStatus, OpenAiCodexLoginState, PendingBrowserLogin, PendingDeviceCodeLogin,
+pub use kraai_provider_core::{
+    LoginMethod, PendingBrowserLogin, PendingDeviceCodeLogin, ProviderAuthStatus,
+    ProviderLoginState,
 };
 use kraai_types::{
-    AgentProfileSummary, AgentProfileWarning, DomainError, DomainErrorKind, Message, MessageId,
-    TokenUsage,
+    AgentProfileSummary, AgentProfileWarning, Message, MessageId, SessionId, TokenUsage,
 };
 use serde::{Deserialize, Serialize};
 
@@ -78,17 +79,32 @@ impl RuntimeError {
     pub(crate) fn internal(error: impl std::fmt::Display) -> Self {
         Self::new(RuntimeErrorKind::Internal, error.to_string())
     }
+}
 
-    pub(crate) fn from_report(error: color_eyre::Report) -> Self {
-        let Some(domain_error) = error.downcast_ref::<DomainError>() else {
-            return Self::internal(error);
-        };
-        let kind = match domain_error.kind() {
+impl From<DomainError> for RuntimeError {
+    fn from(error: DomainError) -> Self {
+        let kind = match error.kind() {
             DomainErrorKind::InvalidArgument => RuntimeErrorKind::InvalidArgument,
             DomainErrorKind::NotFound => RuntimeErrorKind::NotFound,
             DomainErrorKind::Conflict => RuntimeErrorKind::Conflict,
         };
-        Self::new(kind, domain_error.message())
+        Self::new(kind, error.message())
+    }
+}
+
+impl From<kraai_agent::AgentError> for RuntimeError {
+    fn from(error: kraai_agent::AgentError) -> Self {
+        match error {
+            kraai_agent::AgentError::Domain(error) => error.into(),
+            kraai_agent::AgentError::Internal(report) => Self::internal(format!("{report:#}")),
+        }
+    }
+}
+
+/// Runtime work that fails with an `eyre` report is classified the same way agent failures are.
+impl From<color_eyre::Report> for RuntimeError {
+    fn from(report: color_eyre::Report) -> Self {
+        kraai_agent::AgentError::from(report).into()
     }
 }
 
@@ -120,13 +136,25 @@ pub enum ContinueSessionOutcome {
     NothingToContinue,
 }
 
+/// The version of the command and event protocol, raised on any incompatible change.
+pub const PROTOCOL_VERSION: u32 = 1;
+
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeStartupState {
     Starting,
-    Ready,
+    Ready { protocol_version: u32 },
     Failed(String),
+}
+
+impl RuntimeStartupState {
+    #[must_use]
+    pub fn ready() -> Self {
+        Self::Ready {
+            protocol_version: PROTOCOL_VERSION,
+        }
+    }
 }
 
 /// Model information
@@ -162,7 +190,7 @@ impl SessionContextUsage {
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
-    pub id: String,
+    pub id: SessionId,
     pub tip_id: Option<String>,
     pub workspace_dir: String,
     pub created_at: u64,
@@ -200,6 +228,7 @@ impl Session {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingScriptInfo {
     pub execution_id: String,
+    pub call_id: String,
     pub source: String,
     pub requested_capabilities: Vec<String>,
     pub capability_additions: Vec<String>,
@@ -247,6 +276,16 @@ pub enum SessionActivity {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HistoryPage {
+    /// Messages without opaque reasoning payloads.
+    pub messages: BTreeMap<MessageId, Message>,
+    /// Where the next older page starts; `None` once the page reaches the first message.
+    pub older_history: Option<MessageId>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSnapshot {
     pub requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
     pub turn_timer: crate::TurnTimer,
@@ -255,7 +294,10 @@ pub struct SessionSnapshot {
     /// session and service events still need to be handled.
     pub event_sequence: u64,
     pub session: Session,
+    /// The latest messages on the session's history, without opaque reasoning payloads.
     pub history: BTreeMap<MessageId, Message>,
+    /// Where the next older page of history starts when `history` holds only the latest part.
+    pub older_history: Option<MessageId>,
     pub context_usage: Option<SessionContextUsage>,
     pub pending_script: Option<PendingScriptInfo>,
     pub profiles: kraai_types::AgentProfilesState,
@@ -276,24 +318,24 @@ pub struct RuntimeEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
     TurnCompleted {
-        session_id: String,
+        session_id: SessionId,
     },
     ScriptPrepared {
-        session_id: String,
+        session_id: SessionId,
         execution_id: String,
         call_id: String,
         source: String,
     },
     ScriptStarted {
-        session_id: String,
+        session_id: SessionId,
         call_id: String,
     },
     RequestUsageUpdated {
-        session_id: String,
+        session_id: SessionId,
         request: Box<kraai_types::RequestUsage>,
     },
     TurnTimingChanged {
-        session_id: String,
+        session_id: SessionId,
         timer: crate::TurnTimer,
     },
     /// Configuration loaded successfully
@@ -305,46 +347,55 @@ pub enum Event {
     },
     /// Failure in background work scoped to one session.
     SessionError {
-        session_id: String,
+        session_id: SessionId,
         error: RuntimeError,
     },
     // Streaming events
     /// Stream started for a message
     StreamStart {
-        session_id: String,
+        session_id: SessionId,
         message_id: String,
     },
-    /// Chunk received for a streaming message
-    StreamChunk {
-        session_id: String,
+    /// A streaming message gained the item at `item_index`, without opaque reasoning payloads.
+    ItemStarted {
+        session_id: SessionId,
         message_id: String,
-        chunk: String,
+        item_index: usize,
+        item: kraai_types::AssistantItem,
     },
-    ScriptCall {
-        session_id: String,
+    /// Text was appended to the text item at `item_index` of a streaming message.
+    ItemDelta {
+        session_id: SessionId,
         message_id: String,
-        call_id: kraai_types::ToolCallId,
-        name: String,
-        input: String,
+        item_index: usize,
+        delta: String,
+    },
+    /// Readable reasoning while the model thinks. It is for display only and is not kept in
+    /// history.
+    ReasoningDelta {
+        session_id: SessionId,
+        message_id: String,
+        item_id: String,
+        delta: String,
     },
     /// Stream completed for a message
     StreamComplete {
-        session_id: String,
+        session_id: SessionId,
         message_id: String,
     },
     /// Stream error for a message
     StreamError {
-        session_id: String,
+        session_id: SessionId,
         message_id: String,
         error: String,
     },
     /// Stream cancelled by the user
     StreamCancelled {
-        session_id: String,
+        session_id: SessionId,
         message_id: String,
     },
     ProviderRetryScheduled {
-        session_id: String,
+        session_id: SessionId,
         provider_id: String,
         model_id: String,
         operation: String,
@@ -352,34 +403,58 @@ pub enum Event {
         delay_seconds: u64,
         reason: String,
     },
+    /// A response failed transiently before committing a script call. Its partial content was
+    /// discarded and the same request is being issued again.
+    StreamRestarted {
+        session_id: SessionId,
+        message_id: String,
+        reason: String,
+    },
 
     ScriptApprovalRequested {
-        session_id: String,
+        session_id: SessionId,
         script: PendingScriptInfo,
     },
     ScriptResultReady {
-        session_id: String,
+        session_id: SessionId,
         execution_id: String,
         call_id: String,
         output: kraai_types::MessageContent,
-        outcome: kraai_types::ScriptExecutionOutcome,
+        outcome: kraai_execution_types::ScriptExecutionOutcome,
     },
     ContextStateChanged {
-        session_id: String,
+        session_id: SessionId,
         notifications: Vec<String>,
     },
     ContinuationFailed {
-        session_id: String,
+        session_id: SessionId,
         error: String,
     },
 
-    // History events
-    /// Chat history was updated
-    HistoryUpdated {
-        session_id: String,
+    /// The session started or stopped running, streaming or waiting on a script.
+    SessionStateChanged {
+        session_id: SessionId,
+        activity: SessionActivity,
+        is_running: bool,
     },
-    OpenAiCodexAuthUpdated {
-        status: OpenAiCodexAuthStatus,
+    // History events
+    /// A message was added to or changed in the session's history.
+    MessageUpserted {
+        session_id: SessionId,
+        message: Box<Message>,
+    },
+    /// Messages left the session's history.
+    MessagesRemoved {
+        session_id: SessionId,
+        message_ids: Vec<MessageId>,
+    },
+    /// The session changed outside this runtime; reload it from a snapshot.
+    HistoryUpdated {
+        session_id: SessionId,
+    },
+    /// A provider type's sign-in changed.
+    ProviderAuthUpdated {
+        status: ProviderAuthStatus,
     },
     McpAuthUpdated {
         status: McpAuthStatus,
@@ -388,7 +463,7 @@ pub enum Event {
 
 impl Event {
     /// Returns the session this event concerns, if any.
-    pub fn session_id(&self) -> Option<&str> {
+    pub fn session_id(&self) -> Option<&SessionId> {
         match self {
             Self::TurnCompleted { session_id }
             | Self::ScriptPrepared { session_id, .. }
@@ -397,22 +472,27 @@ impl Event {
             | Self::TurnTimingChanged { session_id, .. }
             | Self::SessionError { session_id, .. }
             | Self::StreamStart { session_id, .. }
-            | Self::StreamChunk { session_id, .. }
-            | Self::ScriptCall { session_id, .. }
+            | Self::ItemStarted { session_id, .. }
+            | Self::ItemDelta { session_id, .. }
+            | Self::ReasoningDelta { session_id, .. }
             | Self::StreamComplete { session_id, .. }
             | Self::StreamError { session_id, .. }
             | Self::StreamCancelled { session_id, .. }
             | Self::ProviderRetryScheduled { session_id, .. }
+            | Self::StreamRestarted { session_id, .. }
             | Self::ScriptApprovalRequested { session_id, .. }
             | Self::ScriptResultReady { session_id, .. }
             | Self::ContextStateChanged { session_id, .. }
             | Self::ContinuationFailed { session_id, .. }
+            | Self::SessionStateChanged { session_id, .. }
+            | Self::MessageUpserted { session_id, .. }
+            | Self::MessagesRemoved { session_id, .. }
             | Self::HistoryUpdated { session_id } => Some(session_id),
             Self::ConfigLoaded
             | Self::ModelsUpdated
             | Self::ServiceError { .. }
             | Self::McpAuthUpdated { .. }
-            | Self::OpenAiCodexAuthUpdated { .. } => None,
+            | Self::ProviderAuthUpdated { .. } => None,
         }
     }
 }

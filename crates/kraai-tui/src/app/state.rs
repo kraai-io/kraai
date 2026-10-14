@@ -6,7 +6,7 @@ use kraai_runtime::{
     AgentProfileSummary, AgentProfileWarning, Model, PendingScriptInfo, ProviderDefinition,
     Session, SessionContextUsage as RuntimeSessionContextUsage, SettingsDocument,
 };
-use kraai_types::{Message, MessageContent, MessageId};
+use kraai_types::{Message, MessageContent, MessageId, SessionId};
 
 use super::auth::ProviderAuthStatus;
 use super::chat_render::ChatRenderCache;
@@ -18,11 +18,12 @@ use super::types::{
 
 pub(super) struct AppState {
     pub(super) session_cost: kraai_types::CostSummary,
-    pub(super) session_requests: BTreeMap<String, BTreeMap<MessageId, kraai_types::RequestUsage>>,
+    pub(super) session_requests:
+        BTreeMap<SessionId, BTreeMap<MessageId, kraai_types::RequestUsage>>,
     pub(super) launch_requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
     pub(super) launched_at: u64,
     pub(super) cost_recovery_list_pending: bool,
-    pub(super) cost_recovery_sessions: std::collections::BTreeSet<String>,
+    pub(super) cost_recovery_sessions: std::collections::BTreeSet<SessionId>,
     pub(super) exit: bool,
     pub(super) editor_requested: bool,
     pub(super) menu_search: String,
@@ -35,7 +36,7 @@ pub(super) struct AppState {
     pub(super) draft_images: super::draft_images::DraftImages,
     pub(super) next_image_request_id: u64,
     pub(super) pending_messages: VecDeque<super::types::PendingMessage>,
-    pub(super) failed_messages: HashMap<Option<String>, Vec<MessageContent>>,
+    pub(super) failed_messages: HashMap<Option<SessionId>, Vec<MessageContent>>,
     pub(super) input_cursor: usize,
     pub(super) input_width: u16,
     pub(super) input_history: Vec<String>,
@@ -48,7 +49,7 @@ pub(super) struct AppState {
     pub(super) chat_epoch: u64,
     pub(super) chat_render_cache: RefCell<ChatRenderCache>,
     pub(super) chat_viewport_height: u16,
-    pub(super) scroll: u16,
+    pub(super) scroll: usize,
     pub(super) auto_scroll: bool,
     pub(super) config_loaded: bool,
     pub(super) mode: UiMode,
@@ -73,10 +74,9 @@ pub(super) struct AppState {
     pub(super) selected_provider_id: Option<String>,
     pub(super) selected_model_id: Option<String>,
     pub(super) last_session_model: Option<kraai_types::ModelSelection>,
-    pub(super) session_model_saves: HashMap<String, super::session_model::SessionModelSave>,
+    pub(super) session_model_saves: HashMap<SessionId, super::session_model::SessionModelSave>,
     pub(super) next_model_save_id: u64,
     pub(super) selected_model_options: kraai_types::ModelOptionValues,
-    pub(super) startup_model_options_applied: bool,
     pub(super) option_menu_index: usize,
     pub(super) option_choice_index: usize,
     pub(super) option_editor: Option<super::model_options::ModelOptionEditor>,
@@ -84,9 +84,9 @@ pub(super) struct AppState {
     pub(super) option_editor_error: Option<String>,
     pub(super) context_usage: Option<RuntimeSessionContextUsage>,
     pub(super) pending_script: Option<PendingScriptInfo>,
-    pub(super) submitted_script_decisions: BTreeMap<String, BTreeSet<String>>,
+    pub(super) submitted_script_decisions: BTreeMap<SessionId, BTreeSet<String>>,
     pub(super) sessions: Vec<Session>,
-    pub(super) current_session_id: Option<String>,
+    pub(super) current_session_id: Option<SessionId>,
     pub(super) current_tip_id: Option<String>,
     pub(super) agent_menu_index: usize,
     pub(super) model_menu_index: usize,
@@ -110,7 +110,8 @@ pub(super) struct AppState {
     pub(super) providers_advanced_focus: ProvidersAdvancedFocus,
     pub(super) connect_provider_search: String,
     pub(super) connect_provider_index: usize,
-    pub(super) openai_codex_auth: ProviderAuthStatus,
+    /// Sign-in state of each provider type that signs in with an account.
+    pub(super) provider_auth: HashMap<String, ProviderAuthStatus>,
     pub(super) mcp_auth: BTreeMap<String, kraai_runtime::McpAuthStatus>,
     pub(super) mcp_browser_intent: BTreeMap<String, super::mcp_auth::BrowserIntent>,
     pub(super) next_mcp_login_request: u64,
@@ -193,7 +194,6 @@ impl Default for AppState {
             session_model_saves: HashMap::new(),
             next_model_save_id: 0,
             selected_model_options: Default::default(),
-            startup_model_options_applied: false,
             option_menu_index: 0,
             option_choice_index: 0,
             option_editor: None,
@@ -227,7 +227,7 @@ impl Default for AppState {
             providers_advanced_focus: ProvidersAdvancedFocus::ProviderFields,
             connect_provider_search: String::new(),
             connect_provider_index: 0,
-            openai_codex_auth: ProviderAuthStatus::default(),
+            provider_auth: HashMap::new(),
             mcp_auth: BTreeMap::new(),
             mcp_browser_intent: Default::default(),
             next_mcp_login_request: 0,
@@ -254,21 +254,9 @@ impl AppState {
             });
 
         Self {
-            selected_provider_id: startup_options
-                .provider_id
-                .clone()
-                .or(workspace_preferences.provider_id),
-            selected_model_id: startup_options
-                .model_id
-                .clone()
-                .or(workspace_preferences.model_id),
-            selected_model_options: if startup_options.provider_id.is_none()
-                && startup_options.model_id.is_none()
-            {
-                workspace_preferences.options
-            } else {
-                Default::default()
-            },
+            selected_provider_id: workspace_preferences.provider_id,
+            selected_model_id: workspace_preferences.model_id,
+            selected_model_options: workspace_preferences.options,
             selected_profile_id: startup_options
                 .agent_profile_id
                 .clone()

@@ -1,9 +1,9 @@
-use kraai_persistence::SessionStore;
-use std::time::Duration;
-
 use color_eyre::eyre::Result;
+use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpConfig, McpHost, McpManager, ServerConfig, TransportConfig};
-use kraai_types::McpRequest;
+use kraai_persistence::SessionStore;
+use kraai_test_support::hang_guard;
+use kraai_types::SessionId;
 use serde_json::{Value, json};
 
 use super::harness::RuntimeTestHarness;
@@ -31,13 +31,8 @@ fn config(name: &str) -> McpConfig {
     }
 }
 
-async fn servers(harness: &RuntimeTestHarness, session: &str) -> Vec<Value> {
-    let mcp = harness
-        .runtime
-        .agent_manager
-        .read()
-        .await
-        .session_mcp(session);
+async fn servers(harness: &RuntimeTestHarness, session: &SessionId) -> Vec<Value> {
+    let mcp = harness.runtime.agent_manager.session_mcp(session);
     mcp.execute(McpRequest::Servers)
         .await
         .unwrap()
@@ -53,14 +48,9 @@ async fn attachments_replace_atomically_and_never_enter_session_storage() -> Res
     let harness = RuntimeTestHarness::new(Vec::new())
         .await
         .expect("runtime fixture");
-    harness
-        .runtime
-        .agent_manager
-        .write()
-        .await
-        .set_mcp(std::sync::Arc::new(
-            McpManager::new(config("configured")).unwrap(),
-        ));
+    harness.runtime.agent_manager.set_mcp(std::sync::Arc::new(
+        McpManager::new(config("configured")).unwrap(),
+    ));
     let first = harness.handle.create_session().await?;
     let second = harness.handle.create_session().await?;
     harness
@@ -120,44 +110,32 @@ async fn attachments_reject_preparing_and_queued_sessions_without_waiting() -> R
         .await
         .expect("runtime fixture");
     let session = harness.handle.create_session().await?;
-    let preparation = harness
-        .runtime
-        .session_preparations
-        .try_begin(&session)
-        .expect("preparation guard");
-    let manager = harness.runtime.agent_manager.write().await;
-    let busy = tokio::time::timeout(
-        Duration::from_secs(1),
+    super::harness::hold_preparation(&harness.runtime, &session).await;
+    let busy = hang_guard(
         harness
             .handle
             .set_session_mcp_servers(session.clone(), config("attached")),
     )
     .await?;
-    drop(manager);
     assert_eq!(busy.unwrap_err().kind, RuntimeErrorKind::Conflict);
-    drop(preparation);
-    harness.runtime.queued_messages.lock().await.insert(
-        session.clone(),
-        [super::super::core::QueuedMessage {
-            options: Default::default(),
-            message: "queued".into(),
-            model_id: kraai_types::ModelId::new("mock-model"),
-            provider_id: kraai_types::ProviderId::new("mock"),
-        }]
-        .into(),
-    );
+    super::harness::release_preparation(&harness.runtime, &session).await;
+    super::harness::enqueue(
+        &harness.runtime,
+        &session,
+        [super::harness::queued(
+            "queued".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )],
+    )
+    .await;
     let busy = harness
         .handle
         .set_session_mcp_servers(session.clone(), config("attached"))
         .await
         .unwrap_err();
     assert_eq!(busy.kind, RuntimeErrorKind::Conflict);
-    harness
-        .runtime
-        .queued_messages
-        .lock()
-        .await
-        .remove(&session);
+    super::harness::take_queue(&harness.runtime, &session).await;
     harness
         .handle
         .set_session_mcp_servers(session.clone(), config("attached"))

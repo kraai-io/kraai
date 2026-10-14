@@ -270,14 +270,14 @@ mod tests {
         let reader = std::thread::spawn(move || {
             send.send(read_regular_text_file(&path)).unwrap();
         });
-        let result = receive.recv_timeout(std::time::Duration::from_secs(1));
+        let result = receive.recv_timeout(kraai_test_support::HANG_TIMEOUT);
         let reader_completed = if result.is_err() {
             let unblock = OpenOptions::new()
                 .read(true)
                 .write(true)
                 .open(&fifo)
                 .unwrap();
-            let rescued = receive.recv_timeout(std::time::Duration::from_secs(1));
+            let rescued = receive.recv_timeout(kraai_test_support::HANG_TIMEOUT);
             drop(unblock);
             !matches!(rescued, Err(std::sync::mpsc::RecvTimeoutError::Timeout))
         } else {
@@ -354,14 +354,14 @@ mod tests {
             let reader = std::thread::spawn(move || {
                 send.send(open_file(&root, &path)).unwrap();
             });
-            let result = receive.recv_timeout(std::time::Duration::from_secs(1));
+            let result = receive.recv_timeout(kraai_test_support::HANG_TIMEOUT);
             let reader_completed = if result.is_err() {
                 let unblock = OpenOptions::new()
                     .read(true)
                     .write(true)
                     .open(&fifo)
                     .unwrap();
-                let rescued = receive.recv_timeout(std::time::Duration::from_secs(1));
+                let rescued = receive.recv_timeout(kraai_test_support::HANG_TIMEOUT);
                 drop(unblock);
                 !matches!(rescued, Err(std::sync::mpsc::RecvTimeoutError::Timeout))
             } else {

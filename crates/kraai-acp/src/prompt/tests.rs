@@ -13,14 +13,14 @@ use axum::{
 use color_eyre::eyre::{Result, ensure, eyre};
 use futures::{StreamExt, stream};
 use kraai_runtime::{RuntimeBuilder, RuntimeEvent, RuntimeStartupState};
-use kraai_types::MessageStatus;
+use kraai_types::{MessageStatus, SessionId};
 use serde_json::json;
 use tokio_util::task::AbortOnDropHandle;
 
 use super::*;
 
 #[tokio::test]
-async fn own_session_overflow_cancels_durably_and_accepts_next_prompt() -> Result<()> {
+async fn own_session_lag_resyncs_without_cancelling_the_turn() -> Result<()> {
     let root = tempfile::tempdir()?;
     let requests = Arc::new(AtomicUsize::new(0));
     let seen = requests.clone();
@@ -62,14 +62,14 @@ provider_id = "mock"
         ),
     )
     .await?;
-    let runtime = RuntimeBuilder::new()
+    let runtime = RuntimeBuilder::new(kraai_providers::DefaultProviders)
         .storage_root(root.path().join("state"))
         .provider_config_path(root.path().join("providers.toml"))
         .mcp_config_path(root.path().join("mcp.toml"))
         .build_on(&tokio::runtime::Handle::current());
     let startup = runtime.wait_for_startup().await?;
     ensure!(
-        startup == RuntimeStartupState::Ready,
+        startup == RuntimeStartupState::ready(),
         "Runtime fixture did not become ready: {startup:?}"
     );
     let (id, session) = crate::session::create(
@@ -84,7 +84,13 @@ provider_id = "mock"
         Arc::default(),
     )
     .await?;
-    let sink = futures::sink::unfold((), async |(), _line: String| Ok::<_, std::io::Error>(()));
+    let lines = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = futures::sink::unfold(lines.clone(), async |lines, line: String| {
+        if let Ok(mut captured) = lines.lock() {
+            captured.push(line);
+        }
+        Ok::<_, std::io::Error>(lines)
+    });
     let transport = Lines::new(sink, stream::pending::<std::io::Result<String>>());
     let (connection_tx, connection_rx) = tokio::sync::oneshot::channel();
     let _protocol = AbortOnDropHandle::new(tokio::spawn(Agent.builder().connect_with(
@@ -97,23 +103,20 @@ provider_id = "mock"
         },
     )));
     let inner = connection_rx.await?;
-    tokio::time::timeout(
-        Duration::from_secs(10),
-        check_overflow(runtime, id, session, inner, requests),
-    )
-    .await?
+    kraai_test_support::hang_guard(check_lag(runtime, id, session, inner, requests, lines)).await?
 }
 
-async fn check_overflow(
+async fn check_lag(
     runtime: kraai_runtime::RuntimeHandle,
-    id: String,
+    id: SessionId,
     session: Arc<crate::session::Session>,
     inner: ConnectionTo<Client>,
     requests: Arc<AtomicUsize>,
+    lines: Arc<std::sync::Mutex<Vec<String>>>,
 ) -> Result<()> {
-    let connection = Connection::new(inner.clone(), crate::Stdio::new().budget);
     let turn = session.begin_turn()?;
     let mut actual_events = runtime.subscribe_session(&id);
+    let prompt_start = runtime.get_tip(id.clone()).await?.map(MessageId::new);
     runtime
         .send_message(
             id.clone(),
@@ -123,41 +126,66 @@ async fn check_overflow(
             Default::default(),
         )
         .await?;
-    let partial_id = loop {
-        if let Event::StreamChunk {
-            message_id, chunk, ..
-        } = actual_events.recv().await?.event
-            && chunk == "partial"
+    let output = Output::new(
+        id.clone(),
+        Connection::new(inner.clone(), crate::Stdio::new().budget),
+        prompt_start,
+    );
+    let (partial_id, partial_item) = loop {
+        let event = actual_events.recv().await?.event;
+        if let Event::ItemStarted {
+            ref message_id,
+            ref item,
+            ..
+        } = event
+            && matches!(item, kraai_types::AssistantItem::Text { text, .. } if text == "partial")
         {
-            break message_id;
+            break (message_id.clone(), event);
         }
     };
     let (sender, mut lagged) = broadcast::channel(1);
-    for sequence in 1..=2 {
-        sender.send(RuntimeEvent {
-            sequence,
-            event: Event::HistoryUpdated {
-                session_id: id.clone(),
-            },
-        })?;
-    }
-    let failure = finish_prompt(
-        &runtime,
-        &mut lagged,
-        Output::new(acp::SessionId::new(id.clone()), connection),
-        &turn.token,
-    )
-    .await;
-    let error = failure
-        .err()
-        .ok_or_else(|| eyre!("overflow unexpectedly succeeded"))?;
-    assert!(
-        error
-            .to_string()
-            .contains("Runtime event stream interrupted"),
-        "{error}"
-    );
+    sender.send(RuntimeEvent {
+        sequence: 1,
+        event: Event::HistoryUpdated {
+            session_id: id.clone(),
+        },
+    })?;
+    sender.send(RuntimeEvent {
+        sequence: 2,
+        event: partial_item,
+    })?;
+    let stop_reason = {
+        let prompt = finish_prompt(&runtime, &mut lagged, output, &turn.token);
+        tokio::pin!(prompt);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut prompt)
+                .await
+                .is_err(),
+            "missed events ended the prompt"
+        );
+        assert!(
+            runtime
+                .get_session_snapshot(id.clone())
+                .await?
+                .session
+                .is_running
+        );
+        turn.token.cancel();
+        prompt.await?.stop_reason
+    };
+    assert_eq!(stop_reason, acp::StopReason::Cancelled);
+    drop(sender);
     drop(turn);
+    let partial_lines = lines
+        .lock()
+        .map_err(|error| eyre!("{error}"))?
+        .iter()
+        .filter(|line| line.contains("agent_message_chunk") && line.contains("\"partial\""))
+        .count();
+    assert_eq!(
+        partial_lines, 1,
+        "resync must send missed text exactly once"
+    );
     let snapshot = runtime.get_session_snapshot(id.clone()).await?;
     assert!(!snapshot.session.is_running);
     let partial = snapshot
@@ -177,7 +205,7 @@ async fn check_overflow(
     let response = run(
         &runtime,
         session.begin_turn()?,
-        acp::PromptRequest::new(id.clone(), vec![content::text("second")]),
+        acp::PromptRequest::new(id.to_string(), vec![content::text("second")]),
         Connection::new(inner, crate::Stdio::new().budget),
     )
     .await?;

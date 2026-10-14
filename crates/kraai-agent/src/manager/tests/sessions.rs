@@ -1,17 +1,17 @@
 use super::super::*;
-use super::common::{cleanup_dir, test_manager};
+use super::common::{cleanup_dir, open_persistence, test_manager};
 use color_eyre::eyre::Result;
 use kraai_types::MessageStatus;
 use std::path::PathBuf;
 
 #[tokio::test]
 async fn a_foreign_workspace_change_refreshes_cached_state_before_the_next_turn() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     assert!(manager.prepare_session(&session_id).await?);
     let obsolete = data_dir.join("obsolete-workspace");
     manager.set_workspace_dir(&session_id, obsolete).await?;
-    let foreign = kraai_persistence::Persistence::open(&data_dir).await?;
+    let foreign = open_persistence(&data_dir).await?;
     let workspace = data_dir.join("foreign-workspace");
     tokio::fs::create_dir_all(&workspace).await?;
     let mut session = foreign.sessions().get(&session_id).await?.unwrap();
@@ -40,7 +40,7 @@ async fn a_foreign_workspace_change_refreshes_cached_state_before_the_next_turn(
 
 #[tokio::test]
 async fn undo_returns_input_after_the_tip_commit_even_if_cleanup_fails() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     manager
         .add_message(
@@ -63,7 +63,7 @@ async fn undo_returns_input_after_the_tip_commit_even_if_cleanup_fails() -> Resu
 
 #[tokio::test]
 async fn preparing_session_rejects_a_parent_cycle() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let session_id = manager.create_session().await?;
     let message_id = manager
         .add_message(
@@ -90,13 +90,13 @@ async fn preparing_session_rejects_a_parent_cycle() -> Result<()> {
 
 #[tokio::test]
 async fn restored_session_supplies_script_workspace_independently_of_executable() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let workspace = data_dir.join("configured-workspace");
     tokio::fs::create_dir_all(&workspace).await?;
     let session_id = manager
         .create_session_with(Some(workspace.clone()), None)
         .await?;
-    manager.session_states.clear();
+    super::super::lock(&manager.session_states).clear();
     assert!(manager.prepare_session(&session_id).await?);
     manager
         .prepare_start_stream(
@@ -116,7 +116,7 @@ async fn restored_session_supplies_script_workspace_independently_of_executable(
 
 #[tokio::test]
 async fn create_session_returns_usable_session_id() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     let sessions = manager.list_sessions().await?;
@@ -143,7 +143,7 @@ fn title_from_user_prompt_truncates_to_sixty_characters() {
 
 #[tokio::test]
 async fn session_defaults_follow_profiles_available_in_the_target_workspace() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
     let workspace_a = data_dir.join("workspace-a");
     let workspace_b = data_dir.join("workspace-b");
     tokio::fs::create_dir_all(workspace_a.join(".kraai")).await?;
@@ -241,7 +241,7 @@ fn title_from_user_prompt_preserves_unicode_whitespace_and_truncation_boundaries
 
 #[tokio::test]
 async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     manager
@@ -273,7 +273,7 @@ async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
 
 #[tokio::test]
 async fn sessions_keep_independent_tips_and_histories() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_a = manager.create_session().await?;
     let session_b = manager.create_session().await?;
@@ -318,7 +318,7 @@ async fn sessions_keep_independent_tips_and_histories() -> Result<()> {
 
 #[tokio::test]
 async fn user_input_history_lists_persisted_user_messages_newest_first() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     manager
@@ -358,7 +358,7 @@ async fn user_input_history_lists_persisted_user_messages_newest_first() -> Resu
 
 #[tokio::test]
 async fn later_user_messages_do_not_overwrite_session_title() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     manager
@@ -395,7 +395,7 @@ async fn later_user_messages_do_not_overwrite_session_title() -> Result<()> {
 
 #[tokio::test]
 async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     let stable_tip = manager
@@ -409,7 +409,12 @@ async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<
     let streaming_id = manager
         .start_streaming_message(
             &session_id,
-            ChatRole::Assistant,
+            super::super::stream_requests::TurnInput {
+                tip: Some(stable_tip.clone()),
+                users: Vec::new(),
+                title: None,
+                consumed_queue_through: None,
+            },
             StreamId::new("call-1"),
             None,
             None,
@@ -441,7 +446,7 @@ async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<
 
 #[tokio::test]
 async fn pending_workspace_changes_are_isolated_per_session() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_a = manager.create_session().await?;
     let session_b = manager.create_session().await?;
@@ -464,7 +469,7 @@ async fn pending_workspace_changes_are_isolated_per_session() -> Result<()> {
 
 #[tokio::test]
 async fn new_sessions_inherit_last_used_profile_after_turn_starts() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let first_session = manager.create_session().await?;
     manager
@@ -498,7 +503,7 @@ async fn new_sessions_inherit_last_used_profile_after_turn_starts() -> Result<()
 
 #[tokio::test]
 async fn prepare_start_stream_fails_when_no_profile_is_selected() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     let mut session = manager
@@ -527,7 +532,7 @@ async fn prepare_start_stream_fails_when_no_profile_is_selected() -> Result<()> 
 
 #[tokio::test]
 async fn undo_last_user_message_rewinds_tip_and_returns_message_content() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     let first_user = manager
@@ -576,7 +581,7 @@ async fn undo_last_user_message_rewinds_tip_and_returns_message_content() -> Res
 
 #[tokio::test]
 async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     manager
@@ -634,7 +639,7 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
 
 #[tokio::test]
 async fn loading_is_passive_and_owned_recovery_restores_interrupted_stream() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     let request = manager
@@ -687,7 +692,7 @@ async fn loading_is_passive_and_owned_recovery_restores_interrupted_stream() -> 
 
 #[tokio::test]
 async fn loading_active_session_does_not_recover_live_stream() -> Result<()> {
-    let (mut manager, data_dir) = test_manager().await;
+    let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await?;
     let request = manager

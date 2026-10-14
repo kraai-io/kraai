@@ -4,8 +4,15 @@
 )]
 
 use super::*;
+use kraai_test_support::HANG_TIMEOUT;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+const TIMEOUTS: HttpTimeouts = HttpTimeouts {
+    connect: Some(HANG_TIMEOUT.saturating_mul(2)),
+    read: Some(HANG_TIMEOUT.saturating_mul(2)),
+    request: Some(HANG_TIMEOUT.saturating_mul(2)),
+};
 
 async fn response(wire: &'static [u8]) -> Response {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -16,7 +23,7 @@ async fn response(wire: &'static [u8]) -> Response {
         let _ = stream.read(&mut request).await.unwrap();
         stream.write_all(wire).await.unwrap();
     });
-    client_builder(HttpTimeouts::FINITE, reqwest::redirect::Policy::none())
+    client_builder(TIMEOUTS, reqwest::redirect::Policy::none())
         .tls_certs_only([])
         .no_proxy()
         .build()

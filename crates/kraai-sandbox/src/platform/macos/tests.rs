@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use kraai_types::{SandboxCapabilities, SandboxCapability};
+use kraai_execution_types::{SandboxCapabilities, SandboxCapability};
 
 use super::profile::build_args;
 use crate::config::LaunchPlan;

@@ -2,7 +2,6 @@ use super::*;
 
 fn submit_first(harness: &mut TestHarness) -> color_eyre::Result<(u64, ModelSelection)> {
     super::super::model_options::configure(harness)?;
-    harness.app.startup_options.ci = true;
     let submitted = ModelSelection {
         provider_id: kraai_types::ProviderId::new("provider"),
         model_id: kraai_types::ModelId::new("model"),
@@ -26,12 +25,12 @@ fn created(harness: &mut TestHarness, creation_id: u64, submitted: &ModelSelecti
         .app
         .handle_runtime_response(RuntimeResponse::CreateSession {
             creation_id,
-            result: Ok("created-session".into()),
+            result: Ok(SessionId::new("created-session")),
         });
     let requests = harness.drain_requests();
     assert!(requests.iter().any(|request| matches!(request,
         RuntimeRequest::SendMessage { session_id, provider_id, model_id, options, .. }
-        if session_id == "created-session"
+        if session_id.as_str() == "created-session"
             && provider_id == submitted.provider_id.as_str()
             && model_id == submitted.model_id.as_str()
             && options == &submitted.options
@@ -41,7 +40,12 @@ fn created(harness: &mut TestHarness, creation_id: u64, submitted: &ModelSelecti
             .iter()
             .any(|request| matches!(request, RuntimeRequest::SetSessionModel { .. }))
     );
-    snapshot(harness, "created-session", 0, session_snapshot(None));
+    snapshot(
+        harness,
+        &SessionId::new("created-session"),
+        0,
+        session_snapshot(None),
+    );
     assert!(saves(harness).is_empty());
 }
 
@@ -84,7 +88,7 @@ fn edits_during_creation_survive_initial_snapshots_and_save_after_the_turn()
         harness
             .app
             .handle_runtime_response(RuntimeResponse::SendMessage {
-                session_id: "created-session".into(),
+                session_id: SessionId::new("created-session"),
                 result: Ok(kraai_runtime::SubmitMessageOutcome::Started {
                     message_id: "reply".into(),
                 }),
@@ -93,7 +97,7 @@ fn edits_during_creation_survive_initial_snapshots_and_save_after_the_turn()
         active.activity = SessionActivity::Streaming;
         active.session.is_running = true;
         active.session.selected_model = Some(submitted.clone());
-        snapshot(&mut harness, "created-session", 0, active);
+        snapshot(&mut harness, &SessionId::new("created-session"), 0, active);
         assert_eq!(harness.app.state.selected_model_options, desired.options);
         assert_eq!(
             harness.app.state.selected_provider_id.as_deref(),
@@ -106,10 +110,10 @@ fn edits_during_creation_survive_initial_snapshots_and_save_after_the_turn()
         assert!(saves(&harness).is_empty());
         let mut idle = session_snapshot(None);
         idle.session.selected_model = Some(submitted);
-        snapshot(&mut harness, "created-session", 0, idle);
+        snapshot(&mut harness, &SessionId::new("created-session"), 0, idle);
         assert!(
             matches!(saves(&harness).as_slice(), [(session, _, selection)]
-            if session == "created-session" && selection == &desired)
+            if session.as_str() == "created-session" && selection == &desired)
         );
     }
     Ok(())
@@ -127,13 +131,18 @@ fn creation_edits_save_after_initial_admission_fails() -> color_eyre::Result<()>
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SendMessage {
-            session_id: "created-session".into(),
+            session_id: SessionId::new("created-session"),
             result: Err(kraai_runtime::RuntimeError::unavailable("admission failed")),
         });
-    snapshot(&mut harness, "created-session", 0, session_snapshot(None));
+    snapshot(
+        &mut harness,
+        &SessionId::new("created-session"),
+        0,
+        session_snapshot(None),
+    );
     assert!(
         matches!(saves(&harness).as_slice(), [(session, _, selection)]
-        if session == "created-session" && selection.options == options("high", false, None))
+        if session.as_str() == "created-session" && selection.options == options("high", false, None))
     );
     assert_eq!(harness.app.state.input, "first message");
     Ok(())
@@ -147,14 +156,14 @@ fn unchanged_creation_selection_does_not_schedule_an_extra_save() -> color_eyre:
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SendMessage {
-            session_id: "created-session".into(),
+            session_id: SessionId::new("created-session"),
             result: Ok(kraai_runtime::SubmitMessageOutcome::Started {
                 message_id: "reply".into(),
             }),
         });
     let mut idle = session_snapshot(None);
     idle.session.selected_model = Some(submitted);
-    snapshot(&mut harness, "created-session", 0, idle);
+    snapshot(&mut harness, &SessionId::new("created-session"), 0, idle);
     assert!(saves(&harness).is_empty());
     Ok(())
 }

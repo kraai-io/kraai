@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use color_eyre::eyre::{Result, ensure, eyre};
 use futures::stream::BoxStream;
 use kraai_provider_core::{
-    ProviderError, ProviderStreamEvent, SseEvent, StreamStatus, adapt_provider_stream,
+    ProviderError, ProviderStreamEvent, SseEvent, StopReason, StreamStatus, adapt_provider_stream,
 };
 use kraai_types::{AssistantPhase, ToolCallId};
 
@@ -26,10 +26,15 @@ pub(crate) fn adapt_responses_stream(
             let event: ResponsesStreamEvent = serde_json::from_str(&payload)?;
             if event.kind == "error" {
                 let error: ResponsesError = serde_json::from_str(&payload)?;
-                return Err(eyre!(
-                    "OpenAI response stream failed: {}",
-                    format_response_error(error)
-                ));
+                let code = error.code.clone();
+                return Err(ProviderError::from_stream_error(
+                    code.as_deref(),
+                    format!(
+                        "OpenAI response stream failed: {}",
+                        format_response_error(error)
+                    ),
+                )
+                .into());
             }
             completion.ingest(event, pending)
         },
@@ -39,6 +44,7 @@ pub(crate) fn adapt_responses_stream(
 #[derive(Default)]
 struct Completion {
     phases: HashMap<String, AssistantPhase>,
+    called_tool: bool,
 }
 
 impl Completion {
@@ -55,6 +61,14 @@ impl Completion {
                 {
                     self.phases
                         .insert(item_id, parse_phase(item.phase.as_deref()));
+                }
+            }
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+                if let Some(delta) = event.delta.filter(|delta| !delta.is_empty()) {
+                    let item_id = event
+                        .item_id
+                        .ok_or_else(|| eyre!("OpenAI reasoning delta omitted item_id"))?;
+                    pending.push_back(ProviderStreamEvent::ReasoningDelta { item_id, delta });
                 }
             }
             "response.output_text.delta" => {
@@ -120,6 +134,7 @@ impl Completion {
                                 .ok_or_else(|| eyre!("OpenAI custom tool call omitted input"))?;
                             let call_id =
                                 ToolCallId::try_new(call_id).map_err(|error| eyre!(error))?;
+                            self.called_tool = true;
                             pending.push_back(ProviderStreamEvent::ScriptCall {
                                 call_id,
                                 name,
@@ -137,6 +152,34 @@ impl Completion {
                     .and_then(normalize_usage)
                     .ok_or_else(|| eyre!("OpenAI response.completed event omitted usage"))?;
                 pending.push_back(ProviderStreamEvent::Usage(usage));
+                pending.push_back(ProviderStreamEvent::Finished {
+                    stop_reason: if self.called_tool {
+                        StopReason::ToolCall
+                    } else {
+                        StopReason::EndTurn
+                    },
+                });
+                return Ok(StreamStatus::Complete);
+            }
+            "response.incomplete"
+                if event
+                    .response
+                    .as_ref()
+                    .and_then(|response| response.incomplete_details.as_ref())
+                    .and_then(|details| details.get("reason"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("max_output_tokens") =>
+            {
+                if let Some(usage) = event
+                    .response
+                    .and_then(|response| response.usage)
+                    .and_then(normalize_usage)
+                {
+                    pending.push_back(ProviderStreamEvent::Usage(usage));
+                }
+                pending.push_back(ProviderStreamEvent::Finished {
+                    stop_reason: StopReason::MaxOutputTokens,
+                });
                 return Ok(StreamStatus::Complete);
             }
             "response.failed" | "response.incomplete" => {
@@ -174,6 +217,13 @@ fn format_response_error(error: ResponsesError) -> String {
         Some(code) => format!("{code}: {}", error.message),
         None => error.message,
     }
+}
+
+/// Reads token usage from a Responses API `usage` object.
+pub fn usage_from_json(usage: &serde_json::Value) -> Option<kraai_types::TokenUsage> {
+    serde_json::from_value::<ResponsesUsage>(usage.clone())
+        .ok()
+        .and_then(normalize_usage)
 }
 
 fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
@@ -217,7 +267,6 @@ fn normalize_usage(usage: ResponsesUsage) -> Option<kraai_types::TokenUsage> {
 mod tests {
     use super::*;
     use futures::{StreamExt, stream};
-    use std::time::Duration;
 
     #[tokio::test]
     async fn encrypted_reasoning_is_preserved_before_its_tool_call() {
@@ -229,7 +278,7 @@ mod tests {
             Ok(SseEvent::Data(r#"{"type":"response.completed","response":{"usage":{"input_tokens":100,"output_tokens":20,"output_tokens_details":{"reasoning_tokens":15}}}}"#.into())),
         ]).boxed();
         let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 4);
         assert!(
             matches!(events.first(), Some(Ok(ProviderStreamEvent::Reasoning { payload: actual })) if actual == &payload)
         );
@@ -240,6 +289,53 @@ mod tests {
         assert!(
             matches!(events.get(2), Some(Ok(ProviderStreamEvent::Usage(usage))) if usage.reasoning_tokens == 15 && usage.input_tokens == 100)
         );
+        assert!(matches!(
+            events.get(3),
+            Some(Ok(ProviderStreamEvent::Finished {
+                stop_reason: StopReason::ToolCall
+            }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn max_output_token_incomplete_responses_finish_instead_of_failing() {
+        let source = stream::iter(vec![
+            Ok(SseEvent::Data(r#"{"type":"response.output_item.added","item":{"type":"message","id":"msg-1","phase":"final_answer"}}"#.into())),
+            Ok(SseEvent::Data(r#"{"type":"response.output_text.delta","item_id":"msg-1","delta":"partial"}"#.into())),
+            Ok(SseEvent::Data(r#"{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":10,"output_tokens":5}}}"#.into())),
+        ]).boxed();
+        let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
+        assert!(events.iter().all(Result::is_ok), "{events:?}");
+        assert!(matches!(
+            events.last(),
+            Some(Ok(ProviderStreamEvent::Finished {
+                stop_reason: StopReason::MaxOutputTokens
+            }))
+        ));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Ok(ProviderStreamEvent::TextDelta { delta, .. }) if delta == "partial"))
+        );
+    }
+
+    #[tokio::test]
+    async fn reasoning_summaries_stream_as_display_deltas() {
+        let source = stream::iter(vec![
+            Ok(SseEvent::Data(r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs-1","delta":"Thinking"}"#.into())),
+            Ok(SseEvent::Data(r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs-1","delta":""}"#.into())),
+        ]).boxed();
+        let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
+        let deltas: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Ok(ProviderStreamEvent::ReasoningDelta { item_id, delta }) => {
+                    Some((item_id.as_str(), delta.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas, [("rs-1", "Thinking")]);
     }
 
     #[test]
@@ -291,12 +387,9 @@ mod tests {
         .chain(stream::pending())
         .boxed();
 
-        let event = tokio::time::timeout(
-            Duration::from_secs(1),
-            adapt_responses_stream(source).next(),
-        )
-        .await
-        .unwrap();
+        let event = kraai_test_support::hang_guard(adapt_responses_stream(source).next())
+            .await
+            .unwrap();
 
         assert!(event.is_some_and(|result| result.is_err()));
     }
@@ -338,7 +431,7 @@ mod tests {
         .chain(stream::pending())
         .boxed();
         let mut events = adapt_responses_stream(source);
-        let error = tokio::time::timeout(Duration::from_secs(1), events.next())
+        let error = kraai_test_support::hang_guard(events.next())
             .await
             .expect("error event must not wait for transport EOF")
             .unwrap()

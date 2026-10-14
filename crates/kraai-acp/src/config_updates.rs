@@ -124,7 +124,11 @@ pub(crate) async fn run(
                 }
             };
             if published.as_ref() != Some(&config) {
-                config::notify(connection, acp::SessionId::new(id), config.clone())?;
+                config::notify(
+                    connection,
+                    acp::SessionId::new(id.to_string()),
+                    config.clone(),
+                )?;
                 *published = Some(config);
             }
         }

@@ -9,8 +9,8 @@ fn page_keys_follow_viewport_size_in_chat_and_executions() {
             harness.app.state.mode = mode.clone();
             harness.app.state.chat_render_cache.borrow_mut().total_lines = 200;
             harness.app.state.chat_viewport_height = height;
-            let bottom = 200 - height;
-            let step = height.saturating_sub(2).max(1);
+            let bottom = 200 - usize::from(height);
+            let step = usize::from(height.saturating_sub(2).max(1));
 
             harness
                 .app
@@ -32,10 +32,8 @@ fn pending_input_leaves_runtime_notifications_queued() {
     let (tx, rx) = unbounded();
     harness.app.runtime_rx = rx;
     assert!(
-        tx.send(RuntimeResponse::OpenAiCodexAuthStatus(Ok(
-            Default::default()
-        )))
-        .is_ok()
+        tx.send(RuntimeResponse::ProviderAuthStatus(Ok(Default::default())))
+            .is_ok()
     );
     assert!(matches!(harness.app.process_events(|| Ok(true)), Ok(false)));
     assert_eq!(harness.app.runtime_rx.len(), 1);
@@ -50,14 +48,28 @@ fn runtime_backlog_yields_before_draining_the_queue() {
     harness.app.runtime_rx = rx;
     for _ in 0..200 {
         assert!(
-            tx.send(RuntimeResponse::OpenAiCodexAuthStatus(Ok(
-                Default::default()
-            )))
-            .is_ok()
+            tx.send(RuntimeResponse::ProviderAuthStatus(Ok(Default::default())))
+                .is_ok()
         );
     }
     assert!(matches!(harness.app.process_events(|| Ok(false)), Ok(true)));
     assert!(harness.app.runtime_rx.len() >= 136);
+}
+
+#[test]
+fn spent_batch_budget_still_processes_one_notification() {
+    let mut harness = test_harness();
+    harness.app.runtime_event_batch_budget = std::time::Duration::ZERO;
+    let (tx, rx) = unbounded();
+    harness.app.runtime_rx = rx;
+    for _ in 0..3 {
+        assert!(
+            tx.send(RuntimeResponse::ProviderAuthStatus(Ok(Default::default())))
+                .is_ok()
+        );
+    }
+    assert!(matches!(harness.app.process_events(|| Ok(false)), Ok(true)));
+    assert_eq!(harness.app.runtime_rx.len(), 2);
 }
 
 #[test]
@@ -67,10 +79,8 @@ fn input_arriving_during_runtime_processing_stops_the_batch() {
     harness.app.runtime_rx = rx;
     for _ in 0..3 {
         assert!(
-            tx.send(RuntimeResponse::OpenAiCodexAuthStatus(Ok(
-                Default::default()
-            )))
-            .is_ok()
+            tx.send(RuntimeResponse::ProviderAuthStatus(Ok(Default::default())))
+                .is_ok()
         );
     }
     let mut polls = 0;
@@ -82,4 +92,18 @@ fn input_arriving_during_runtime_processing_stops_the_batch() {
         Ok(true)
     ));
     assert_eq!(harness.app.runtime_rx.len(), 2);
+}
+
+#[test]
+fn chat_scroll_reaches_lines_beyond_u16_range() {
+    let mut harness = test_harness();
+    harness.app.state.chat_render_cache.borrow_mut().total_lines = 100_000;
+    harness.app.state.chat_viewport_height = 20;
+
+    harness.app.scroll_chat_to_bottom();
+    assert_eq!(harness.app.state.scroll, 99_980);
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+    assert_eq!(harness.app.state.scroll, 99_962);
 }

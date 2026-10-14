@@ -10,8 +10,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use kraai_execution_types::{SandboxCapabilities, SandboxCapability};
 use kraai_sandbox::{LaunchPlan, SandboxError, Termination};
-use kraai_types::{SandboxCapabilities, SandboxCapability};
+use kraai_test_support::{HANG_TIMEOUT, hang_guard};
 use tokio_util::sync::CancellationToken;
 
 struct Fixture(PathBuf);
@@ -35,7 +36,7 @@ impl Fixture {
             executable.clone(),
             self.0.join("workspace"),
             SandboxCapabilities::new(capabilities.iter().copied()).expect("valid capabilities"),
-            Duration::from_secs(20),
+            HANG_TIMEOUT,
         );
         plan.runtime_roots.push(executable);
         plan.args(["--exact", "probe", "--nocapture"]);
@@ -104,7 +105,7 @@ fn probe() {
                 .expect("spawn descendant");
             println!("descendant started");
             if mode == "tree" {
-                std::thread::sleep(Duration::from_secs(30));
+                std::thread::sleep(HANG_TIMEOUT * 2);
             }
         }
         "descendant" => {
@@ -243,13 +244,18 @@ async fn assert_tree_stopped(fixture: &Fixture, cancel: bool) {
     if !cancel {
         plan.timeout = Duration::from_secs(5);
     }
+    let (started, execution_started) = tokio::sync::oneshot::channel();
+    plan.execution_started = Some(execution_started);
     let execution = tokio::spawn(kraai_sandbox::run(plan, cancellation.clone()));
     wait_for_descendant(events).await;
     if cancel {
         cancellation.cancel();
+    } else {
+        let _ = started.send(tokio::time::Instant::now());
     }
-    let output = execution
+    let output = hang_guard(execution)
         .await
+        .expect("execution finished")
         .expect("join execution")
         .expect("run execution");
     assert_eq!(
@@ -337,7 +343,7 @@ async fn aborted_cleanup_does_not_block_the_runtime() {
     let _ = release_tx.send(());
     holder.await.expect("lock holder finished");
     assert!(
-        elapsed < Duration::from_millis(500),
+        elapsed < HANG_TIMEOUT,
         "cleanup blocked the runtime for {elapsed:?}"
     );
 }
@@ -361,17 +367,18 @@ fn hold_cleanup_lock(
     let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
     assert!(!handle.is_null());
     let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
-    let wait = unsafe { WaitForSingleObject(handle.as_raw_handle(), 15000) };
+    let timeout = u32::try_from(HANG_TIMEOUT.as_millis()).expect("hang timeout fits a wait");
+    let wait = unsafe { WaitForSingleObject(handle.as_raw_handle(), timeout) };
     assert!(wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED);
     let _ = ready.send(());
-    let _ = release.recv_timeout(Duration::from_secs(2));
+    let _ = release.recv_timeout(HANG_TIMEOUT * 2);
     assert_ne!(unsafe { ReleaseMutex(handle.as_raw_handle()) }, 0);
 }
 
 async fn wait_for_descendant(
     mut events: tokio::sync::mpsc::UnboundedReceiver<kraai_sandbox::OutputEvent>,
 ) {
-    tokio::time::timeout(Duration::from_secs(15), async {
+    hang_guard(async {
         let mut output = Vec::new();
         while let Some(event) = events.recv().await {
             output.extend(event.bytes);

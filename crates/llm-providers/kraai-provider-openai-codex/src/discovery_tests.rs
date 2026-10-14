@@ -10,7 +10,6 @@ use futures::TryStreamExt;
 use kraai_provider_core::ScriptToolDefinition;
 use kraai_types::{AssistantPhase, ConversationItem, TokenUsage};
 use serde_json::{Value, json};
-use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -21,7 +20,7 @@ async fn server(
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let base_url = format!("http://{}/backend-api", listener.local_addr()?);
     let task = tokio::spawn(async move {
-        tokio::time::timeout(Duration::from_secs(10), async move {
+        kraai_test_support::hang_guard(async move {
             let mut requests = Vec::new();
             for (status, body) in responses {
                 let (mut stream, _) = listener.accept().await?;
@@ -224,6 +223,9 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
                     cache_read_tokens: 40,
                     ..TokenUsage::default()
                 }),
+                ProviderStreamEvent::Finished {
+                    stop_reason: kraai_provider_core::StopReason::EndTurn,
+                },
             ]
         );
     }

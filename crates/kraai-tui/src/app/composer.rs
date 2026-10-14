@@ -1,4 +1,5 @@
 use super::*;
+use kraai_types::SessionId;
 
 impl App {
     pub(super) fn handle_composer_shortcut(&mut self, key: KeyEvent) -> bool {
@@ -115,7 +116,7 @@ impl App {
             let text = std::fs::read_to_string(file.path())?;
             self.apply_edited_prompt(
                 text,
-                original_session.as_deref(),
+                original_session.as_ref(),
                 &original_input,
                 &image_labels,
             )
@@ -138,12 +139,12 @@ impl App {
     pub(super) fn apply_edited_prompt(
         &mut self,
         text: String,
-        original_session: Option<&str>,
+        original_session: Option<&SessionId>,
         original_input: &str,
         image_labels: &[String],
     ) -> Result<()> {
         if self.state.exit
-            || self.state.current_session_id.as_deref() != original_session
+            || self.state.current_session_id.as_ref() != original_session
             || self.state.input != original_input
         {
             return Err(color_eyre::eyre::eyre!(

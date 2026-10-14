@@ -1,5 +1,10 @@
 #![forbid(unsafe_code)]
 
+mod auth;
+pub use auth::{
+    LoginMethod, PendingBrowserLogin, PendingDeviceCodeLogin, ProviderAuth, ProviderAuthStatus,
+    ProviderLoginState, ProviderSet, ProviderSetup,
+};
 mod cache_warming;
 pub use cache_warming::{CacheWarmingPolicy, CacheWarmup};
 
@@ -33,9 +38,14 @@ mod test_support;
 
 pub use config::{DynamicConfig, DynamicValue, ModelConfig, ProviderConfig, ProviderManagerConfig};
 pub use definition::{FieldDefinition, FieldValueKind, ProviderDefinition, ValidationError};
-pub use error::{ProviderError, ProviderModelCacheRefreshError};
+pub use error::{
+    ProviderError, ProviderModelCacheRefreshError, is_context_overflow_error, is_transient_error,
+};
 
-pub use http_retry::{DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, send_with_retry};
+pub use http_retry::{
+    DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, ProviderCooldown, parse_retry_after,
+    send_with_retry,
+};
 pub use manager::ProviderManager;
 pub use model_discovery::DiscoveredModelOptions;
 pub use model_metadata::ConfiguredModelMetadata;
@@ -48,7 +58,7 @@ pub use provider::{Model, Provider, ProviderRequest, ScriptToolDefinition};
 pub use registry::{ProviderFactory, ProviderRegistry};
 pub use request_context::{ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver};
 pub use sse::{MAX_SSE_EVENT_BYTES, SseEvent, stream_sse_data};
-pub use stream::{ProviderStreamEvent, StreamStatus, adapt_provider_stream};
+pub use stream::{ProviderStreamEvent, StopReason, StreamStatus, adapt_provider_stream};
 
 mod model_catalog;
 pub use model_catalog::{CatalogModelMetadata, ModelCatalog, ModelCatalogView};

@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::{CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use kraai_types::SessionId;
 
 #[test]
 fn editor_request_stops_buffered_input_from_submitting_the_draft() {
@@ -26,18 +27,23 @@ fn editor_request_stops_buffered_input_from_submitting_the_draft() {
 #[test]
 fn edited_prompt_does_not_overwrite_an_undo_received_while_editing() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.set_input_text(String::from("draft"));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::UndoLastUserMessage {
-            session_id: String::from("session"),
+            session_id: SessionId::new("session"),
             result: Ok(Some("restored message".into())),
         });
     assert!(
         harness
             .app
-            .apply_edited_prompt(String::from("edited draft"), Some("session"), "draft", &[])
+            .apply_edited_prompt(
+                String::from("edited draft"),
+                Some(&SessionId::new("session")),
+                "draft",
+                &[]
+            )
             .is_err()
     );
     assert_eq!(harness.app.state.input, "restored message");
@@ -46,12 +52,17 @@ fn edited_prompt_does_not_overwrite_an_undo_received_while_editing() {
 #[test]
 fn edited_prompt_does_not_move_into_another_session() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("other-session"));
+    harness.app.state.current_session_id = Some(SessionId::new("other-session"));
     harness.app.set_input_text(String::from("draft"));
     assert!(
         harness
             .app
-            .apply_edited_prompt(String::from("edited draft"), Some("session"), "draft", &[])
+            .apply_edited_prompt(
+                String::from("edited draft"),
+                Some(&SessionId::new("session")),
+                "draft",
+                &[]
+            )
             .is_err()
     );
     assert_eq!(harness.app.state.input, "draft");
@@ -60,12 +71,17 @@ fn edited_prompt_does_not_move_into_another_session() {
 #[test]
 fn edited_prompt_updates_unchanged_session_and_draft() {
     let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(String::from("session"));
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.set_input_text(String::from("draft"));
     assert!(
         harness
             .app
-            .apply_edited_prompt(String::from("edited draft"), Some("session"), "draft", &[])
+            .apply_edited_prompt(
+                String::from("edited draft"),
+                Some(&SessionId::new("session")),
+                "draft",
+                &[]
+            )
             .is_ok()
     );
     assert_eq!(harness.app.state.input, "edited draft");

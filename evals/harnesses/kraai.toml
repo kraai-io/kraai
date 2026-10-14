@@ -1,6 +1,5 @@
 api_key_env = "OPENAI_API_KEY"
 args = [
-  "--ci",
   "--provider",
   "{provider_id}",
   "--model",
@@ -14,7 +13,7 @@ args = [
 ]
 max_requests = 64
 name = "kraai"
-program = "kraai"
+program = "kraai-headless"
 proxy = "codex_subscription"
 sanitize_kraai_provider = true
 schema_version = 1

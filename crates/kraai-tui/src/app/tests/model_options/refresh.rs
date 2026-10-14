@@ -1,9 +1,8 @@
 use super::*;
+use kraai_types::SessionId;
 
 fn configure_refresh(harness: &mut TestHarness) -> color_eyre::Result<()> {
     configure_optional(harness)?;
-    harness.app.startup_options.provider_id = Some("provider".into());
-    harness.app.startup_options.model_id = Some("model".into());
     Ok(())
 }
 
@@ -147,7 +146,7 @@ fn changed_model_selection_cancels_editor_even_with_identical_definitions() -> c
             .entry(provider.into())
             .or_default()
             .push(model);
-        harness.app.state.current_session_id = Some("session".into());
+        harness.app.state.current_session_id = Some(SessionId::new("session"));
         let mut snapshot = session_snapshot(None);
         let values = harness.app.state.selected_model_options.clone();
         snapshot.session.selected_model = Some(kraai_types::ModelSelection {
@@ -158,7 +157,7 @@ fn changed_model_selection_cancels_editor_even_with_identical_definitions() -> c
         harness
             .app
             .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-                session_id: "session".into(),
+                session_id: SessionId::new("session"),
                 model_save_id: 0,
                 result: Box::new(Ok(snapshot)),
             });

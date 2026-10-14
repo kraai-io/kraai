@@ -4,7 +4,6 @@
 )]
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::{
     Router,
@@ -13,7 +12,8 @@ use axum::{
 use color_eyre::eyre::{Result, eyre};
 use kraai_runtime::{Event, RuntimeBuilder, RuntimeHandle, RuntimeStartupState};
 use kraai_types::{
-    ModelId, ModelOptionDefinition, ModelOptionValue, ModelOptionValues, ModelSelection, ProviderId,
+    ModelId, ModelOptionDefinition, ModelOptionValue, ModelOptionValues, ModelSelection,
+    ProviderId, SessionId,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -23,7 +23,7 @@ use super::*;
 
 struct Fixture {
     runtime: RuntimeHandle,
-    session: String,
+    session: SessionId,
     payloads: Arc<Mutex<Vec<Value>>>,
     _server: AbortOnDropHandle<()>,
     _root: tempfile::TempDir,
@@ -70,14 +70,14 @@ provider_id = "mock"
             ),
         )
         .await?;
-        let runtime = RuntimeBuilder::new()
+        let runtime = RuntimeBuilder::new(kraai_providers::DefaultProviders)
             .storage_root(root.path().join("state"))
             .provider_config_path(config)
             .mcp_config_path(root.path().join("mcp.toml"))
             .build_on(&tokio::runtime::Handle::current());
         assert_eq!(
             runtime.wait_for_startup().await?,
-            RuntimeStartupState::Ready
+            RuntimeStartupState::ready()
         );
         let session = runtime.create_session().await?;
         let fixture = Self {
@@ -151,11 +151,7 @@ async fn active_session_metadata_changes_reconcile_controls_and_allow_individual
             Some(&json!(""))
         );
     }
-    let selected = crate::session::selected_model(
-        &fixture.runtime,
-        &acp::SessionId::new(fixture.session.clone()),
-    )
-    .await?;
+    let selected = crate::session::selected_model(&fixture.runtime, &fixture.session).await?;
     assert_eq!(
         selected.options,
         ModelOptionValues::from([("retained".into(), ModelOptionValue::Boolean(false))])
@@ -236,11 +232,7 @@ async fn removing_the_final_optional_setting_does_not_block_the_next_prompt() ->
     )
     .await?;
     fixture.update(Vec::new()).await?;
-    let selected = crate::session::selected_model(
-        &fixture.runtime,
-        &acp::SessionId::new(fixture.session.clone()),
-    )
-    .await?;
+    let selected = crate::session::selected_model(&fixture.runtime, &fixture.session).await?;
     assert!(selected.options.is_empty());
     let mut events = fixture.runtime.subscribe_session(&fixture.session);
     fixture
@@ -253,7 +245,7 @@ async fn removing_the_final_optional_setting_does_not_block_the_next_prompt() ->
             selected.options,
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
+    kraai_test_support::hang_guard(async {
         loop {
             match events.recv().await?.event {
                 Event::TurnCompleted { .. } => return Ok::<_, color_eyre::Report>(()),
