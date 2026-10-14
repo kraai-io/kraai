@@ -377,9 +377,11 @@ impl SessionActor {
         self.sender.clone()
     }
 
+    /// Ends the turn and publishes the idle state before any event announcing how it ended.
     pub(super) async fn finish_turn(&mut self) {
         self.state = TurnState::Idle;
         self.runtime.finish_turn(&self.session_id).await;
+        self.publish_state();
     }
 
     fn has_child(&self) -> bool {

@@ -93,6 +93,22 @@ async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<(
         .collect();
     assert!(states.contains(&(SessionActivity::Streaming, true)));
     assert_eq!(states.last(), Some(&(SessionActivity::Idle, false)));
+    let idle = session_events.iter().position(|event| {
+        matches!(
+            event,
+            Event::SessionStateChanged {
+                is_running: false,
+                ..
+            }
+        )
+    });
+    let turn_end = session_events
+        .iter()
+        .position(|event| matches!(event, Event::TurnCompleted { .. }));
+    assert!(
+        idle.is_some() && idle < turn_end,
+        "clients must see the idle state before the turn's end"
+    );
 
     let mut events = harness.runtime.event_tx.subscribe();
     harness
