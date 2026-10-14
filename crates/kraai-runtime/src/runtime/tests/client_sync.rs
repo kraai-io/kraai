@@ -26,9 +26,9 @@ async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<(
         .await?;
     let events = harness
         .events
-        .wait_for("turn completion", |events| {
+        .wait_for("idle session", |events| {
             events.iter().any(|event| {
-                matches!(event, Event::TurnCompleted { session_id: id } if id == &session_id)
+                matches!(event, Event::SessionStateChanged { session_id: id, is_running: false, .. } if id == &session_id)
             })
         })
         .await;
@@ -106,8 +106,8 @@ async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<(
         .iter()
         .position(|event| matches!(event, Event::TurnCompleted { .. }));
     assert!(
-        idle.is_some() && idle < turn_end,
-        "clients must see the idle state before the turn's end"
+        turn_end.is_some() && turn_end < idle,
+        "clients that stop at idle must already have seen how the turn ended"
     );
 
     let mut events = harness.runtime.event_tx.subscribe();

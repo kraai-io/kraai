@@ -248,6 +248,7 @@ impl SessionActor {
             {
                 exit = self.handle(message).await;
             }
+            // After the message's events, so clients that stop at idle already saw how a turn ended.
             self.publish_state();
             if exit || (self.stopping && !self.has_child()) {
                 break;
@@ -377,11 +378,9 @@ impl SessionActor {
         self.sender.clone()
     }
 
-    /// Ends the turn and publishes the idle state before any event announcing how it ended.
     pub(super) async fn finish_turn(&mut self) {
         self.state = TurnState::Idle;
         self.runtime.finish_turn(&self.session_id).await;
-        self.publish_state();
     }
 
     fn has_child(&self) -> bool {
