@@ -580,7 +580,7 @@ async fn native_compaction_recovers_after_interruption_without_duplicate_checkpo
         .await?;
     ensure!(outcome.requests.len() == 2);
     {
-        let requests = requests.lock().map_err(|e| eyre!("{e}"))?;
+        let requests = requests.lock().map_err(|e| eyre!("{e}"))?.clone();
         ensure!(requests.len() == 2);
         let expected: Vec<_> = context
             .original
@@ -781,7 +781,7 @@ async fn compaction_reads_images_but_retains_only_reopenable_references() -> Res
             .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
             .await?;
         {
-            let requests = requests.lock().map_err(|error| eyre!("{error}"))?;
+            let requests = requests.lock().map_err(|error| eyre!("{error}"))?.clone();
             ensure!(
                 requests
                     .first()

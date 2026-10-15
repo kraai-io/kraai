@@ -5514,9 +5514,9 @@ rec {
       };
       "eyre" = rec {
         crateName = "eyre";
-        version = "0.6.12";
+        version = "0.6.14";
         edition = "2018";
-        sha256 = "1v1a3vb9gs5zkwp4jzkcfnpg0gvyp4ifydzx37f4qy14kzcibnbw";
+        sha256 = "18w6i5apbrn7cy17dx9f50dn8h3n08krpnsdl94mb735rkdhk0y0";
         license = "MIT OR Apache-2.0";
         authors = [
           "David Tolnay <dtolnay@gmail.com>"
@@ -5532,9 +5532,14 @@ rec {
             packageId = "once_cell";
           }
         ];
+        buildDependencies = [
+          {
+            name = "autocfg";
+            packageId = "autocfg";
+          }
+        ];
         features = {
           "default" = [ "auto-install" "track-caller" ];
-          "pyo3" = [ "dep:pyo3" ];
         };
         resolvedDefaultFeatures = [ "auto-install" "default" "track-caller" ];
       };

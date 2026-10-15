@@ -43,7 +43,7 @@ impl Budget {
 
     fn try_reserve(&self, bytes: usize) -> bool {
         self.bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current
                     .checked_add(bytes)
                     .filter(|total| *total <= self.limit)
