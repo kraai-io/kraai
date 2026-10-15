@@ -50,7 +50,7 @@ inherits = "release"
 strip = false
 
 [workspace.dependencies]
-agent-client-protocol = "2.2.0"
+agent-client-protocol = "3.1.0"
 kraai-agent = { path = "crates/kraai-agent" }
 kraai-commands = { path = "crates/kraai-commands" }
 kraai-execution-types = { path = "crates/kraai-execution-types" }
