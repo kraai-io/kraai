@@ -126,13 +126,15 @@ impl App {
                 cursor.update(Instant::now(), true);
                 needs_redraw = true;
             }
-            let cursor_changed = cursor.update(Instant::now(), input_changed);
-            needs_redraw |= cursor_changed
+            let blink_changed = cursor.update(Instant::now(), input_changed)
                 && self.state.composer_cursor_enabled()
                 && self.state.cursor_preferences.custom_blink();
             needs_redraw |= self.advance_statusline_animation(Instant::now());
 
             if !needs_redraw {
+                if blink_changed {
+                    cursor.show(&mut terminal)?;
+                }
                 continue;
             }
 
@@ -146,20 +148,26 @@ impl App {
 
                 frame.render_widget(&self.state, area);
 
+                cursor.position = None;
                 if self.state.mode == UiMode::Chat {
                     let [_, _, input_area] = ui::chat_layout(&self.state, area);
                     self.state.input_width = input_area.width;
 
-                    let (cursor_x, cursor_y) =
-                        TextInput::new(&self.state.input, self.state.input_cursor)
-                            .get_cursor_position(input_area);
                     if self.state.composer_cursor_enabled()
-                        && (!self.state.cursor_preferences.custom_blink() || cursor.visible)
                         && input_area.width > 0
                         && input_area.height > 0
                     {
-                        frame.set_cursor_position((cursor_x, cursor_y));
+                        cursor.position = Some(
+                            TextInput::new(&self.state.input, self.state.input_cursor)
+                                .get_cursor_position(input_area)
+                                .into(),
+                        );
                     }
+                }
+                if let Some(position) = cursor.position
+                    && (!self.state.cursor_preferences.custom_blink() || cursor.visible)
+                {
+                    frame.set_cursor_position(position);
                 }
             })?;
             needs_redraw = false;
