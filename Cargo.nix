@@ -3968,6 +3968,12 @@ rec {
             target = { target, features }: (target."unix" or false);
           }
           {
+            name = "futures-core";
+            packageId = "futures-core";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
             name = "mio";
             packageId = "mio";
             optional = true;
@@ -4024,7 +4030,7 @@ rec {
           "use-dev-tty" = [ "filedescriptor" "rustix/process" ];
           "windows" = [ "dep:winapi" "dep:crossterm_winapi" ];
         };
-        resolvedDefaultFeatures = [ "bracketed-paste" "default" "derive-more" "events" "filedescriptor" "serde" "use-dev-tty" "windows" ];
+        resolvedDefaultFeatures = [ "bracketed-paste" "default" "derive-more" "event-stream" "events" "filedescriptor" "serde" "use-dev-tty" "windows" ];
       };
       "crossterm_winapi" = rec {
         crateName = "crossterm_winapi";
@@ -11735,6 +11741,15 @@ rec {
           {
             name = "crossbeam-channel";
             packageId = "crossbeam-channel";
+          }
+          {
+            name = "crossterm";
+            packageId = "crossterm 0.29.0";
+            features = [ "event-stream" ];
+          }
+          {
+            name = "futures";
+            packageId = "futures";
           }
           {
             name = "image";

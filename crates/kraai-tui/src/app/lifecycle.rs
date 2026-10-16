@@ -57,6 +57,7 @@ impl App {
             event_rx,
             runtime_tx,
             runtime_rx,
+            input: input::TerminalInput::default(),
             clipboard: None,
             startup_options,
             persist_workspace_preferences: true,
@@ -87,27 +88,26 @@ impl App {
         self.state.palette.request();
         let mut needs_redraw = true;
         let mut cursor = super::cursor::CursorBlink::new(Instant::now());
+        let input = self.input.receiver().clone();
+        self.input.start()?;
         while !self.state.exit {
-            needs_redraw |= self.process_events(|| event::poll(Duration::ZERO))?;
+            needs_redraw |= self.process_events(|| Ok(!input.is_empty()))?;
+            let now = Instant::now();
             let event_timeout = if needs_redraw {
-                std::time::Duration::from_millis(0)
-            } else if self.startup_sync != StartupSync::Complete {
-                Duration::from_millis(8)
-            } else if self.state.feedback.completion_until.is_some()
-                && self.state.palette.muted.is_some()
-            {
-                Duration::from_millis(33)
-            } else if self.state.runtime_is_active() {
-                STATUSLINE_ANIMATION_INTERVAL
+                Some(Duration::ZERO)
             } else {
-                std::time::Duration::from_millis(100)
-            };
-            let event_timeout = if self.state.composer_cursor_enabled()
-                && self.state.cursor_preferences.custom_blink()
-            {
-                event_timeout.min(cursor.timeout(Instant::now()))
-            } else {
-                event_timeout
+                let fading = self.state.palette.muted.is_some();
+                let animation = self
+                    .state
+                    .runtime_is_active()
+                    .then_some(STATUSLINE_ANIMATION_INTERVAL);
+                let blink = (self.state.composer_cursor_enabled()
+                    && self.state.cursor_preferences.custom_blink())
+                .then(|| cursor.timeout(now));
+                [self.state.feedback.timeout(now, fading), animation, blink]
+                    .into_iter()
+                    .flatten()
+                    .min()
             };
             let prior_style = self.state.cursor_preferences.style;
             let prior_muted = self.state.palette.muted;
@@ -117,7 +117,10 @@ impl App {
             needs_redraw |= prior_muted != self.state.palette.muted;
             cursor_override.apply(self.state.cursor_preferences.style)?;
             if self.state.editor_requested {
-                if let Err(error) = self.open_composer_editor(&mut terminal, cursor_override) {
+                self.input.stop();
+                let edited = self.open_composer_editor(&mut terminal, cursor_override);
+                self.input.start()?;
+                if let Err(error) = edited {
                     if self.state.exit {
                         return Err(error);
                     }
@@ -216,10 +219,16 @@ impl App {
                 break;
             }
             let mut received = false;
-            if let Ok(message) = self.event_rx.try_recv() {
-                self.handle_runtime_event_bridge_message(message);
-                changed = true;
-                received = true;
+            match self.event_rx.try_recv() {
+                Ok(message) => {
+                    self.handle_runtime_event_bridge_message(message);
+                    changed = true;
+                    received = true;
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => {}
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    self.event_rx = crossbeam_channel::never();
+                }
             }
             if budget_spent(changed) || input_pending()? {
                 break;
@@ -232,6 +241,7 @@ impl App {
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => {}
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    self.runtime_rx = crossbeam_channel::never();
                     self.handle_runtime_bridge_disconnect();
                     changed = true;
                     break;
