@@ -64,13 +64,12 @@ Each agent's terminal UI, started fresh in the same repo and left idle:
 
 | | Memory (RSS) | CPU, first 30 s | CPU while idle |
 | --- | --- | --- | --- |
-| Kraai | 43 MB | 0.4 s | 0.9% |
+| Kraai | 42 MB | 0.17 s | 0.07% |
 | Codex 0.162.0 | 470 MB | 2.2 s | 0.8% |
 | Claude Code 2.1.295 | 320 MB | 3.4 s | 0.2% |
 
-Kraai uses a tenth of Codex's memory and starts with a fraction of the CPU.
-Its idle CPU is the one weak spot. Nearly all of it goes to the UI thread
-redrawing twice a second to blink the cursor.
+Kraai uses a tenth of Codex's memory, a small fraction of its startup CPU, and
+about a tenth of its idle CPU.
 
 Each number is the median of three runs on Linux, in a 200×50 tmux pane, with
 the idle CPU measured over 60 seconds. Only each agent's own processes count;
