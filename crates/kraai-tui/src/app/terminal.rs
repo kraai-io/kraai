@@ -7,6 +7,9 @@ const TERMINAL_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(1);
 impl App {
     pub(super) fn handle_events(&mut self, timeout: Option<Duration>) -> Result<bool> {
         self.wait_for_events(timeout);
+        if self.hangup.try_recv().is_ok() {
+            self.state.exit = true;
+        }
         let mut changed = false;
         let batch_started = Instant::now();
         while !self.state.editor_requested
@@ -26,6 +29,7 @@ impl App {
         select.recv(self.input.receiver());
         select.recv(&self.event_rx);
         select.recv(&self.runtime_rx);
+        select.recv(&self.hangup);
         match timeout {
             Some(timeout) => {
                 let _ = select.ready_timeout(timeout);

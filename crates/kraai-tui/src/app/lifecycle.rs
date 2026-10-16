@@ -58,6 +58,7 @@ impl App {
             runtime_tx,
             runtime_rx,
             input: input::TerminalInput::default(),
+            hangup: crossbeam_channel::never(),
             clipboard: None,
             startup_options,
             persist_workspace_preferences: true,
@@ -82,13 +83,14 @@ impl App {
 
     pub fn run(
         &mut self,
-        mut terminal: ratatui::DefaultTerminal,
+        terminal: &mut ratatui::DefaultTerminal,
         cursor_override: &crate::terminal_cursor::CursorOverride,
     ) -> Result<()> {
         self.state.palette.request();
         let mut needs_redraw = true;
         let mut cursor = super::cursor::CursorBlink::new(Instant::now());
         let input = self.input.receiver().clone();
+        self.hangup = crate::terminal_loss::watch()?;
         self.input.start()?;
         while !self.state.exit {
             needs_redraw |= self.process_events(|| Ok(!input.is_empty()))?;
@@ -118,7 +120,7 @@ impl App {
             cursor_override.apply(self.state.cursor_preferences.style)?;
             if self.state.editor_requested {
                 self.input.stop();
-                let edited = self.open_composer_editor(&mut terminal, cursor_override);
+                let edited = self.open_composer_editor(terminal, cursor_override);
                 self.input.start()?;
                 if let Err(error) = edited {
                     if self.state.exit {
@@ -136,7 +138,7 @@ impl App {
 
             if !needs_redraw {
                 if blink_changed {
-                    cursor.show(&mut terminal)?;
+                    cursor.show(terminal)?;
                 }
                 continue;
             }

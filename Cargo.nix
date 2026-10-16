@@ -11803,7 +11803,7 @@ rec {
             name = "rustix";
             packageId = "rustix 1.1.5";
             target = { target, features }: (target."unix" or false);
-            features = [ "fs" "net" "pipe" "process" ];
+            features = [ "fs" "net" "pipe" "process" "stdio" ];
           }
           {
             name = "serde_json";
@@ -11844,6 +11844,12 @@ rec {
           {
             name = "kraai-test-support";
             packageId = "kraai-test-support";
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.5";
+            target = { target, features }: (target."unix" or false);
+            features = [ "fs" "net" "pipe" "pty" ];
           }
         ];
 
@@ -21479,7 +21485,7 @@ rec {
           "thread" = [ "linux-raw-sys/prctl" ];
           "use-libc" = [ "libc_errno" "libc" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "default" "event" "fs" "net" "param" "pipe" "process" "std" "stdio" "system" "termios" "thread" "time" "use-libc-auxv" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "event" "fs" "net" "param" "pipe" "process" "pty" "std" "stdio" "system" "termios" "thread" "time" "use-libc-auxv" ];
       };
       "rustls" = rec {
         crateName = "rustls";

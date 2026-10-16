@@ -109,6 +109,7 @@ pub struct App {
     runtime_tx: Sender<RuntimeRequest>,
     runtime_rx: Receiver<RuntimeResponse>,
     input: input::TerminalInput,
+    hangup: Receiver<()>,
     clipboard: Option<arboard::Clipboard>,
     startup_options: StartupOptions,
     /// Whether model choices are remembered for the workspace; off in tests.
