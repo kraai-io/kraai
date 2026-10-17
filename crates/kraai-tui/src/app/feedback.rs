@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+const FADE_FRAME: Duration = Duration::from_millis(33);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CopyTarget {
     Error,
@@ -41,7 +43,7 @@ impl VisualFeedback {
         }
         if self
             .last_fade_frame
-            .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_millis(33))
+            .is_some_and(|last| now.saturating_duration_since(last) < FADE_FRAME)
         {
             return false;
         }
@@ -59,6 +61,16 @@ impl VisualFeedback {
 
     pub(super) fn clear_copy(&mut self) {
         self.copied = None;
+    }
+
+    pub(super) fn timeout(&self, now: Instant, fading: bool) -> Option<Duration> {
+        let fade = (fading && self.completion_until.is_some()).then_some(FADE_FRAME);
+        [self.completion_until, self.copied.map(|(_, until)| until)]
+            .into_iter()
+            .flatten()
+            .map(|until| until.saturating_duration_since(now))
+            .chain(fade)
+            .min()
     }
 
     pub(super) fn expire(&mut self, now: Instant) -> bool {
@@ -109,5 +121,26 @@ mod tests {
             Color::DarkGray
         );
         assert!(!feedback.advance_fade(now + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn timeout_wakes_for_fade_frames_and_expiry() {
+        let now = Instant::now();
+        let mut feedback = VisualFeedback::default();
+        assert_eq!(feedback.timeout(now, true), None);
+
+        feedback.show_copied(CopyTarget::Error, now);
+        assert_eq!(
+            feedback.timeout(now, true),
+            Some(Duration::from_millis(1200))
+        );
+        assert_eq!(
+            feedback.timeout(now + Duration::from_secs(2), false),
+            Some(Duration::ZERO)
+        );
+
+        feedback.completion_until = Some(now + Duration::from_secs(1));
+        assert_eq!(feedback.timeout(now, false), Some(Duration::from_secs(1)));
+        assert_eq!(feedback.timeout(now, true), Some(FADE_FRAME));
     }
 }

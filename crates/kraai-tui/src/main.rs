@@ -13,6 +13,7 @@ mod clipboard_image;
 mod components;
 mod terminal_cursor;
 mod terminal_features;
+mod terminal_loss;
 #[cfg(all(test, unix))]
 mod terminal_session_tests;
 
@@ -33,7 +34,7 @@ impl TerminalSessionGuard {
         let cursor = self.cursor.clone();
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            ratatui::restore();
+            let _ = ratatui::try_restore();
             let _ = cursor.restore();
             previous(info);
         }));
@@ -98,13 +99,18 @@ fn main() -> Result<()> {
 
     ratatui::crossterm::terminal::enable_raw_mode()?;
     app.request_cursor_preferences();
-    let terminal = ratatui::init();
+    let mut terminal = ratatui::init();
     let mut terminal_guard = TerminalSessionGuard::new();
     terminal_guard.install_panic_hook();
     terminal_features::enable()?;
 
-    let result = app.run(terminal, &terminal_guard.cursor);
+    let result = app.run(&mut terminal, &terminal_guard.cursor);
 
+    if terminal_loss::detach_if_lost() {
+        terminal_guard.active = false;
+        return Ok(());
+    }
+    drop(terminal);
     let restore_result = terminal_guard.restore();
 
     if result.is_ok()

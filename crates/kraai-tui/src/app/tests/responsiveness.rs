@@ -42,6 +42,39 @@ fn pending_input_leaves_runtime_notifications_queued() {
 }
 
 #[test]
+fn idle_wait_wakes_for_runtime_notifications() {
+    let mut harness = test_harness();
+    let (events_tx, events_rx) = unbounded();
+    let (responses_tx, responses_rx) = unbounded();
+    harness.app.event_rx = events_rx;
+    harness.app.runtime_rx = responses_rx;
+    let sender = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let _ = responses_tx.send(RuntimeResponse::ProviderAuthStatus(Ok(Default::default())));
+        events_tx
+    });
+    let started = std::time::Instant::now();
+    assert!(matches!(harness.app.handle_events(None), Ok(false)));
+    assert!(started.elapsed() < kraai_test_support::HANG_TIMEOUT);
+    assert_eq!(harness.app.runtime_rx.len(), 1);
+    assert!(sender.join().is_ok());
+}
+
+#[test]
+fn disconnected_runtime_channels_do_not_wake_an_idle_wait() {
+    let mut harness = test_harness();
+    assert!(matches!(harness.app.process_events(|| Ok(false)), Ok(true)));
+    assert!(harness.app.state.exit);
+    let started = std::time::Instant::now();
+    let timeout = std::time::Duration::from_millis(20);
+    assert!(matches!(
+        harness.app.handle_events(Some(timeout)),
+        Ok(false)
+    ));
+    assert!(started.elapsed() >= timeout);
+}
+
+#[test]
 fn runtime_backlog_yields_before_draining_the_queue() {
     let mut harness = test_harness();
     let (tx, rx) = unbounded();

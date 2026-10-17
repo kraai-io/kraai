@@ -3968,6 +3968,12 @@ rec {
             target = { target, features }: (target."unix" or false);
           }
           {
+            name = "futures-core";
+            packageId = "futures-core";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
             name = "mio";
             packageId = "mio";
             optional = true;
@@ -4024,7 +4030,7 @@ rec {
           "use-dev-tty" = [ "filedescriptor" "rustix/process" ];
           "windows" = [ "dep:winapi" "dep:crossterm_winapi" ];
         };
-        resolvedDefaultFeatures = [ "bracketed-paste" "default" "derive-more" "events" "filedescriptor" "serde" "use-dev-tty" "windows" ];
+        resolvedDefaultFeatures = [ "bracketed-paste" "default" "derive-more" "event-stream" "events" "filedescriptor" "serde" "use-dev-tty" "windows" ];
       };
       "crossterm_winapi" = rec {
         crateName = "crossterm_winapi";
@@ -11737,6 +11743,15 @@ rec {
             packageId = "crossbeam-channel";
           }
           {
+            name = "crossterm";
+            packageId = "crossterm 0.29.0";
+            features = [ "event-stream" ];
+          }
+          {
+            name = "futures";
+            packageId = "futures";
+          }
+          {
             name = "image";
             packageId = "image";
             usesDefaultFeatures = false;
@@ -11788,7 +11803,7 @@ rec {
             name = "rustix";
             packageId = "rustix 1.1.5";
             target = { target, features }: (target."unix" or false);
-            features = [ "fs" "net" "pipe" "process" ];
+            features = [ "fs" "net" "pipe" "process" "stdio" ];
           }
           {
             name = "serde_json";
@@ -11829,6 +11844,12 @@ rec {
           {
             name = "kraai-test-support";
             packageId = "kraai-test-support";
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.5";
+            target = { target, features }: (target."unix" or false);
+            features = [ "fs" "net" "pipe" "pty" ];
           }
         ];
 
@@ -21464,7 +21485,7 @@ rec {
           "thread" = [ "linux-raw-sys/prctl" ];
           "use-libc" = [ "libc_errno" "libc" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "default" "event" "fs" "net" "param" "pipe" "process" "std" "stdio" "system" "termios" "thread" "time" "use-libc-auxv" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "event" "fs" "net" "param" "pipe" "process" "pty" "std" "stdio" "system" "termios" "thread" "time" "use-libc-auxv" ];
       };
       "rustls" = rec {
         crateName = "rustls";

@@ -92,6 +92,8 @@ fn test_harness() -> TestHarness {
             event_rx,
             runtime_tx,
             runtime_rx,
+            input: super::input::TerminalInput::default(),
+            hangup: crossbeam_channel::never(),
             clipboard: None,
             startup_options: StartupOptions::default(),
             persist_workspace_preferences: false,

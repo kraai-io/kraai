@@ -5,28 +5,39 @@ const WHEEL_SCROLL_LINES: i16 = 3;
 const TERMINAL_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(1);
 
 impl App {
-    pub(super) fn handle_events(&mut self, timeout: std::time::Duration) -> Result<bool> {
+    pub(super) fn handle_events(&mut self, timeout: Option<Duration>) -> Result<bool> {
+        self.wait_for_events(timeout);
+        if self.hangup.try_recv().is_ok() {
+            self.state.exit = true;
+        }
         let mut changed = false;
-        if !event::poll(timeout)? {
-            return Ok(changed);
-        }
-
         let batch_started = Instant::now();
-        loop {
-            if self.handle_terminal_event(event::read()?) {
-                changed = true;
-            }
-
-            if self.state.editor_requested
-                || self.state.exit
-                || batch_started.elapsed() >= TERMINAL_EVENT_BATCH_BUDGET
-                || !event::poll(Duration::ZERO)?
-            {
+        while !self.state.editor_requested
+            && !self.state.exit
+            && batch_started.elapsed() < TERMINAL_EVENT_BATCH_BUDGET
+        {
+            let Ok(event) = self.input.receiver().try_recv() else {
                 break;
+            };
+            changed |= self.handle_terminal_event(event?);
+        }
+        Ok(changed)
+    }
+
+    fn wait_for_events(&self, timeout: Option<Duration>) {
+        let mut select = crossbeam_channel::Select::new();
+        select.recv(self.input.receiver());
+        select.recv(&self.event_rx);
+        select.recv(&self.runtime_rx);
+        select.recv(&self.hangup);
+        match timeout {
+            Some(timeout) => {
+                let _ = select.ready_timeout(timeout);
+            }
+            None => {
+                select.ready();
             }
         }
-
-        Ok(changed)
     }
 
     pub(super) fn handle_terminal_event(&mut self, event: CrosstermEvent) -> bool {

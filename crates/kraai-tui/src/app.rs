@@ -13,7 +13,7 @@ use kraai_types::{
     AssistantItem, ChatRole, ConversationItem, MessageContent, MessageId, MessageStatus, SessionId,
 };
 use ratatui::crossterm::event::{
-    self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
     MouseEventKind,
 };
 
@@ -33,6 +33,7 @@ mod error;
 mod executions;
 mod feedback;
 mod images;
+mod input;
 mod lifecycle;
 mod mcp_auth;
 mod menu_search;
@@ -107,6 +108,8 @@ pub struct App {
     event_rx: Receiver<RuntimeEventBridgeMessage>,
     runtime_tx: Sender<RuntimeRequest>,
     runtime_rx: Receiver<RuntimeResponse>,
+    input: input::TerminalInput,
+    hangup: Receiver<()>,
     clipboard: Option<arboard::Clipboard>,
     startup_options: StartupOptions,
     /// Whether model choices are remembered for the workspace; off in tests.
