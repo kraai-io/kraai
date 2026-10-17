@@ -22,6 +22,7 @@ pub enum Reply {
     Text(String),
     Script(String),
     Streaming,
+    Truncated(String),
     Chunks(usize),
 }
 
@@ -85,6 +86,7 @@ impl Harness {
                                 Some("tool_calls"),
                             ),
                             Some(Reply::Streaming) => (json!({"content":"partial"}), None),
+                            Some(Reply::Truncated(text)) => (json!({"content":text}), Some("length")),
                             Some(Reply::Chunks(_)) => unreachable!(),
                             None => (json!({"content":"Unexpected extra model request"}), Some("stop")),
                         };
@@ -339,4 +341,8 @@ pub fn prompt(session: &str) -> Value {
 
 pub fn text_prompt(session: &str, text: &str) -> Value {
     json!({"sessionId":session,"prompt":[{"type":"text","text":text}]})
+}
+
+pub fn client_prompt(session: &str, text: &str) -> Value {
+    json!({"sessionId":session,"prompt":[{"type":"text","text":text},{"type":"text","text":"<runtime_info>Client context</runtime_info>"}]})
 }

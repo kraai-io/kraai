@@ -224,12 +224,6 @@ pub(super) enum RuntimeRequest {
     CancelStream {
         session_id: SessionId,
     },
-    ContinueSession {
-        session_id: SessionId,
-        model_id: String,
-        provider_id: String,
-        options: kraai_types::ModelOptionValues,
-    },
 }
 
 pub(super) enum RuntimeResponse {
@@ -305,5 +299,4 @@ pub(super) enum RuntimeResponse {
         result: RuntimeResult<()>,
     },
     CancelStream(RuntimeResult<bool>),
-    ContinueSession(RuntimeResult<kraai_runtime::ContinueSessionOutcome>),
 }

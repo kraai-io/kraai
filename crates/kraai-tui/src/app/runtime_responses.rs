@@ -609,19 +609,6 @@ impl App {
             RuntimeResponse::CancelStream(Err(err)) => {
                 self.set_error(format!("Failed cancelling stream: {err}"));
             }
-            RuntimeResponse::ContinueSession(Ok(outcome)) => match outcome {
-                kraai_runtime::ContinueSessionOutcome::Started => {
-                    self.state.script_phase = ScriptPhase::Idle;
-                    self.state.profile_lock_stale_after_terminal_event = false;
-                    self.state.status = String::from("Continuing session");
-                }
-                kraai_runtime::ContinueSessionOutcome::NothingToContinue => {
-                    self.state.status = String::from("Nothing to continue");
-                }
-            },
-            RuntimeResponse::ContinueSession(Err(err)) => {
-                self.set_error(format!("Failed continuing session: {err}"));
-            }
         }
     }
 }

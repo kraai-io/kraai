@@ -1,5 +1,4 @@
 use color_eyre::eyre::Result;
-use kraai_test_support::hang_guard;
 
 use super::harness::FullHistory as _;
 use super::harness::{RuntimeTestHarness, create_session_with_profile};
@@ -10,6 +9,20 @@ async fn drain(harness: &RuntimeTestHarness, session_id: &kraai_types::SessionId
         .runtime
         .with_session_actor(session_id, |actor| {
             Box::pin(async move { actor.drain().await })
+        })
+        .await;
+}
+
+async fn wait_for_continuation_failure(
+    harness: &RuntimeTestHarness,
+    session_id: &kraai_types::SessionId,
+) {
+    harness
+        .events
+        .wait_for("continuation failure", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::ContinuationFailed { session_id: id, .. } if id == session_id)
+            })
         })
         .await;
 }
@@ -83,31 +96,21 @@ async fn failed_continuation_preserves_queue_order_with_messages_queued_meanwhil
     };
     super::harness::enqueue(&harness.runtime, &session_id, vec![message("first")]).await;
     let second = message("second");
-    let (failed, overlapping) = harness
+    harness
         .runtime
         .with_session_actor(&session_id, move |actor| {
             Box::pin(async move {
-                let (failed_response, failed) = tokio::sync::oneshot::channel();
-                actor.continue_session(None, Some(failed_response)).await;
+                actor.continue_turn().await;
                 actor
                     .runtime
                     .session_store
                     .enqueue_message(&actor.session_id, &second)
                     .await
                     .expect("enqueue during preparation");
-                let (overlapping_response, overlapping) = tokio::sync::oneshot::channel();
-                actor
-                    .continue_session(None, Some(overlapping_response))
-                    .await;
-                (failed, overlapping)
             })
         })
         .await;
-    assert_eq!(
-        hang_guard(overlapping).await???,
-        crate::ContinueSessionOutcome::NothingToContinue
-    );
-    assert!(hang_guard(failed).await??.is_err());
+    wait_for_continuation_failure(&harness, &session_id).await;
     let restored = super::harness::take_queue(&harness.runtime, &session_id).await;
     assert_eq!(
         restored
@@ -157,75 +160,6 @@ async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn rejected_continuation_preserves_turn_and_pending_workspace() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new()).await.expect("fixture");
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let runtime = &harness.runtime;
-    let (tip, workspace) = {
-        let agent = &runtime.agent_manager;
-        let request = agent
-            .prepare_start_stream(
-                &session_id,
-                "first".into(),
-                kraai_types::ModelId::new("mock-model"),
-                kraai_types::ProviderId::new("mock"),
-                Default::default(),
-            )
-            .await?;
-        agent.complete_message(&request.message_id).await?;
-        let turn = agent.script_turn_context(&session_id)?;
-        let pending_workspace = turn.workspace_dir.join("pending");
-        tokio::fs::create_dir_all(pending_workspace.join(".kraai")).await?;
-        tokio::fs::copy(
-            turn.workspace_dir.join(".kraai/agents.toml"),
-            pending_workspace.join(".kraai/agents.toml"),
-        )
-        .await?;
-        agent
-            .set_workspace_dir(&session_id, pending_workspace)
-            .await?;
-        (request.message_id, turn.workspace_dir.join("pending"))
-    };
-    super::harness::enqueue(
-        runtime,
-        &session_id,
-        vec![super::harness::queued(
-            "queued".into(),
-            kraai_types::ModelId::new("mock-model"),
-            kraai_types::ProviderId::new("missing"),
-        )],
-    )
-    .await;
-    assert!(
-        hang_guard(harness.handle.continue_session(
-            session_id.clone(),
-            "mock-model".into(),
-            "missing".into(),
-            Default::default(),
-        ),)
-        .await?
-        .is_err()
-    );
-    assert!(runtime.agent_manager.is_turn_active(&session_id));
-    assert!(runtime.session_store.owns_turn(&session_id).await?);
-    assert_eq!(runtime.agent_manager.get_tip(&session_id).await?, Some(tip));
-    assert_eq!(
-        runtime
-            .agent_manager
-            .get_workspace_dir_state(&session_id)
-            .await?,
-        Some((workspace, true))
-    );
-    let queued = super::harness::take_queue(runtime, &session_id).await;
-    assert_eq!(queued.len(), 1);
-    assert_eq!(
-        queued.first().expect("restored message").content,
-        "queued".into()
-    );
-    harness.shutdown().await;
-    Ok(())
-}
 #[tokio::test]
 async fn queued_messages_survive_restart_and_drain_on_the_next_send() -> Result<()> {
     let previous = RuntimeTestHarness::new(Vec::new())

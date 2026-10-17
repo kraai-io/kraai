@@ -395,17 +395,6 @@ impl RequestBridge {
                 let result = self.execute(|runtime| runtime.cancel_stream(session_id));
                 RuntimeResponse::CancelStream(result)
             }
-            RuntimeRequest::ContinueSession {
-                session_id,
-                model_id,
-                provider_id,
-                options,
-            } => {
-                let result = self.execute(|runtime| {
-                    runtime.continue_session(session_id, model_id, provider_id, options)
-                });
-                RuntimeResponse::ContinueSession(result)
-            }
         }
     }
 }

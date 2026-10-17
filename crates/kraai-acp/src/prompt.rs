@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use agent_client_protocol::{Result, schema::v1 as acp};
-use kraai_runtime::{ContinueSessionOutcome, Event, PendingScriptInfo, RuntimeHandle};
+use kraai_runtime::{Event, PendingScriptInfo, RuntimeHandle};
 use kraai_types::{AssistantItem, ConversationItem, MessageId, SessionId};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -52,16 +52,6 @@ pub(crate) async fn run(
         Some(commands::Command::Undo) => {
             commands::undo(runtime, &id, &connection).await?;
             return Ok(command_response());
-        }
-        Some(commands::Command::Continue) => {
-            if runtime
-                .continue_turn(id.clone(), model.model, model.provider, model.options)
-                .await
-                .map_err(error::runtime)?
-                == ContinueSessionOutcome::NothingToContinue
-            {
-                return Ok(command_response());
-            }
         }
         None => {
             let message = content::prompt(runtime, request.prompt).await?;
@@ -198,6 +188,8 @@ struct Output {
     prompt_start: Option<MessageId>,
     /// The global event sequence the last resync already covered.
     covered: u64,
+    /// The message streamed most recently, which runtime notices are shown in.
+    streaming: Option<String>,
 }
 
 impl Output {
@@ -213,6 +205,7 @@ impl Output {
             open: HashSet::new(),
             prompt_start,
             covered: 0,
+            streaming: None,
         }
     }
 
@@ -272,6 +265,16 @@ impl Output {
         self.text(message_id, text)
     }
 
+    /// Shows a runtime notice as its own paragraph, in `message_id` when it belongs to one.
+    fn notice(&mut self, message_id: Option<&str>, notice: &str) -> Result<()> {
+        let mut chunk = acp::ContentChunk::new(content::text(format!("\n\n[{notice}]\n\n")));
+        if let Some(message_id) = message_id {
+            self.shown.remove(message_id);
+            chunk = chunk.message_id(acp::MessageId::new(message_id));
+        }
+        self.update(acp::SessionUpdate::AgentMessageChunk(chunk))
+    }
+
     fn announce(&mut self, call_id: String, input: String) -> Result<()> {
         if !self.announced.insert(call_id.clone()) {
             return Ok(());
@@ -329,13 +332,19 @@ impl Output {
                         .message_id(acp::MessageId::new(message_id)),
                 ))?;
             }
+            Event::StreamStart { message_id, .. } => self.streaming = Some(message_id),
             Event::StreamRestarted { message_id, .. } => {
                 self.sent.retain(|(id, _), _| id != &message_id);
-                self.text(
-                    &message_id,
-                    String::from("\n\n[Provider stream failed; retrying the response.]\n\n"),
+                self.notice(
+                    Some(&message_id),
+                    "Provider stream failed; retrying the response.",
                 )?;
-                self.shown.remove(&message_id);
+            }
+            Event::ContextStateChanged { notifications, .. } => {
+                let message_id = self.streaming.clone();
+                for notification in notifications {
+                    self.notice(message_id.as_deref(), &notification)?;
+                }
             }
             Event::ScriptPrepared {
                 execution_id,

@@ -243,62 +243,6 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
 }
 
 #[tokio::test]
-async fn continuation_during_a_live_stream_preserves_ownership() -> Result<()> {
-    let (sender, receiver) = mpsc::unbounded_channel();
-    let mut providers = ProviderManager::new();
-    providers.register_provider(
-        ProviderId::new("mock"),
-        Box::new(ControlledProvider {
-            events: Mutex::new(VecDeque::from([receiver])),
-        }),
-    );
-    let owner = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("owner fixture");
-    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone())
-        .await
-        .expect("observer fixture");
-    let session = create_session_with_profile(&owner.handle, "test-profile").await?;
-    owner
-        .handle
-        .send_message(
-            session.clone(),
-            "first".into(),
-            "mock-model".into(),
-            "mock".into(),
-            Default::default(),
-        )
-        .await?;
-    assert_eq!(
-        owner
-            .handle
-            .continue_session(
-                session.clone(),
-                "mock-model".into(),
-                "mock".into(),
-                Default::default()
-            )
-            .await?,
-        crate::ContinueSessionOutcome::NothingToContinue
-    );
-    assert!(owner.runtime.session_store.owns_turn(&session).await?);
-    assert!(
-        observer
-            .runtime
-            .session_store
-            .claim_turn(&session)
-            .await
-            .is_err()
-    );
-    assert!(owner.runtime.agent_manager.is_turn_active(&session));
-    drop(sender);
-    owner.events.wait_for("owner completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id } if session_id == &session))).await;
-    observer.shutdown().await;
-    owner.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn failed_intercepted_continuation_releases_ownership_and_preserves_input() -> Result<()> {
     let (sender, receiver) = mpsc::unbounded_channel();
     let mut providers = ProviderManager::new();

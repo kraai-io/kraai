@@ -6,7 +6,7 @@ use kraai_types::{MessageId, ModelId, ModelOptionValues, ProviderId, SessionId};
 use tokio::sync::oneshot;
 
 use crate::{
-    AgentProfileCatalog, AgentProfilesState, ContinueSessionOutcome, CreateSessionRequest, Model,
+    AgentProfileCatalog, AgentProfilesState, CreateSessionRequest, Model,
     RuntimeResult, Session, SessionContextUsage, SessionSnapshot, SettingsDocument,
     SubmitMessageOutcome, WorkspaceState,
 };
@@ -156,14 +156,6 @@ pub(crate) enum Command {
     CancelTurn {
         session_id: SessionId,
         response: oneshot::Sender<RuntimeResult<bool>>,
-    },
-    ContinueSession {
-        session_id: SessionId,
-        model_id: ModelId,
-        provider_id: ProviderId,
-        options: ModelOptionValues,
-        wait_for_preparation: bool,
-        response: oneshot::Sender<RuntimeResult<ContinueSessionOutcome>>,
     },
     GetProviderAuthStatuses {
         response: oneshot::Sender<RuntimeResult<Vec<crate::ProviderAuthStatus>>>,

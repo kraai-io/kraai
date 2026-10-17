@@ -583,14 +583,11 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
         .recover_session_executions(&session_id)
         .await?;
     harness
-        .handle
-        .continue_session(
-            session_id.clone(),
-            "mock-model".into(),
-            "mock".into(),
-            Default::default(),
-        )
-        .await?;
+        .runtime
+        .with_session_actor(&session_id, |actor| {
+            Box::pin(async move { actor.continue_turn().await })
+        })
+        .await;
     harness
         .events
         .wait_for("recovery continuation", |events| {

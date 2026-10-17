@@ -189,26 +189,6 @@ impl App {
                 }
                 self.request(RuntimeRequest::UndoLastUserMessage { session_id });
             }
-            "continue" => {
-                let Some(session_id) = self.state.current_session_id.clone() else {
-                    self.state.status = String::from("No session to continue");
-                    return;
-                };
-                if self.state.turn_blocks_user_commands() {
-                    self.state.status =
-                        String::from("Cannot continue while the current turn is active");
-                    return;
-                }
-                let Some((model_id, provider_id)) = self.submission_model() else {
-                    return;
-                };
-                self.request(RuntimeRequest::ContinueSession {
-                    session_id,
-                    model_id,
-                    provider_id,
-                    options: self.state.selected_model_options.clone(),
-                });
-            }
             "help" => {
                 self.state.help_scroll.set(0);
                 self.state.mode = UiMode::Help;

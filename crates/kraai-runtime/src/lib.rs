@@ -9,7 +9,7 @@ mod timing;
 pub use timing::TurnTimer;
 
 pub use api::{
-    AgentProfileCatalog, ContinueSessionOutcome, CreateSessionRequest, Event, EventCallback,
+    AgentProfileCatalog, CreateSessionRequest, Event, EventCallback,
     FieldViolation, HistoryPage, LoginMethod, Model, PROTOCOL_VERSION, PendingBrowserLogin,
     PendingDeviceCodeLogin, PendingScriptInfo, ProviderAuthStatus, ProviderLoginState,
     RuntimeError, RuntimeErrorKind, RuntimeEvent, RuntimeResult, RuntimeStartupState, Session,

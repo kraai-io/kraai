@@ -17,6 +17,8 @@ mod mcp;
 mod model_options;
 #[path = "stdio/models.rs"]
 mod models;
+#[path = "stdio/notices.rs"]
+mod notices;
 #[path = "stdio/profiles.rs"]
 mod profiles;
 #[path = "stdio/recovery.rs"]

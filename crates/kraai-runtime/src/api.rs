@@ -127,15 +127,6 @@ pub enum SubmitMessageOutcome {
     Queued { position: usize },
 }
 
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ContinueSessionOutcome {
-    Started,
-    NothingToContinue,
-}
-
 /// The version of the command and event protocol, raised on any incompatible change.
 pub const PROTOCOL_VERSION: u32 = 1;
 

@@ -35,7 +35,6 @@ impl SessionActor {
             generation,
             kind: super::actor::StreamKind::Initial,
             origin: super::actor::PreparationOrigin::Queue,
-            selection: None,
             intercepted: false,
             retried: false,
             cancel: None,

@@ -15,8 +15,8 @@ use super::super::stream_driver::StreamDriveResult;
 use super::stream::StreamEvent;
 use crate::api::Event;
 use crate::{
-    ContinueSessionOutcome, PendingScriptInfo, RuntimeError, RuntimeResult, SessionActivity,
-    SessionSnapshot, SubmitMessageOutcome,
+    PendingScriptInfo, RuntimeError, RuntimeResult, SessionActivity, SessionSnapshot,
+    SubmitMessageOutcome,
 };
 
 pub(in crate::runtime) type Responder<T> = oneshot::Sender<RuntimeResult<T>>;
@@ -26,11 +26,6 @@ pub(crate) enum SessionMessage {
         message: MessageContent,
         selection: ModelSelection,
         response: Responder<SubmitMessageOutcome>,
-    },
-    Continue {
-        selection: Option<ModelSelection>,
-        wait_for_preparation: bool,
-        response: Responder<ContinueSessionOutcome>,
     },
     Cancel {
         discard_queue: bool,
@@ -96,7 +91,6 @@ impl SessionMessage {
         let error = || RuntimeError::unavailable("Session actor stopped");
         match self {
             Self::Send { response, .. } => drop(response.send(Err(error()))),
-            Self::Continue { response, .. } => drop(response.send(Err(error()))),
             Self::Cancel {
                 response: Some(response),
                 ..
@@ -139,7 +133,7 @@ pub(super) enum StreamKind {
 /// Who is waiting for a preparation to finish.
 pub(super) enum PreparationOrigin {
     Send(Responder<SubmitMessageOutcome>),
-    Continue(Option<Responder<ContinueSessionOutcome>>),
+    Continue,
     Queue,
 }
 
@@ -147,7 +141,6 @@ pub(super) struct Preparation {
     pub(super) generation: u64,
     pub(super) kind: StreamKind,
     pub(super) origin: PreparationOrigin,
-    pub(super) selection: Option<ModelSelection>,
     pub(super) intercepted: bool,
     pub(super) retried: bool,
     pub(super) cancel: Option<CancelRequest>,
@@ -275,21 +268,6 @@ impl SessionActor {
                 selection,
                 response,
             } => self.send(message, selection, response).await,
-            SessionMessage::Continue {
-                selection,
-                wait_for_preparation,
-                response,
-            } => {
-                if wait_for_preparation && matches!(self.state, TurnState::Preparing(_)) {
-                    self.deferred.push_back(SessionMessage::Continue {
-                        selection,
-                        wait_for_preparation,
-                        response,
-                    });
-                } else {
-                    self.continue_session(selection, Some(response)).await;
-                }
-            }
             SessionMessage::Cancel {
                 discard_queue,
                 expected_lease,

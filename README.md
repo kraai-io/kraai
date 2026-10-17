@@ -31,8 +31,6 @@ Current priorities, in order:
    - Open as many clients as you want at once, in terminals or ACP editors,
      on the same sessions. Every client follows the same live stream and
      approval prompts, whichever one is running the turn.
-   - `/continue` picks a session back up from where it stopped, on whichever
-     model you have selected.
 
 ---
 

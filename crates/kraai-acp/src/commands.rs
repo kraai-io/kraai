@@ -4,13 +4,13 @@ use kraai_runtime::RuntimeHandle;
 use crate::{content, error};
 
 pub(crate) enum Command {
-    Continue,
     Undo,
     Option { id: String, value: String },
 }
 
+/// Reads a command from the first block; clients may append their own context blocks after it.
 pub(crate) fn parse(prompt: &[acp::ContentBlock]) -> Result<Option<Command>> {
-    let [acp::ContentBlock::Text(text)] = prompt else {
+    let Some(acp::ContentBlock::Text(text)) = prompt.first() else {
         return Ok(None);
     };
     let mut words = text.text.split_whitespace();
@@ -31,15 +31,13 @@ pub(crate) fn parse(prompt: &[acp::ContentBlock]) -> Result<Option<Command>> {
             },
         }));
     }
-    let (command, usage) = match first {
-        Some("/continue") => (Command::Continue, "Usage: /continue"),
-        Some("/undo") => (Command::Undo, "Usage: /undo"),
-        _ => return Ok(None),
-    };
-    if words.next().is_some() {
-        return Err(error::invalid(usage));
+    if first != Some("/undo") {
+        return Ok(None);
     }
-    Ok(Some(command))
+    if words.next().is_some() {
+        return Err(error::invalid("Usage: /undo"));
+    }
+    Ok(Some(Command::Undo))
 }
 
 pub(crate) async fn advertise(
@@ -50,10 +48,6 @@ pub(crate) async fn advertise(
         .send_notification_wait(acp::SessionNotification::new(
             id,
             acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(vec![
-                acp::AvailableCommand::new(
-                    "continue",
-                    "Resume the conversation using the selected model",
-                ),
                 acp::AvailableCommand::new(
                     "undo",
                     "Remove the last user turn from conversation context; keep file changes",

@@ -3,24 +3,15 @@ use std::sync::atomic::Ordering;
 use color_eyre::eyre::Result;
 use serde_json::{Value, json};
 
-use crate::support::{Harness, PROFILE_ID, Reply, prompt, text_prompt};
+use crate::support::{Harness, PROFILE_ID, Reply, client_prompt, prompt, text_prompt};
 
 #[tokio::test]
-async fn continue_uses_selected_model_and_rejects_changes_during_active_prompts() -> Result<()> {
-    let mut harness = Harness::new(vec![Reply::Streaming, "Resumed".into()]).await?;
+async fn commands_are_rejected_during_active_prompts_and_model_changes_apply_next() -> Result<()> {
+    let mut harness = Harness::new(vec![Reply::Streaming, "Next reply".into()]).await?;
     harness.install_profile().await?;
     harness.initialize().await?;
     let session = harness.session().await?;
 
-    let empty = harness
-        .request(2, "session/prompt", text_prompt(&session, "/continue"))
-        .await?;
-    assert_eq!(
-        empty
-            .last()
-            .and_then(|value| value.pointer("/result/stopReason")),
-        Some(&json!("end_turn"))
-    );
     let selected = harness
         .request(
             3,
@@ -93,19 +84,18 @@ async fn continue_uses_selected_model_and_rejects_changes_during_active_prompts(
             .and_then(|value| value.pointer("/result/configOptions/0/currentValue")),
         Some(&json!("4:mock:mock-alternate"))
     );
-    let continued = harness
-        .request(7, "session/prompt", text_prompt(&session, "/continue"))
+    let next = harness
+        .request(7, "session/prompt", text_prompt(&session, "Next"))
         .await?;
     assert_eq!(
-        continued
+        next
             .last()
             .and_then(|value| value.pointer("/result/stopReason")),
         Some(&json!("end_turn"))
     );
     assert!(
-        continued
-            .iter()
-            .any(|value| value.pointer("/params/update/content/text") == Some(&json!("Resumed")))
+        next.iter()
+            .any(|value| value.pointer("/params/update/content/text") == Some(&json!("Next reply")))
     );
     assert_eq!(harness.model_requests.load(Ordering::SeqCst), 2);
     let payloads = harness.provider_payloads.lock().await.clone();
@@ -116,7 +106,6 @@ async fn continue_uses_selected_model_and_rejects_changes_during_active_prompts(
             .get("messages")
             .map(ToString::to_string)
             .unwrap_or_default();
-        assert!(!messages.contains("/continue"));
         assert!(!messages.contains("/undo"));
     }
     harness.stop().await
@@ -129,7 +118,7 @@ async fn empty_undo_and_rejected_commands_do_not_call_the_provider() -> Result<(
     let session = harness.session().await?;
 
     let empty = harness
-        .request(2, "session/prompt", text_prompt(&session, "/undo"))
+        .request(2, "session/prompt", client_prompt(&session, "/undo"))
         .await?;
     assert_eq!(
         empty
@@ -143,14 +132,18 @@ async fn empty_undo_and_rejected_commands_do_not_call_the_provider() -> Result<(
             .and_then(Value::as_str)
             .is_some_and(|text| !text.is_empty())
     }));
-    for (id, command) in [(3, "/undo extra"), (4, "/continue extra")] {
+    for (id, command, usage) in [
+        (3, "/undo extra", "Usage: /undo"),
+        (4, "/option effort", "Usage: /option <id> <value|--clear>"),
+    ] {
         let rejected = harness
-            .request(id, "session/prompt", text_prompt(&session, command))
+            .request(id, "session/prompt", client_prompt(&session, command))
             .await?;
-        assert!(
+        assert_eq!(
             rejected
                 .last()
-                .is_some_and(|value| value.get("error").is_some())
+                .and_then(|value| value.pointer("/error/message")),
+            Some(&json!(usage))
         );
         assert_eq!(harness.model_requests.load(Ordering::SeqCst), 0);
     }
