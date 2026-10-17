@@ -141,7 +141,11 @@ mod tests {
     fn unresolved_startup_paths_fail_inherited_startup_but_allow_clean_startup() {
         for environment in [
             nu_config::TestEnv::new(Default::default()),
-            nu_config::TestEnv::new(Default::default()).with_config_dir(std::env::temp_dir()),
+            nu_config::TestEnv::new(std::collections::HashMap::from([(
+                "XDG_CONFIG_HOME".to_owned(),
+                "relative".to_owned(),
+            )]))
+            .with_home_dir(std::env::temp_dir()),
         ] {
             let mut engine = EngineState::new();
             let error = configure_startup_paths(&mut engine, NushellStartup::Inherit, &environment);
