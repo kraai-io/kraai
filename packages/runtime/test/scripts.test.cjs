@@ -111,6 +111,7 @@ for (const { codex, symlinked } of fileContextCases) {
     assert.match(text(messages[5].at(-1)), /1\|updated\r\n/);
     const history = unwrap(await runtime.getHistoryPage(session, null, 200)).messages;
     assert.ok(!Object.values(history).some(message => message.content.type === 'file_context'));
+    unwrap(await runtime.shutdown());
     const context = readRecord(join(directory, 'storage'), 'context', session);
     const pins = context.events.flatMap(event => event.mutations)
       .filter(mutation => mutation.kind === 'pin-file');
@@ -119,6 +120,5 @@ for (const { codex, symlinked } of fileContextCases) {
       assert.equal(pin.scope.kind, 'workspace');
       assert.equal(realpathSync.native(pin.scope.root), realpathSync.native(workspace));
     }
-    unwrap(await runtime.shutdown());
   });
 }

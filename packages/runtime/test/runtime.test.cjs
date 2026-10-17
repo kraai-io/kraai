@@ -135,10 +135,10 @@ test('streams a reply from a local provider and persists the conversation', { ti
   const snapshot = unwrap(await runtime.getSessionSnapshot(session));
   const request = Object.values(snapshot.requests).find(value => value.model_id === 'test-model');
   assert.ok(request);
-  const receipt = readRecord(directory, 'usage', request.message_id);
-  assert.equal(receipt.model_id, 'test-model');
   events.close();
   unwrap(await runtime.shutdown());
+  const receipt = readRecord(directory, 'usage', request.message_id);
+  assert.equal(receipt.model_id, 'test-model');
 });
 
 test('native methods reject invalid and wrong-class receivers', { timeout: HANG_TIMEOUT }, async t => {
