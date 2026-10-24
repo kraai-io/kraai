@@ -62,6 +62,16 @@ impl SessionActor {
             mailbox: self.mailbox(),
             generation,
         };
+        self.runtime.send_event(Event::StreamStart {
+            session_id: self.session_id.clone(),
+            message_id: message_id.to_string(),
+        });
+        if !context_notifications.is_empty() {
+            self.runtime.send_event(Event::ContextStateChanged {
+                session_id: self.session_id.clone(),
+                notifications: context_notifications,
+            });
+        }
         let stream_tasks = self.runtime.stream_tasks.clone();
         let session_id = self.session_id.clone();
         let mailbox = self.mailbox();
@@ -81,16 +91,6 @@ impl SessionActor {
                 stream_tasks.wait_auxiliary_session(&session_id).await;
                 let _ = mailbox.send(SessionMessage::StreamEnded { generation, result });
             });
-        if !context_notifications.is_empty() {
-            self.runtime.send_event(Event::ContextStateChanged {
-                session_id: self.session_id.clone(),
-                notifications: context_notifications,
-            });
-        }
-        self.runtime.send_event(Event::StreamStart {
-            session_id: self.session_id.clone(),
-            message_id: message_id.to_string(),
-        });
         self.state = TurnState::Streaming(StreamJob {
             generation,
             kind,

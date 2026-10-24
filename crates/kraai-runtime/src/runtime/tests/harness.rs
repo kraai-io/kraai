@@ -122,10 +122,6 @@ impl kraai_provider_core::Provider for ScriptedProvider {
         vec![mock_model()]
     }
 
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
-    }
-
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
         Ok(())
     }
@@ -197,10 +193,6 @@ impl kraai_provider_core::Provider for RetryNotifyingProvider {
 
     async fn list_models(&self) -> Vec<kraai_provider_core::Model> {
         vec![mock_model()]
-    }
-
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
     }
 
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
@@ -391,6 +383,9 @@ path = \"inherit\"\n",
         let execution_store = persistence.executions().clone();
         let context_state_store = persistence.context().clone();
         let image_store = persistence.images().clone();
+        let model_lists = Arc::new(super::super::model_lists::ModelListSync::new(
+            persistence.model_lists().clone(),
+        ));
         let (model_catalog_tx, _) =
             tokio::sync::watch::channel(providers.subscribe_model_catalog());
         let agent_manager = Arc::new(AgentManager::new(
@@ -445,6 +440,7 @@ path = \"inherit\"\n",
             }),
             startup_tx,
             model_catalog_tx,
+            model_lists,
         };
 
         let events_for_task = events.clone();
@@ -467,6 +463,7 @@ path = \"inherit\"\n",
         let maintenance_tasks = vec![
             runtime.spawn_lease_heartbeat(),
             runtime.spawn_session_observers(),
+            runtime.spawn_turn_timer_persistence(),
         ];
         Some(Self {
             owns_directory,

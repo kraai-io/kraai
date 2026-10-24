@@ -65,6 +65,33 @@ fn fallback_keeps_matching_model_and_prefers_existing_provider() {
 }
 
 #[test]
+fn loading_models_never_saves_over_the_session_model() {
+    for (selected, expected) in [(Some("added-later"), "added-later"), (None, "first")] {
+        let mut harness = test_harness();
+        harness.app.state.current_session_id = Some(kraai_types::SessionId::new("session"));
+        harness.app.state.selected_provider_id = Some("provider".into());
+        harness.app.state.selected_model_id = selected.map(String::from);
+        harness.drain_requests();
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::Models(Ok(HashMap::from([(
+                "provider".into(),
+                vec![model("first")],
+            )]))));
+        assert_eq!(
+            harness.app.state.selected_model_id.as_deref(),
+            Some(expected)
+        );
+        assert!(
+            !harness
+                .drain_requests()
+                .iter()
+                .any(|request| matches!(request, RuntimeRequest::SetSessionModel { .. }))
+        );
+    }
+}
+
+#[test]
 fn empty_discovery_preserves_selection_for_recovery() {
     let mut harness = test_harness();
     harness.app.state.selected_provider_id = Some("provider".into());

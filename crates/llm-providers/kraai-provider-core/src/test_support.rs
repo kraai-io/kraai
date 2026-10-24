@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
-use color_eyre::{Result, eyre::eyre};
+use color_eyre::Result;
 use futures::{StreamExt, stream::BoxStream};
 use kraai_types::{AssistantPhase, ModelId, ProviderId};
 
@@ -16,9 +15,6 @@ pub(crate) struct MockProvider {
     id: ProviderId,
     models: Vec<Model>,
     reply_count: AtomicUsize,
-    pub(crate) cache_count: AtomicUsize,
-    fail_cache: bool,
-    cache_delay: Option<Duration>,
     pub(crate) warming: Option<crate::CacheWarmingPolicy>,
     pub(crate) usage: Option<kraai_types::TokenUsage>,
 }
@@ -35,18 +31,8 @@ impl MockProvider {
                 options: Vec::new(),
             }],
             reply_count: AtomicUsize::new(0),
-            cache_count: AtomicUsize::new(0),
-            fail_cache: false,
-            cache_delay: None,
             warming: None,
             usage: None,
-        }
-    }
-
-    pub(crate) fn failing_cache(id: &str) -> Self {
-        Self {
-            fail_cache: true,
-            ..Self::new(id)
         }
     }
 }
@@ -59,17 +45,6 @@ impl Provider for MockProvider {
 
     async fn list_models(&self) -> Vec<Model> {
         self.models.clone()
-    }
-
-    async fn cache_models(&self) -> Result<()> {
-        self.cache_count.fetch_add(1, Ordering::SeqCst);
-        if let Some(delay) = self.cache_delay {
-            tokio::time::sleep(delay).await;
-        }
-        if self.fail_cache {
-            return Err(eyre!("cache failed for {}", self.id));
-        }
-        Ok(())
     }
 
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {

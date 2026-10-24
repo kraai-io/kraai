@@ -199,38 +199,41 @@ impl App {
         }
     }
 
+    /// Fills in a missing selection without saving it to the session. A selected model this list
+    /// lacks stays selected, since the list can be stale.
     pub(super) fn ensure_selected_model(&mut self) {
         let previous_provider_id = self.state.selected_provider_id.clone();
         let previous_model_id = self.state.selected_model_id.clone();
+        let provider_models = self
+            .state
+            .selected_provider_id
+            .as_ref()
+            .and_then(|provider_id| self.state.models_by_provider.get(provider_id));
 
-        if let Some(provider_id) = self.state.selected_provider_id.as_ref()
-            && let Some(models) = self.state.models_by_provider.get(provider_id)
-        {
-            if let Some(model_id) = self.state.selected_model_id.as_ref()
-                && models.iter().any(|model| &model.id == model_id)
+        if let Some(model_id) = self.state.selected_model_id.as_ref() {
+            if provider_models
+                .is_some_and(|models| models.iter().any(|model| &model.id == model_id))
             {
                 return;
             }
-
-            if let Some(model) = models.first() {
-                self.state.selected_model_id = Some(model.id.clone());
-                self.save_workspace_preferences_if_model_changed(
-                    previous_provider_id,
-                    previous_model_id,
-                );
-                return;
-            }
-        }
-
-        if let Some(model_id) = self.state.selected_model_id.as_ref()
-            && let Some((provider_id, _)) = self
+            if let Some((provider_id, _)) = self
                 .state
                 .models_by_provider
                 .iter()
                 .filter(|(_, models)| models.iter().any(|model| &model.id == model_id))
                 .min_by(|(left, _), (right, _)| left.cmp(right))
-        {
-            self.state.selected_provider_id = Some(provider_id.clone());
+            {
+                self.state.selected_provider_id = Some(provider_id.clone());
+                self.save_workspace_preferences_if_model_changed(
+                    previous_provider_id,
+                    previous_model_id,
+                );
+            }
+            return;
+        }
+
+        if let Some(model) = provider_models.and_then(|models| models.first()) {
+            self.state.selected_model_id = Some(model.id.clone());
             self.save_workspace_preferences_if_model_changed(
                 previous_provider_id,
                 previous_model_id,
@@ -313,7 +316,8 @@ impl App {
         if previous_provider_id != self.state.selected_provider_id
             || previous_model_id != self.state.selected_model_id
         {
-            self.save_model_selection();
+            self.reconcile_model_options();
+            self.save_workspace_preferences();
         }
     }
 

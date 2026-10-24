@@ -6,9 +6,8 @@ use kraai_types::{MessageId, ModelId, ModelOptionValues, ProviderId, SessionId};
 use tokio::sync::oneshot;
 
 use crate::{
-    AgentProfileCatalog, AgentProfilesState, CreateSessionRequest, Model,
-    RuntimeResult, Session, SessionContextUsage, SessionSnapshot, SettingsDocument,
-    SubmitMessageOutcome, WorkspaceState,
+    AgentProfileCatalog, AgentProfilesState, CreateSessionRequest, Model, RuntimeResult, Session,
+    SessionContextUsage, SessionSnapshot, SettingsDocument, SubmitMessageOutcome, WorkspaceState,
 };
 
 /// Internal commands sent to the runtime

@@ -1,14 +1,27 @@
 use super::core::RuntimeCore;
-use crate::Event;
+use crate::{Event, RuntimeEvent};
 use kraai_types::SessionId;
 use std::collections::BTreeSet;
 use std::time::Duration;
+use tokio::sync::broadcast;
 use tokio::task::{JoinHandle, JoinSet};
 
 impl RuntimeCore {
+    /// Releases the session's turn, saving its timer stopped so other runtimes never show a
+    /// turn without an owner as running.
     pub(crate) async fn release_turn(&self, session_id: &SessionId) {
         self.agent_manager.discard_streaming_state(session_id).await;
-        match self.session_store.release_turn(session_id).await {
+        let mut timer = self.event_tx.timer_snapshot(session_id).1;
+        timer.finish(std::time::Instant::now());
+        let released = match serde_json::to_string(&timer) {
+            Ok(timer) => {
+                self.session_store
+                    .release_turn_with_timer(session_id, timer)
+                    .await
+            }
+            Err(error) => Err(error.into()),
+        };
+        match released {
             Ok(false) => self.agent_manager.clear_active_turn(session_id),
             Ok(true) => {}
             Err(error) => self.send_session_error(session_id, error),
@@ -17,8 +30,44 @@ impl RuntimeCore {
 
     pub(crate) async fn finish_turn(&self, session_id: &SessionId) {
         self.agent_manager.clear_active_turn(session_id);
-        self.release_turn(session_id).await;
         self.event_tx.finish_timer(session_id);
+        self.release_turn(session_id).await;
+    }
+
+    /// Saves the timer of every turn this runtime runs whenever it changes.
+    pub(crate) fn spawn_turn_timer_persistence(&self) -> JoinHandle<()> {
+        let runtime = self.clone();
+        let mut events = self.event_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                let sessions = match events.recv().await {
+                    Ok(RuntimeEvent {
+                        event: Event::TurnTimingChanged { session_id, .. },
+                        ..
+                    }) => vec![session_id],
+                    Ok(_) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        runtime.session_store.owned_sessions()
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                for session_id in sessions {
+                    let timer = runtime.event_tx.timer_snapshot(&session_id).1;
+                    let saved = match serde_json::to_string(&timer) {
+                        Ok(timer) => {
+                            runtime
+                                .session_store
+                                .save_turn_timer(&session_id, timer)
+                                .await
+                        }
+                        Err(error) => Err(error.into()),
+                    };
+                    if let Err(error) = saved {
+                        tracing::warn!(%session_id, error = %format!("{error:#}"), "Unable to save turn timer");
+                    }
+                }
+            }
+        })
     }
 
     pub(crate) fn spawn_lease_heartbeat(&self) -> JoinHandle<()> {
@@ -95,23 +144,39 @@ impl RuntimeCore {
                     .lock()
                     .await
                     .iter()
-                    .map(|(session, observation)| (session.clone(), *observation))
+                    .map(|(session, observation)| (session.clone(), observation.clone()))
                     .collect();
                 for (session, previous) in watched {
                     match runtime.session_store.observe(&session).await {
                         Ok(Some(observation))
                             if observation.revision != previous.revision
-                                || observation.lease_active != previous.lease_active =>
+                                || observation.lease_active != previous.lease_active
+                                || observation.turn_timer != previous.turn_timer =>
                         {
                             runtime
                                 .observed_sessions
                                 .lock()
                                 .await
-                                .insert(session.clone(), observation);
+                                .insert(session.clone(), observation.clone());
                             match runtime.session_store.owns_turn(&session).await {
-                                Ok(false) => runtime.send_event(Event::HistoryUpdated {
-                                    session_id: session,
-                                }),
+                                Ok(false) => {
+                                    if observation.turn_timer != previous.turn_timer
+                                        && let Some(timer) =
+                                            stored_turn_timer(&session, &observation)
+                                    {
+                                        runtime.send_event(Event::TurnTimingChanged {
+                                            session_id: session.clone(),
+                                            timer,
+                                        });
+                                    }
+                                    if observation.revision != previous.revision
+                                        || observation.lease_active != previous.lease_active
+                                    {
+                                        runtime.send_event(Event::HistoryUpdated {
+                                            session_id: session,
+                                        });
+                                    }
+                                }
                                 Err(error) => runtime.send_session_error(&session, error),
                                 _ => {}
                             }
@@ -159,4 +224,15 @@ impl RuntimeCore {
             self.send_event(Event::HistoryUpdated { session_id });
         }
     }
+}
+
+/// The turn timer another runtime saved for the session, if it saved a readable one.
+pub(crate) fn stored_turn_timer(
+    session_id: &SessionId,
+    observation: &kraai_persistence::SessionObservation,
+) -> Option<crate::TurnTimer> {
+    let timer = observation.turn_timer.as_deref()?;
+    serde_json::from_str(timer)
+        .inspect_err(|error| tracing::warn!(%session_id, %error, "Ignoring unreadable turn timer"))
+        .ok()
 }

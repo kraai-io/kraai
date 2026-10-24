@@ -46,10 +46,6 @@ impl Provider for FixtureProvider {
         }]
     }
 
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
-    }
-
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
         bail!("The performance fixture has a fixed model")
     }

@@ -97,10 +97,7 @@ fn assistant_updates(
                     )
                 }
                 AssistantItem::ScriptCall { call_id, input, .. } => acp::SessionUpdate::ToolCall(
-                    acp::ToolCall::new(call_id.to_string(), "Run Nushell script")
-                        .kind(acp::ToolKind::Execute)
-                        .status(acp::ToolCallStatus::Pending)
-                        .raw_input(serde_json::Value::String(input.clone())),
+                    content::script_call(call_id.to_string(), input.clone()),
                 ),
                 AssistantItem::Reasoning { .. } => return None,
             };

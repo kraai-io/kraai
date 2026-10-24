@@ -25,9 +25,6 @@ impl Provider for ControlledProvider {
     async fn list_models(&self) -> Vec<kraai_provider_core::Model> {
         vec![super::harness::mock_model()]
     }
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
-    }
     async fn register_model(&mut self, _: kraai_provider_core::ModelConfig) -> Result<()> {
         Ok(())
     }
@@ -457,6 +454,71 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
         )
         .await?;
     owner.runtime.finish_turn(&session).await;
+    observer.shutdown().await;
+    owner.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn observers_follow_the_owners_turn_timer() -> Result<()> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let mut providers = ProviderManager::new();
+    providers.register_provider(
+        ProviderId::new("mock"),
+        Box::new(ControlledProvider {
+            events: Mutex::new(VecDeque::from([receiver])),
+        }),
+    );
+    let owner = RuntimeTestHarness::new_with_parts(providers)
+        .await
+        .expect("owner fixture");
+    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone())
+        .await
+        .expect("observer fixture");
+    let session = create_session_with_profile(&owner.handle, "test-profile").await?;
+    assert!(observer.handle.load_session(session.clone()).await?);
+    let timer_of = |events: &[Event], running: bool| {
+        events.iter().any(|event| {
+            matches!(event, Event::TurnTimingChanged { session_id, timer }
+                if session_id == &session
+                    && timer.elapsed(std::time::Instant::now()).is_some() == running
+                    && (running || timer.last_duration().is_some()))
+        })
+    };
+
+    owner
+        .handle
+        .send_message(
+            session.clone(),
+            "first".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
+        )
+        .await?;
+    observer
+        .events
+        .wait_for("running timer", |events| timer_of(events, true))
+        .await;
+    let running = observer
+        .handle
+        .get_session_snapshot(session.clone())
+        .await?
+        .turn_timer;
+    assert!(running.elapsed(std::time::Instant::now()).is_some());
+
+    drop(sender);
+    observer
+        .events
+        .wait_for("finished timer", |events| timer_of(events, false))
+        .await;
+    let finished = observer
+        .handle
+        .get_session_snapshot(session.clone())
+        .await?
+        .turn_timer;
+    assert!(finished.elapsed(std::time::Instant::now()).is_none());
+    assert!(finished.last_duration().is_some());
     observer.shutdown().await;
     owner.shutdown().await;
     Ok(())

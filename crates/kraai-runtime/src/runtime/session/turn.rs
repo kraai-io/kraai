@@ -87,10 +87,7 @@ impl SessionActor {
         self.begin_preparation(
             StreamKind::Initial,
             PreparationOrigin::Send(response),
-            PrepareRequest::Start {
-                message,
-                selection,
-            },
+            PrepareRequest::Start { message, selection },
             false,
             false,
         );

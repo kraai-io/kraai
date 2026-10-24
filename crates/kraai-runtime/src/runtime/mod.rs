@@ -5,6 +5,7 @@ mod config;
 mod core;
 mod dispatch;
 mod model_catalog;
+mod model_lists;
 mod nushell_host;
 mod request_usage;
 mod script_environment;

@@ -102,10 +102,6 @@ impl Provider for TestSummarizer {
         }]
     }
 
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
-    }
-
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
         Ok(())
     }
@@ -320,10 +316,6 @@ impl Provider for OverflowingProvider {
         vec![super::harness::mock_model()]
     }
 
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
-    }
-
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
         Ok(())
     }
@@ -423,10 +415,6 @@ impl Provider for SharedProvider {
 
     async fn list_models(&self) -> Vec<Model> {
         self.0.list_models().await
-    }
-
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
     }
 
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {

@@ -53,9 +53,6 @@ impl Provider for WarmingProvider {
             max_context: None,
         }]
     }
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
-    }
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
         Ok(())
     }

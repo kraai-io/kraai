@@ -8,9 +8,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::RuntimeError;
 use crate::{
-    AgentProfileCatalog, AgentProfilesState, CreateSessionRequest, Model,
-    RuntimeEvent, RuntimeResult, RuntimeStartupState, Session, SessionContextUsage,
-    SessionSnapshot, SettingsDocument, SubmitMessageOutcome, WorkspaceState,
+    AgentProfileCatalog, AgentProfilesState, CreateSessionRequest, Model, RuntimeEvent,
+    RuntimeResult, RuntimeStartupState, Session, SessionContextUsage, SessionSnapshot,
+    SettingsDocument, SubmitMessageOutcome, WorkspaceState,
 };
 
 mod command;

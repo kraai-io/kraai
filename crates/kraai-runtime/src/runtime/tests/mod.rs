@@ -17,6 +17,7 @@ mod usage_cancellation;
 mod images;
 mod mcp_sessions;
 mod model_catalog;
+mod model_lists;
 mod model_options;
 
 mod lease_expiry;

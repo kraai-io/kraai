@@ -26,7 +26,24 @@ pub trait Provider: Send + Sync {
 
     fn set_model_catalog(&mut self, _catalog: std::sync::Arc<crate::ModelCatalog>) {}
 
-    async fn cache_models(&self) -> Result<()>;
+    /// Identifies where the model list comes from; `None` when the provider does not discover
+    /// models. A stored list is only reused while its source matches.
+    fn model_list_source(&self) -> Option<String> {
+        None
+    }
+
+    async fn fetch_model_list(&self) -> Result<serde_json::Value> {
+        color_eyre::eyre::bail!("Provider does not discover models")
+    }
+
+    async fn install_model_list(&self, _list: serde_json::Value) -> Result<()> {
+        Ok(())
+    }
+
+    async fn refresh_model_list(&self) -> Result<()> {
+        let list = self.fetch_model_list().await?;
+        self.install_model_list(list).await
+    }
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()>;
 

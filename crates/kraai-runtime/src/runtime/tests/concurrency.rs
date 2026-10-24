@@ -31,10 +31,6 @@ impl kraai_provider_core::Provider for HandoffProvider {
         vec![super::harness::mock_model()]
     }
 
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
-    }
-
     async fn register_model(&mut self, _model: kraai_provider_core::ModelConfig) -> Result<()> {
         Ok(())
     }
@@ -400,10 +396,6 @@ async fn stream_start_events_precede_a_snapshot_taken_right_after_the_stream_sta
         })
         .await;
 
-    let context = events.try_recv()?;
-    assert!(
-        matches!(context.event, Event::ContextStateChanged { notifications, .. } if notifications.len() == 1)
-    );
     let timing = events.try_recv()?;
     let Event::TurnTimingChanged { timer, .. } = timing.event else {
         panic!("expected runtime turn timing");
@@ -412,7 +404,10 @@ async fn stream_start_events_precede_a_snapshot_taken_right_after_the_stream_sta
     assert!(
         matches!(start.event, Event::StreamStart { message_id: actual, .. } if actual == message_id)
     );
-    assert!(context.sequence < start.sequence);
+    let context = events.try_recv()?;
+    assert!(
+        matches!(context.event, Event::ContextStateChanged { notifications, .. } if notifications.len() == 1)
+    );
     let snapshot = hang_guard(snapshot).await???;
     assert!(snapshot.event_sequence >= start.sequence);
     assert_eq!(snapshot.activity, SessionActivity::Streaming);

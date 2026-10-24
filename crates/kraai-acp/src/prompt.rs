@@ -190,6 +190,8 @@ struct Output {
     covered: u64,
     /// The message streamed most recently, which runtime notices are shown in.
     streaming: Option<String>,
+    /// The message whose text was the last update sent, so a notice can still extend it.
+    open_text: Option<String>,
 }
 
 impl Output {
@@ -206,6 +208,7 @@ impl Output {
             prompt_start,
             covered: 0,
             streaming: None,
+            open_text: None,
         }
     }
 
@@ -232,12 +235,18 @@ impl Output {
         messages
     }
 
-    fn update(&self, update: acp::SessionUpdate) -> Result<()> {
+    fn update(&mut self, update: acp::SessionUpdate) -> Result<()> {
+        self.open_text = match &update {
+            acp::SessionUpdate::AgentMessageChunk(chunk) => {
+                chunk.message_id.as_ref().map(ToString::to_string)
+            }
+            _ => None,
+        };
         self.connection
             .send_notification(acp::SessionNotification::new(self.id.clone(), update))
     }
 
-    fn text(&self, message_id: &str, text: String) -> Result<()> {
+    fn text(&mut self, message_id: &str, text: String) -> Result<()> {
         if text.is_empty() {
             return Ok(());
         }
@@ -265,10 +274,11 @@ impl Output {
         self.text(message_id, text)
     }
 
-    /// Shows a runtime notice as its own paragraph, in `message_id` when it belongs to one.
+    /// Shows a runtime notice as its own paragraph, inside `message_id` only while that message's
+    /// text was the last update, since clients restart a message's text after other updates.
     fn notice(&mut self, message_id: Option<&str>, notice: &str) -> Result<()> {
         let mut chunk = acp::ContentChunk::new(content::text(format!("\n\n[{notice}]\n\n")));
-        if let Some(message_id) = message_id {
+        if let Some(message_id) = message_id.filter(|id| self.open_text.as_deref() == Some(*id)) {
             self.shown.remove(message_id);
             chunk = chunk.message_id(acp::MessageId::new(message_id));
         }
@@ -280,12 +290,9 @@ impl Output {
             return Ok(());
         }
         self.open.insert(call_id.clone());
-        self.update(acp::SessionUpdate::ToolCall(
-            acp::ToolCall::new(call_id, "Run Nushell script")
-                .kind(acp::ToolKind::Execute)
-                .status(acp::ToolCallStatus::Pending)
-                .raw_input(serde_json::Value::String(input)),
-        ))
+        self.update(acp::SessionUpdate::ToolCall(content::script_call(
+            call_id, input,
+        )))
     }
 
     async fn result(
@@ -472,7 +479,7 @@ impl Output {
                     script.capability_additions.join(", ")
                 ))
                 .kind(acp::ToolKind::Execute)
-                .raw_input(serde_json::Value::String(script.source)),
+                .raw_input(content::script_input(script.source)),
         );
         let request = acp::RequestPermissionRequest::new(
             self.id.clone(),

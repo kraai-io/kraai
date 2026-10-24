@@ -1,14 +1,12 @@
 use std::collections::BTreeMap;
 
-use color_eyre::Result;
 use kraai_types::ModelId;
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
+use tokio::sync::{RwLock, RwLockReadGuard};
 
 use crate::{Model, ModelCatalog, ModelCatalogView};
 
 pub struct ModelMetadataCache<T> {
     state: RwLock<CacheState<T>>,
-    refresh: Mutex<()>,
 }
 
 struct CacheState<T> {
@@ -25,7 +23,6 @@ impl<T: Default> Default for ModelMetadataCache<T> {
                 models: BTreeMap::new(),
                 revision: None,
             }),
-            refresh: Mutex::new(()),
         }
     }
 }
@@ -35,14 +32,12 @@ impl<T: Send + Sync> ModelMetadataCache<T> {
         self.state.get_mut().revision = None;
     }
 
-    pub async fn refresh(
+    pub async fn install(
         &self,
         catalog: Option<&ModelCatalog>,
-        discover: impl Future<Output = Result<T>> + Send,
+        native: T,
         resolve: impl FnOnce(&T, Option<&ModelCatalogView<'_>>) -> BTreeMap<ModelId, Model> + Send,
-    ) -> Result<()> {
-        let refresh = self.refresh.lock().await;
-        let native = discover.await?;
+    ) {
         let mut state = self.state.write().await;
         let view = match catalog {
             Some(catalog) => Some(catalog.view().await),
@@ -61,9 +56,7 @@ impl<T: Send + Sync> ModelMetadataCache<T> {
             },
         );
         drop(state);
-        drop(refresh);
         drop(previous);
-        Ok(())
     }
 
     pub async fn models(

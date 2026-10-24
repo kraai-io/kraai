@@ -133,17 +133,15 @@ async fn catalog_recovery_and_updates_refresh_cached_limits_and_options_without_
     let cache = ModelMetadataCache::default();
     let mut updates = catalog.subscribe();
     cache
-        .refresh(
+        .install(
             Some(&catalog),
-            async {
-                Ok(NativeModel {
-                    owner: "openai".into(),
-                    ..Default::default()
-                })
+            NativeModel {
+                owner: "openai".into(),
+                ..Default::default()
             },
             resolve,
         )
-        .await?;
+        .await;
     let missing = cached_model(&cache, &catalog).await?;
     assert_eq!(missing.max_context, None);
     assert!(missing.options.is_empty());
@@ -157,16 +155,6 @@ async fn catalog_recovery_and_updates_refresh_cached_limits_and_options_without_
     let recovered = cached_model(&cache, &catalog).await?;
     assert_eq!(recovered.max_context, Some(4096));
     check_effort(&recovered, "low")?;
-    assert!(
-        cache
-            .refresh(
-                Some(&catalog),
-                async { Err(eyre!("discovery unavailable")) },
-                resolve
-            )
-            .await
-            .is_err()
-    );
 
     catalog.replace_snapshot(snapshot(8192, &["high"])?).await;
     let updated = cached_model(&cache, &catalog).await?;
@@ -175,23 +163,21 @@ async fn catalog_recovery_and_updates_refresh_cached_limits_and_options_without_
     assert!(check_effort(&updated, "low").is_err());
 
     cache
-        .refresh(
+        .install(
             Some(&catalog),
-            async {
-                Ok(NativeModel {
-                    owner: "openai".into(),
-                    options: serde_json::from_value(
-                        json!({"reasoning_options":[{"type":"effort","values":["native"]}]}),
-                    )?,
-                    config: ConfiguredModelMetadata {
-                        max_context: Some(1024),
-                        ..Default::default()
-                    },
-                })
+            NativeModel {
+                owner: "openai".into(),
+                options: serde_json::from_value(
+                    json!({"reasoning_options":[{"type":"effort","values":["native"]}]}),
+                )?,
+                config: ConfiguredModelMetadata {
+                    max_context: Some(1024),
+                    ..Default::default()
+                },
             },
             resolve,
         )
-        .await?;
+        .await;
     catalog
         .replace_snapshot(snapshot(16384, &["future"])?)
         .await;
@@ -202,22 +188,19 @@ async fn catalog_recovery_and_updates_refresh_cached_limits_and_options_without_
 }
 
 #[tokio::test]
-async fn concurrent_readers_rebuild_each_revision_once_and_reads_continue_during_discovery()
--> Result<()> {
+async fn concurrent_readers_rebuild_each_revision_once() -> Result<()> {
     let catalog = Arc::new(ModelCatalog::default());
     let cache = Arc::new(ModelMetadataCache::default());
     cache
-        .refresh(
+        .install(
             Some(&catalog),
-            async {
-                Ok(NativeModel {
-                    owner: "openai".into(),
-                    ..Default::default()
-                })
+            NativeModel {
+                owner: "openai".into(),
+                ..Default::default()
             },
             resolve,
         )
-        .await?;
+        .await;
     catalog.replace_snapshot(snapshot(4096, &["low"])?).await;
     let resolutions = Arc::new(AtomicUsize::new(0));
     let mut readers = tokio::task::JoinSet::new();
@@ -241,39 +224,10 @@ async fn concurrent_readers_rebuild_each_revision_once_and_reads_continue_during
     }
     assert_eq!(resolutions.load(Ordering::SeqCst), 1);
 
-    let (started, waiting) = tokio::sync::oneshot::channel();
-    let (release, ready) = tokio::sync::oneshot::channel();
-    let refreshing = {
-        let cache = cache.clone();
-        let catalog = catalog.clone();
-        tokio::spawn(async move {
-            cache
-                .refresh(
-                    Some(&catalog),
-                    async {
-                        started
-                            .send(())
-                            .map_err(|_value| eyre!("missing refresh observer"))?;
-                        ready.await?;
-                        Ok(NativeModel {
-                            owner: "openai".into(),
-                            ..Default::default()
-                        })
-                    },
-                    resolve,
-                )
-                .await
-        })
-    };
-    waiting.await?;
     catalog.replace_snapshot(snapshot(8192, &["high"])?).await;
-    let during_refresh = kraai_test_support::hang_guard(cached_model(&cache, &catalog)).await??;
-    assert_eq!(during_refresh.max_context, Some(8192));
-    release
-        .send(())
-        .map_err(|_value| eyre!("refresh stopped"))?;
-    refreshing.await??;
-    check_effort(&cached_model(&cache, &catalog).await?, "high")?;
+    let updated = cached_model(&cache, &catalog).await?;
+    assert_eq!(updated.max_context, Some(8192));
+    check_effort(&updated, "high")?;
     Ok(())
 }
 
@@ -281,17 +235,15 @@ async fn concurrent_readers_rebuild_each_revision_once_and_reads_continue_during
 async fn discovery_filters_invalid_models_and_accepts_later_corrected_metadata() -> Result<()> {
     let cache = ModelMetadataCache::default();
     cache
-        .refresh(
+        .install(
             None,
-            async {
-                discovered_models(&[
-                    ("model", &["duplicate", "duplicate"]),
-                    ("healthy", &["low"]),
-                ])
-            },
+            discovered_models(&[
+                ("model", &["duplicate", "duplicate"]),
+                ("healthy", &["low"]),
+            ])?,
             resolve_models,
         )
-        .await?;
+        .await;
     let models = cache.models(None, resolve_models).await;
     assert_eq!(models.len(), 1);
     assert!(!models.contains_key(&ModelId::new("model")));
@@ -304,12 +256,12 @@ async fn discovery_filters_invalid_models_and_accepts_later_corrected_metadata()
     drop(models);
 
     cache
-        .refresh(
+        .install(
             None,
-            async { discovered_models(&[("model", &["medium"]), ("healthy", &["high"])]) },
+            discovered_models(&[("model", &["medium"]), ("healthy", &["high"])])?,
             resolve_models,
         )
-        .await?;
+        .await;
     let models = cache.models(None, resolve_models).await;
     assert_eq!(models.len(), 2);
     check_effort(
@@ -340,12 +292,12 @@ async fn invalid_catalog_updates_filter_only_invalid_models_and_recover_on_next_
         ])?)
         .await;
     cache
-        .refresh(
+        .install(
             Some(&catalog),
-            async { discovered_models(&[("model", &[]), ("healthy", &[])]) },
+            discovered_models(&[("model", &[]), ("healthy", &[])])?,
             resolve_models,
         )
-        .await?;
+        .await;
     catalog
         .replace_snapshot(models_snapshot(&[
             ("model", 8192, &["duplicate", "duplicate"]),
@@ -392,17 +344,15 @@ async fn invalidation_reresolves_when_replacement_catalog_has_the_same_revision(
     assert_eq!(previous.revision(), replacement.revision());
     let mut cache = ModelMetadataCache::default();
     cache
-        .refresh(
+        .install(
             Some(&previous),
-            async {
-                Ok(NativeModel {
-                    owner: "openai".into(),
-                    ..Default::default()
-                })
+            NativeModel {
+                owner: "openai".into(),
+                ..Default::default()
             },
             resolve,
         )
-        .await?;
+        .await;
     cache.invalidate();
     let updated = cached_model(&cache, &replacement).await?;
     assert_eq!(updated.max_context, Some(8192));

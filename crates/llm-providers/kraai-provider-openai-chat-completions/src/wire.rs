@@ -147,6 +147,16 @@ pub struct ChatCompletionChunkDelta {
     pub refusal: Option<String>,
 }
 
+impl ChatCompletionChunkDelta {
+    /// Whether this fragment adds nothing to the message.
+    pub fn is_empty(&self) -> bool {
+        self.reasoning.is_empty()
+            && self.content.as_deref().is_none_or(str::is_empty)
+            && self.tool_calls.as_ref().is_none_or(Vec::is_empty)
+            && self.refusal.as_deref().is_none_or(str::is_empty)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ToolCallDelta {
     #[serde(default)]

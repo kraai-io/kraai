@@ -237,6 +237,39 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
 }
 
 #[test]
+fn snapshot_older_than_a_session_event_still_restores_the_model() {
+    let mut harness = test_harness();
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
+    harness
+        .app
+        .handle_runtime_event_bridge_message(stream_event(
+            5,
+            Event::HistoryUpdated {
+                session_id: SessionId::new("session"),
+            },
+        ));
+    let mut snapshot = session_snapshot_at(3, None);
+    snapshot.session.selected_model = Some(kraai_types::ModelSelection {
+        provider_id: ProviderId::new("saved-provider"),
+        model_id: ModelId::new("saved-model"),
+        options: Default::default(),
+    });
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
+            session_id: SessionId::new("session"),
+            result: Box::new(Ok(snapshot)),
+        });
+    assert_eq!(
+        harness.app.state.selected_model_id.as_deref(),
+        Some("saved-model")
+    );
+}
+
+#[test]
 fn observer_refreshes_model_when_saved_selection_changes() {
     let mut harness = test_harness();
     harness

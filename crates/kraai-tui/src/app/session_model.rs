@@ -216,6 +216,24 @@ impl App {
         }
     }
 
+    pub(super) fn observe_session_activity_snapshot(
+        &mut self,
+        session_id: &SessionId,
+        snapshot: &SessionSnapshot,
+    ) {
+        self.state
+            .session_model_saves
+            .entry(session_id.clone())
+            .or_default()
+            .is_running = Some(
+            snapshot.session.is_running
+                || snapshot.activity != kraai_runtime::SessionActivity::Idle
+                || snapshot.queued_messages != 0,
+        );
+    }
+
+    /// No event carries the saved model, so even a snapshot older than the session's latest
+    /// event holds the newest model this client has seen.
     pub(super) fn observe_session_model_snapshot(
         &mut self,
         session_id: &SessionId,
@@ -227,11 +245,6 @@ impl App {
             .session_model_saves
             .entry(session_id.clone())
             .or_default();
-        save.is_running = Some(
-            snapshot.session.is_running
-                || snapshot.activity != kraai_runtime::SessionActivity::Idle
-                || snapshot.queued_messages != 0,
-        );
         if self.state.current_session_id.as_ref() != Some(session_id)
             || model_save_id < save.last_saved_id
             || self.state.last_session_model == snapshot.session.selected_model

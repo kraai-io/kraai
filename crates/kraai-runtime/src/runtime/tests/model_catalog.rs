@@ -31,11 +31,15 @@ impl Provider for CatalogProvider {
         }]
     }
 
-    async fn cache_models(&self) -> Result<()> {
+    fn model_list_source(&self) -> Option<String> {
+        Some(self.id.to_string())
+    }
+
+    async fn fetch_model_list(&self) -> Result<serde_json::Value> {
         if self.fail_cache {
             Err(eyre!("discovery failed"))
         } else {
-            Ok(())
+            Ok(serde_json::Value::Null)
         }
     }
 

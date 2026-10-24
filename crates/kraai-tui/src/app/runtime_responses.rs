@@ -43,7 +43,7 @@ impl App {
                 self.ensure_selected_model();
                 self.reconcile_model_options();
                 if self.state.selected_model_options != previous_options {
-                    self.save_model_selection();
+                    self.save_workspace_preferences();
                 }
                 self.reconcile_pending_session_model_options();
                 self.maybe_send_startup_message();
@@ -359,6 +359,7 @@ impl App {
                 result,
             } => match *result {
                 Ok(snapshot) => {
+                    self.observe_session_model_snapshot(&session_id, model_save_id, &snapshot);
                     if self
                         .last_session_event_sequences
                         .get(&session_id)
@@ -369,7 +370,7 @@ impl App {
                     self.session_snapshot_sequences
                         .insert(session_id.clone(), snapshot.event_sequence);
                     self.accumulate_exit_usage_from_history(&snapshot.history);
-                    self.observe_session_model_snapshot(&session_id, model_save_id, &snapshot);
+                    self.observe_session_activity_snapshot(&session_id, &snapshot);
                     self.update_costs(&session_id, snapshot.requests);
                     self.state.cost_recovery_sessions.remove(&session_id);
                     if self.state.current_session_id.as_ref() == Some(&session_id) {

@@ -88,8 +88,7 @@ async fn commands_are_rejected_during_active_prompts_and_model_changes_apply_nex
         .request(7, "session/prompt", text_prompt(&session, "Next"))
         .await?;
     assert_eq!(
-        next
-            .last()
+        next.last()
             .and_then(|value| value.pointer("/result/stopReason")),
         Some(&json!("end_turn"))
     );

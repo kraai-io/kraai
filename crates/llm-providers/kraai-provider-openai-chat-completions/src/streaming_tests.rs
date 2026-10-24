@@ -242,6 +242,48 @@ async fn text_usage_and_errors_survive_without_tools() -> Result<()> {
 }
 
 #[tokio::test]
+async fn empty_repeated_final_choice_carries_usage_but_new_content_fails() -> Result<()> {
+    let repeated = |delta: Value, reason: &str| json!({"choices":[{"index":0,"delta":delta,"finish_reason":reason}],"usage":{"prompt_tokens":8,"completion_tokens":2}});
+    let events = collect(
+        vec![
+            data(json!({"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]})),
+            data(repeated(json!({"content":"","role":"assistant"}), "stop")),
+            Ok(SseEvent::Done),
+        ],
+        false,
+    )
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
+    assert!(matches!(
+        events.get(1),
+        Some(ProviderStreamEvent::Finished {
+            stop_reason: StopReason::EndTurn
+        })
+    ));
+    assert!(
+        matches!(events.get(2), Some(ProviderStreamEvent::Usage(usage)) if usage.total_tokens == 10)
+    );
+    for (delta, reason) in [
+        (json!({"content":"more"}), "stop"),
+        (json!({"reasoning":"more"}), "stop"),
+        (json!({}), "length"),
+    ] {
+        let events = collect(
+            vec![
+                data(finish("stop")),
+                data(repeated(delta, reason)),
+                Ok(SseEvent::Done),
+            ],
+            false,
+        )
+        .await;
+        assert!(events.iter().any(Result::is_err));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn termination_does_not_wait_for_transport_eof() -> Result<()> {
     for event in [
         data(finish("stop")),

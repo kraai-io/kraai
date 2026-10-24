@@ -56,29 +56,6 @@ where
         }
     }
 
-    async fn discover_models(&self) -> Result<Vec<ListModelEntry>> {
-        let response = send_with_retry(
-            "list models",
-            &DEFAULT_HTTP_RETRY_POLICY,
-            &ProviderRequestContext::default(),
-            || {
-                finite_request(
-                    self.auth
-                        .apply(self.client.get(self.build_endpoint("models"))),
-                )
-                .send()
-            },
-        )
-        .await?;
-        let response = ensure_success_response("list models", response).await?;
-        let bytes = kraai_io::http::read_response_body(response, 32 * 1024 * 1024).await?;
-        let models: ListModelsResponse = serde_json::from_slice(&bytes)?;
-        if let Some(catalog) = &self.model_catalog {
-            catalog.initialize().await;
-        }
-        Ok(models.data)
-    }
-
     async fn send_chat_completion_request(
         &self,
         operation: &'static str,
@@ -171,14 +148,42 @@ where
         self.cached_models.invalidate();
     }
 
-    async fn cache_models(&self) -> Result<()> {
+    fn model_list_source(&self) -> Option<String> {
+        Some(self.base_url.clone())
+    }
+
+    async fn fetch_model_list(&self) -> Result<serde_json::Value> {
+        let response = send_with_retry(
+            "list models",
+            &DEFAULT_HTTP_RETRY_POLICY,
+            &ProviderRequestContext::default(),
+            || {
+                finite_request(
+                    self.auth
+                        .apply(self.client.get(self.build_endpoint("models"))),
+                )
+                .send()
+            },
+        )
+        .await?;
+        let response = ensure_success_response("list models", response).await?;
+        let bytes = kraai_io::http::read_response_body(response, 32 * 1024 * 1024).await?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    async fn install_model_list(&self, list: serde_json::Value) -> Result<()> {
+        let models: ListModelsResponse = serde_json::from_value(list)?;
+        if let Some(catalog) = &self.model_catalog {
+            catalog.initialize().await;
+        }
         self.cached_models
-            .refresh(
+            .install(
                 self.model_catalog.as_deref(),
-                self.discover_models(),
+                models.data,
                 |native, catalog| self.model_resolver().resolve(native, catalog),
             )
-            .await
+            .await;
+        Ok(())
     }
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()> {

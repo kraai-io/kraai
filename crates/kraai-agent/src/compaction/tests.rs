@@ -29,9 +29,6 @@ impl Provider for Summarizer {
     async fn list_models(&self) -> Vec<Model> {
         Vec::new()
     }
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
-    }
     async fn register_model(&mut self, _: ModelConfig) -> Result<()> {
         Ok(())
     }

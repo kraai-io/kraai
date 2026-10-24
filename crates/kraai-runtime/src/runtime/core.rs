@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use kraai_agent::AgentManager;
 use kraai_persistence::{ContextStateStore, ScriptExecutionStore};
-use kraai_provider_core::ProviderRegistry;
+use kraai_provider_core::{ProviderError, ProviderRegistry};
 use kraai_types::SessionId;
 use tokio::sync::{Mutex, mpsc};
 
@@ -38,6 +38,7 @@ pub(crate) struct RuntimeCore {
     pub(crate) config: Arc<RuntimeConfig>,
     pub(crate) startup_tx: tokio::sync::watch::Sender<RuntimeStartupState>,
     pub(crate) model_catalog_tx: tokio::sync::watch::Sender<tokio::sync::watch::Receiver<u64>>,
+    pub(crate) model_lists: Arc<super::model_lists::ModelListSync>,
 }
 
 #[derive(Clone)]
@@ -99,6 +100,8 @@ impl RuntimeCore {
             self.spawn_mcp_auth_forwarder(),
             self.spawn_lease_heartbeat(),
             self.spawn_session_observers(),
+            self.spawn_turn_timer_persistence(),
+            self.spawn_model_list_sync(),
         ];
         match self.load_providers_config_and_emit().await {
             Ok(()) => {
@@ -205,6 +208,16 @@ impl RuntimeCore {
         let result = agent
             .set_providers(config, self.provider_registry.clone())
             .await;
+        let synced = match &result {
+            Ok(()) => {
+                self.model_lists.reset().await;
+                Some(
+                    self.sync_model_lists(super::model_lists::unix_millis())
+                        .await,
+                )
+            }
+            Err(_) => None,
+        };
         let updates = agent.cloned_provider_manager().subscribe_model_catalog();
         self.model_catalog_tx.send_if_modified(|current| {
             if current.same_channel(&updates) {
@@ -215,6 +228,12 @@ impl RuntimeCore {
             }
         });
         result?;
+        if let Some(synced) = synced {
+            let failures = synced?.failures;
+            if !failures.is_empty() {
+                return Err(ProviderError::ModelCacheRefreshFailed(failures).into());
+            }
+        }
         tracing::info!("Loaded config");
         self.send_event(Event::ConfigLoaded);
         Ok(())

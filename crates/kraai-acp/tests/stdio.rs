@@ -129,7 +129,19 @@ async fn check_script(script: &str, status: &str) -> Result<()> {
             .iter()
             .any(|value| value.get("id") == Some(&json!(2)))
     );
+    let shows_command = |value: &Value, pointer: &str| {
+        value
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .is_some_and(|command| command.contains(script))
+    };
+    assert!(
+        pending
+            .iter()
+            .any(|value| shows_command(value, "/params/update/rawInput/command"))
+    );
     let approval = pending.last().ok_or_else(|| eyre!("missing approval"))?;
+    assert!(shows_command(approval, "/params/toolCall/rawInput/command"));
     harness.send(json!({"jsonrpc":"2.0","id":approval.get("id"),"result":{"outcome":{"outcome":"selected","optionId":"allow"}}})).await?;
     let values = harness
         .until(|value| value.get("id") == Some(&json!(2)))
@@ -175,6 +187,11 @@ async fn check_script(script: &str, status: &str) -> Result<()> {
         values
             .iter()
             .any(|value| value.pointer("/params/update/status") == Some(&json!(status)))
+    );
+    assert!(
+        values
+            .iter()
+            .any(|value| shows_command(value, "/params/update/rawInput/command"))
     );
     harness.stop().await
 }

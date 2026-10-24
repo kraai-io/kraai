@@ -112,10 +112,18 @@ impl Completion {
                 choice.index == 0,
                 "Provider returned an unexpected completion choice"
             );
-            ensure!(
-                self.finish_reason.is_none(),
-                "Provider sent a choice after completion"
-            );
+            if let Some(finished) = &self.finish_reason {
+                // OpenRouter repeats the final choice, empty, alongside the usage chunk.
+                ensure!(
+                    choice.delta.is_empty()
+                        && choice
+                            .finish_reason
+                            .as_ref()
+                            .is_none_or(|reason| reason == finished),
+                    "Provider sent a choice after completion"
+                );
+                continue;
+            }
             if let Some(refusal) = choice.delta.refusal.filter(|text| !text.is_empty()) {
                 return Err(eyre!("Provider refused the request: {refusal}"));
             }
