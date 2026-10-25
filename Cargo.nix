@@ -10606,7 +10606,7 @@ rec {
           }
           {
             name = "sse-stream";
-            packageId = "sse-stream 0.3.0";
+            packageId = "sse-stream";
           }
           {
             name = "tokio";
@@ -20853,7 +20853,7 @@ rec {
           }
           {
             name = "sse-stream";
-            packageId = "sse-stream 0.2.6";
+            packageId = "sse-stream";
             optional = true;
           }
           {
@@ -23149,7 +23149,7 @@ rec {
           "bindgen" = [ "dep:bindgen" ];
         };
       };
-      "sse-stream 0.2.6" = rec {
+      "sse-stream" = rec {
         crateName = "sse-stream";
         version = "0.2.6";
         edition = "2021";
@@ -23185,60 +23185,6 @@ rec {
           "tracing" = [ "dep:tracing" ];
         };
         resolvedDefaultFeatures = [ "default" ];
-      };
-      "sse-stream 0.3.0" = rec {
-        crateName = "sse-stream";
-        version = "0.3.0";
-        edition = "2021";
-        sha256 = "1939rrd18cyzaq9pz4mlgb5f7l0hwiik5vy8kixlza7vq07id1fk";
-        libName = "sse_stream";
-        license = "MIT OR Apache-2.0";
-        authors = [
-          "4t145 <u4t145@163.com>"
-        ];
-        dependencies = [
-          {
-            name = "bytes";
-            packageId = "bytes";
-          }
-          {
-            name = "futures-util";
-            packageId = "futures-util";
-          }
-          {
-            name = "http-body";
-            packageId = "http-body";
-          }
-          {
-            name = "http-body-util";
-            packageId = "http-body-util";
-          }
-          {
-            name = "memchr";
-            packageId = "memchr";
-            optional = true;
-          }
-          {
-            name = "pin-project-lite";
-            packageId = "pin-project-lite";
-          }
-          {
-            name = "simdutf8";
-            packageId = "simdutf8";
-            optional = true;
-          }
-          {
-            name = "thiserror";
-            packageId = "thiserror 2.0.21";
-          }
-        ];
-        features = {
-          "default" = [ "memchr" "simdutf8" ];
-          "memchr" = [ "dep:memchr" ];
-          "simdutf8" = [ "dep:simdutf8" ];
-          "tracing" = [ "dep:tracing" ];
-        };
-        resolvedDefaultFeatures = [ "default" "memchr" "simdutf8" ];
       };
       "stable_deref_trait" = rec {
         crateName = "stable_deref_trait";
