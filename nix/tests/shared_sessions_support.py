@@ -160,7 +160,7 @@ class Client:
         self.reader.start()
         try:
             response = self.request(
-                "initialize", {"protocolVersion": 2, "clientCapabilities": {}}
+                "initialize", {"protocolVersion": 1, "clientCapabilities": {}}
             )
             assert "result" in response, response
         except BaseException:
