@@ -41,6 +41,7 @@ impl Provider for FixtureProvider {
             id: model_id(),
             name: "Offline performance fixture".into(),
             max_context: None,
+            max_output: None,
             supports_images: false,
             options: Vec::new(),
         }]

@@ -210,19 +210,38 @@ impl Completion {
     }
 }
 
+/// A call the model got wrong becomes a call with an `arguments_error`, so the model can see
+/// the error and retry; only a call that cannot be answered fails the stream.
 fn finish_call(call: PendingCall, tool_name: Option<&str>) -> Result<ProviderStreamEvent> {
-    ensure!(
-        Some(call.name.as_str()) == tool_name,
-        "Provider called unexpected tool '{}'",
-        call.name
-    );
+    let tool_name =
+        tool_name.ok_or_else(|| eyre!("Provider called a tool when tools were disabled"))?;
     let id = call.id.ok_or_else(|| eyre!("Tool call omitted ID"))?;
     let call_id = ToolCallId::try_new(id).map_err(|error| eyre!(error))?;
-    let arguments: ScriptArguments = serde_json::from_str(&call.arguments)?;
+    let arguments_error = if call.name == tool_name {
+        match serde_json::from_str::<ScriptArguments>(&call.arguments) {
+            Ok(arguments) => {
+                return Ok(ProviderStreamEvent::ScriptCall {
+                    call_id,
+                    name: call.name,
+                    input: arguments.input,
+                    arguments_error: None,
+                });
+            }
+            Err(error) => {
+                format!("arguments must be a JSON object with one string field \"input\": {error}")
+            }
+        }
+    } else {
+        format!(
+            "unknown tool '{}'; the only tool is '{tool_name}'",
+            call.name
+        )
+    };
     Ok(ProviderStreamEvent::ScriptCall {
         call_id,
         name: call.name,
-        input: arguments.input,
+        input: call.arguments,
+        arguments_error: Some(arguments_error),
     })
 }
 

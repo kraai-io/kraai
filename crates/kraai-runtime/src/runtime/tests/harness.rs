@@ -35,8 +35,16 @@ fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
 #[derive(Clone, Debug)]
 enum ScriptedChunkKind {
     Reasoning(serde_json::Value),
-    Text { phase: AssistantPhase, text: String },
-    NativeCall { call_id: String, input: String },
+    Text {
+        phase: AssistantPhase,
+        text: String,
+    },
+    NativeCall {
+        call_id: String,
+        name: String,
+        input: String,
+        arguments_error: Option<String>,
+    },
     Usage(TokenUsage),
     Error(String),
     ErrorWithSource(String, String),
@@ -83,7 +91,21 @@ impl ScriptedChunk {
         Self {
             kind: ScriptedChunkKind::NativeCall {
                 call_id: call_id.to_string(),
+                name: String::from("kraai_nushell"),
                 input: input.into(),
+                arguments_error: None,
+            },
+        }
+    }
+
+    /// A call whose arguments the provider could not turn into a script.
+    pub(super) fn invalid_call(call_id: &str, name: &str, arguments: &str, error: &str) -> Self {
+        Self {
+            kind: ScriptedChunkKind::NativeCall {
+                call_id: call_id.to_string(),
+                name: name.to_string(),
+                input: arguments.to_string(),
+                arguments_error: Some(error.to_string()),
             },
         }
     }
@@ -107,9 +129,29 @@ impl ScriptedChunk {
     }
 }
 
+pub(super) type ProviderRequests = Arc<StdMutex<Vec<ProviderRequest>>>;
+
 struct ScriptedProvider {
     id: ProviderId,
     scripts: StdMutex<VecDeque<Vec<ScriptedChunk>>>,
+    requests: ProviderRequests,
+}
+
+fn scripted_providers(
+    id: &str,
+    scripts: Vec<Vec<ScriptedChunk>>,
+) -> (ProviderManager, ProviderRequests) {
+    let requests = ProviderRequests::default();
+    let mut providers = ProviderManager::new();
+    providers.register_provider(
+        ProviderId::new(id),
+        Box::new(ScriptedProvider {
+            id: ProviderId::new(id),
+            scripts: StdMutex::new(scripts.into()),
+            requests: Arc::clone(&requests),
+        }),
+    );
+    (providers, requests)
 }
 
 #[async_trait]
@@ -139,6 +181,10 @@ impl kraai_provider_core::Provider for ScriptedProvider {
         if tool.name != "kraai_nushell" {
             return Err(eyre!("unexpected tool name: {}", tool.name));
         }
+        self.requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(request);
 
         let script = self
             .scripts
@@ -159,13 +205,17 @@ impl kraai_provider_core::Provider for ScriptedProvider {
                         delta: text,
                     })
                 }
-                ScriptedChunkKind::NativeCall { call_id, input } => {
-                    Ok(kraai_provider_core::ProviderStreamEvent::ScriptCall {
-                        call_id: kraai_types::ToolCallId::new(call_id),
-                        name: String::from("kraai_nushell"),
-                        input,
-                    })
-                }
+                ScriptedChunkKind::NativeCall {
+                    call_id,
+                    name,
+                    input,
+                    arguments_error,
+                } => Ok(kraai_provider_core::ProviderStreamEvent::ScriptCall {
+                    call_id: kraai_types::ToolCallId::new(call_id),
+                    name,
+                    input,
+                    arguments_error,
+                }),
                 ScriptedChunkKind::Usage(usage) => {
                     Ok(kraai_provider_core::ProviderStreamEvent::Usage(usage))
                 }
@@ -223,6 +273,7 @@ pub(super) fn mock_model() -> kraai_provider_core::Model {
         id: ModelId::new("mock-model"),
         name: String::from("Mock Model"),
         max_context: None,
+        max_output: None,
     }
 }
 
@@ -285,33 +336,32 @@ pub(super) struct RuntimeTestHarness {
     runtime_task: tokio::task::JoinHandle<()>,
     event_task: tokio::task::JoinHandle<()>,
     pub(super) data_dir: PathBuf,
+    /// Requests the scripted provider received, in order.
+    pub(super) provider_requests: ProviderRequests,
     owns_directory: bool,
     pub(super) maintenance_tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl RuntimeTestHarness {
     pub(super) async fn new(scripts: Vec<Vec<ScriptedChunk>>) -> Option<Self> {
-        let mut providers = ProviderManager::new();
-        providers.register_provider(
-            ProviderId::new("mock"),
-            Box::new(ScriptedProvider {
-                id: ProviderId::new("mock"),
-                scripts: StdMutex::new(scripts.into()),
-            }),
-        );
-        Self::new_with_parts(providers).await
+        Self::new_scripted("mock", scripts, None).await
     }
 
     pub(super) async fn new_native(scripts: Vec<Vec<ScriptedChunk>>) -> Option<Self> {
-        let mut providers = ProviderManager::new();
-        providers.register_provider(
-            ProviderId::new("mock-native"),
-            Box::new(ScriptedProvider {
-                id: ProviderId::new("mock-native"),
-                scripts: StdMutex::new(scripts.into()),
-            }),
-        );
-        Self::new_with_parts(providers).await
+        Self::new_scripted("mock-native", scripts, None).await
+    }
+
+    async fn new_scripted(
+        provider_id: &str,
+        scripts: Vec<Vec<ScriptedChunk>>,
+        shared_directory: Option<PathBuf>,
+    ) -> Option<Self> {
+        let (providers, provider_requests) = scripted_providers(provider_id, scripts);
+        let harness = Self::new_in_directory(providers, None, shared_directory).await?;
+        Some(Self {
+            provider_requests,
+            ..harness
+        })
     }
 
     pub(super) async fn new_with_parts(providers: ProviderManager) -> Option<Self> {
@@ -329,15 +379,7 @@ impl RuntimeTestHarness {
         scripts: Vec<Vec<ScriptedChunk>>,
         data_dir: PathBuf,
     ) -> Option<Self> {
-        let mut providers = ProviderManager::new();
-        providers.register_provider(
-            ProviderId::new("mock"),
-            Box::new(ScriptedProvider {
-                id: ProviderId::new("mock"),
-                scripts: StdMutex::new(scripts.into()),
-            }),
-        );
-        Self::new_in_directory(providers, None, Some(data_dir)).await
+        Self::new_scripted("mock", scripts, Some(data_dir)).await
     }
 
     pub(super) async fn new_in_directory(
@@ -466,6 +508,7 @@ path = \"inherit\"\n",
             runtime.spawn_turn_timer_persistence(),
         ];
         Some(Self {
+            provider_requests: ProviderRequests::default(),
             owns_directory,
             maintenance_tasks,
             handle,

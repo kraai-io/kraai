@@ -99,6 +99,7 @@ impl Provider for TestSummarizer {
             id: ModelId::new("mock-model"),
             name: String::from("Mock model"),
             max_context: Some(32768),
+            max_output: None,
         }]
     }
 

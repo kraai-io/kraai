@@ -73,6 +73,7 @@ pub enum ProviderStreamEvent {
         call_id: ToolCallId,
         name: String,
         input: String,
+        arguments_error: Option<String>,
     },
     Usage(TokenUsage),
     /// Why the provider ended the response; sent once, after its content.

@@ -195,6 +195,7 @@ mod tests {
             call_id: ToolCallId::new("call"),
             name: String::from("kraai_nushell"),
             input: input.to_string(),
+            arguments_error: None,
         };
         for (items, expected) in [
             (Vec::new(), ""),

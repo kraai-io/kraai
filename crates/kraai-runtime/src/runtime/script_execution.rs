@@ -67,6 +67,10 @@ impl CompletedScriptExecution {
             diagnostic: self.record.error.as_deref(),
             stdout_file,
             stderr_file,
+            sandbox_blocked: self
+                .record
+                .sandbox_denied
+                .then_some(&self.record.effective_capabilities),
         });
         let mut content = kraai_types::MessageContent::from(text);
         content.0.extend(

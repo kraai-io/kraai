@@ -27,6 +27,7 @@ impl Provider for ContextProvider {
             id: ModelId::new(id),
             name: id.into(),
             max_context,
+            max_output: None,
             supports_images: false,
             options: Vec::new(),
         })

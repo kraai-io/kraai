@@ -175,6 +175,7 @@ fn fixture(
                         call_id: ToolCallId::new("call"),
                         name: "kraai_nushell".into(),
                         input: "inspect".into(),
+                        arguments_error: None,
                     },
                 ],
             },
@@ -527,6 +528,7 @@ async fn invalid_fallback_response_preserves_existing_context() -> Result<()> {
             call_id: ToolCallId::new("unexpected"),
             name: "kraai_nushell".into(),
             input: "# timeout=1sec\nls".into(),
+            arguments_error: None,
         }],
     ] {
         let (context, providers, _, root) = fixture(false, events, false);

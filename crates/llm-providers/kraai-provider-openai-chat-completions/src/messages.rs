@@ -36,16 +36,18 @@ pub fn normalize_chat_messages(
                             call_id,
                             name,
                             input,
+                            arguments_error,
                         } => {
+                            let arguments = match arguments_error {
+                                Some(_) => input,
+                                None => {
+                                    serde_json::to_string(&crate::wire::ScriptArguments { input })?
+                                }
+                            };
                             tool_calls.push(crate::wire::FunctionCall {
                                 id: call_id,
                                 kind: "function",
-                                function: crate::wire::FunctionArguments {
-                                    name,
-                                    arguments: serde_json::to_string(
-                                        &crate::wire::ScriptArguments { input },
-                                    )?,
-                                },
+                                function: crate::wire::FunctionArguments { name, arguments },
                             });
                         }
                     }
@@ -113,6 +115,7 @@ mod tests {
                         call_id: ToolCallId::new("call"),
                         name: "kraai_nushell".into(),
                         input: "# timeout=1sec\nls".into(),
+                        arguments_error: None,
                     },
                 ],
             }];
@@ -188,6 +191,7 @@ mod tests {
                         call_id: ToolCallId::new("call-1"),
                         name: "kraai_nushell".to_string(),
                         input: "# timeout=10sec\nls".to_string(),
+                        arguments_error: None,
                     },
                 ],
             }],
@@ -201,6 +205,33 @@ mod tests {
                 {"role":"assistant", "content":"I will inspect it.", "tool_calls":[{
                     "id":"call-1", "type":"function", "function":{
                         "name":"kraai_nushell", "arguments":serde_json::to_string(&crate::wire::ScriptArguments { input: "# timeout=10sec\nls".into() })?
+                    }
+                }]}
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_call_replays_exactly_as_the_model_sent_it() -> Result<()> {
+        let normalized = normalize_chat_messages(
+            vec![ConversationItem::Assistant {
+                items: vec![AssistantItem::ScriptCall {
+                    call_id: ToolCallId::new("call-1"),
+                    name: "bash".to_string(),
+                    input: r#"{"command": "ls"}"#.to_string(),
+                    arguments_error: Some("unknown tool 'bash'".to_string()),
+                }],
+            }],
+            &ResolvedImages::default(),
+            &kraai_types::ProviderId::new("fixture"),
+        )?;
+        assert_eq!(
+            serde_json::to_value(normalized)?,
+            serde_json::json!([
+                {"role":"assistant", "content":null, "tool_calls":[{
+                    "id":"call-1", "type":"function", "function":{
+                        "name":"bash", "arguments":r#"{"command": "ls"}"#
                     }
                 }]}
             ])

@@ -8,6 +8,8 @@ pub struct ChatCompletionRequest {
     pub tools: Option<Vec<FunctionTool>>,
     pub tool_choice: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_completion_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
@@ -270,6 +272,7 @@ mod tests {
                 messages: Vec::new(),
                 tools,
                 tool_choice: "none",
+                max_completion_tokens: None,
                 parallel_tool_calls: None,
                 stream: true,
                 stream_options: None,

@@ -602,7 +602,7 @@ async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
 }
 
 #[tokio::test]
-async fn uses_retry_after_when_parseable() -> Result<()> {
+async fn a_shorter_retry_after_still_waits_the_backoff() -> Result<()> {
     let address = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "429 Too Many Requests",
@@ -634,7 +634,8 @@ async fn uses_retry_after_when_parseable() -> Result<()> {
     let [event] = events.as_slice() else {
         return Err(eyre!("expected one retry event"));
     };
-    assert_eq!(event.delay, Duration::ZERO);
+    assert!(event.delay >= Duration::from_millis(4));
+    assert!(event.delay <= Duration::from_millis(6));
     Ok(())
 }
 
@@ -684,7 +685,7 @@ async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
 
 #[test]
 fn default_retry_policy_is_bounded_and_jitter_stays_within_limits() {
-    assert_eq!(DEFAULT_HTTP_RETRY_POLICY.max_attempts, 6);
+    assert_eq!(DEFAULT_HTTP_RETRY_POLICY.max_attempts, 10);
     assert_eq!(DEFAULT_HTTP_RETRY_POLICY.max_delay, Duration::from_secs(15));
     assert_eq!(
         DEFAULT_HTTP_RETRY_POLICY.max_elapsed,

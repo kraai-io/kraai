@@ -224,6 +224,9 @@ where
             .script_tool
             .as_ref()
             .map(|tool| tool.name.clone());
+        let max_completion_tokens = model
+            .as_ref()
+            .and_then(|model| model.output_limit(&provider_request.messages));
         let messages = normalize_chat_messages(provider_request.messages, &images, &self.id)?;
         let has_tool_history = messages.iter().any(|message| match message {
             RequestMessage::Assistant { tool_calls, .. } => !tool_calls.is_empty(),
@@ -237,6 +240,7 @@ where
         let request = ChatCompletionRequest {
             tools,
             tool_choice: if tool_name.is_some() { "auto" } else { "none" },
+            max_completion_tokens,
             parallel_tool_calls: tool_name.as_ref().map(|_| false),
             model: model_id.to_string(),
             messages,

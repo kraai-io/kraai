@@ -10,6 +10,7 @@ use tokio::process::Command;
 
 use crate::config::LaunchPlan;
 use crate::error::SandboxError;
+use crate::platform::git_worktree::linked_worktree_common_dir;
 
 use super::seccomp::restricted_network_seccomp_filter;
 
@@ -198,6 +199,12 @@ pub(crate) fn build_bwrap_args(
     };
     push_parent_dirs(&mut args, &resolved_workspace);
     push_bind(&mut args, workspace_flag, &resolved_workspace);
+    if capabilities.contains(SandboxCapability::WorkspaceWrite)
+        && let Some(git_dir) = linked_worktree_common_dir(&resolved_workspace)
+    {
+        push_parent_dirs(&mut args, &git_dir);
+        push_bind(&mut args, "--bind", &git_dir);
+    }
 
     if network_enabled
         && !capabilities.contains(SandboxCapability::HostRead)

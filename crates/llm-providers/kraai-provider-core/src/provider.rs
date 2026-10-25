@@ -84,7 +84,7 @@ impl ScriptToolDefinition {
     pub fn nushell() -> Self {
         Self {
             name: Self::NAME.to_string(),
-            description: "Execute a Nushell script. Supply the complete script, beginning with a metadata comment containing timeout, such as # timeout=30sec.".to_string(),
+            description: "Execute a Nushell script. Supply the complete script, beginning with a header comment containing its timeout and any extra sandbox capabilities it requests, such as `# timeout=30sec` or `# timeout=30sec permissions=host-write`.".to_string(),
         }
     }
 }
@@ -102,6 +102,8 @@ pub struct Model {
     pub id: ModelId,
     pub name: String,
     pub max_context: Option<usize>,
+    #[serde(default)]
+    pub max_output: Option<usize>,
     pub supports_images: bool,
     #[serde(default)]
     pub options: Vec<kraai_types::ModelOptionDefinition>,

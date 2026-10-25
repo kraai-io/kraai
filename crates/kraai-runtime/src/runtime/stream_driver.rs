@@ -466,6 +466,7 @@ impl StreamReader {
                     call_id,
                     name,
                     input,
+                    arguments_error,
                 }) => {
                     if draining {
                         // Only the first call runs; later ones stay in the response and get a
@@ -475,23 +476,29 @@ impl StreamReader {
                             call_id,
                             name,
                             input,
+                            arguments_error,
                         }) {
                             return ResponseEnd::Stopped;
                         }
                         continue;
                     }
-                    if name != ScriptToolDefinition::NAME {
+                    if arguments_error.is_none() && name != ScriptToolDefinition::NAME {
                         return ResponseEnd::Failed(format!(
                             "provider called unexpected tool '{name}'"
                         ));
                     }
-                    response.boundary = Some(protocol_boundary(call_id.clone(), &input));
+                    response.boundary = Some(protocol_boundary(
+                        call_id.clone(),
+                        &input,
+                        arguments_error.clone(),
+                    ));
                     drain_deadline =
                         Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
                     self.forward(StreamEvent::ScriptCall {
                         call_id,
                         name,
                         input,
+                        arguments_error,
                     })
                 }
                 Ok(ProviderStreamEvent::Finished { stop_reason }) => {
@@ -559,8 +566,16 @@ enum ResponseEnd {
     },
 }
 
-fn protocol_boundary(call_id: ToolCallId, input: &str) -> CompletedProtocolBoundary {
-    match parse_script_input(input) {
+fn protocol_boundary(
+    call_id: ToolCallId,
+    input: &str,
+    arguments_error: Option<String>,
+) -> CompletedProtocolBoundary {
+    let parsed = match arguments_error {
+        Some(error) => Err(ProtocolError::InvalidToolCall(error)),
+        None => parse_script_input(input),
+    };
+    match parsed {
         Ok(script) => CompletedProtocolBoundary {
             call_id,
             script: Some(script),

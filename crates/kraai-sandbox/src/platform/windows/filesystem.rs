@@ -74,7 +74,7 @@ pub(super) fn check_roots(
     check_roots_with(workspace, runtime_roots, temp, query)
 }
 
-#[cfg(all(windows, test))]
+#[cfg(windows)]
 pub(super) fn check(path: &Path) -> Result<(), SandboxError> {
     check_with(path, query)
 }

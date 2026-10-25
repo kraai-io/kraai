@@ -622,6 +622,7 @@ mod tests {
                     call_id: ToolCallId::new("call"),
                     name: "kraai_nushell".into(),
                     input: input.into(),
+                    arguments_error: None,
                 },
                 AssistantItem::Text {
                     phase: AssistantPhase::FinalAnswer,

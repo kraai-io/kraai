@@ -2,7 +2,18 @@ use super::*;
 use crate::context_state::InstructionSection;
 
 const SCRIPT_EXECUTION_PROMPT: &str = r#"# Script Execution
-Use the `kraai_nushell` tool to run complete Nushell scripts starting with `# timeout=30sec` (any positive Nushell duration). To request capabilities beyond those granted in the execution context, append `permissions=workspace-write,network`. Available capabilities: `workspace-read`, `host-read`, `workspace-write`, `host-write`, `network`, `no-sandbox`. Request `no-sandbox` alone.
+Use the `kraai_nushell` tool to run complete Nushell scripts. Each script starts with a header comment giving its timeout (any positive Nushell duration). A script that needs capabilities beyond those granted in the execution context lists them in a `permissions` field of the same header; the user may be asked to approve them.
+
+```nu
+# timeout=5min permissions=host-write,network
+cargo install --locked cargo-nextest
+```
+
+Capabilities:
+- `workspace-read` / `workspace-write`: read or write the workspace directory, including a linked git worktree's git directory.
+- `host-read` / `host-write`: read or write the whole file system.
+- `network`: network access.
+- `no-sandbox`: run without the sandbox; request it alone.
 
 Each script starts a fresh shell in the workspace; shell state does not persist. Timeout kills the script and its children; completed writes remain.
 

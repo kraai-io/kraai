@@ -210,6 +210,7 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
                 call_id: ToolCallId::new("tool"),
                 name: String::from("nushell"),
                 input: String::from("echo secret-source"),
+                arguments_error: None,
             }],
         },
         status: MessageStatus::Complete,

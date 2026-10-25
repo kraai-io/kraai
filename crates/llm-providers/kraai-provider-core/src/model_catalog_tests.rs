@@ -240,7 +240,7 @@ async fn capabilities_are_scoped_to_the_serving_provider_and_preserve_unknowns()
         "fetched_at": 123,
         "providers": {
             "vision": {"api":"https://vision.test/v1", "models":{
-                "shared":{"name":"Vision model","modalities":{"input":["text","image"]},"limit":{"context":65536}},
+                "shared":{"name":"Vision model","modalities":{"input":["text","image"]},"limit":{"context":65536,"output":8192}},
                 "unknown":{},
                 "invalid-limit":{"limit":{"context":0}}
             }},
@@ -256,6 +256,7 @@ async fn capabilities_are_scoped_to_the_serving_provider_and_preserve_unknowns()
             options: Vec::new(),
             name: Some("Vision model".into()),
             max_context: Some(65536),
+            max_output: Some(8192),
             supports_images: Some(true)
         })
     );

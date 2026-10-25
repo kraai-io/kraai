@@ -7,6 +7,7 @@ use kraai_execution_types::{SandboxCapabilities, SandboxCapability};
 use super::profile::build_args;
 use crate::config::LaunchPlan;
 use crate::temp_dir::PrivateTempDir;
+use crate::tests::git_worktree::LinkedWorktree;
 
 fn fixture(capabilities: &[SandboxCapability]) -> (PrivateTempDir, LaunchPlan, PathBuf) {
     let root = PrivateTempDir::create(None).expect("create fixture");
@@ -179,5 +180,39 @@ fn sysctl_access_is_limited_to_runtime_information() {
         for name in ["kern.argmax", "hw.ncpu", "machdep.cpu.brand_string"] {
             assert!(policy.contains(&format!("(sysctl-name \"{name}\")")));
         }
+    }
+}
+
+#[test]
+fn workspace_write_allows_linked_worktree_common_dir_over_runtime_roots() {
+    for (capability, writable) in [
+        (SandboxCapability::WorkspaceWrite, true),
+        (SandboxCapability::WorkspaceRead, false),
+    ] {
+        let worktree = LinkedWorktree::new();
+        let private_temp = PrivateTempDir::create(None).expect("create private temp");
+        let mut plan = LaunchPlan::new(
+            PathBuf::from("/bin/sh"),
+            worktree.workspace.clone(),
+            SandboxCapabilities::new([capability]).expect("valid capabilities"),
+            Duration::from_secs(5),
+        );
+        plan.runtime_roots.push(
+            worktree
+                .workspace
+                .parent()
+                .expect("fixture base")
+                .to_path_buf(),
+        );
+        let args = build_args(&plan, private_temp.path()).expect("build policy");
+        let policy = source(&args);
+        let parameters = parameters_for(&args, &worktree.common_dir);
+        if !writable {
+            assert!(parameters.is_empty());
+            continue;
+        }
+        let filter = format!("(require-any (literal {0}) (subpath {0}))", parameters[0]);
+        assert!(policy.contains(&format!("(allow file-read* file-write* {filter})")));
+        assert!(policy.contains(&format!("(require-not {filter})")));
     }
 }

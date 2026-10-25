@@ -326,6 +326,7 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
                         id: ModelId::new("stale"),
                         name: String::from("Stale model"),
                         max_context: None,
+                        max_output: None,
                         options: Vec::new(),
                     },
                 )])
@@ -348,6 +349,7 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
                     supports_images: None,
                     name: Some(String::from("Configured alpha")),
                     max_context: Some(4096),
+                    max_output: None,
                     options: Vec::new(),
                     remove_options: Vec::new(),
                 },
@@ -445,6 +447,7 @@ async fn discovery_requires_advertised_reasoning_and_applies_native_modes_to_htt
         Some(&serde_json::json!("future-effort"))
     );
     assert_eq!(body.get("speed"), Some(&serde_json::json!("fast")));
+    assert_eq!(body.get("max_completion_tokens"), None);
 }
 
 #[tokio::test]
@@ -690,7 +693,7 @@ async fn configured_custom_models_absent_from_discovery_apply_custom_settings() 
         .register_model(ModelConfig {
             id: id.clone(),
             provider_id: provider.id.clone(),
-            config: DynamicConfig::new(),
+            config: DynamicConfig::from([("max_output".into(), DynamicValue::Integer(8192))]),
             options: vec![definition],
             remove_options: Vec::new(),
         })
@@ -722,4 +725,8 @@ async fn configured_custom_models_absent_from_discovery_apply_custom_settings() 
         Some(&serde_json::json!(4000))
     );
     assert_eq!(body.get("model"), Some(&serde_json::json!("custom-model")));
+    assert_eq!(
+        body.get("max_completion_tokens"),
+        Some(&serde_json::json!(8192))
+    );
 }

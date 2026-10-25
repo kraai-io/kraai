@@ -333,6 +333,7 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
             call_id.clone(),
             String::from("kraai_nushell"),
             String::from("# timeout: 1\n42"),
+            None,
         )
         .await
         .expect("script call should be appended");

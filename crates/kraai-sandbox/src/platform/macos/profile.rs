@@ -6,6 +6,7 @@ use kraai_execution_types::SandboxCapability;
 
 use crate::SandboxError;
 use crate::config::LaunchPlan;
+use crate::platform::git_worktree::linked_worktree_common_dir;
 
 pub(super) fn build_args(
     plan: &LaunchPlan,
@@ -16,6 +17,25 @@ pub(super) fn build_args(
     let mut profile = Profile::new();
     let workspace_filter = profile.path_filter(&workspace, workspace.is_dir())?;
     let temp_filter = profile.path_filter(&private_temp, true)?;
+    let git_dir = plan
+        .capabilities
+        .contains(SandboxCapability::WorkspaceWrite)
+        .then(|| linked_worktree_common_dir(&workspace))
+        .flatten();
+    let git_filter = git_dir
+        .as_deref()
+        .map(|git_dir| profile.path_filter(git_dir, true))
+        .transpose()?;
+    let writable_exclusions = [
+        Some(&workspace_filter),
+        Some(&temp_filter),
+        git_filter.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|filter| format!("(require-not {filter})"))
+    .collect::<Vec<_>>()
+    .join(" ");
 
     if plan.capabilities.contains(SandboxCapability::HostRead) {
         profile.push("(allow file-read* file-map-executable)");
@@ -35,6 +55,9 @@ pub(super) fn build_args(
     {
         profile.push(&format!("(allow file-write* {workspace_filter})"));
     }
+    if let Some(git_filter) = &git_filter {
+        profile.push(&format!("(allow file-read* file-write* {git_filter})"));
+    }
 
     let runtime_roots = plan
         .runtime_roots
@@ -46,7 +69,7 @@ pub(super) fn build_args(
         profile.push(&format!("(allow file-read* file-map-executable {filter})"));
         if !root.starts_with(&workspace) {
             profile.push(&format!(
-                "(deny file-write* (require-all {filter} (require-not {workspace_filter}) (require-not {temp_filter})))"
+                "(deny file-write* (require-all {filter} {writable_exclusions}))"
             ));
             profile.protect_ancestors(&root)?;
         }
@@ -75,6 +98,9 @@ pub(super) fn build_args(
 
     profile.protect_directory(&workspace)?;
     profile.protect_directory(&private_temp)?;
+    if let Some(git_dir) = &git_dir {
+        profile.protect_directory(git_dir)?;
+    }
 
     let mut args = vec![OsString::from("-p"), profile.source.into()];
     args.extend(profile.parameters);

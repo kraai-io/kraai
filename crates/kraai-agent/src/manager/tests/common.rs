@@ -32,6 +32,7 @@ impl Provider for MockProvider {
                 id: ModelId::new(id),
                 name: String::from("Mock Model"),
                 max_context: None,
+                max_output: None,
             })
             .collect()
     }

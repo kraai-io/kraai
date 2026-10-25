@@ -20,6 +20,7 @@ impl Provider for ConfigurableProvider {
             id: ModelId::new("model"),
             name: "Configurable model".into(),
             max_context: None,
+            max_output: None,
             supports_images: false,
             options: vec![
                 ModelOptionDefinition {

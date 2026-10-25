@@ -10,7 +10,7 @@ use tokio::sync::{RwLock, RwLockReadGuard, watch};
 
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 const MAX_AGE: u64 = 24 * 60 * 60;
-const CACHE_VERSION: u32 = 3;
+const CACHE_VERSION: u32 = 4;
 
 mod resolution;
 
@@ -53,12 +53,15 @@ struct Modalities {
 #[derive(Serialize, Deserialize)]
 struct Limits {
     context: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CatalogModelMetadata {
     pub name: Option<String>,
     pub max_context: Option<usize>,
+    pub max_output: Option<usize>,
     pub supports_images: Option<bool>,
     pub options: Vec<kraai_types::ModelOptionDefinition>,
 }
@@ -310,13 +313,17 @@ impl ModelCatalogView<'_> {
         let (_, _, model) = serving
             .or(owned)
             .or_else(|| snapshot.model(provider, api, model))?;
-        let metadata = CatalogModelMetadata {
-            name: model.name.clone(),
-            max_context: model
+        let limit = |field: fn(&Limits) -> Option<usize>| {
+            model
                 .limit
                 .as_ref()
-                .and_then(|limit| limit.context)
-                .filter(|limit| *limit > 0),
+                .and_then(field)
+                .filter(|limit| *limit > 0)
+        };
+        let metadata = CatalogModelMetadata {
+            name: model.name.clone(),
+            max_context: limit(|limits| limits.context),
+            max_output: limit(|limits| limits.output),
             supports_images: model
                 .modalities
                 .as_ref()

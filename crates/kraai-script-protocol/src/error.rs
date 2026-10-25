@@ -7,6 +7,7 @@ pub enum ProtocolError {
     InvalidTimeout(String),
     InvalidPermissions(String),
     EmptyScript,
+    InvalidToolCall(String),
 }
 
 impl std::fmt::Display for ProtocolError {
@@ -21,6 +22,7 @@ impl std::fmt::Display for ProtocolError {
                 write!(f, "invalid script permissions: {message}")
             }
             Self::EmptyScript => write!(f, "tool_call script is empty"),
+            Self::InvalidToolCall(message) => write!(f, "invalid tool call: {message}"),
         }
     }
 }

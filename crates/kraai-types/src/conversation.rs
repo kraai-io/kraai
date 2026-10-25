@@ -140,6 +140,9 @@ pub enum AssistantItem {
         call_id: ToolCallId,
         name: String,
         input: String,
+        /// Why the provider's arguments did not form a script call. `input` then holds the
+        /// arguments exactly as the provider sent them.
+        arguments_error: Option<String>,
     },
 }
 

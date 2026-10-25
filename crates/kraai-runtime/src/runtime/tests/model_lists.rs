@@ -45,6 +45,7 @@ impl Provider for ListedProvider {
                 id: ModelId::new(id.clone()),
                 name: id.clone(),
                 max_context: None,
+                max_output: None,
                 supports_images: false,
                 options: Vec::new(),
             })

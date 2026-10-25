@@ -61,6 +61,7 @@ async fn restart_after_cancellation_failure(
             ToolCallId::new("cancelled-call"),
             "kraai_nushell".into(),
             "echo text".into(),
+            None,
         )
         .await;
     let usage = TokenUsage {
@@ -201,6 +202,7 @@ async fn script_result_recovery_requires_a_matching_direct_parent_and_no_live_st
                 ToolCallId::new("call"),
                 "kraai_nushell".into(),
                 "echo text".into(),
+                None,
             )
             .await;
         let source = manager

@@ -273,12 +273,14 @@ impl AgentManager {
         call_id: ToolCallId,
         name: String,
         input: String,
+        arguments_error: Option<String>,
     ) -> Option<StreamedItem> {
         let id = call_id.clone();
         let call = AssistantItem::ScriptCall {
             call_id,
             name,
             input,
+            arguments_error,
         };
         self.append_item(message_id, call, |items| {
             !items.iter().any(
@@ -347,6 +349,7 @@ impl AgentManager {
                 diagnostic: Some(SKIPPED_CALL_DIAGNOSTIC),
                 stdout_file: None,
                 stderr_file: None,
+                sandbox_blocked: None,
             },
         );
         for (index, item) in items.iter().enumerate() {

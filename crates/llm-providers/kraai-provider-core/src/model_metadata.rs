@@ -6,6 +6,7 @@ use crate::{DynamicConfig, DynamicValue, FieldDefinition, FieldValueKind, Valida
 pub struct ConfiguredModelMetadata {
     pub name: Option<String>,
     pub max_context: Option<usize>,
+    pub max_output: Option<usize>,
     pub supports_images: Option<bool>,
     pub options: Vec<kraai_types::ModelOptionDefinition>,
     pub remove_options: Vec<String>,
@@ -18,6 +19,7 @@ impl ConfiguredModelMetadata {
         catalog: Option<crate::CatalogModelMetadata>,
     ) -> crate::Model {
         let catalog = catalog.unwrap_or_default();
+        let max_context = self.max_context.or(catalog.max_context);
         crate::Model {
             name: self
                 .name
@@ -25,7 +27,12 @@ impl ConfiguredModelMetadata {
                 .or(catalog.name)
                 .unwrap_or_else(|| id.to_string()),
             id,
-            max_context: self.max_context.or(catalog.max_context),
+            max_context,
+            max_output: crate::context_budget::max_output(
+                self.max_output,
+                catalog.max_output,
+                max_context,
+            ),
             supports_images: self
                 .supports_images
                 .or(catalog.supports_images)
@@ -113,6 +120,17 @@ impl ConfiguredModelMetadata {
                 help_text: Some(String::from("Optional context limit in tokens")),
                 default_value: None,
             },
+            FieldDefinition {
+                key: String::from("max_output"),
+                label: String::from("Max Output"),
+                value_kind: FieldValueKind::Integer,
+                required: false,
+                secret: false,
+                help_text: Some(String::from(
+                    "Optional response limit in tokens, replacing the default of the catalog limit within the context left after compaction",
+                )),
+                default_value: None,
+            },
         ]
     }
 
@@ -126,18 +144,16 @@ impl ConfiguredModelMetadata {
                 message: String::from("Display Name must be a string"),
             });
         }
-        if let Some(value) = config.get("max_context") {
-            match value.as_integer() {
-                Some(number) if number > 0 => {}
-                Some(_) => errors.push(ValidationError {
-                    field: String::from("max_context"),
-                    message: String::from("Max Context must be greater than zero"),
-                }),
-                None => errors.push(ValidationError {
-                    field: String::from("max_context"),
-                    message: String::from("Max Context must be an integer"),
-                }),
-            }
+        for (field, label) in [("max_context", "Max Context"), ("max_output", "Max Output")] {
+            let message = match config.get(field).map(DynamicValue::as_integer) {
+                None | Some(Some(1..)) => continue,
+                Some(Some(_)) => format!("{label} must be greater than zero"),
+                Some(None) => format!("{label} must be an integer"),
+            };
+            errors.push(ValidationError {
+                field: String::from(field),
+                message,
+            });
         }
         if let Some(value) = config.get("supports_images")
             && value.as_bool().is_none()
@@ -156,12 +172,14 @@ impl ConfiguredModelMetadata {
             .and_then(DynamicValue::as_str)
             .map(ToString::to_string)
             .filter(|value| !value.trim().is_empty());
-        let max_context = config
-            .get("max_context")
-            .and_then(DynamicValue::as_integer)
-            .map(usize::try_from)
-            .transpose()
-            .map_err(|error| eyre!("Invalid max_context: {error}"))?;
+        let tokens = |field: &str| {
+            config
+                .get(field)
+                .and_then(DynamicValue::as_integer)
+                .map(usize::try_from)
+                .transpose()
+                .map_err(|error| eyre!("Invalid {field}: {error}"))
+        };
         let supports_images = config
             .get("supports_images")
             .map(|value| {
@@ -172,7 +190,8 @@ impl ConfiguredModelMetadata {
             .transpose()?;
         Ok(Self {
             name,
-            max_context,
+            max_context: tokens("max_context")?,
+            max_output: tokens("max_output")?,
             supports_images,
             options: Vec::new(),
             remove_options: Vec::new(),
@@ -193,6 +212,7 @@ mod tests {
         let catalog = crate::CatalogModelMetadata {
             name: Some("Catalog".into()),
             max_context: Some(65536),
+            max_output: Some(32768),
             supports_images: Some(true),
             options: Vec::new(),
         };
@@ -201,9 +221,11 @@ mod tests {
             ConfiguredModelMetadata::default().resolve(id.clone(), Some(catalog.clone()));
         assert!(discovered.supports_images);
         assert_eq!(discovered.max_context, Some(65536));
+        assert_eq!(discovered.max_output, Some(13108));
         let configured = ConfiguredModelMetadata {
             name: Some("Override".into()),
             max_context: Some(4096),
+            max_output: Some(2048),
             supports_images: Some(false),
             options: Vec::new(),
             remove_options: Vec::new(),
@@ -211,6 +233,7 @@ mod tests {
         .resolve(id, Some(catalog));
         assert!(!configured.supports_images);
         assert_eq!(configured.max_context, Some(4096));
+        assert_eq!(configured.max_output, Some(2048));
         assert_eq!(configured.name, "Override");
     }
 
@@ -236,17 +259,19 @@ mod tests {
                 },
             ],
         );
-        for max_context in [-1, 0] {
-            assert_eq!(
-                ConfiguredModelMetadata::validate(&DynamicConfig::from([(
-                    String::from("max_context"),
-                    DynamicValue::Integer(max_context),
-                )])),
-                vec![ValidationError {
-                    field: String::from("max_context"),
-                    message: String::from("Max Context must be greater than zero"),
-                }],
-            );
+        for (field, label) in [("max_context", "Max Context"), ("max_output", "Max Output")] {
+            for tokens in [-1, 0] {
+                assert_eq!(
+                    ConfiguredModelMetadata::validate(&DynamicConfig::from([(
+                        String::from(field),
+                        DynamicValue::Integer(tokens),
+                    )])),
+                    vec![ValidationError {
+                        field: String::from(field),
+                        message: format!("{label} must be greater than zero"),
+                    }],
+                );
+            }
         }
     }
 

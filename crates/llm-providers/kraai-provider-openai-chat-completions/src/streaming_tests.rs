@@ -42,7 +42,7 @@ async fn fragmented_arguments_preserve_script_and_drain_usage_after_call() -> Re
             matches!(events.get(2), Some(ProviderStreamEvent::Usage(usage)) if usage.total_tokens == 5)
         );
         assert!(
-            matches!(events.first(), Some(ProviderStreamEvent::ScriptCall { call_id, name, input: script }) if call_id.as_str() == "call-1" && name == "kraai_nushell" && script == input)
+            matches!(events.first(), Some(ProviderStreamEvent::ScriptCall { call_id, name, input: script, arguments_error: None }) if call_id.as_str() == "call-1" && name == "kraai_nushell" && script == input)
         );
         assert!(matches!(
             events.get(1),
@@ -71,7 +71,7 @@ async fn tool_fragments_without_indexes_preserve_the_single_call() -> Result<()>
     .collect::<Result<Vec<_>>>()?;
     assert_eq!(events.len(), 2);
     assert!(
-        matches!(events.first(), Some(ProviderStreamEvent::ScriptCall { call_id, name, input }) if call_id.as_str() == "call-1" && name == "kraai_nushell" && input == "ls")
+        matches!(events.first(), Some(ProviderStreamEvent::ScriptCall { call_id, name, input, arguments_error: None }) if call_id.as_str() == "call-1" && name == "kraai_nushell" && input == "ls")
     );
     Ok(())
 }
@@ -101,41 +101,79 @@ async fn multiple_calls_without_indexes_never_emit_a_script() {
 }
 
 #[tokio::test]
+async fn invalid_calls_keep_raw_arguments_and_their_error() -> Result<()> {
+    let mut wrong_tool = call(r#"{"input":"ls"}"#);
+    wrong_tool["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] = json!("bash");
+    for (chunk, name, arguments, error) in [
+        (
+            call(r#"{"command": "ls"}"#),
+            "kraai_nushell",
+            r#"{"command": "ls"}"#,
+            "arguments must be a JSON object with one string field \"input\": unknown field `command`, expected `input` at line 1 column 10",
+        ),
+        (
+            call(r#"{"input":"#),
+            "kraai_nushell",
+            r#"{"input":"#,
+            "arguments must be a JSON object with one string field \"input\": EOF while parsing a value at line 1 column 9",
+        ),
+        (
+            call(r#"{"input":"ls","extra":true}"#),
+            "kraai_nushell",
+            r#"{"input":"ls","extra":true}"#,
+            "arguments must be a JSON object with one string field \"input\": unknown field `extra`, expected `input` at line 1 column 21",
+        ),
+        (
+            wrong_tool,
+            "bash",
+            r#"{"input":"ls"}"#,
+            "unknown tool 'bash'; the only tool is 'kraai_nushell'",
+        ),
+    ] {
+        let events = collect(
+            vec![data(chunk), data(finish("tool_calls")), Ok(SseEvent::Done)],
+            true,
+        )
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            events,
+            [
+                ProviderStreamEvent::ScriptCall {
+                    call_id: ToolCallId::new("call-1"),
+                    name: name.into(),
+                    input: arguments.into(),
+                    arguments_error: Some(error.into()),
+                },
+                ProviderStreamEvent::Finished {
+                    stop_reason: StopReason::ToolCall
+                },
+            ]
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn malformed_or_incomplete_calls_never_emit_a_script() {
     let good = r##"{"input":"# timeout=1sec\nls"}"##;
     let mut extra = call(good);
     extra["choices"][0]["delta"]["tool_calls"][0]["index"] = json!(1);
-    let mut unknown = call(good);
-    unknown["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] = json!("shell");
-    let mut missing_id = call(good);
-    missing_id["choices"][0]["delta"]["tool_calls"][0]["id"] = Value::Null;
+    let missing_id = |arguments: &str| {
+        let mut chunk = call(arguments);
+        chunk["choices"][0]["delta"]["tool_calls"][0]["id"] = Value::Null;
+        vec![data(chunk), data(finish("tool_calls")), Ok(SseEvent::Done)]
+    };
     for events in [
+        missing_id(good),
+        missing_id(r#"{"command":"ls"}"#),
         vec![data(call(good))],
         vec![data(call(good)), Ok(SseEvent::Done)],
         vec![data(call(good)), data(finish("stop")), Ok(SseEvent::Done)],
         vec![
             data(call(good)),
             data(extra),
-            data(finish("tool_calls")),
-            Ok(SseEvent::Done),
-        ],
-        vec![
-            data(unknown),
-            data(finish("tool_calls")),
-            Ok(SseEvent::Done),
-        ],
-        vec![
-            data(missing_id),
-            data(finish("tool_calls")),
-            Ok(SseEvent::Done),
-        ],
-        vec![
-            data(call("{\"input\":")),
-            data(finish("tool_calls")),
-            Ok(SseEvent::Done),
-        ],
-        vec![
-            data(call(r#"{"input":"ls","extra":true}"#)),
             data(finish("tool_calls")),
             Ok(SseEvent::Done),
         ],
@@ -386,6 +424,7 @@ async fn structured_reasoning_fragments_survive_tool_continuation() -> Result<()
                         call_id: ToolCallId::new("call-1"),
                         name: "kraai_nushell".into(),
                         input: "ls".into(),
+                        arguments_error: None,
                     },
                 ],
             },

@@ -26,6 +26,7 @@ impl Provider for CatalogProvider {
             id: ModelId::new("available"),
             name: "Available model".into(),
             max_context: Some(5_000),
+            max_output: None,
             supports_images: false,
             options: Vec::new(),
         }]

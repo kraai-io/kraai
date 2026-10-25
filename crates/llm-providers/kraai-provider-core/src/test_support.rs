@@ -28,6 +28,7 @@ impl MockProvider {
                 id: ModelId::new("mock-model"),
                 name: "Mock Model".to_string(),
                 max_context: Some(4096),
+                max_output: None,
                 options: Vec::new(),
             }],
             reply_count: AtomicUsize::new(0),

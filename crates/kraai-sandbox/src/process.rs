@@ -314,16 +314,12 @@ pub(crate) fn is_likely_sandbox_denied(
         return false;
     }
 
-    const SANDBOX_DENIED_KEYWORDS: [&str; 9] = [
+    const SANDBOX_DENIED_KEYWORDS: [&str; 5] = [
+        "read-only file",
         "operation not permitted",
         "access is denied",
-        "permission denied",
-        "no permissions",
-        "read-only file system",
-        "seccomp",
-        "sandbox",
-        "landlock",
-        "failed to write file",
+        "network unreachable",
+        "network is unreachable",
     ];
 
     [stdout, stderr].into_iter().any(|section| {

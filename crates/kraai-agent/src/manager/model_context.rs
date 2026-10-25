@@ -160,7 +160,7 @@ impl AgentManager {
             .map_or(0, |(_, used)| used.saturating_add(unreported_tokens))
             .max(request_tokens);
         let compact_first = max_context.is_some_and(|limit| {
-            limit > 0 && (projected_tokens as u128) * 100 >= (limit as u128) * 80
+            limit > 0 && projected_tokens >= kraai_provider_core::compaction_point(limit)
         });
         let notifications = files.notifications.clone();
         let compaction = covered_through.is_some().then(|| ContextCompaction {

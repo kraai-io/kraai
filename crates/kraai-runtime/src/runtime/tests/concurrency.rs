@@ -58,6 +58,7 @@ impl kraai_provider_core::Provider for HandoffProvider {
                 input: String::from(
                     "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
                 ),
+                arguments_error: None,
             }));
             let events = futures::stream::iter(events);
             if self.hold_after_call {

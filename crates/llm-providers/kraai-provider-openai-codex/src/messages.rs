@@ -121,6 +121,7 @@ pub fn normalize_conversation(
                             call_id,
                             name,
                             input: tool_input,
+                            ..
                         } => input.push(ResponsesRequestItem::CustomToolCall(
                             ResponsesCustomToolCall {
                                 kind: "custom_tool_call",
@@ -305,6 +306,7 @@ mod tests {
                             call_id: ToolCallId::new("call-1"),
                             name: "kraai_nushell".to_string(),
                             input: "# timeout=10sec\nls".to_string(),
+                            arguments_error: None,
                         },
                     ],
                 },

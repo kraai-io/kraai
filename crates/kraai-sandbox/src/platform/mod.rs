@@ -2,6 +2,8 @@ use crate::config::{LaunchPlan, PreparedCommand, path_is_absolute};
 use crate::error::SandboxError;
 use kraai_execution_types::SandboxCapability;
 
+pub(crate) mod git_worktree;
+
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;
 

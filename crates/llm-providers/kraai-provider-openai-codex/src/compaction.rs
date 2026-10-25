@@ -78,6 +78,7 @@ mod tests {
                 call_id: ToolCallId::new("call"),
                 name: "tool".into(),
                 input: "inspect".into(),
+                arguments_error: None,
             }],
         };
         let mut request = ProviderRequest {

@@ -51,6 +51,7 @@ impl Provider for WarmingProvider {
             id: ModelId::new("mock-model"),
             name: "Mock".into(),
             max_context: None,
+            max_output: None,
         }]
     }
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
@@ -105,6 +106,7 @@ impl Provider for WarmingProvider {
                 call_id: ToolCallId::new("discarded-call"),
                 name: "kraai_nushell".into(),
                 input: "# timeout=10sec\nerror make {msg: 'must never execute'}".into(),
+                arguments_error: None,
             }));
         }
         events.push(Ok(ProviderStreamEvent::Usage(TokenUsage {

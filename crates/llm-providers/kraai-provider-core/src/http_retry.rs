@@ -71,7 +71,7 @@ impl ProviderCooldown {
 }
 
 pub const DEFAULT_HTTP_RETRY_POLICY: HttpRetryPolicy = HttpRetryPolicy {
-    max_attempts: 6,
+    max_attempts: 10,
     initial_backoff: Duration::from_secs(1),
     max_delay: Duration::from_secs(15),
     max_elapsed: Duration::from_secs(60),
@@ -127,8 +127,9 @@ where
 
                 let retry_number = attempt_number;
                 let reason = format!("HTTP {}", response.status());
-                let delay =
-                    retry_after.unwrap_or_else(|| policy.jittered_backoff_for_retry(retry_number));
+                // A proxy's short Retry-After can hide a longer upstream limit, so it is a floor.
+                let backoff = policy.jittered_backoff_for_retry(retry_number);
+                let delay = retry_after.map_or(backoff, |retry_after| retry_after.max(backoff));
                 if !retry_fits_budget(policy, started, delay) {
                     return Ok(response);
                 }

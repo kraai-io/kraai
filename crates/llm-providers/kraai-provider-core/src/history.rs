@@ -64,6 +64,7 @@ mod tests {
             call_id: ToolCallId::new("call"),
             name: "kraai_nushell".into(),
             input: "ls".into(),
+            arguments_error: None,
         };
         let result = ConversationItem::ScriptResult {
             outcome: kraai_execution_types::ScriptExecutionOutcome {

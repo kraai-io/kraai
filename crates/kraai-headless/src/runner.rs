@@ -302,6 +302,7 @@ mod tests {
                 call_id: kraai_types::ToolCallId::new("call"),
                 name: "kraai_nushell".into(),
                 input: "ls".into(),
+                arguments_error: None,
             },
         )?;
         transcript.item(&mut output, "n", 0, &text("Done."))?;

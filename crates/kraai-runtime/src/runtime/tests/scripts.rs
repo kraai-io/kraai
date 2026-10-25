@@ -126,7 +126,7 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
     ));
     assert!(matches!(
         items.get(2),
-        Some(AssistantItem::ScriptCall { call_id, name, input })
+        Some(AssistantItem::ScriptCall { call_id, name, input, arguments_error: None })
             if call_id.as_str() == "openai-call-1"
                 && name == "kraai_nushell"
                 && input.starts_with("# timeout=30sec")
@@ -536,6 +536,82 @@ async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Resu
             .as_deref()
             .is_some_and(|error| error.contains("timeout"))
     );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_tool_call_fails_without_running_and_replays_raw_call() -> Result<()> {
+    let error = "unknown tool 'bash'; the only tool is 'kraai_nushell'";
+    let arguments = r#"{"command": "ls"}"#;
+    let Some(harness) = RuntimeTestHarness::new(vec![
+        vec![ScriptedChunk::invalid_call(
+            "call-1", "bash", arguments, error,
+        )],
+        vec![ScriptedChunk::plain("Retrying with the right tool.")],
+    ])
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("list files"),
+            String::from("mock-model"),
+            String::from("mock"),
+            Default::default(),
+        )
+        .await?;
+
+    let events = harness
+        .events
+        .wait_for("turn completion", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::TurnCompleted { session_id: event_session } if event_session == &session_id)
+            })
+        })
+        .await;
+    let diagnostic = format!("invalid tool call: {error}");
+    assert!(events.iter().any(|event| {
+        matches!(event, Event::ScriptResultReady { session_id: event_session, call_id, output, outcome, .. }
+            if event_session == &session_id
+                && call_id == "call-1"
+                && outcome.status == ScriptExecutionStatus::InvalidScript
+                && output.display_text().contains(&diagnostic))
+    }));
+    assert!(!events.iter().any(|event| {
+        matches!(event, Event::ScriptApprovalRequested { session_id: event_session, .. } if event_session == &session_id)
+    }));
+
+    let requests = harness
+        .provider_requests
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    assert_eq!(requests.len(), 2);
+    let retry = &requests[1].messages;
+    let call = retry
+        .iter()
+        .position(|item| {
+            item.assistant_items().is_some_and(|items| {
+                items.contains(&AssistantItem::ScriptCall {
+                    call_id: kraai_types::ToolCallId::new("call-1"),
+                    name: String::from("bash"),
+                    input: String::from(arguments),
+                    arguments_error: Some(String::from(error)),
+                })
+            })
+        })
+        .ok_or_else(|| color_eyre::eyre::eyre!("retry request is missing the invalid call"))?;
+    assert!(matches!(
+        retry.get(call + 1),
+        Some(kraai_types::ConversationItem::ScriptResult { call_id, output, .. })
+            if call_id.as_str() == "call-1" && output.display_text().contains(&diagnostic)
+    ));
 
     harness.shutdown().await;
     Ok(())
