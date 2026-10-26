@@ -24,7 +24,6 @@ pub struct ToolCallResultView<'a> {
     /// Where the full stdout was saved when the model sees only part of it.
     pub stdout_file: Option<&'a Path>,
     pub stderr_file: Option<&'a Path>,
-    /// The capabilities the script ran with, when its failure looks like the sandbox blocking it.
     pub sandbox_blocked: Option<&'a SandboxCapabilities>,
 }
 
@@ -90,7 +89,6 @@ fn render_channel(rendered: &mut String, name: &str, bytes: &[u8], file: Option<
     rendered.push_str(">\n");
 }
 
-/// Names the sandbox as the likely cause and the header that asks for more access.
 fn push_sandbox_notice(rendered: &mut String, granted: &SandboxCapabilities) {
     let names = |capabilities: &mut dyn Iterator<Item = SandboxCapability>| {
         capabilities

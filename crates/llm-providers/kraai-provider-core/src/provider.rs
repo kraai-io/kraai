@@ -26,8 +26,6 @@ pub trait Provider: Send + Sync {
 
     fn set_model_catalog(&mut self, _catalog: std::sync::Arc<crate::ModelCatalog>) {}
 
-    /// Identifies where the model list comes from; `None` when the provider does not discover
-    /// models. A stored list is only reused while its source matches.
     fn model_list_source(&self) -> Option<String> {
         None
     }

@@ -232,8 +232,6 @@ impl App {
         );
     }
 
-    /// No event carries the saved model, so even a snapshot older than the session's latest
-    /// event holds the newest model this client has seen.
     pub(super) fn observe_session_model_snapshot(
         &mut self,
         session_id: &SessionId,

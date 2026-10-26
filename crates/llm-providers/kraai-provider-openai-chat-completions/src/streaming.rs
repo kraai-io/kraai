@@ -113,7 +113,6 @@ impl Completion {
                 "Provider returned an unexpected completion choice"
             );
             if let Some(finished) = &self.finish_reason {
-                // OpenRouter repeats the final choice, empty, alongside the usage chunk.
                 ensure!(
                     choice.delta.is_empty()
                         && choice
@@ -210,8 +209,6 @@ impl Completion {
     }
 }
 
-/// A call the model got wrong becomes a call with an `arguments_error`, so the model can see
-/// the error and retry; only a call that cannot be answered fails the stream.
 fn finish_call(call: PendingCall, tool_name: Option<&str>) -> Result<ProviderStreamEvent> {
     let tool_name =
         tool_name.ok_or_else(|| eyre!("Provider called a tool when tools were disabled"))?;

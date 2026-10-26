@@ -13,7 +13,6 @@ use tokio_util::sync::CancellationToken;
 
 const OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const ENVELOPE_BYTES: usize = 128;
-/// How long output may stay blocked once the client has closed its input.
 const CLOSED_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
@@ -180,7 +179,6 @@ struct WireFrame<'a> {
     params: Option<&'a serde_json::value::RawValue>,
 }
 
-/// Writes one frame, waiting as long as the client takes to read it until its input closes.
 async fn write_frame(
     writer: &mut (impl AsyncWrite + Unpin + Send),
     line: &str,
@@ -225,7 +223,6 @@ async fn write_frame(
     Ok(())
 }
 
-/// Cancels `closed` once `input` ends or is dropped.
 fn cancel_when_finished<T>(
     input: impl Stream<Item = T>,
     closed: CancellationToken,

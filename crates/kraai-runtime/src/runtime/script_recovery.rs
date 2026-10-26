@@ -59,7 +59,6 @@ impl RuntimeCore {
                     _ => None,
                 });
             if let Some((output, outcome)) = stored {
-                // A result already written stays as written, even if rendering has changed since.
                 let recorded = record.outcome().ok();
                 if recorded.as_ref() != Some(&outcome) {
                     tracing::warn!(

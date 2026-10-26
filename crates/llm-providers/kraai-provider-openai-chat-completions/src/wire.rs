@@ -150,7 +150,6 @@ pub struct ChatCompletionChunkDelta {
 }
 
 impl ChatCompletionChunkDelta {
-    /// Whether this fragment adds nothing to the message.
     pub fn is_empty(&self) -> bool {
         self.reasoning.is_empty()
             && self.content.as_deref().is_none_or(str::is_empty)

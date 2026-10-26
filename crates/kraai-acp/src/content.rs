@@ -45,12 +45,10 @@ pub(crate) async fn prompt(
     Ok(MessageContent(parts))
 }
 
-/// The input of a script call in the shape clients show for execute tools.
 pub(crate) fn script_input(source: String) -> serde_json::Value {
     serde_json::json!({ "command": source })
 }
 
-/// Announces a script call before it runs.
 pub(crate) fn script_call(call_id: String, source: String) -> acp::ToolCall {
     acp::ToolCall::new(call_id, "Run Nushell script")
         .kind(acp::ToolKind::Execute)

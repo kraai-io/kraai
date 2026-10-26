@@ -188,9 +188,7 @@ struct Output {
     prompt_start: Option<MessageId>,
     /// The global event sequence the last resync already covered.
     covered: u64,
-    /// The message streamed most recently, which runtime notices are shown in.
     streaming: Option<String>,
-    /// The message whose text was the last update sent, so a notice can still extend it.
     open_text: Option<String>,
 }
 
@@ -274,8 +272,6 @@ impl Output {
         self.text(message_id, text)
     }
 
-    /// Shows a runtime notice as its own paragraph, inside `message_id` only while that message's
-    /// text was the last update, since clients restart a message's text after other updates.
     fn notice(&mut self, message_id: Option<&str>, notice: &str) -> Result<()> {
         let mut chunk = acp::ContentChunk::new(content::text(format!("\n\n[{notice}]\n\n")));
         if let Some(message_id) = message_id.filter(|id| self.open_text.as_deref() == Some(*id)) {

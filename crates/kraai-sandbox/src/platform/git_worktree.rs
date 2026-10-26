@@ -3,10 +3,6 @@ use std::path::{Path, PathBuf};
 
 const MAX_POINTER_BYTES: u64 = 8192;
 
-/// Returns the canonical shared git directory of a linked worktree when it lies outside
-/// `workspace`. The worktree's administrative directory must be `<common>/worktrees/<name>` and
-/// its `gitdir` file must point back at `<workspace>/.git`, so a rewritten `.git` file cannot
-/// select an arbitrary host directory.
 pub(crate) fn linked_worktree_common_dir(workspace: &Path) -> Option<PathBuf> {
     let workspace = workspace.canonicalize().ok()?;
     let dot_git = workspace.join(".git");

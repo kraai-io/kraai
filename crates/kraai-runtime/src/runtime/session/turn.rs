@@ -165,7 +165,6 @@ impl SessionActor {
         );
     }
 
-    /// Continues the turn after a script result.
     pub(in crate::runtime) async fn continue_turn(&mut self) {
         if self.stopping {
             return;

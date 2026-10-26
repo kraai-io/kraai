@@ -199,9 +199,6 @@ impl App {
         }
     }
 
-    /// Fills in a missing selection without saving it to the session. A selected model this list
-    /// lacks stays selected, since the list can be stale, and a selected provider is never
-    /// replaced by another.
     pub(super) fn ensure_selected_model(&mut self) {
         if self.state.selected_model_id.is_some() {
             return;

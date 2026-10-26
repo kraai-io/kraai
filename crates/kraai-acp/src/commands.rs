@@ -8,7 +8,6 @@ pub(crate) enum Command {
     Option { id: String, value: String },
 }
 
-/// Reads a command from the first block; clients may append their own context blocks after it.
 pub(crate) fn parse(prompt: &[acp::ContentBlock]) -> Result<Option<Command>> {
     let Some(acp::ContentBlock::Text(text)) = prompt.first() else {
         return Ok(None);

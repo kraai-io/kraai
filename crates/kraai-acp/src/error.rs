@@ -11,7 +11,6 @@ pub(crate) fn runtime(error: RuntimeError) -> Error {
     }
 }
 
-/// Clients show `message`, so it carries the reason instead of the generic code name.
 fn with_message(mut error: Error, message: impl Into<String>) -> Error {
     error.message = message.into();
     error

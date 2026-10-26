@@ -80,7 +80,10 @@ impl ContextCompaction {
                         ProviderStreamEvent::Finished {
                             stop_reason: kraai_provider_core::StopReason::MaxOutputTokens,
                         } => {
-                            return Err(eyre!("Compaction stopped at the output token limit"));
+                            return Err(ProviderError::ContextWindowExceeded(
+                                "Compaction stopped at the output token limit".into(),
+                            )
+                            .into());
                         }
                         _ => {}
                     }

@@ -16,6 +16,8 @@ pub struct ResponsesRequest {
     pub tool_choice: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<usize>,
     pub stream: bool,
     pub store: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -178,6 +180,7 @@ mod tests {
             tools: vec![script_tool()],
             tool_choice: None,
             parallel_tool_calls: None,
+            max_output_tokens: None,
             stream: true,
             store: false,
             include: vec!["reasoning.encrypted_content"],
@@ -200,6 +203,7 @@ mod tests {
             tools: vec![script_tool()],
             tool_choice: None,
             parallel_tool_calls: None,
+            max_output_tokens: None,
             stream: true,
             store: false,
             include: vec!["reasoning.encrypted_content"],
@@ -227,6 +231,7 @@ mod tests {
             tools: vec![script_tool()],
             tool_choice: Some("auto"),
             parallel_tool_calls: Some(false),
+            max_output_tokens: None,
             stream: true,
             store: false,
             include: vec!["reasoning.encrypted_content"],

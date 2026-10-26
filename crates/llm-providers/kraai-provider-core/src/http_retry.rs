@@ -127,7 +127,6 @@ where
 
                 let retry_number = attempt_number;
                 let reason = format!("HTTP {}", response.status());
-                // A proxy's short Retry-After can hide a longer upstream limit, so it is a floor.
                 let backoff = policy.jittered_backoff_for_retry(retry_number);
                 let delay = retry_after.map_or(backoff, |retry_after| retry_after.max(backoff));
                 if !retry_fits_budget(policy, started, delay) {

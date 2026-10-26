@@ -453,6 +453,9 @@ impl OpenAiCodexProvider {
                 description: tool.description,
             })
             .collect();
+        let max_output_tokens = (!compact)
+            .then(|| model.output_limit(&provider_request.messages))
+            .flatten();
         let normalized = normalize_conversation(provider_request.messages, &self.id, &images)?;
         let mut request = ResponsesRequest {
             model: model_id.to_string(),
@@ -463,6 +466,7 @@ impl OpenAiCodexProvider {
             tools,
             tool_choice: Some(if has_tool { "auto" } else { "none" }),
             parallel_tool_calls: has_tool.then_some(false),
+            max_output_tokens,
             stream: true,
             store: false,
             include: Vec::new(),

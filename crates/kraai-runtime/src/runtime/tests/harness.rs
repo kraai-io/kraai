@@ -98,7 +98,6 @@ impl ScriptedChunk {
         }
     }
 
-    /// A call whose arguments the provider could not turn into a script.
     pub(super) fn invalid_call(call_id: &str, name: &str, arguments: &str, error: &str) -> Self {
         Self {
             kind: ScriptedChunkKind::NativeCall {
@@ -338,7 +337,6 @@ pub(super) struct RuntimeTestHarness {
     runtime_task: tokio::task::JoinHandle<()>,
     event_task: tokio::task::JoinHandle<()>,
     pub(super) data_dir: PathBuf,
-    /// Requests the scripted provider received, in order.
     pub(super) provider_requests: ProviderRequests,
     owns_directory: bool,
     pub(super) maintenance_tasks: Vec<tokio::task::JoinHandle<()>>,

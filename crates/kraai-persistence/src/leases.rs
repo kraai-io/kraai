@@ -12,7 +12,6 @@ pub struct SessionObservation {
     pub revision: i64,
     pub lease_active: bool,
     pub lease_expires_at: i64,
-    /// The timer of the session's latest turn, as saved by the runtime that ran it.
     pub turn_timer: Option<String>,
 }
 
@@ -159,7 +158,6 @@ impl SqliteSessionStore {
         self.release(session_id, None).await
     }
 
-    /// Releases the turn and saves the timer it ended with.
     pub async fn release_turn_with_timer(
         &self,
         session_id: &SessionId,
@@ -186,7 +184,6 @@ impl SqliteSessionStore {
             .await
     }
 
-    /// Saves the timer of a turn this runtime is running, so other runtimes can show it.
     pub async fn save_turn_timer(&self, session_id: &SessionId, turn_timer: String) -> Result<()> {
         let Some(expected) = self.database.leases().get(session_id) else {
             return Ok(());

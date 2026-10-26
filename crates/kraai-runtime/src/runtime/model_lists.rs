@@ -16,7 +16,6 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const CLAIM_TTL: Duration = Duration::from_secs(2 * 60);
 const SYNC_CONCURRENCY: usize = 8;
 
-/// Keeps this process's provider model lists in step with the lists shared through the database.
 pub(crate) struct ModelListSync {
     store: SqliteModelListStore,
     state: Mutex<SyncState>,
@@ -52,8 +51,6 @@ impl ModelListSync {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Forgets what was installed, for freshly created providers, and gives up the claims
-    /// this process kept after failed fetches so the new configuration retries at once.
     pub(crate) async fn reset(&self) {
         let failed_claims = std::mem::take(&mut *self.state()).failed_claims;
         for (provider, claimed_until) in failed_claims {

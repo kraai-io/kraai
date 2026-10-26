@@ -7,8 +7,6 @@ use tokio::sync::broadcast;
 use tokio::task::{JoinHandle, JoinSet};
 
 impl RuntimeCore {
-    /// Releases the session's turn, saving its timer stopped so other runtimes never show a
-    /// turn without an owner as running.
     pub(crate) async fn release_turn(&self, session_id: &SessionId) {
         self.agent_manager.discard_streaming_state(session_id).await;
         let mut timer = self.event_tx.timer_snapshot(session_id).1;
@@ -34,7 +32,6 @@ impl RuntimeCore {
         self.release_turn(session_id).await;
     }
 
-    /// Saves the timer of every turn this runtime runs whenever it changes.
     pub(crate) fn spawn_turn_timer_persistence(&self) -> JoinHandle<()> {
         let runtime = self.clone();
         let mut events = self.event_tx.subscribe();
@@ -226,7 +223,6 @@ impl RuntimeCore {
     }
 }
 
-/// The turn timer another runtime saved for the session, if it saved a readable one.
 pub(crate) fn stored_turn_timer(
     session_id: &SessionId,
     observation: &kraai_persistence::SessionObservation,

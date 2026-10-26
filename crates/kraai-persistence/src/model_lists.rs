@@ -16,8 +16,6 @@ pub struct StoredModelList {
     pub data: serde_json::Value,
 }
 
-/// Provider model lists shared by every process using the database. Times are unix
-/// milliseconds supplied by the caller.
 #[derive(Clone)]
 pub struct SqliteModelListStore {
     database: Database,
@@ -79,9 +77,6 @@ impl SqliteModelListStore {
             .await
     }
 
-    /// Claims the right to refresh `provider` until `until`. Fails while another claim is live
-    /// or once the stored list is no longer `seen`, so a list saved by another process since it
-    /// was read is not fetched again.
     pub async fn claim(
         &self,
         provider: &ProviderId,
@@ -107,7 +102,6 @@ impl SqliteModelListStore {
             .await
     }
 
-    /// Gives up a claim made with `claimed_until`, unless another claim replaced it.
     pub async fn release(&self, provider: &ProviderId, claimed_until: i64) -> Result<()> {
         let provider = provider.to_string();
         self.database
@@ -122,8 +116,6 @@ impl SqliteModelListStore {
             .await
     }
 
-    /// Stores a fetched list and releases any claim on it, unless a list fetched later is
-    /// already stored.
     pub async fn save(
         &self,
         provider: &ProviderId,

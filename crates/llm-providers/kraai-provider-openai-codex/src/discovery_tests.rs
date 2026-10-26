@@ -156,6 +156,7 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
         "slug": "summary-model",
         "display_name": "Summary Model",
         "visibility": "list",
+        "context_window": 10000,
         "default_reasoning_level": "low",
         "supported_reasoning_levels": [{"effort": "low", "description": "Fast"}]
     }]})
@@ -262,6 +263,7 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
         assert_eq!(body.get("tools"), Some(&json!([])));
         assert_eq!(body.get("tool_choice"), Some(&json!("none")));
         assert!(body.get("parallel_tool_calls").is_none());
+        assert_eq!(body.get("max_output_tokens"), Some(&json!(2000)));
         assert_eq!(body.get("stream"), Some(&json!(true)));
         assert_eq!(body.get("store"), Some(&json!(false)));
         assert_eq!(
@@ -695,7 +697,9 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> R
         Some("kraai_nushell")
     );
     assert_eq!(compact["instructions"], "system instructions");
+    assert!(compact.get("max_output_tokens").is_none());
     let replay = bodies.get(1).ok_or_else(|| eyre!("missing replay"))?;
+    assert_eq!(replay.get("max_output_tokens"), Some(&json!(54_400)));
     assert!(
         replay["input"]
             .as_array()

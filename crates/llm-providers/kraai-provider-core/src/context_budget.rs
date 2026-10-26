@@ -1,14 +1,11 @@
 use kraai_types::ConversationItem;
 
-/// Percent of a context window that input may fill before kraai compacts it.
 const COMPACTION_PERCENT: usize = 80;
 
-/// The input size at which kraai compacts before sending the next request.
 pub fn compaction_point(max_context: usize) -> usize {
     max_context.saturating_mul(COMPACTION_PERCENT) / 100
 }
 
-/// A configured output limit, or else the catalog's limit within the window left after the compaction point.
 pub fn max_output(
     configured: Option<usize>,
     catalog: Option<usize>,
@@ -21,7 +18,6 @@ pub fn max_output(
 }
 
 impl crate::Model {
-    /// The most output a response to `messages` may request without overflowing the window.
     pub fn output_limit(&self, messages: &[ConversationItem]) -> Option<usize> {
         let remaining = self.max_context.map(|limit| {
             limit.saturating_sub(

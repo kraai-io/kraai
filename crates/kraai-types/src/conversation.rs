@@ -146,8 +146,6 @@ pub struct ScriptCall {
     pub call_id: ToolCallId,
     pub name: String,
     pub input: String,
-    /// Why the provider's arguments did not form a script call. `input` then holds the
-    /// arguments exactly as the provider sent them.
     pub arguments_error: Option<String>,
 }
 

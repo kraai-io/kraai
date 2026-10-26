@@ -15,7 +15,6 @@ use super::harness::RuntimeTestHarness;
 use crate::Event;
 use crate::runtime::model_lists::unix_millis;
 
-/// Later than the shared lists' maximum age.
 const STALE: i64 = 11 * 60 * 1000;
 
 #[derive(Clone, Default)]
