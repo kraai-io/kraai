@@ -259,7 +259,8 @@ async fn recovery_retains_script_sources_in_the_current_history_ancestry() -> Re
 }
 
 #[tokio::test]
-async fn recovery_keeps_delivered_script_results_as_written() -> Result<()> {
+async fn recovery_keeps_delivered_script_results_as_written_even_when_they_disagree() -> Result<()>
+{
     let Some((mut harness, session_id, completed)) = completed_script().await? else {
         return Ok(());
     };
@@ -268,12 +269,16 @@ async fn recovery_keeps_delivered_script_results_as_written() -> Result<()> {
         .get(&completed.record.result_message_id)
         .await?
         .unwrap();
-    let ConversationItem::ScriptResult { output, .. } = &mut message.content else {
+    let ConversationItem::ScriptResult {
+        output, outcome, ..
+    } = &mut message.content
+    else {
         panic!("expected script result");
     };
     output.0.push(kraai_types::ContentPart::Text {
         text: "rendered by an older build".into(),
     });
+    outcome.exit_code = Some(7);
     messages.save(&message).await?;
     rusqlite::Connection::open(harness.data_dir.join("kraai.sqlite3"))?.execute(
         "INSERT INTO execution_output(execution_id, stream, bytes) VALUES (?1, 'corrupt', x'00')",

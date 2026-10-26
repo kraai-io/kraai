@@ -60,6 +60,16 @@ impl RuntimeCore {
                 });
             if let Some((output, outcome)) = stored {
                 // A result already written stays as written, even if rendering has changed since.
+                let recorded = record.outcome().ok();
+                if recorded.as_ref() != Some(&outcome) {
+                    tracing::warn!(
+                        execution_id = ?record.id,
+                        message_id = ?record.result_message_id,
+                        ?recorded,
+                        delivered = ?outcome,
+                        "Delivered script result disagrees with its execution record"
+                    );
+                }
                 self.agent_manager
                     .add_script_result_to_history(
                         &record.session_id,
