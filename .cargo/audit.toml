@@ -1,5 +1,8 @@
 [advisories]
 ignore = [
-  "RUSTSEC-2026-0194",
-  "RUSTSEC-2026-0195",
+  "RUSTSEC-2026-0194", # quick-xml 0.39 via wayland-scanner, build-time parsing of bundled protocol XML only
+  "RUSTSEC-2026-0195", # quick-xml 0.39 via wayland-scanner, build-time parsing of bundled protocol XML only
+  "RUSTSEC-2026-0367", # zip 8 via nu-command -> calamine, which never calls extract()
+  "RUSTSEC-2026-0368", # zip 8 via nu-command -> calamine, which never calls extract()
+  "RUSTSEC-2026-0369", # zip 8 via nu-command -> calamine, which never calls extract()
 ] # advisory IDs to ignore e.g. ["RUSTSEC-2019-0001", ...]

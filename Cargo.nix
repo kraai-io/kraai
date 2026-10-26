@@ -18738,9 +18738,9 @@ rec {
       };
       "quinn" = rec {
         crateName = "quinn";
-        version = "0.11.11";
+        version = "0.11.12";
         edition = "2021";
-        sha256 = "1a60yxn03zr07ll7zianby2mrs18w4frgm1c6y4x9fxn6zj426hc";
+        sha256 = "04cxgnriz43bzhicvvjjj0sjv8l7rbdrrx9ywfkmbhl5j4zf4la0";
         license = "MIT OR Apache-2.0";
         dependencies = [
           {
@@ -18841,9 +18841,9 @@ rec {
       };
       "quinn-proto" = rec {
         crateName = "quinn-proto";
-        version = "0.11.16";
+        version = "0.11.19";
         edition = "2021";
-        sha256 = "0q75f2wkhc7iw8n0q63jb3zm7206b7774l44r1ixzfb2a80zqjrg";
+        sha256 = "1gpg5d36v8wrm1hjrrz8jfcyflcnv8lva2sxl4wh8kzyap50qx8f";
         libName = "quinn_proto";
         license = "MIT OR Apache-2.0";
         dependencies = [
@@ -21442,9 +21442,9 @@ rec {
       };
       "rustls" = rec {
         crateName = "rustls";
-        version = "0.23.45";
+        version = "0.23.46";
         edition = "2021";
-        sha256 = "0d6n90q52x5cjyxb6bwcnf9hwg6yb31cwr63rk8n5yfjqwqxfh8d";
+        sha256 = "1pwg7i8drr70374amj96952cils9mpwyijd5rx1mqdp9q3c3pqa8";
         license = "Apache-2.0 OR ISC OR MIT";
         dependencies = [
           {
