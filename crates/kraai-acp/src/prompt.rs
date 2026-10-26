@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::{Event, PendingScriptInfo, RuntimeHandle};
-use kraai_types::{AssistantItem, ConversationItem, MessageId, SessionId};
+use kraai_types::{AssistantItem, ConversationItem, MessageId, ScriptCall, SessionId};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -320,7 +320,7 @@ impl Output {
                 AssistantItem::Text { text, .. } => {
                     self.item_text(&message_id, item_index, &text)?;
                 }
-                AssistantItem::ScriptCall { .. } => {
+                AssistantItem::ScriptCall(_) => {
                     self.shown.insert(message_id);
                 }
                 AssistantItem::Reasoning { .. } => {}
@@ -405,7 +405,7 @@ impl Output {
                                 let missing = text.get(sent..).unwrap_or_default();
                                 self.item_text(&id, index, missing)?;
                             }
-                            AssistantItem::ScriptCall { call_id, input, .. } => {
+                            AssistantItem::ScriptCall(ScriptCall { call_id, input, .. }) => {
                                 self.shown.insert(id.clone());
                                 self.announce(call_id.to_string(), input.clone())?;
                             }

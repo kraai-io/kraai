@@ -5,7 +5,7 @@ use futures::stream::BoxStream;
 use kraai_provider_core::{
     ProviderStreamEvent, SseEvent, StopReason, StreamStatus, adapt_provider_stream,
 };
-use kraai_types::{AssistantPhase, ToolCallId};
+use kraai_types::{AssistantPhase, ScriptCall, ToolCallId};
 
 use crate::usage::normalize_usage;
 use crate::wire::{ChatCompletionChunk, ScriptArguments, ToolCallDelta};
@@ -199,7 +199,7 @@ impl Completion {
         let mut ids: Vec<_> = calls
             .iter()
             .filter_map(|call| match call {
-                ProviderStreamEvent::ScriptCall { call_id, .. } => Some(call_id),
+                ProviderStreamEvent::ScriptCall(ScriptCall { call_id, .. }) => Some(call_id),
                 _ => None,
             })
             .collect();
@@ -220,12 +220,12 @@ fn finish_call(call: PendingCall, tool_name: Option<&str>) -> Result<ProviderStr
     let arguments_error = if call.name == tool_name {
         match serde_json::from_str::<ScriptArguments>(&call.arguments) {
             Ok(arguments) => {
-                return Ok(ProviderStreamEvent::ScriptCall {
+                return Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
                     call_id,
                     name: call.name,
                     input: arguments.input,
                     arguments_error: None,
-                });
+                }));
             }
             Err(error) => {
                 format!("arguments must be a JSON object with one string field \"input\": {error}")
@@ -237,12 +237,12 @@ fn finish_call(call: PendingCall, tool_name: Option<&str>) -> Result<ProviderStr
             call.name
         )
     };
-    Ok(ProviderStreamEvent::ScriptCall {
+    Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
         call_id,
         name: call.name,
         input: call.arguments,
         arguments_error: Some(arguments_error),
-    })
+    }))
 }
 
 pub(super) fn adapt_chat_completion_stream(

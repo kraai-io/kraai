@@ -117,7 +117,7 @@ async fn chat_completions_compaction_replays_tools_and_resumes_with_native_calls
         .await?;
     let mut calls = 0;
     while let Some(event) = stream.next().await {
-        if let ProviderStreamEvent::ScriptCall { call_id, input, .. } = event? {
+        if let ProviderStreamEvent::ScriptCall(ScriptCall { call_id, input, .. }) = event? {
             ensure!(call_id.as_str() == "next-call");
             ensure!(input == "# timeout=1sec\nls");
             calls += 1;

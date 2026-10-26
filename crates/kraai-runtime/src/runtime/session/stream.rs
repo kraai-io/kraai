@@ -3,7 +3,7 @@ use std::panic::AssertUnwindSafe;
 use futures::FutureExt;
 use kraai_agent::PendingStreamRequest;
 use kraai_provider_core::ProviderManager;
-use kraai_types::{AssistantPhase, MessageId, TokenUsage, ToolCallId};
+use kraai_types::{AssistantPhase, MessageId, ScriptCall, TokenUsage};
 use tokio_util::sync::CancellationToken;
 
 use super::super::core::RuntimeCore;
@@ -28,12 +28,7 @@ pub(crate) enum StreamEvent {
         item_id: String,
         delta: String,
     },
-    ScriptCall {
-        call_id: ToolCallId,
-        name: String,
-        input: String,
-        arguments_error: Option<String>,
-    },
+    ScriptCall(ScriptCall),
     Usage(TokenUsage),
     /// The request failed transiently and is being issued again.
     Restart {
@@ -400,15 +395,8 @@ pub(in crate::runtime) async fn apply_stream_event(
             });
             None
         }
-        StreamEvent::ScriptCall {
-            call_id,
-            name,
-            input,
-            arguments_error,
-        } => {
-            let streamed = agent
-                .append_script_call(message_id, call_id, name, input, arguments_error)
-                .await;
+        StreamEvent::ScriptCall(call) => {
+            let streamed = agent.append_script_call(message_id, call).await;
             send_streamed_item(runtime, session_id, message_id, streamed);
             None
         }

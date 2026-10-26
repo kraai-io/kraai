@@ -1,7 +1,7 @@
 use color_eyre::eyre::Result;
 use kraai_execution_types::{ScriptExecutionPhase, ScriptExecutionStatus};
 use kraai_persistence::{ScriptExecutionStore, SqliteScriptExecutionStore};
-use kraai_types::{AssistantItem, AssistantPhase, ChatRole, TokenUsage};
+use kraai_types::{AssistantItem, AssistantPhase, ChatRole, ScriptCall, TokenUsage};
 
 use super::super::stream_driver::POST_BOUNDARY_DRAIN_YIELD_INTERVAL;
 use super::harness::FullHistory as _;
@@ -126,7 +126,7 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
     ));
     assert!(matches!(
         items.get(2),
-        Some(AssistantItem::ScriptCall { call_id, name, input, arguments_error: None })
+        Some(AssistantItem::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None }))
             if call_id.as_str() == "openai-call-1"
                 && name == "kraai_nushell"
                 && input.starts_with("# timeout=30sec")
@@ -598,12 +598,12 @@ async fn invalid_tool_call_fails_without_running_and_replays_raw_call() -> Resul
         .iter()
         .position(|item| {
             item.assistant_items().is_some_and(|items| {
-                items.contains(&AssistantItem::ScriptCall {
+                items.contains(&AssistantItem::ScriptCall(ScriptCall {
                     call_id: kraai_types::ToolCallId::new("call-1"),
                     name: String::from("bash"),
                     input: String::from(arguments),
                     arguments_error: Some(String::from(error)),
-                })
+                }))
             })
         })
         .ok_or_else(|| color_eyre::eyre::eyre!("retry request is missing the invalid call"))?;
@@ -980,7 +980,7 @@ async fn only_the_first_script_call_of_a_response_runs_and_the_others_are_answer
         .values()
         .filter_map(|message| message.content.assistant_items())
         .flatten()
-        .filter(|item| matches!(item, AssistantItem::ScriptCall { .. }))
+        .filter(|item| matches!(item, AssistantItem::ScriptCall(_)))
         .count();
     assert_eq!(calls, 2);
     harness.shutdown().await;

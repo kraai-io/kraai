@@ -1,4 +1,4 @@
-use kraai_types::{ChatRole, Message};
+use kraai_types::{ChatRole, Message, ScriptCall};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -254,7 +254,7 @@ impl<'a> ChatHistory<'a> {
                     }
                     markdown::render_message(&normalize_terminal_text(text), width, style)
                 }
-                kraai_types::AssistantItem::ScriptCall { input, .. } => {
+                kraai_types::AssistantItem::ScriptCall(ScriptCall { input, .. }) => {
                     Self::render_script_card(&normalize_terminal_text(input), width)
                 }
             };
@@ -618,12 +618,12 @@ mod tests {
                     phase: AssistantPhase::Commentary,
                     text: before.into(),
                 },
-                AssistantItem::ScriptCall {
+                AssistantItem::ScriptCall(ScriptCall {
                     call_id: ToolCallId::new("call"),
                     name: "kraai_nushell".into(),
                     input: input.into(),
                     arguments_error: None,
-                },
+                }),
                 AssistantItem::Text {
                     phase: AssistantPhase::FinalAnswer,
                     text: after.into(),

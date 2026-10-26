@@ -2,7 +2,7 @@ use crate::AuxiliaryUsageRecorder;
 use color_eyre::eyre::{Result, eyre};
 use futures::StreamExt;
 use kraai_provider_core::{ProviderError, ProviderRequestContext, ProviderStreamEvent};
-use kraai_types::{AssistantItem, AssistantPhase};
+use kraai_types::{AssistantItem, AssistantPhase, ScriptCall};
 
 use super::*;
 
@@ -74,7 +74,7 @@ impl ContextCompaction {
                             ..
                         } => text.push_str(&delta),
                         ProviderStreamEvent::Usage(usage) => observer.save_usage(usage).await?,
-                        ProviderStreamEvent::ScriptCall { .. } => {
+                        ProviderStreamEvent::ScriptCall(_) => {
                             return Err(eyre!("Compaction returned an unexpected tool call"));
                         }
                         ProviderStreamEvent::Finished {
@@ -160,7 +160,7 @@ fn remove_oldest_exchange(messages: &mut Vec<ConversationItem>) -> bool {
         let calls: Vec<_> = items
             .into_iter()
             .filter_map(|item| match item {
-                AssistantItem::ScriptCall { call_id, .. } => Some(call_id),
+                AssistantItem::ScriptCall(ScriptCall { call_id, .. }) => Some(call_id),
                 _ => None,
             })
             .collect();

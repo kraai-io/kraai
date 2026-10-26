@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use agent_client_protocol::{Result, schema::v1 as acp};
 use kraai_runtime::{RuntimeHandle, SessionSnapshot};
-use kraai_types::{AssistantItem, ConversationItem};
+use kraai_types::{AssistantItem, ConversationItem, ScriptCall};
 
 use crate::{content, error};
 
@@ -96,9 +96,12 @@ fn assistant_updates(
                             .message_id(acp::MessageId::new(id.to_string())),
                     )
                 }
-                AssistantItem::ScriptCall { call_id, input, .. } => acp::SessionUpdate::ToolCall(
-                    content::script_call(call_id.to_string(), input.clone()),
-                ),
+                AssistantItem::ScriptCall(ScriptCall { call_id, input, .. }) => {
+                    acp::SessionUpdate::ToolCall(content::script_call(
+                        call_id.to_string(),
+                        input.clone(),
+                    ))
+                }
                 AssistantItem::Reasoning { .. } => return None,
             };
             has_prior_item = true;

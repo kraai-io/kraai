@@ -37,7 +37,7 @@ pub enum ChatRole {
 }
 
 pub use conversation::{
-    AssistantItem, AssistantPhase, ContentPart, ConversationItem, MessageContent,
+    AssistantItem, AssistantPhase, ContentPart, ConversationItem, MessageContent, ScriptCall,
 };
 mod conversation;
 mod token_estimate;
@@ -191,11 +191,13 @@ mod tests {
             phase: AssistantPhase::Commentary,
             text: text.to_string(),
         };
-        let script = |input: &str| AssistantItem::ScriptCall {
-            call_id: ToolCallId::new("call"),
-            name: String::from("kraai_nushell"),
-            input: input.to_string(),
-            arguments_error: None,
+        let script = |input: &str| {
+            AssistantItem::ScriptCall(ScriptCall {
+                call_id: ToolCallId::new("call"),
+                name: String::from("kraai_nushell"),
+                input: input.to_string(),
+                arguments_error: None,
+            })
         };
         for (items, expected) in [
             (Vec::new(), ""),

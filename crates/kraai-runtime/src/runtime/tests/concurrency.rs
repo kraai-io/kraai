@@ -8,7 +8,7 @@ use color_eyre::eyre::Result;
 use futures::{StreamExt, poll};
 use kraai_persistence::{MessageStore, SqliteMessageStore};
 use kraai_test_support::hang_guard;
-use kraai_types::{Message, MessageId};
+use kraai_types::{Message, MessageId, ScriptCall};
 use tokio_util::sync::CancellationToken;
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
@@ -52,14 +52,16 @@ impl kraai_provider_core::Provider for HandoffProvider {
                     delta: text.into(),
                 }));
             }
-            events.push(Ok(kraai_provider_core::ProviderStreamEvent::ScriptCall {
-                call_id: kraai_types::ToolCallId::new("handoff-call"),
-                name: String::from("kraai_nushell"),
-                input: String::from(
-                    "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
-                ),
-                arguments_error: None,
-            }));
+            events.push(Ok(kraai_provider_core::ProviderStreamEvent::ScriptCall(
+                ScriptCall {
+                    call_id: kraai_types::ToolCallId::new("handoff-call"),
+                    name: String::from("kraai_nushell"),
+                    input: String::from(
+                        "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
+                    ),
+                    arguments_error: None,
+                },
+            )));
             let events = futures::stream::iter(events);
             if self.hold_after_call {
                 Ok(Box::pin(events.chain(futures::stream::pending())))
@@ -132,7 +134,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         .events
         .wait_for("script call before usage drain completes", |events| {
             events.iter().any(|event| {
-                matches!(event, Event::ItemStarted { session_id: id, item: kraai_types::AssistantItem::ScriptCall { .. }, .. } if id == &session_id)
+                matches!(event, Event::ItemStarted { session_id: id, item: kraai_types::AssistantItem::ScriptCall(_), .. } if id == &session_id)
             })
         })
         .await;
@@ -177,7 +179,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
     harness.shutdown().await;
     let has_call = request.messages.iter().any(|item| {
         matches!(item, kraai_types::ConversationItem::Assistant { items }
-            if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall { call_id, .. }
+            if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall(ScriptCall { call_id, .. })
                 if call_id.as_str() == "handoff-call")))
     });
     assert!(has_call, "cancellation discarded the script call");
@@ -704,7 +706,7 @@ impl MessageStore for PausedMessageStore {
         }
         if message.status == kraai_types::MessageStatus::Complete
             && matches!(&message.content, kraai_types::ConversationItem::Assistant { items }
-                if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall { .. })))
+                if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall(_))))
             && self.pause_completed_script.swap(false, Ordering::SeqCst)
         {
             self.entered.notify_one();

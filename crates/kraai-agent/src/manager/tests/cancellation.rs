@@ -6,6 +6,7 @@ use std::sync::{
 
 use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::MessageStore;
+use kraai_types::ScriptCall;
 
 use super::super::*;
 use super::common::{cleanup_dir, open_persistence, test_manager};
@@ -58,10 +59,12 @@ async fn restart_after_cancellation_failure(
     manager
         .append_script_call(
             &request.message_id,
-            ToolCallId::new("cancelled-call"),
-            "kraai_nushell".into(),
-            "echo text".into(),
-            None,
+            ScriptCall {
+                call_id: ToolCallId::new("cancelled-call"),
+                name: "kraai_nushell".into(),
+                input: "echo text".into(),
+                arguments_error: None,
+            },
         )
         .await;
     let usage = TokenUsage {
@@ -141,7 +144,7 @@ async fn restart_after_cancellation_failure(
         );
     } else {
         assert!(!history.values().any(|message| matches!(&message.content,
-            ConversationItem::Assistant { items } if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { .. })))),
+            ConversationItem::Assistant { items } if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall(_))))),
             "restart retained an unpaired cancelled call");
     }
     let next = reopened
@@ -159,7 +162,7 @@ async fn restart_after_cancellation_failure(
         .iter()
         .filter_map(|item| match item {
             ConversationItem::Assistant { items } => items.iter().find_map(|item| match item {
-                AssistantItem::ScriptCall { call_id, .. } => Some(call_id),
+                AssistantItem::ScriptCall(ScriptCall { call_id, .. }) => Some(call_id),
                 AssistantItem::Text { .. } | AssistantItem::Reasoning { .. } => None,
             }),
             _ => None,
@@ -199,10 +202,12 @@ async fn script_result_recovery_requires_a_matching_direct_parent_and_no_live_st
         manager
             .append_script_call(
                 &request.message_id,
-                ToolCallId::new("call"),
-                "kraai_nushell".into(),
-                "echo text".into(),
-                None,
+                ScriptCall {
+                    call_id: ToolCallId::new("call"),
+                    name: "kraai_nushell".into(),
+                    input: "echo text".into(),
+                    arguments_error: None,
+                },
             )
             .await;
         let source = manager
@@ -270,7 +275,7 @@ impl MessageStore for FailingCancellationStore {
         let target = if self.fail_assistant_completion {
             message.status == MessageStatus::Complete
                 && matches!(&message.content,
-                ConversationItem::Assistant { items } if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { .. })))
+                ConversationItem::Assistant { items } if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall(_))))
         } else {
             matches!(message.content, ConversationItem::ScriptResult { .. })
         };

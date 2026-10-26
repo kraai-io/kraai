@@ -9,7 +9,7 @@ use futures::stream::{self, BoxStream};
 use kraai_agent::AgentManager;
 use kraai_persistence::SqliteMessageStore;
 use kraai_provider_core::{ModelConfig, ProviderManager, ProviderRequest};
-use kraai_types::{AssistantPhase, ModelId, ProviderId, SessionId, TokenUsage};
+use kraai_types::{AssistantPhase, ModelId, ProviderId, ScriptCall, SessionId, TokenUsage};
 use tokio::sync::{broadcast, mpsc};
 
 use super::super::core::{RuntimeConfig, RuntimeCore};
@@ -210,12 +210,14 @@ impl kraai_provider_core::Provider for ScriptedProvider {
                     name,
                     input,
                     arguments_error,
-                } => Ok(kraai_provider_core::ProviderStreamEvent::ScriptCall {
-                    call_id: kraai_types::ToolCallId::new(call_id),
-                    name,
-                    input,
-                    arguments_error,
-                }),
+                } => Ok(kraai_provider_core::ProviderStreamEvent::ScriptCall(
+                    ScriptCall {
+                        call_id: kraai_types::ToolCallId::new(call_id),
+                        name,
+                        input,
+                        arguments_error,
+                    },
+                )),
                 ScriptedChunkKind::Usage(usage) => {
                     Ok(kraai_provider_core::ProviderStreamEvent::Usage(usage))
                 }

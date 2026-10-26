@@ -6,7 +6,7 @@ use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderRequestContext, ProviderStreamEvent,
 };
 use kraai_types::{
-    AssistantItem, AssistantPhase, MessageId, MessageStatus, TokenUsage, ToolCallId,
+    AssistantItem, AssistantPhase, MessageId, MessageStatus, ScriptCall, TokenUsage, ToolCallId,
 };
 use std::sync::Mutex;
 
@@ -171,12 +171,12 @@ fn fixture(
                         provider_id: ProviderId::new("test"),
                         payload: serde_json::json!({"type":"reasoning","encrypted_content":"encrypted-reasoning"}),
                     },
-                    AssistantItem::ScriptCall {
+                    AssistantItem::ScriptCall(ScriptCall {
                         call_id: ToolCallId::new("call"),
                         name: "kraai_nushell".into(),
                         input: "inspect".into(),
                         arguments_error: None,
-                    },
+                    }),
                 ],
             },
         ),
@@ -524,12 +524,12 @@ async fn native_stream_retries_are_bounded_and_each_attempt_is_accounted() -> Re
 async fn invalid_fallback_response_preserves_existing_context() -> Result<()> {
     for events in [
         vec![],
-        vec![ProviderStreamEvent::ScriptCall {
+        vec![ProviderStreamEvent::ScriptCall(ScriptCall {
             call_id: ToolCallId::new("unexpected"),
             name: "kraai_nushell".into(),
             input: "# timeout=1sec\nls".into(),
             arguments_error: None,
-        }],
+        })],
     ] {
         let (context, providers, _, root) = fixture(false, events, false);
         ensure!(

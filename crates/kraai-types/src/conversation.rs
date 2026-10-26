@@ -136,14 +136,19 @@ pub enum AssistantItem {
         phase: AssistantPhase,
         text: String,
     },
-    ScriptCall {
-        call_id: ToolCallId,
-        name: String,
-        input: String,
-        /// Why the provider's arguments did not form a script call. `input` then holds the
-        /// arguments exactly as the provider sent them.
-        arguments_error: Option<String>,
-    },
+    ScriptCall(ScriptCall),
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptCall {
+    pub call_id: ToolCallId,
+    pub name: String,
+    pub input: String,
+    /// Why the provider's arguments did not form a script call. `input` then holds the
+    /// arguments exactly as the provider sent them.
+    pub arguments_error: Option<String>,
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -231,7 +236,7 @@ fn render_assistant_items(items: &[AssistantItem]) -> Cow<'_, str> {
                     rendered.to_mut().push_str(text);
                 }
             }
-            AssistantItem::ScriptCall { input, .. } => {
+            AssistantItem::ScriptCall(ScriptCall { input, .. }) => {
                 let rendered = rendered.to_mut();
                 rendered.push_str("<tool_call>\n");
                 rendered.push_str(input);
@@ -249,6 +254,37 @@ fn render_assistant_items(items: &[AssistantItem]) -> Cow<'_, str> {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn script_calls_serialize_as_flat_tagged_objects() -> Result<(), serde_json::Error> {
+        let call = AssistantItem::ScriptCall(ScriptCall {
+            call_id: ToolCallId::new("call"),
+            name: "kraai_nushell".into(),
+            input: "ls".into(),
+            arguments_error: None,
+        });
+        assert_eq!(
+            serde_json::to_value(&call)?,
+            serde_json::json!({
+                "type": "script_call",
+                "call_id": "call",
+                "name": "kraai_nushell",
+                "input": "ls",
+                "arguments_error": null,
+            })
+        );
+        let without_error = serde_json::json!({
+            "type": "script_call",
+            "call_id": "call",
+            "name": "kraai_nushell",
+            "input": "ls",
+        });
+        assert_eq!(
+            serde_json::from_value::<AssistantItem>(without_error)?,
+            call
+        );
+        Ok(())
+    }
 
     #[test]
     fn ordered_content_roundtrips_without_embedding_image_bytes() -> Result<(), serde_json::Error> {

@@ -1,6 +1,7 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_manager};
 use color_eyre::eyre::Result;
+use kraai_types::ScriptCall;
 
 #[tokio::test]
 async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<()> {
@@ -330,10 +331,12 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
     manager
         .append_script_call(
             &first.message_id,
-            call_id.clone(),
-            String::from("kraai_nushell"),
-            String::from("# timeout: 1\n42"),
-            None,
+            ScriptCall {
+                call_id: call_id.clone(),
+                name: String::from("kraai_nushell"),
+                input: String::from("# timeout: 1\n42"),
+                arguments_error: None,
+            },
         )
         .await
         .expect("script call should be appended");

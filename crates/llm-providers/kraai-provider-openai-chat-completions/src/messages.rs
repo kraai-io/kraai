@@ -1,6 +1,6 @@
 use color_eyre::Result;
 use kraai_provider_core::ResolvedImages;
-use kraai_types::{ContentPart, ConversationItem, MessageContent};
+use kraai_types::{ContentPart, ConversationItem, MessageContent, ScriptCall};
 
 use crate::wire::{ImageUrl, RequestContent, RequestContentPart, RequestMessage};
 
@@ -32,12 +32,12 @@ pub fn normalize_chat_messages(
                             reasoning.append(serde_json::from_value(payload)?)?;
                         }
                         kraai_types::AssistantItem::Text { text: value, .. } => text.push(value),
-                        kraai_types::AssistantItem::ScriptCall {
+                        kraai_types::AssistantItem::ScriptCall(ScriptCall {
                             call_id,
                             name,
                             input,
                             arguments_error,
-                        } => {
+                        }) => {
                             let arguments = match arguments_error {
                                 Some(_) => input,
                                 None => {
@@ -111,12 +111,12 @@ mod tests {
                         provider_id: kraai_types::ProviderId::new(source),
                         payload: serde_json::json!({"reasoning_content":"inspect first", "reasoning_details":[{"type":"reasoning.encrypted","data":"opaque"}]}),
                     },
-                    AssistantItem::ScriptCall {
+                    AssistantItem::ScriptCall(ScriptCall {
                         call_id: ToolCallId::new("call"),
                         name: "kraai_nushell".into(),
                         input: "# timeout=1sec\nls".into(),
                         arguments_error: None,
-                    },
+                    }),
                 ],
             }];
             let messages = serde_json::to_value(normalize_chat_messages(
@@ -187,12 +187,12 @@ mod tests {
                         phase: AssistantPhase::Commentary,
                         text: "I will inspect it.".to_string(),
                     },
-                    AssistantItem::ScriptCall {
+                    AssistantItem::ScriptCall(ScriptCall {
                         call_id: ToolCallId::new("call-1"),
                         name: "kraai_nushell".to_string(),
                         input: "# timeout=10sec\nls".to_string(),
                         arguments_error: None,
-                    },
+                    }),
                 ],
             }],
             &ResolvedImages::default(),
@@ -216,12 +216,12 @@ mod tests {
     fn invalid_call_replays_exactly_as_the_model_sent_it() -> Result<()> {
         let normalized = normalize_chat_messages(
             vec![ConversationItem::Assistant {
-                items: vec![AssistantItem::ScriptCall {
+                items: vec![AssistantItem::ScriptCall(ScriptCall {
                     call_id: ToolCallId::new("call-1"),
                     name: "bash".to_string(),
                     input: r#"{"command": "ls"}"#.to_string(),
                     arguments_error: Some("unknown tool 'bash'".to_string()),
-                }],
+                })],
             }],
             &ResolvedImages::default(),
             &kraai_types::ProviderId::new("fixture"),

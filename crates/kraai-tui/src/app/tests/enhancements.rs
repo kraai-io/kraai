@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::{KeyCode, KeyEvent, KeyModifiers, UiMode};
-use kraai_types::SessionId;
+use kraai_types::{ScriptCall, SessionId};
 use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
 
 fn screen(state: &AppState, width: u16, height: u16) -> String {
@@ -206,12 +206,12 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
         id: MessageId::new("call"),
         parent_id: None,
         content: ConversationItem::Assistant {
-            items: vec![AssistantItem::ScriptCall {
+            items: vec![AssistantItem::ScriptCall(ScriptCall {
                 call_id: ToolCallId::new("tool"),
                 name: String::from("nushell"),
                 input: String::from("echo secret-source"),
                 arguments_error: None,
-            }],
+            })],
         },
         status: MessageStatus::Complete,
         agent_profile_id: None,

@@ -42,7 +42,7 @@ async fn fragmented_arguments_preserve_script_and_drain_usage_after_call() -> Re
             matches!(events.get(2), Some(ProviderStreamEvent::Usage(usage)) if usage.total_tokens == 5)
         );
         assert!(
-            matches!(events.first(), Some(ProviderStreamEvent::ScriptCall { call_id, name, input: script, arguments_error: None }) if call_id.as_str() == "call-1" && name == "kraai_nushell" && script == input)
+            matches!(events.first(), Some(ProviderStreamEvent::ScriptCall(ScriptCall { call_id, name, input: script, arguments_error: None })) if call_id.as_str() == "call-1" && name == "kraai_nushell" && script == input)
         );
         assert!(matches!(
             events.get(1),
@@ -71,7 +71,7 @@ async fn tool_fragments_without_indexes_preserve_the_single_call() -> Result<()>
     .collect::<Result<Vec<_>>>()?;
     assert_eq!(events.len(), 2);
     assert!(
-        matches!(events.first(), Some(ProviderStreamEvent::ScriptCall { call_id, name, input, arguments_error: None }) if call_id.as_str() == "call-1" && name == "kraai_nushell" && input == "ls")
+        matches!(events.first(), Some(ProviderStreamEvent::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None })) if call_id.as_str() == "call-1" && name == "kraai_nushell" && input == "ls")
     );
     Ok(())
 }
@@ -95,7 +95,7 @@ async fn multiple_calls_without_indexes_never_emit_a_script() {
         assert!(
             !events
                 .iter()
-                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall { .. })))
+                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall(_))))
         );
     }
 }
@@ -140,12 +140,12 @@ async fn invalid_calls_keep_raw_arguments_and_their_error() -> Result<()> {
         assert_eq!(
             events,
             [
-                ProviderStreamEvent::ScriptCall {
+                ProviderStreamEvent::ScriptCall(ScriptCall {
                     call_id: ToolCallId::new("call-1"),
                     name: name.into(),
                     input: arguments.into(),
                     arguments_error: Some(error.into()),
-                },
+                }),
                 ProviderStreamEvent::Finished {
                     stop_reason: StopReason::ToolCall
                 },
@@ -184,7 +184,7 @@ async fn malformed_or_incomplete_calls_never_emit_a_script() {
         assert!(
             !events
                 .iter()
-                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall { .. }))),
+                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall(_)))),
             "{events:?}"
         );
     }
@@ -202,7 +202,7 @@ async fn completed_call_survives_trailing_stream_failure() {
         source.extend(tail);
         let events = collect(source, true).await;
         assert!(
-            matches!(events.first(), Some(Ok(ProviderStreamEvent::ScriptCall { input, .. })) if input == "ls")
+            matches!(events.first(), Some(Ok(ProviderStreamEvent::ScriptCall(ScriptCall { input, .. }))) if input == "ls")
         );
         assert!(matches!(
             events.get(1),
@@ -223,7 +223,7 @@ async fn completed_call_does_not_wait_for_trailing_usage_or_done() -> Result<()>
     let mut events = adapt_chat_completion_stream(source, Some("kraai_nushell".into()), false);
     let event = kraai_test_support::hang_guard(events.next()).await?;
     assert!(
-        matches!(event, Some(Ok(ProviderStreamEvent::ScriptCall { input, .. })) if input == "ls")
+        matches!(event, Some(Ok(ProviderStreamEvent::ScriptCall(ScriptCall { input, .. }))) if input == "ls")
     );
     Ok(())
 }
@@ -247,7 +247,7 @@ async fn disabled_tools_and_oversized_arguments_are_rejected() {
         assert!(
             !events
                 .iter()
-                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall { .. })))
+                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall(_))))
         );
     }
 }
@@ -371,7 +371,7 @@ async fn reasoning_is_assembled_for_replay_before_the_tool_call() -> Result<()> 
     );
     assert!(matches!(
         rest.get(1),
-        Some(ProviderStreamEvent::ScriptCall { .. })
+        Some(ProviderStreamEvent::ScriptCall(_))
     ));
     Ok(())
 }
@@ -420,12 +420,12 @@ async fn structured_reasoning_fragments_survive_tool_continuation() -> Result<()
                         provider_id: provider_id.clone(),
                         payload: payload.clone(),
                     },
-                    kraai_types::AssistantItem::ScriptCall {
+                    kraai_types::AssistantItem::ScriptCall(ScriptCall {
                         call_id: ToolCallId::new("call-1"),
                         name: "kraai_nushell".into(),
                         input: "ls".into(),
                         arguments_error: None,
-                    },
+                    }),
                 ],
             },
             kraai_types::ConversationItem::ScriptResult {
@@ -510,7 +510,7 @@ async fn several_indexed_calls_are_emitted_in_order() -> Result<()> {
     let calls: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
-            ProviderStreamEvent::ScriptCall { call_id, .. } => Some(call_id.as_str()),
+            ProviderStreamEvent::ScriptCall(ScriptCall { call_id, .. }) => Some(call_id.as_str()),
             _ => None,
         })
         .collect();

@@ -1,5 +1,6 @@
 use kraai_types::{
-    ConversationItem, MessageGeneration, ModelId, ProviderId, SessionId, StreamId, TokenUsage,
+    ConversationItem, MessageGeneration, ModelId, ProviderId, ScriptCall, SessionId, StreamId,
+    TokenUsage,
 };
 
 use super::*;
@@ -132,14 +133,14 @@ fn item_events_build_the_streaming_message_and_gaps_request_a_snapshot() {
         session_id: SessionId::new("session"),
         message_id: "answer".into(),
         item_index: 1,
-        item: kraai_types::AssistantItem::ScriptCall {
+        item: kraai_types::AssistantItem::ScriptCall(ScriptCall {
             call_id: kraai_types::ToolCallId::new("call"),
             name: "kraai_nushell".into(),
             input: "# timeout=1sec
 print '</tool_call>'"
                 .into(),
             arguments_error: None,
-        },
+        }),
     };
     harness.app.handle_runtime_event(call.clone());
     harness.app.handle_runtime_event(call);
@@ -147,7 +148,7 @@ print '</tool_call>'"
         &harness.app.state.chat_history.get(&MessageId::new("answer")).unwrap().content,
         ConversationItem::Assistant { items }
             if matches!(items.as_slice(),
-                [kraai_types::AssistantItem::Text { text, .. }, kraai_types::AssistantItem::ScriptCall { input, .. }]
+                [kraai_types::AssistantItem::Text { text, .. }, kraai_types::AssistantItem::ScriptCall(ScriptCall { input, .. })]
                 if text == "answer text continued" && input == "# timeout=1sec\nprint '</tool_call>'")
     ));
     harness.drain_requests();

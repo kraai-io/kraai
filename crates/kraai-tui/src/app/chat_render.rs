@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use kraai_types::{AssistantItem, ChatRole, ConversationItem, Message, MessageId, MessageStatus};
+use kraai_types::{
+    AssistantItem, ChatRole, ConversationItem, Message, MessageId, MessageStatus, ScriptCall,
+};
 
 use crate::components::{ChatHistory, RenderedLine};
 
@@ -67,7 +69,7 @@ impl AppState {
         for message in &rendered_messages {
             if let ConversationItem::Assistant { items } = &message.content {
                 for item in items {
-                    if let AssistantItem::ScriptCall { call_id, input, .. } = item
+                    if let AssistantItem::ScriptCall(ScriptCall { call_id, input, .. }) = item
                         && completed.contains(call_id.as_str())
                     {
                         sources.insert(call_id.as_str(), input.as_str());
@@ -220,7 +222,7 @@ fn without_completed_calls<'a>(
         return Cow::Borrowed(message);
     };
     let is_completed = |item: &AssistantItem| {
-        matches!(item, AssistantItem::ScriptCall { call_id, .. }
+        matches!(item, AssistantItem::ScriptCall(ScriptCall { call_id, .. })
             if completed.contains(call_id.as_str()))
     };
     if !items.iter().any(is_completed) {

@@ -45,6 +45,7 @@ pub fn prepare_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kraai_types::ScriptCall;
     use kraai_types::ToolCallId;
     use serde_json::json;
 
@@ -60,12 +61,12 @@ mod tests {
             provider_id: own.clone(),
             payload: json!({"opaque": "own compaction"}),
         };
-        let call = AssistantItem::ScriptCall {
+        let call = AssistantItem::ScriptCall(ScriptCall {
             call_id: ToolCallId::new("call"),
             name: "kraai_nushell".into(),
             input: "ls".into(),
             arguments_error: None,
-        };
+        });
         let result = ConversationItem::ScriptResult {
             outcome: kraai_execution_types::ScriptExecutionOutcome {
                 status: kraai_execution_types::ScriptExecutionStatus::Completed,

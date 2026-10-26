@@ -1,4 +1,5 @@
 use super::*;
+use kraai_types::ScriptCall;
 
 impl AgentManager {
     pub fn clear_active_turn(&self, session_id: &SessionId) {
@@ -261,7 +262,7 @@ impl AgentManager {
             };
             match &parent.content {
                 ConversationItem::Assistant { items }
-                    if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall { call_id: called, .. } if called == call_id)) =>
+                    if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall(ScriptCall { call_id: called, .. }) if called == call_id)) =>
                 {
                     return Ok(Some((result, parent)));
                 }

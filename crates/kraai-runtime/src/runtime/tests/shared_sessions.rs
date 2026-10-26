@@ -6,7 +6,7 @@ use futures::stream::BoxStream;
 use kraai_execution_types::{ScriptExecutionId, ScriptExecutionStatus};
 use kraai_provider_core::{Provider, ProviderManager, ProviderRequest, ProviderStreamEvent};
 use kraai_test_support::hang_guard;
-use kraai_types::{AssistantPhase, ModelId, ProviderId};
+use kraai_types::{AssistantPhase, ModelId, ProviderId, ScriptCall};
 use tokio::sync::{Mutex, mpsc};
 
 use super::harness::FullHistory as _;
@@ -277,12 +277,12 @@ async fn failed_intercepted_continuation_releases_ownership_and_preserves_input(
         )
         .await?;
     tokio::fs::write(owner.data_dir.join("AGENTS.md"), [0xff]).await?;
-    sender.send(Ok(ProviderStreamEvent::ScriptCall {
+    sender.send(Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
         call_id: kraai_types::ToolCallId::new("call"),
         name: "kraai_nushell".into(),
         input: "# timeout=30sec permissions=workspace-write\nprint hello".into(),
         arguments_error: None,
-    }))?;
+    })))?;
     drop(sender);
     owner.events.wait_for("approval", |events| events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id, .. } if session_id == &session))).await;
     let pending = owner
