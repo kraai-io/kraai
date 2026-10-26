@@ -20,6 +20,7 @@ async fn fractional_metadata_releases_exactly_the_admitted_bytes() -> color_eyre
         &mut futures::io::Cursor::new(Vec::new()),
         &line,
         &budget,
+        &CancellationToken::new(),
         kraai_test_support::HANG_TIMEOUT,
     )
     .await?;
@@ -115,6 +116,7 @@ async fn large_image_reservation_is_released_only_after_physical_flush() -> colo
         &mut written,
         &line,
         &budget,
+        &CancellationToken::new(),
         kraai_test_support::HANG_TIMEOUT,
     )
     .await?;
@@ -144,14 +146,46 @@ impl AsyncWrite for BlockedWriter {
 }
 
 #[tokio::test]
-async fn blocked_stdout_expires_instead_of_hanging_shutdown() {
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "assertions validate when blocked output expires"
+)]
+async fn blocked_output_waits_for_the_client_until_its_input_closes() -> color_eyre::Result<()> {
     let budget = Budget::new(OUTPUT_BYTES);
-    let result = write_frame(
-        &mut BlockedWriter,
-        &json!({"jsonrpc":"2.0","id":1,"result":{}}).to_string(),
-        &budget,
-        Duration::from_millis(10),
-    )
-    .await;
+    let closed = CancellationToken::new();
+    let line = json!({"jsonrpc":"2.0","id":1,"result":{}}).to_string();
+    let timeout = Duration::from_millis(10);
+    let mut writer = BlockedWriter;
+    let mut writing = Box::pin(write_frame(&mut writer, &line, &budget, &closed, timeout));
+    assert!(futures::poll!(writing.as_mut()).is_pending());
+    tokio::time::sleep(timeout * 5).await;
+    assert!(futures::poll!(writing.as_mut()).is_pending());
+    closed.cancel();
+    let result = kraai_test_support::hang_guard(writing).await?;
     assert!(matches!(result, Err(error) if error.kind() == io::ErrorKind::TimedOut));
+    Ok(())
+}
+
+#[tokio::test]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "assertions validate when input counts as closed"
+)]
+async fn input_counts_as_closed_once_it_ends_or_is_dropped() -> color_eyre::Result<()> {
+    let closed = CancellationToken::new();
+    let mut input = Box::pin(cancel_when_finished(
+        futures::stream::iter([1, 2]),
+        closed.clone(),
+    ));
+    assert_eq!(input.next().await, Some(1));
+    assert_eq!(input.next().await, Some(2));
+    assert!(!closed.is_cancelled());
+    assert_eq!(input.next().await, None);
+    assert!(closed.is_cancelled());
+
+    let closed = CancellationToken::new();
+    let input = cancel_when_finished(futures::stream::pending::<()>(), closed.clone());
+    drop(input);
+    assert!(closed.is_cancelled());
+    Ok(())
 }

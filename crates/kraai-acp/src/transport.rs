@@ -7,13 +7,14 @@ use std::sync::{
 use std::time::Duration;
 
 use agent_client_protocol::{Client, ConnectTo, ConnectionTo, Lines, Role, schema::v1 as acp};
-use futures::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, io::BufReader};
+use futures::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, Stream, StreamExt, io::BufReader};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 const OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const ENVELOPE_BYTES: usize = 128;
-const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long output may stay blocked once the client has closed its input.
+const CLOSED_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub(crate) struct Budget {
@@ -179,10 +180,12 @@ struct WireFrame<'a> {
     params: Option<&'a serde_json::value::RawValue>,
 }
 
+/// Writes one frame, waiting as long as the client takes to read it until its input closes.
 async fn write_frame(
     writer: &mut (impl AsyncWrite + Unpin + Send),
     line: &str,
     budget: &Budget,
+    closed: &CancellationToken,
     timeout: Duration,
 ) -> io::Result<()> {
     if line.len() > OUTPUT_BYTES {
@@ -200,20 +203,41 @@ async fn write_frame(
     } else {
         0
     };
-    tokio::time::timeout(timeout, async {
+    let write = async {
         writer.write_all(line.as_bytes()).await?;
         writer.write_all(b"\n").await?;
         writer.flush().await
-    })
-    .await
-    .map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("ACP client stopped reading output: {error}"),
-        )
-    })??;
+    };
+    let expired = async {
+        closed.cancelled().await;
+        tokio::time::sleep(timeout).await;
+    };
+    tokio::select! {
+        result = write => result?,
+        () = expired => {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "ACP client closed its input and stopped reading output",
+            ));
+        }
+    }
     budget.release(reservation);
     Ok(())
+}
+
+/// Cancels `closed` once `input` ends or is dropped.
+fn cancel_when_finished<T>(
+    input: impl Stream<Item = T>,
+    closed: CancellationToken,
+) -> impl Stream<Item = T> {
+    let guard = closed.drop_guard();
+    input.chain(
+        futures::stream::once(async move {
+            drop(guard);
+            None
+        })
+        .filter_map(std::future::ready),
+    )
 }
 
 impl<R: Role> ConnectTo<R> for Stdio {
@@ -224,15 +248,16 @@ impl<R: Role> ConnectTo<R> for Stdio {
         let _closed = self.budget.failed.clone().drop_guard();
         let stdin = blocking::Unblock::new(std::io::stdin());
         let stdout = blocking::Unblock::with_capacity(64 * 1024, std::io::stdout());
+        let closed = CancellationToken::new();
         let sink = futures::sink::unfold(
-            (stdout, self.budget.clone()),
-            async move |(mut writer, budget), line: String| {
-                write_frame(&mut writer, &line, &budget, WRITE_TIMEOUT).await?;
-                Ok::<_, io::Error>((writer, budget))
+            (stdout, self.budget.clone(), closed.clone()),
+            async move |(mut writer, budget, closed), line: String| {
+                write_frame(&mut writer, &line, &budget, &closed, CLOSED_WRITE_TIMEOUT).await?;
+                Ok::<_, io::Error>((writer, budget, closed))
             },
         );
-        let protocol =
-            ConnectTo::<R>::connect_to(Lines::new(sink, BufReader::new(stdin).lines()), client);
+        let input = cancel_when_finished(BufReader::new(stdin).lines(), closed);
+        let protocol = ConnectTo::<R>::connect_to(Lines::new(sink, input), client);
         tokio::select! {
             biased;
             () = self.budget.failed.cancelled() => Err(crate::error::internal("ACP output capacity exceeded")),
