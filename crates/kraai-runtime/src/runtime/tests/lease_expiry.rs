@@ -144,3 +144,36 @@ async fn startup_recovers_sessions_whose_owner_stopped_mid_stream() -> Result<()
     tokio::fs::remove_dir_all(directory).await?;
     Ok(())
 }
+
+#[test]
+fn a_timer_left_running_by_an_expired_lease_stops_at_the_expiry() -> Result<()> {
+    let now = std::time::Instant::now();
+    let mut running = crate::TurnTimer::default();
+    running.start(
+        now.checked_sub(Duration::from_secs(60))
+            .ok_or_else(|| color_eyre::eyre::eyre!("clock too early"))?,
+    );
+    let expired_at = std::time::SystemTime::now()
+        .checked_sub(Duration::from_secs(30))
+        .ok_or_else(|| color_eyre::eyre::eyre!("clock too early"))?;
+    let mut observation = kraai_persistence::SessionObservation {
+        revision: 0,
+        lease_active: true,
+        lease_expires_at: i64::try_from(
+            expired_at.duration_since(std::time::UNIX_EPOCH)?.as_nanos(),
+        )?,
+        turn_timer: Some(serde_json::to_string(&running)?),
+    };
+    let session = kraai_types::SessionId::new("session");
+    let stored = crate::runtime::session_maintenance::stored_turn_timer(&session, &observation);
+    assert!(stored.is_some_and(|timer| timer.elapsed(now).is_some()));
+
+    observation.lease_active = false;
+    let stopped = crate::runtime::session_maintenance::stored_turn_timer(&session, &observation)
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing timer"))?;
+    assert_eq!(stopped.elapsed(std::time::Instant::now()), None);
+    assert!(stopped.last_duration().is_some_and(|duration| {
+        duration >= Duration::from_secs(29) && duration <= Duration::from_secs(31)
+    }));
+    Ok(())
+}

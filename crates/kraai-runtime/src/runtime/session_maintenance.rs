@@ -157,7 +157,8 @@ impl RuntimeCore {
                                 .insert(session.clone(), observation.clone());
                             match runtime.session_store.owns_turn(&session).await {
                                 Ok(false) => {
-                                    if observation.turn_timer != previous.turn_timer
+                                    if (observation.turn_timer != previous.turn_timer
+                                        || observation.lease_active != previous.lease_active)
                                         && let Some(timer) =
                                             stored_turn_timer(&session, &observation)
                                     {
@@ -228,7 +229,13 @@ pub(crate) fn stored_turn_timer(
     observation: &kraai_persistence::SessionObservation,
 ) -> Option<crate::TurnTimer> {
     let timer = observation.turn_timer.as_deref()?;
-    serde_json::from_str(timer)
+    let mut timer: crate::TurnTimer = serde_json::from_str(timer)
         .inspect_err(|error| tracing::warn!(%session_id, %error, "Ignoring unreadable turn timer"))
-        .ok()
+        .ok()?;
+    if !observation.lease_active {
+        let lease_expired_at = std::time::UNIX_EPOCH
+            + Duration::from_nanos(u64::try_from(observation.lease_expires_at).unwrap_or_default());
+        timer.finish(crate::timing::instant_at(lease_expired_at));
+    }
+    Some(timer)
 }
