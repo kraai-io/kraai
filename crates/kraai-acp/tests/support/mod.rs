@@ -234,7 +234,7 @@ supports_images = true
             .request(
                 0,
                 "initialize",
-                json!({"protocolVersion":2,"clientCapabilities":{}}),
+                json!({"protocolVersion":2,"info":{"name":"kraai-acp-tests","version":"0.0.0"},"capabilities":{}}),
             )
             .await?;
         values
