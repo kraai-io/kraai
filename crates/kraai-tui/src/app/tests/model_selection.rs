@@ -10,7 +10,7 @@ fn model(id: &str) -> kraai_runtime::Model {
 }
 
 #[test]
-fn default_selection_skips_empty_providers_and_is_deterministic() {
+fn default_selection_is_deterministic_and_stays_with_the_selected_provider() {
     for reverse in [false, true] {
         let mut harness = test_harness();
         let mut providers = [
@@ -25,37 +25,42 @@ fn default_selection_skips_empty_providers_and_is_deterministic() {
             .into_iter()
             .map(|(provider, models)| (provider.into(), models))
             .collect();
-        for selected_provider in [None, Some("empty"), Some("unavailable")] {
+        for (selected_provider, expected) in [
+            (None, Some(("alpha", "first"))),
+            (Some("zeta"), Some(("zeta", "other"))),
+            (Some("empty"), None),
+            (Some("unavailable"), None),
+        ] {
             harness.app.state.selected_provider_id = selected_provider.map(String::from);
             harness.app.state.selected_model_id = None;
             harness.app.ensure_selected_model();
             assert_eq!(
                 harness.app.state.selected_provider_id.as_deref(),
-                Some("alpha")
+                expected.map(|(provider, _)| provider).or(selected_provider)
             );
             assert_eq!(
                 harness.app.state.selected_model_id.as_deref(),
-                Some("first")
+                expected.map(|(_, model)| model)
             );
         }
     }
 }
 
 #[test]
-fn fallback_keeps_matching_model_and_prefers_existing_provider() {
+fn a_selected_model_never_moves_to_another_provider() {
     let mut harness = test_harness();
     harness.app.state.models_by_provider = HashMap::from([
         ("empty".into(), Vec::new()),
         ("alpha".into(), vec![model("first"), model("shared")]),
         ("zeta".into(), vec![model("shared")]),
     ]);
-    for (provider, expected) in [("missing", "alpha"), ("empty", "alpha"), ("zeta", "zeta")] {
+    for provider in ["missing", "empty", "zeta"] {
         harness.app.state.selected_provider_id = Some(provider.into());
         harness.app.state.selected_model_id = Some("shared".into());
         harness.app.ensure_selected_model();
         assert_eq!(
             harness.app.state.selected_provider_id.as_deref(),
-            Some(expected)
+            Some(provider)
         );
         assert_eq!(
             harness.app.state.selected_model_id.as_deref(),
