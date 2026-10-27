@@ -216,6 +216,22 @@ impl App {
         }
     }
 
+    pub(super) fn observe_session_activity_snapshot(
+        &mut self,
+        session_id: &SessionId,
+        snapshot: &SessionSnapshot,
+    ) {
+        self.state
+            .session_model_saves
+            .entry(session_id.clone())
+            .or_default()
+            .is_running = Some(
+            snapshot.session.is_running
+                || snapshot.activity != kraai_runtime::SessionActivity::Idle
+                || snapshot.queued_messages != 0,
+        );
+    }
+
     pub(super) fn observe_session_model_snapshot(
         &mut self,
         session_id: &SessionId,
@@ -227,11 +243,6 @@ impl App {
             .session_model_saves
             .entry(session_id.clone())
             .or_default();
-        save.is_running = Some(
-            snapshot.session.is_running
-                || snapshot.activity != kraai_runtime::SessionActivity::Idle
-                || snapshot.queued_messages != 0,
-        );
         if self.state.current_session_id.as_ref() != Some(session_id)
             || model_save_id < save.last_saved_id
             || self.state.last_session_model == snapshot.session.selected_model

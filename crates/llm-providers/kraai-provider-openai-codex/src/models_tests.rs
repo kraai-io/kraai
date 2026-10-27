@@ -145,6 +145,7 @@ fn configured_metadata_and_options_override_discovery_and_can_remove_controls() 
     let config = ConfiguredModelMetadata {
         name: Some("Configured".into()),
         max_context: Some(4096),
+        max_output: None,
         supports_images: Some(false),
         options: vec![override_option],
         remove_options: vec!["processing_mode_enabled".into(), "service_tier".into()],
@@ -210,6 +211,7 @@ fn configured_models_absent_from_discovery_keep_their_identity_and_custom_option
         ConfiguredModelMetadata {
             name: Some("Custom".into()),
             max_context: Some(32768),
+            max_output: None,
             supports_images: Some(true),
             options: vec![kraai_provider_core::reasoning_effort_option(
                 ModelOptionsProtocol::OpenAiResponses,

@@ -3,17 +3,16 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::Duration;
 
 use color_eyre::eyre::Result;
 use futures::{StreamExt, poll};
 use kraai_persistence::{MessageStore, SqliteMessageStore};
 use kraai_test_support::hang_guard;
-use kraai_types::{Message, MessageId};
+use kraai_types::{Message, MessageId, ScriptCall};
 use tokio_util::sync::CancellationToken;
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
-use crate::{ContinueSessionOutcome, Event, SessionActivity};
+use crate::{Event, SessionActivity};
 
 struct HandoffProvider {
     requests: tokio::sync::mpsc::UnboundedSender<kraai_provider_core::ProviderRequest>,
@@ -30,10 +29,6 @@ impl kraai_provider_core::Provider for HandoffProvider {
 
     async fn list_models(&self) -> Vec<kraai_provider_core::Model> {
         vec![super::harness::mock_model()]
-    }
-
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
     }
 
     async fn register_model(&mut self, _model: kraai_provider_core::ModelConfig) -> Result<()> {
@@ -57,13 +52,16 @@ impl kraai_provider_core::Provider for HandoffProvider {
                     delta: text.into(),
                 }));
             }
-            events.push(Ok(kraai_provider_core::ProviderStreamEvent::ScriptCall {
-                call_id: kraai_types::ToolCallId::new("handoff-call"),
-                name: String::from("kraai_nushell"),
-                input: String::from(
-                    "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
-                ),
-            }));
+            events.push(Ok(kraai_provider_core::ProviderStreamEvent::ScriptCall(
+                ScriptCall {
+                    call_id: kraai_types::ToolCallId::new("handoff-call"),
+                    name: String::from("kraai_nushell"),
+                    input: String::from(
+                        "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
+                    ),
+                    arguments_error: None,
+                },
+            )));
             let events = futures::stream::iter(events);
             if self.hold_after_call {
                 Ok(Box::pin(events.chain(futures::stream::pending())))
@@ -74,124 +72,6 @@ impl kraai_provider_core::Provider for HandoffProvider {
             Ok(Box::pin(futures::stream::pending()))
         }
     }
-}
-
-#[tokio::test]
-async fn continuation_cannot_overtake_script_approval_during_stream_completion() -> Result<()> {
-    let data_dir =
-        std::env::temp_dir().join(format!("kraai-script-handoff-{}", ulid::Ulid::generate()));
-    tokio::fs::create_dir_all(&data_dir).await?;
-    let store = Arc::new(PausedMessageStore {
-        inner: SqliteMessageStore::new(&data_dir),
-        pause: AtomicBool::new(false),
-        pause_completed_script: AtomicBool::new(true),
-        fail_script_result_save: AtomicBool::new(false),
-        persist_failed_script_result: false,
-        entered: tokio::sync::Notify::new(),
-        release: tokio::sync::Notify::new(),
-    });
-    let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
-    let mut providers = kraai_provider_core::ProviderManager::new();
-    providers.register_provider(
-        kraai_types::ProviderId::new("mock"),
-        Box::new(HandoffProvider {
-            requests,
-            first_request: AtomicBool::new(true),
-            hold_after_call: false,
-            text_before_call: None,
-        }),
-    );
-    let harness = RuntimeTestHarness::new_with_message_store(providers, Some(store.clone()))
-        .await
-        .expect("runtime regression fixture must initialize");
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    harness
-        .handle
-        .send_message(
-            session_id.clone(),
-            String::from("change it"),
-            String::from("mock-model"),
-            String::from("mock"),
-            Default::default(),
-        )
-        .await?;
-    hang_guard(received.recv())
-        .await?
-        .expect("initial provider request");
-    hang_guard(store.entered.notified()).await?;
-
-    let handle = harness.handle.clone();
-    let continuation_session = session_id.clone();
-    let continuation = tokio::spawn(async move {
-        handle
-            .continue_session(
-                continuation_session,
-                "mock-model".into(),
-                "mock".into(),
-                Default::default(),
-            )
-            .await
-    });
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    store.release.notify_one();
-    let outcome = hang_guard(continuation).await???;
-    let premature_request = if outcome == ContinueSessionOutcome::Started {
-        Some(
-            hang_guard(received.recv())
-                .await?
-                .expect("continued provider request"),
-        )
-    } else {
-        None
-    };
-    harness
-        .events
-        .wait_for("script approval after handoff", |events| {
-            events.iter().any(|event| {
-                matches!(event, Event::ScriptApprovalRequested { session_id: actual, .. } if actual == &session_id)
-            })
-        })
-        .await;
-    if outcome == ContinueSessionOutcome::NothingToContinue {
-        let pending = harness
-            .handle
-            .get_pending_script(session_id.clone())
-            .await?
-            .expect("pending script approval");
-        harness
-            .handle
-            .deny_script(session_id.clone(), pending.execution_id)
-            .await?;
-        let request = hang_guard(received.recv())
-            .await?
-            .expect("automatic continuation after denial");
-        assert!(request.messages.iter().any(|message| {
-            matches!(message, kraai_types::ConversationItem::ScriptResult { call_id, .. }
-                if call_id.as_str() == "handoff-call")
-        }));
-        assert_eq!(
-            harness
-                .handle
-                .continue_session(
-                    session_id.clone(),
-                    "mock-model".into(),
-                    "mock".into(),
-                    Default::default()
-                )
-                .await?,
-            ContinueSessionOutcome::NothingToContinue
-        );
-        assert!(received.try_recv().is_err());
-    }
-    harness.shutdown().await;
-    tokio::fs::remove_dir_all(data_dir).await?;
-    assert_eq!(
-        outcome,
-        ContinueSessionOutcome::NothingToContinue,
-        "continuation bypassed script approval; provider history: {:?}",
-        premature_request.map(|request| request.messages)
-    );
-    Ok(())
 }
 
 #[tokio::test]
@@ -254,7 +134,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         .events
         .wait_for("script call before usage drain completes", |events| {
             events.iter().any(|event| {
-                matches!(event, Event::ItemStarted { session_id: id, item: kraai_types::AssistantItem::ScriptCall { .. }, .. } if id == &session_id)
+                matches!(event, Event::ItemStarted { session_id: id, item: kraai_types::AssistantItem::ScriptCall(_), .. } if id == &session_id)
             })
         })
         .await;
@@ -275,18 +155,6 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
             .await?;
         assert!(snapshot.session.is_running);
         assert!(snapshot.session.is_streaming);
-        assert_eq!(
-            harness
-                .handle
-                .continue_session(
-                    session_id.clone(),
-                    "mock-model".into(),
-                    "mock".into(),
-                    Default::default()
-                )
-                .await?,
-            ContinueSessionOutcome::NothingToContinue
-        );
     }
     assert!(harness.handle.cancel_stream(session_id.clone()).await?);
     assert!(!harness.handle.cancel_stream(session_id.clone()).await?);
@@ -311,7 +179,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
     harness.shutdown().await;
     let has_call = request.messages.iter().any(|item| {
         matches!(item, kraai_types::ConversationItem::Assistant { items }
-            if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall { call_id, .. }
+            if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall(ScriptCall { call_id, .. })
                 if call_id.as_str() == "handoff-call")))
     });
     assert!(has_call, "cancellation discarded the script call");
@@ -531,10 +399,6 @@ async fn stream_start_events_precede_a_snapshot_taken_right_after_the_stream_sta
         })
         .await;
 
-    let context = events.try_recv()?;
-    assert!(
-        matches!(context.event, Event::ContextStateChanged { notifications, .. } if notifications.len() == 1)
-    );
     let timing = events.try_recv()?;
     let Event::TurnTimingChanged { timer, .. } = timing.event else {
         panic!("expected runtime turn timing");
@@ -543,7 +407,10 @@ async fn stream_start_events_precede_a_snapshot_taken_right_after_the_stream_sta
     assert!(
         matches!(start.event, Event::StreamStart { message_id: actual, .. } if actual == message_id)
     );
-    assert!(context.sequence < start.sequence);
+    let context = events.try_recv()?;
+    assert!(
+        matches!(context.event, Event::ContextStateChanged { notifications, .. } if notifications.len() == 1)
+    );
     let snapshot = hang_guard(snapshot).await???;
     assert!(snapshot.event_sequence >= start.sequence);
     assert_eq!(snapshot.activity, SessionActivity::Streaming);
@@ -695,8 +562,9 @@ async fn session_commands_after_shutdown_cannot_start_a_new_stream() -> Result<(
     assert!(
         harness
             .handle
-            .continue_session(
+            .send_message(
                 session_id.clone(),
+                "again".into(),
                 "mock-model".into(),
                 "mock".into(),
                 Default::default(),
@@ -708,9 +576,13 @@ async fn session_commands_after_shutdown_cannot_start_a_new_stream() -> Result<(
     harness.runtime.sessions.send(
         &harness.runtime,
         &session_id,
-        crate::runtime::session::SessionMessage::Continue {
-            selection: None,
-            wait_for_preparation: false,
+        crate::runtime::session::SessionMessage::Send {
+            message: "again".into(),
+            selection: kraai_types::ModelSelection {
+                provider_id: kraai_types::ProviderId::new("mock"),
+                model_id: kraai_types::ModelId::new("mock-model"),
+                options: Default::default(),
+            },
             response,
         },
     );
@@ -834,7 +706,7 @@ impl MessageStore for PausedMessageStore {
         }
         if message.status == kraai_types::MessageStatus::Complete
             && matches!(&message.content, kraai_types::ConversationItem::Assistant { items }
-                if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall { .. })))
+                if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall(_))))
             && self.pause_completed_script.swap(false, Ordering::SeqCst)
         {
             self.entered.notify_one();

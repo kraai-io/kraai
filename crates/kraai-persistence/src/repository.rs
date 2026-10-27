@@ -2,7 +2,8 @@ use crate::database::Database;
 use crate::{
     ContextStateStore, ConversationStore, FileImageStore, MessageStore, RequestUsageStore,
     SessionStore, SqliteCompactionStore, SqliteContextStateStore, SqliteMessageStore,
-    SqliteRequestUsageStore, SqliteScriptExecutionStore, SqliteSessionStore, TURN_LEASE_DURATION,
+    SqliteModelListStore, SqliteRequestUsageStore, SqliteScriptExecutionStore, SqliteSessionStore,
+    TURN_LEASE_DURATION,
 };
 use color_eyre::eyre::{Result, ensure};
 use kraai_types::SessionId;
@@ -19,6 +20,7 @@ pub struct Persistence {
     pub(crate) usage: Arc<dyn RequestUsageStore>,
     pub(crate) images: Arc<FileImageStore>,
     pub(crate) compactions: SqliteCompactionStore,
+    pub(crate) model_lists: SqliteModelListStore,
 }
 
 impl Persistence {
@@ -62,6 +64,7 @@ impl Persistence {
             context: Arc::new(SqliteContextStateStore::with_database(database.clone())),
             usage: Arc::new(SqliteRequestUsageStore::with_database(database.clone())),
             compactions: SqliteCompactionStore::with_database(database.clone()),
+            model_lists: SqliteModelListStore::with_database(database.clone()),
             sessions,
             executions: Arc::new(SqliteScriptExecutionStore::with_database(database)),
             images: Arc::new(FileImageStore::new(data_dir)),
@@ -90,6 +93,9 @@ impl Persistence {
     }
     pub fn compactions(&self) -> &SqliteCompactionStore {
         &self.compactions
+    }
+    pub fn model_lists(&self) -> &SqliteModelListStore {
+        &self.model_lists
     }
     pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
         self.sessions.delete(session_id).await

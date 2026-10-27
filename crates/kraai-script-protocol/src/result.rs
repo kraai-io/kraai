@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use kraai_execution_types::ScriptExecutionStatus;
+use kraai_execution_types::{SandboxCapabilities, SandboxCapability, ScriptExecutionStatus};
 
 const BINARY_OUTPUT_MESSAGE: &str = "Binary output was preserved by Kraai. Decode an existing output file if available. Rerun only if repeating the command's effects is safe, decoding its output with the appropriate encoding before returning text.";
 
@@ -24,6 +24,7 @@ pub struct ToolCallResultView<'a> {
     /// Where the full stdout was saved when the model sees only part of it.
     pub stdout_file: Option<&'a Path>,
     pub stderr_file: Option<&'a Path>,
+    pub sandbox_blocked: Option<&'a SandboxCapabilities>,
 }
 
 pub fn render_tool_call_result(result: ToolCallResultView<'_>) -> String {
@@ -38,7 +39,8 @@ pub fn render_tool_call_result(result: ToolCallResultView<'_>) -> String {
 
     let has_body = !result.stdout.is_empty()
         || !result.stderr.is_empty()
-        || result.diagnostic.is_some_and(|value| !value.is_empty());
+        || result.diagnostic.is_some_and(|value| !value.is_empty())
+        || result.sandbox_blocked.is_some();
     if has_body {
         rendered.push('\n');
         render_channel(&mut rendered, "stdout", result.stdout, result.stdout_file);
@@ -47,6 +49,9 @@ pub fn render_tool_call_result(result: ToolCallResultView<'_>) -> String {
             rendered.push_str("<diagnostic>");
             rendered.push_str(diagnostic);
             rendered.push_str("</diagnostic>\n");
+        }
+        if let Some(granted) = result.sandbox_blocked {
+            push_sandbox_notice(&mut rendered, granted);
         }
     }
     rendered.push_str("</tool_call_result>");
@@ -82,6 +87,34 @@ fn render_channel(rendered: &mut String, name: &str, bytes: &[u8], file: Option<
     rendered.push_str("</");
     rendered.push_str(name);
     rendered.push_str(">\n");
+}
+
+fn push_sandbox_notice(rendered: &mut String, granted: &SandboxCapabilities) {
+    let names = |capabilities: &mut dyn Iterator<Item = SandboxCapability>| {
+        capabilities
+            .map(SandboxCapability::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut missing = [
+        SandboxCapability::HostWrite,
+        SandboxCapability::Network,
+        SandboxCapability::HostRead,
+        SandboxCapability::WorkspaceWrite,
+    ]
+    .into_iter()
+    .filter(|capability| !granted.contains(*capability))
+    .peekable();
+    let example = missing
+        .peek()
+        .copied()
+        .unwrap_or(SandboxCapability::NoSandbox)
+        .as_str();
+    let not_granted = names(&mut missing.chain([SandboxCapability::NoSandbox]));
+    rendered.push_str(&format!(
+        "<sandbox>The sandbox likely blocked this script. It ran with: {}. If it needs more access, rerun it with the capabilities it needs in its header, such as `# timeout=30sec permissions={example}`. Not granted: {not_granted}.</sandbox>\n",
+        names(&mut granted.iter()),
+    ));
 }
 
 fn push_attribute(rendered: &mut String, name: &str, value: &str) {
@@ -136,6 +169,7 @@ mod tests {
             diagnostic: None,
             stdout_file: None,
             stderr_file: None,
+            sandbox_blocked: None,
         });
         assert_eq!(
             rendered,
@@ -157,6 +191,7 @@ mod tests {
             diagnostic: None,
             stdout_file: None,
             stderr_file: None,
+            sandbox_blocked: None,
         });
         assert!(rendered.contains("encoding=\"binary\" byte_count=\"3\""));
         assert!(rendered.contains(super::BINARY_OUTPUT_MESSAGE));
@@ -175,9 +210,41 @@ mod tests {
                 diagnostic: None,
                 stdout_file: None,
                 stderr_file: None,
+                sandbox_blocked: None,
             }),
             "<tool_call_result status=\"denied\"></tool_call_result>"
         );
+    }
+
+    #[test]
+    fn a_likely_sandbox_block_names_the_header_that_asks_for_more() {
+        let notice = |granted| {
+            render_tool_call_result(ToolCallResultView {
+                status: ScriptExecutionStatus::Completed,
+                exit_code: Some(128),
+                elapsed_millis: None,
+                stdout: &[],
+                stderr: &[],
+                diagnostic: None,
+                stdout_file: None,
+                stderr_file: None,
+                sandbox_blocked: Some(&granted),
+            })
+        };
+        assert_eq!(
+            notice(kraai_execution_types::SandboxCapabilities::workspace_write()),
+            "<tool_call_result status=\"completed\" exit_code=\"128\">\n\
+<sandbox>The sandbox likely blocked this script. It ran with: workspace-read, workspace-write, network. If it needs more access, rerun it with the capabilities it needs in its header, such as `# timeout=30sec permissions=host-write`. Not granted: host-write, host-read, no-sandbox.</sandbox>\n\
+</tool_call_result>"
+        );
+        let unrestricted = kraai_execution_types::SandboxCapabilities::new([
+            kraai_execution_types::SandboxCapability::HostWrite,
+            kraai_execution_types::SandboxCapability::Network,
+        ])
+        .ok();
+        assert!(unrestricted.map(notice).is_some_and(|rendered| {
+            rendered.contains("permissions=no-sandbox`. Not granted: no-sandbox.")
+        }));
     }
 
     #[test]
@@ -192,6 +259,7 @@ mod tests {
             diagnostic: None,
             stdout_file: Some(std::path::Path::new("/out/a \"b\".stdout")),
             stderr_file: None,
+            sandbox_blocked: None,
         });
         assert!(rendered.len() < super::CHANNEL_DISPLAY_LIMIT + 512);
         assert!(rendered.contains(&format!(

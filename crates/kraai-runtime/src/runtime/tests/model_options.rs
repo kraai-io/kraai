@@ -32,6 +32,7 @@ impl Provider for ConfigurableProvider {
             id: ModelId::new("model"),
             name: "Configurable model".into(),
             max_context: None,
+            max_output: None,
             supports_images: false,
             options: vec![
                 ModelOptionDefinition {
@@ -84,10 +85,6 @@ impl Provider for ConfigurableProvider {
                 },
             ],
         }]
-    }
-
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
     }
 
     async fn register_model(&mut self, _: kraai_provider_core::ModelConfig) -> Result<()> {

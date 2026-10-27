@@ -273,6 +273,9 @@ impl RuntimeBuilder {
         let execution_store = persistence.executions().clone();
         let context_state_store = persistence.context().clone();
         let image_store = persistence.images().clone();
+        let model_lists = Arc::new(super::model_lists::ModelListSync::new(
+            persistence.model_lists().clone(),
+        ));
 
         let providers = ProviderManager::new();
         let (model_catalog_tx, _) =
@@ -334,6 +337,7 @@ impl RuntimeBuilder {
             }),
             startup_tx,
             model_catalog_tx,
+            model_lists,
         };
 
         runtime.run(command_rx, shutdown_rx).await;

@@ -11,7 +11,8 @@ use kraai_provider_core::{
 };
 use kraai_test_support::hang_guard;
 use kraai_types::{
-    AssistantPhase, ConversationItem, ModelId, ProviderId, SessionId, TokenUsage, ToolCallId,
+    AssistantPhase, ConversationItem, ModelId, ProviderId, ScriptCall, SessionId, TokenUsage,
+    ToolCallId,
 };
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
@@ -51,10 +52,8 @@ impl Provider for WarmingProvider {
             id: ModelId::new("mock-model"),
             name: "Mock".into(),
             max_context: None,
+            max_output: None,
         }]
-    }
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
     }
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
         Ok(())
@@ -104,11 +103,12 @@ impl Provider for WarmingProvider {
             delta: if first { "discard this" } else { "real answer" }.into(),
         })];
         if first {
-            events.push(Ok(ProviderStreamEvent::ScriptCall {
+            events.push(Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
                 call_id: ToolCallId::new("discarded-call"),
                 name: "kraai_nushell".into(),
                 input: "# timeout=10sec\nerror make {msg: 'must never execute'}".into(),
-            }));
+                arguments_error: None,
+            })));
         }
         events.push(Ok(ProviderStreamEvent::Usage(TokenUsage {
             input_tokens: if first { 2000 } else { 3000 },

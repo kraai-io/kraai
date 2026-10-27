@@ -8,6 +8,8 @@ pub struct ChatCompletionRequest {
     pub tools: Option<Vec<FunctionTool>>,
     pub tool_choice: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_completion_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
@@ -147,6 +149,15 @@ pub struct ChatCompletionChunkDelta {
     pub refusal: Option<String>,
 }
 
+impl ChatCompletionChunkDelta {
+    pub fn is_empty(&self) -> bool {
+        self.reasoning.is_empty()
+            && self.content.as_deref().is_none_or(str::is_empty)
+            && self.tool_calls.as_ref().is_none_or(Vec::is_empty)
+            && self.refusal.as_deref().is_none_or(str::is_empty)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ToolCallDelta {
     #[serde(default)]
@@ -260,6 +271,7 @@ mod tests {
                 messages: Vec::new(),
                 tools,
                 tool_choice: "none",
+                max_completion_tokens: None,
                 parallel_tool_calls: None,
                 stream: true,
                 stream_options: None,

@@ -26,7 +26,22 @@ pub trait Provider: Send + Sync {
 
     fn set_model_catalog(&mut self, _catalog: std::sync::Arc<crate::ModelCatalog>) {}
 
-    async fn cache_models(&self) -> Result<()>;
+    fn model_list_source(&self) -> Option<String> {
+        None
+    }
+
+    async fn fetch_model_list(&self) -> Result<serde_json::Value> {
+        color_eyre::eyre::bail!("Provider does not discover models")
+    }
+
+    async fn install_model_list(&self, _list: serde_json::Value) -> Result<()> {
+        Ok(())
+    }
+
+    async fn refresh_model_list(&self) -> Result<()> {
+        let list = self.fetch_model_list().await?;
+        self.install_model_list(list).await
+    }
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()>;
 
@@ -67,7 +82,7 @@ impl ScriptToolDefinition {
     pub fn nushell() -> Self {
         Self {
             name: Self::NAME.to_string(),
-            description: "Execute a Nushell script. Supply the complete script, beginning with a metadata comment containing timeout, such as # timeout=30sec.".to_string(),
+            description: "Execute a Nushell script. Supply the complete script, beginning with a header comment containing its timeout and any extra sandbox capabilities it requests, such as `# timeout=30sec` or `# timeout=30sec permissions=host-write`.".to_string(),
         }
     }
 }
@@ -85,6 +100,8 @@ pub struct Model {
     pub id: ModelId,
     pub name: String,
     pub max_context: Option<usize>,
+    #[serde(default)]
+    pub max_output: Option<usize>,
     pub supports_images: bool,
     #[serde(default)]
     pub options: Vec<kraai_types::ModelOptionDefinition>,

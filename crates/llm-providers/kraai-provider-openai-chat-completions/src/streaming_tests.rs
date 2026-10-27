@@ -42,7 +42,7 @@ async fn fragmented_arguments_preserve_script_and_drain_usage_after_call() -> Re
             matches!(events.get(2), Some(ProviderStreamEvent::Usage(usage)) if usage.total_tokens == 5)
         );
         assert!(
-            matches!(events.first(), Some(ProviderStreamEvent::ScriptCall { call_id, name, input: script }) if call_id.as_str() == "call-1" && name == "kraai_nushell" && script == input)
+            matches!(events.first(), Some(ProviderStreamEvent::ScriptCall(ScriptCall { call_id, name, input: script, arguments_error: None })) if call_id.as_str() == "call-1" && name == "kraai_nushell" && script == input)
         );
         assert!(matches!(
             events.get(1),
@@ -71,7 +71,7 @@ async fn tool_fragments_without_indexes_preserve_the_single_call() -> Result<()>
     .collect::<Result<Vec<_>>>()?;
     assert_eq!(events.len(), 2);
     assert!(
-        matches!(events.first(), Some(ProviderStreamEvent::ScriptCall { call_id, name, input }) if call_id.as_str() == "call-1" && name == "kraai_nushell" && input == "ls")
+        matches!(events.first(), Some(ProviderStreamEvent::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None })) if call_id.as_str() == "call-1" && name == "kraai_nushell" && input == "ls")
     );
     Ok(())
 }
@@ -95,9 +95,64 @@ async fn multiple_calls_without_indexes_never_emit_a_script() {
         assert!(
             !events
                 .iter()
-                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall { .. })))
+                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall(_))))
         );
     }
+}
+
+#[tokio::test]
+async fn invalid_calls_keep_raw_arguments_and_their_error() -> Result<()> {
+    let mut wrong_tool = call(r#"{"input":"ls"}"#);
+    wrong_tool["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] = json!("bash");
+    for (chunk, name, arguments, error) in [
+        (
+            call(r#"{"command": "ls"}"#),
+            "kraai_nushell",
+            r#"{"command": "ls"}"#,
+            "arguments must be a JSON object with one string field \"input\": unknown field `command`, expected `input` at line 1 column 10",
+        ),
+        (
+            call(r#"{"input":"#),
+            "kraai_nushell",
+            r#"{"input":"#,
+            "arguments must be a JSON object with one string field \"input\": EOF while parsing a value at line 1 column 9",
+        ),
+        (
+            call(r#"{"input":"ls","extra":true}"#),
+            "kraai_nushell",
+            r#"{"input":"ls","extra":true}"#,
+            "arguments must be a JSON object with one string field \"input\": unknown field `extra`, expected `input` at line 1 column 21",
+        ),
+        (
+            wrong_tool,
+            "bash",
+            r#"{"input":"ls"}"#,
+            "unknown tool 'bash'; the only tool is 'kraai_nushell'",
+        ),
+    ] {
+        let events = collect(
+            vec![data(chunk), data(finish("tool_calls")), Ok(SseEvent::Done)],
+            true,
+        )
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            events,
+            [
+                ProviderStreamEvent::ScriptCall(ScriptCall {
+                    call_id: ToolCallId::new("call-1"),
+                    name: name.into(),
+                    input: arguments.into(),
+                    arguments_error: Some(error.into()),
+                }),
+                ProviderStreamEvent::Finished {
+                    stop_reason: StopReason::ToolCall
+                },
+            ]
+        );
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -105,37 +160,20 @@ async fn malformed_or_incomplete_calls_never_emit_a_script() {
     let good = r##"{"input":"# timeout=1sec\nls"}"##;
     let mut extra = call(good);
     extra["choices"][0]["delta"]["tool_calls"][0]["index"] = json!(1);
-    let mut unknown = call(good);
-    unknown["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] = json!("shell");
-    let mut missing_id = call(good);
-    missing_id["choices"][0]["delta"]["tool_calls"][0]["id"] = Value::Null;
+    let missing_id = |arguments: &str| {
+        let mut chunk = call(arguments);
+        chunk["choices"][0]["delta"]["tool_calls"][0]["id"] = Value::Null;
+        vec![data(chunk), data(finish("tool_calls")), Ok(SseEvent::Done)]
+    };
     for events in [
+        missing_id(good),
+        missing_id(r#"{"command":"ls"}"#),
         vec![data(call(good))],
         vec![data(call(good)), Ok(SseEvent::Done)],
         vec![data(call(good)), data(finish("stop")), Ok(SseEvent::Done)],
         vec![
             data(call(good)),
             data(extra),
-            data(finish("tool_calls")),
-            Ok(SseEvent::Done),
-        ],
-        vec![
-            data(unknown),
-            data(finish("tool_calls")),
-            Ok(SseEvent::Done),
-        ],
-        vec![
-            data(missing_id),
-            data(finish("tool_calls")),
-            Ok(SseEvent::Done),
-        ],
-        vec![
-            data(call("{\"input\":")),
-            data(finish("tool_calls")),
-            Ok(SseEvent::Done),
-        ],
-        vec![
-            data(call(r#"{"input":"ls","extra":true}"#)),
             data(finish("tool_calls")),
             Ok(SseEvent::Done),
         ],
@@ -146,7 +184,7 @@ async fn malformed_or_incomplete_calls_never_emit_a_script() {
         assert!(
             !events
                 .iter()
-                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall { .. }))),
+                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall(_)))),
             "{events:?}"
         );
     }
@@ -164,7 +202,7 @@ async fn completed_call_survives_trailing_stream_failure() {
         source.extend(tail);
         let events = collect(source, true).await;
         assert!(
-            matches!(events.first(), Some(Ok(ProviderStreamEvent::ScriptCall { input, .. })) if input == "ls")
+            matches!(events.first(), Some(Ok(ProviderStreamEvent::ScriptCall(ScriptCall { input, .. }))) if input == "ls")
         );
         assert!(matches!(
             events.get(1),
@@ -185,7 +223,7 @@ async fn completed_call_does_not_wait_for_trailing_usage_or_done() -> Result<()>
     let mut events = adapt_chat_completion_stream(source, Some("kraai_nushell".into()), false);
     let event = kraai_test_support::hang_guard(events.next()).await?;
     assert!(
-        matches!(event, Some(Ok(ProviderStreamEvent::ScriptCall { input, .. })) if input == "ls")
+        matches!(event, Some(Ok(ProviderStreamEvent::ScriptCall(ScriptCall { input, .. }))) if input == "ls")
     );
     Ok(())
 }
@@ -209,7 +247,7 @@ async fn disabled_tools_and_oversized_arguments_are_rejected() {
         assert!(
             !events
                 .iter()
-                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall { .. })))
+                .any(|event| matches!(event, Ok(ProviderStreamEvent::ScriptCall(_))))
         );
     }
 }
@@ -236,6 +274,48 @@ async fn text_usage_and_errors_survive_without_tools() -> Result<()> {
         json!({"choices":[{"delta":{"refusal":"refused"}}]}),
     ] {
         let events = collect(vec![data(failure), Ok(SseEvent::Done)], false).await;
+        assert!(events.iter().any(Result::is_err));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_repeated_final_choice_carries_usage_but_new_content_fails() -> Result<()> {
+    let repeated = |delta: Value, reason: &str| json!({"choices":[{"index":0,"delta":delta,"finish_reason":reason}],"usage":{"prompt_tokens":8,"completion_tokens":2}});
+    let events = collect(
+        vec![
+            data(json!({"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]})),
+            data(repeated(json!({"content":"","role":"assistant"}), "stop")),
+            Ok(SseEvent::Done),
+        ],
+        false,
+    )
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
+    assert!(matches!(
+        events.get(1),
+        Some(ProviderStreamEvent::Finished {
+            stop_reason: StopReason::EndTurn
+        })
+    ));
+    assert!(
+        matches!(events.get(2), Some(ProviderStreamEvent::Usage(usage)) if usage.total_tokens == 10)
+    );
+    for (delta, reason) in [
+        (json!({"content":"more"}), "stop"),
+        (json!({"reasoning":"more"}), "stop"),
+        (json!({}), "length"),
+    ] {
+        let events = collect(
+            vec![
+                data(finish("stop")),
+                data(repeated(delta, reason)),
+                Ok(SseEvent::Done),
+            ],
+            false,
+        )
+        .await;
         assert!(events.iter().any(Result::is_err));
     }
     Ok(())
@@ -291,7 +371,7 @@ async fn reasoning_is_assembled_for_replay_before_the_tool_call() -> Result<()> 
     );
     assert!(matches!(
         rest.get(1),
-        Some(ProviderStreamEvent::ScriptCall { .. })
+        Some(ProviderStreamEvent::ScriptCall(_))
     ));
     Ok(())
 }
@@ -340,11 +420,12 @@ async fn structured_reasoning_fragments_survive_tool_continuation() -> Result<()
                         provider_id: provider_id.clone(),
                         payload: payload.clone(),
                     },
-                    kraai_types::AssistantItem::ScriptCall {
+                    kraai_types::AssistantItem::ScriptCall(ScriptCall {
                         call_id: ToolCallId::new("call-1"),
                         name: "kraai_nushell".into(),
                         input: "ls".into(),
-                    },
+                        arguments_error: None,
+                    }),
                 ],
             },
             kraai_types::ConversationItem::ScriptResult {
@@ -429,7 +510,7 @@ async fn several_indexed_calls_are_emitted_in_order() -> Result<()> {
     let calls: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
-            ProviderStreamEvent::ScriptCall { call_id, .. } => Some(call_id.as_str()),
+            ProviderStreamEvent::ScriptCall(ScriptCall { call_id, .. }) => Some(call_id.as_str()),
             _ => None,
         })
         .collect();

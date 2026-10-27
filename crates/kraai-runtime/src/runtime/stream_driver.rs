@@ -10,7 +10,7 @@ use kraai_provider_core::{
     ScriptToolDefinition,
 };
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock, parse_script_input};
-use kraai_types::{MessageId, ModelId, ProviderId, SessionId, ToolCallId};
+use kraai_types::{MessageId, ModelId, ProviderId, ScriptCall, SessionId, ToolCallId};
 use tokio::sync::{RwLock, mpsc};
 
 use super::core::emit_event;
@@ -462,37 +462,26 @@ impl StreamReader {
                         delta,
                     })
                 }
-                Ok(ProviderStreamEvent::ScriptCall {
-                    call_id,
-                    name,
-                    input,
-                }) => {
+                Ok(ProviderStreamEvent::ScriptCall(call)) => {
                     if draining {
                         // Only the first call runs; later ones stay in the response and get a
                         // result saying they did not run.
-                        tracing::debug!(%call_id, "Keeping a script call after the first without running it");
-                        if !self.forward(StreamEvent::ScriptCall {
-                            call_id,
-                            name,
-                            input,
-                        }) {
+                        tracing::debug!(call_id = %call.call_id, "Keeping a script call after the first without running it");
+                        if !self.forward(StreamEvent::ScriptCall(call)) {
                             return ResponseEnd::Stopped;
                         }
                         continue;
                     }
-                    if name != ScriptToolDefinition::NAME {
+                    if call.arguments_error.is_none() && call.name != ScriptToolDefinition::NAME {
                         return ResponseEnd::Failed(format!(
-                            "provider called unexpected tool '{name}'"
+                            "provider called unexpected tool '{}'",
+                            call.name
                         ));
                     }
-                    response.boundary = Some(protocol_boundary(call_id.clone(), &input));
+                    response.boundary = Some(protocol_boundary(&call));
                     drain_deadline =
                         Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
-                    self.forward(StreamEvent::ScriptCall {
-                        call_id,
-                        name,
-                        input,
-                    })
+                    self.forward(StreamEvent::ScriptCall(call))
                 }
                 Ok(ProviderStreamEvent::Finished { stop_reason }) => {
                     response.reached_output_limit =
@@ -559,8 +548,14 @@ enum ResponseEnd {
     },
 }
 
-fn protocol_boundary(call_id: ToolCallId, input: &str) -> CompletedProtocolBoundary {
-    match parse_script_input(input) {
+fn protocol_boundary(call: &ScriptCall) -> CompletedProtocolBoundary {
+    let call_id = call.call_id.clone();
+    let input = call.input.as_str();
+    let parsed = match &call.arguments_error {
+        Some(error) => Err(ProtocolError::InvalidToolCall(error.clone())),
+        None => parse_script_input(input),
+    };
+    match parsed {
         Ok(script) => CompletedProtocolBoundary {
             call_id,
             script: Some(script),

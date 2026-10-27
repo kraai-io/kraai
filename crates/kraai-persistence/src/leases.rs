@@ -7,11 +7,12 @@ use std::time::Duration;
 
 pub const TURN_LEASE_DURATION: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionObservation {
     pub revision: i64,
     pub lease_active: bool,
     pub lease_expires_at: i64,
+    pub turn_timer: Option<String>,
 }
 
 fn ensure_claimable(connection: &Connection, session: &SessionId) -> Result<i64> {
@@ -49,7 +50,8 @@ impl SqliteSessionStore {
             .read(move |connection, _| {
                 Ok(connection
                     .query_row(
-                        "SELECT revision, lease_active AND lease_expires_at >= ?2, lease_expires_at
+                        "SELECT revision, lease_active AND lease_expires_at >= ?2, lease_expires_at,
+                             turn_timer
                          FROM sessions WHERE id = ?1",
                         params![session.as_str(), now_nanos()?],
                         |row| {
@@ -57,6 +59,7 @@ impl SqliteSessionStore {
                                 revision: row.get(0)?,
                                 lease_active: row.get(1)?,
                                 lease_expires_at: row.get(2)?,
+                                turn_timer: row.get(3)?,
                             })
                         },
                     )
@@ -152,6 +155,18 @@ impl SqliteSessionStore {
     }
 
     pub async fn release_turn(&self, session_id: &SessionId) -> Result<bool> {
+        self.release(session_id, None).await
+    }
+
+    pub async fn release_turn_with_timer(
+        &self,
+        session_id: &SessionId,
+        turn_timer: String,
+    ) -> Result<bool> {
+        self.release(session_id, Some(turn_timer)).await
+    }
+
+    async fn release(&self, session_id: &SessionId, turn_timer: Option<String>) -> Result<bool> {
         let session = session_id.clone();
         self.database
             .run(move |connection, leases| {
@@ -159,11 +174,29 @@ impl SqliteSessionStore {
                     return Ok(false);
                 };
                 let updated = connection.execute(
-                    "UPDATE sessions SET lease_active = 0, revision = revision + 1
+                    "UPDATE sessions SET lease_active = 0, revision = revision + 1,
+                         turn_timer = COALESCE(?3, turn_timer)
                      WHERE id = ?1 AND lease_active = 1 AND lease_token = ?2",
-                    params![session.as_str(), expected],
+                    params![session.as_str(), expected, turn_timer],
                 )?;
                 Ok(updated == 1)
+            })
+            .await
+    }
+
+    pub async fn save_turn_timer(&self, session_id: &SessionId, turn_timer: String) -> Result<()> {
+        let Some(expected) = self.database.leases().get(session_id) else {
+            return Ok(());
+        };
+        let session = session_id.clone();
+        self.database
+            .run(move |connection, _| {
+                connection.execute(
+                    "UPDATE sessions SET turn_timer = ?3
+                     WHERE id = ?1 AND lease_active = 1 AND lease_token = ?2",
+                    params![session.as_str(), expected, turn_timer],
+                )?;
+                Ok(())
             })
             .await
     }

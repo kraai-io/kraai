@@ -9,47 +9,6 @@ use crate::Event;
 use kraai_persistence::SessionStore;
 
 #[tokio::test]
-async fn rejected_continuation_preserves_input_queued_before_a_foreign_claim() -> Result<()> {
-    let observer = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("observer fixture");
-    let session = create_session_with_profile(&observer.handle, "test-profile").await?;
-    super::harness::enqueue(
-        &observer.runtime,
-        &session,
-        vec![super::harness::queued(
-            "pending input".into(),
-            kraai_types::ModelId::new("mock-model"),
-            kraai_types::ProviderId::new("mock"),
-        )],
-    )
-    .await;
-    let owner = kraai_persistence::Persistence::open(&observer.data_dir).await?;
-    owner.sessions().claim_turn(&session).await?;
-    assert!(
-        observer
-            .handle
-            .continue_session(
-                session.clone(),
-                "mock-model".into(),
-                "mock".into(),
-                Default::default()
-            )
-            .await
-            .is_err()
-    );
-    let queued = super::harness::queue(&observer.runtime, &session).await;
-    assert_eq!(queued.len(), 1);
-    assert_eq!(
-        queued.first().expect("queued input").content,
-        "pending input".into()
-    );
-    assert!(owner.sessions().owns_turn(&session).await?);
-    observer.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn observers_refresh_on_expiry_without_a_revision_change_and_can_submit() -> Result<()> {
     let observer = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("reply")]])
         .await
@@ -183,5 +142,38 @@ async fn startup_recovers_sessions_whose_owner_stopped_mid_stream() -> Result<()
     assert!(!lease_active);
     restarted.shutdown().await;
     tokio::fs::remove_dir_all(directory).await?;
+    Ok(())
+}
+
+#[test]
+fn a_timer_left_running_by_an_expired_lease_stops_at_the_expiry() -> Result<()> {
+    let now = std::time::Instant::now();
+    let mut running = crate::TurnTimer::default();
+    running.start(
+        now.checked_sub(Duration::from_secs(60))
+            .ok_or_else(|| color_eyre::eyre::eyre!("clock too early"))?,
+    );
+    let expired_at = std::time::SystemTime::now()
+        .checked_sub(Duration::from_secs(30))
+        .ok_or_else(|| color_eyre::eyre::eyre!("clock too early"))?;
+    let mut observation = kraai_persistence::SessionObservation {
+        revision: 0,
+        lease_active: true,
+        lease_expires_at: i64::try_from(
+            expired_at.duration_since(std::time::UNIX_EPOCH)?.as_nanos(),
+        )?,
+        turn_timer: Some(serde_json::to_string(&running)?),
+    };
+    let session = kraai_types::SessionId::new("session");
+    let stored = crate::runtime::session_maintenance::stored_turn_timer(&session, &observation);
+    assert!(stored.is_some_and(|timer| timer.elapsed(now).is_some()));
+
+    observation.lease_active = false;
+    let stopped = crate::runtime::session_maintenance::stored_turn_timer(&session, &observation)
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing timer"))?;
+    assert_eq!(stopped.elapsed(std::time::Instant::now()), None);
+    assert!(stopped.last_duration().is_some_and(|duration| {
+        duration >= Duration::from_secs(29) && duration <= Duration::from_secs(31)
+    }));
     Ok(())
 }

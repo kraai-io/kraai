@@ -61,10 +61,6 @@ impl kraai_provider_core::Provider for BlockingPollProvider {
         vec![super::harness::mock_model()]
     }
 
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
-    }
-
     async fn register_model(&mut self, _model: kraai_provider_core::ModelConfig) -> Result<()> {
         Ok(())
     }

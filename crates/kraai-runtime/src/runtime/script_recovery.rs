@@ -48,6 +48,39 @@ impl RuntimeCore {
             if !history.contains(&record.source_message_id) {
                 continue;
             }
+            let stored = self
+                .agent_manager
+                .get_message(&record.result_message_id)
+                .await?
+                .and_then(|message| match message.content {
+                    kraai_types::ConversationItem::ScriptResult {
+                        output, outcome, ..
+                    } => Some((output, outcome)),
+                    _ => None,
+                });
+            if let Some((output, outcome)) = stored {
+                let recorded = record.outcome().ok();
+                if recorded.as_ref() != Some(&outcome) {
+                    tracing::warn!(
+                        execution_id = ?record.id,
+                        message_id = ?record.result_message_id,
+                        ?recorded,
+                        delivered = ?outcome,
+                        "Delivered script result disagrees with its execution record"
+                    );
+                }
+                self.agent_manager
+                    .add_script_result_to_history(
+                        &record.session_id,
+                        record.result_message_id.clone(),
+                        record.profile.id.clone(),
+                        record.call_id.clone(),
+                        output,
+                        outcome,
+                    )
+                    .await?;
+                continue;
+            }
             let completed = if record.phase == kraai_execution_types::ScriptExecutionPhase::Finished
             {
                 CompletedScriptExecution {

@@ -32,12 +32,9 @@ impl Provider for MockProvider {
                 id: ModelId::new(id),
                 name: String::from("Mock Model"),
                 max_context: None,
+                max_output: None,
             })
             .collect()
-    }
-
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
     }
 
     async fn register_model(&mut self, _model: kraai_provider_core::ModelConfig) -> Result<()> {

@@ -156,6 +156,7 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
         "slug": "summary-model",
         "display_name": "Summary Model",
         "visibility": "list",
+        "context_window": 10000,
         "default_reasoning_level": "low",
         "supported_reasoning_levels": [{"effort": "low", "description": "Fast"}]
     }]})
@@ -179,7 +180,7 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
     ])
     .await?;
     let provider = provider(base_url)?;
-    provider.cache_models().await?;
+    provider.refresh_model_list().await?;
     for cache_key in [None, Some("summary-session")] {
         let context = cache_key.map_or_else(ProviderRequestContext::default, |key| {
             ProviderRequestContext::with_prompt_cache_key(key.into())
@@ -262,6 +263,7 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
         assert_eq!(body.get("tools"), Some(&json!([])));
         assert_eq!(body.get("tool_choice"), Some(&json!("none")));
         assert!(body.get("parallel_tool_calls").is_none());
+        assert_eq!(body.get("max_output_tokens"), Some(&json!(2000)));
         assert_eq!(body.get("stream"), Some(&json!(true)));
         assert_eq!(body.get("store"), Some(&json!(false)));
         assert_eq!(
@@ -317,7 +319,7 @@ async fn subscription_redirect_policy_rejects_cross_origin_https_targets() -> Re
 async fn proxy_redirect_cannot_bypass_backend_transport_validation() -> Result<()> {
     let (base_url, server) = redirect_server("http://example.com/backend-api/codex/models").await?;
     let provider = provider(base_url)?;
-    let result = provider.cache_models().await;
+    let result = provider.refresh_model_list().await;
     assert!(result.is_err_and(|error| {
         error
             .downcast_ref::<reqwest::Error>()
@@ -357,7 +359,7 @@ async fn discovery_drives_requests_and_reports_refresh_failures() -> Result<()> 
     ])
     .await?;
     let provider = provider(base_url)?;
-    provider.cache_models().await?;
+    provider.refresh_model_list().await?;
     let models = provider.list_models().await;
     assert_eq!(models.len(), 1);
     let model = models.first().ok_or_else(|| eyre!("no discovered model"))?;
@@ -384,14 +386,14 @@ async fn discovery_drives_requests_and_reports_refresh_failures() -> Result<()> 
         .await?
         .text()
         .await?;
-    assert!(provider.cache_models().await.is_err());
+    assert!(provider.refresh_model_list().await.is_err());
     assert!(
         provider
-            .cache_models()
+            .refresh_model_list()
             .await
             .is_err_and(|error| error.to_string().contains("403"))
     );
-    provider.cache_models().await?;
+    provider.refresh_model_list().await?;
     assert!(provider.list_models().await.is_empty());
     assert!(
         provider
@@ -443,7 +445,7 @@ async fn discovery_drives_requests_and_reports_refresh_failures() -> Result<()> 
 async fn initial_discovery_failure_does_not_create_models() -> Result<()> {
     let (base_url, server) = server(vec![("403 Forbidden", "denied".into())]).await?;
     let provider = provider(base_url)?;
-    assert!(provider.cache_models().await.is_err());
+    assert!(provider.refresh_model_list().await.is_err());
     assert!(provider.list_models().await.is_empty());
     server.await??;
     Ok(())
@@ -506,7 +508,7 @@ async fn rejected_reasoning_retries_once_without_losing_visible_history() -> Res
             ("200 OK", "data: [DONE]\n\n".into()),
         ]).await?;
         let provider = provider(base_url)?;
-        provider.cache_models().await?;
+        provider.refresh_model_list().await?;
         let request = ProviderRequest {
             cacheable_messages: None,
             options: reasoning("low"),
@@ -611,7 +613,7 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> R
     ])
     .await?;
     let provider = provider(base_url)?;
-    provider.cache_models().await?;
+    provider.refresh_model_list().await?;
     let reasoning_payload =
         json!({"type":"reasoning","id":"rs-1","encrypted_content":"prior-reasoning","summary":[]});
     let request = ProviderRequest {
@@ -695,7 +697,9 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> R
         Some("kraai_nushell")
     );
     assert_eq!(compact["instructions"], "system instructions");
+    assert!(compact.get("max_output_tokens").is_none());
     let replay = bodies.get(1).ok_or_else(|| eyre!("missing replay"))?;
+    assert_eq!(replay.get("max_output_tokens"), Some(&json!(54_400)));
     assert!(
         replay["input"]
             .as_array()
@@ -724,7 +728,7 @@ async fn native_compaction_records_rejected_reasoning_without_retrying_the_faile
     ])
     .await?;
     let provider = provider(base_url)?;
-    provider.cache_models().await?;
+    provider.refresh_model_list().await?;
     let request = ProviderRequest {
         messages: vec![ConversationItem::Assistant {
             items: vec![kraai_types::AssistantItem::Reasoning {
@@ -794,7 +798,7 @@ async fn discovered_processing_tiers_preserve_model_and_reasoning_for_generation
     responses.extend((0..4).map(|_| ("200 OK", "data: [DONE]\n\n".into())));
     let (base_url, server) = server(responses).await?;
     let provider = provider(base_url)?;
-    provider.cache_models().await?;
+    provider.refresh_model_list().await?;
     let model_id = ModelId::new("gpt-6-astra");
     for options in [Default::default(), reasoning("low"), {
         let mut options = reasoning("low");
@@ -907,7 +911,7 @@ async fn configured_custom_models_send_their_settings_without_native_discovery_e
             "disabled":{"body":{"priority_processing":false}}
         }))?], remove_options: Vec::new(),
     }).await?;
-    provider.cache_models().await?;
+    provider.refresh_model_list().await?;
     assert_eq!(provider.list_models().await.len(), 1);
     assert_eq!(provider.pricing_model_id(&id).await?, id);
     provider

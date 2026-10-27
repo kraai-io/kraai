@@ -5,7 +5,6 @@ mod cancellation;
 mod client_sync;
 mod compaction;
 mod concurrency;
-mod continuation;
 mod deletion;
 mod denial;
 mod harness;
@@ -18,6 +17,7 @@ mod usage_cancellation;
 mod images;
 mod mcp_sessions;
 mod model_catalog;
+mod model_lists;
 mod model_options;
 
 mod lease_expiry;

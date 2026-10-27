@@ -318,7 +318,7 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
         };
         let cached_models = ModelMetadataCache::default();
         cached_models
-            .refresh(None, async { Ok(Vec::new()) }, |_, _| {
+            .install(None, Vec::new(), |_, _| {
                 BTreeMap::from([(
                     ModelId::new("stale"),
                     Model {
@@ -326,12 +326,12 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
                         id: ModelId::new("stale"),
                         name: String::from("Stale model"),
                         max_context: None,
+                        max_output: None,
                         options: Vec::new(),
                     },
                 )])
             })
-            .await
-            .unwrap();
+            .await;
         let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
             id: ProviderId::new("fixture"),
             client,
@@ -349,6 +349,7 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
                     supports_images: None,
                     name: Some(String::from("Configured alpha")),
                     max_context: Some(4096),
+                    max_output: None,
                     options: Vec::new(),
                     remove_options: Vec::new(),
                 },
@@ -372,7 +373,7 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
             expected.push((String::from("zeta"), String::from("zeta"), None));
         }
 
-        provider.cache_models().await.unwrap();
+        provider.refresh_model_list().await.unwrap();
         assert_eq!(metadata(provider.list_models().await), expected);
         for listed in provider.list_models().await {
             let found = provider.get_model(&listed.id).await.unwrap();
@@ -383,7 +384,7 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
         if only_listed_models {
             assert!(provider.get_model(&ModelId::new("zeta")).await.is_none());
         }
-        assert!(provider.cache_models().await.is_err());
+        assert!(provider.refresh_model_list().await.is_err());
         assert_eq!(metadata(provider.list_models().await), expected);
     }
 }
@@ -397,7 +398,7 @@ async fn discovery_requires_advertised_reasoning_and_applies_native_modes_to_htt
     let Some(provider) = discovery_provider(address) else {
         return;
     };
-    provider.cache_models().await.unwrap();
+    provider.refresh_model_list().await.unwrap();
     let id = ModelId::new("future-model");
     let make_request = |options| ProviderRequest {
         messages: Vec::new(),
@@ -446,6 +447,7 @@ async fn discovery_requires_advertised_reasoning_and_applies_native_modes_to_htt
         Some(&serde_json::json!("future-effort"))
     );
     assert_eq!(body.get("speed"), Some(&serde_json::json!("fast")));
+    assert_eq!(body.get("max_completion_tokens"), None);
 }
 
 #[tokio::test]
@@ -472,7 +474,7 @@ async fn supported_reasoning_levels_preserve_explicit_descriptors_and_generic_to
     let Some(provider) = discovery_provider(address) else {
         return;
     };
-    provider.cache_models().await.unwrap();
+    provider.refresh_model_list().await.unwrap();
     let make_request = |options| ProviderRequest {
         messages: Vec::new(),
         script_tool: None,
@@ -591,7 +593,7 @@ async fn configured_reasoning_options_keep_unconditional_and_custom_conditions_a
         })
         .await
         .unwrap();
-    provider.cache_models().await.unwrap();
+    provider.refresh_model_list().await.unwrap();
     let make_request = |options| ProviderRequest {
         messages: Vec::new(),
         script_tool: None,
@@ -691,13 +693,13 @@ async fn configured_custom_models_absent_from_discovery_apply_custom_settings() 
         .register_model(ModelConfig {
             id: id.clone(),
             provider_id: provider.id.clone(),
-            config: DynamicConfig::new(),
+            config: DynamicConfig::from([("max_output".into(), DynamicValue::Integer(8192))]),
             options: vec![definition],
             remove_options: Vec::new(),
         })
         .await
         .unwrap();
-    provider.cache_models().await.unwrap();
+    provider.refresh_model_list().await.unwrap();
     assert_eq!(provider.list_models().await.len(), 1);
     assert_eq!(provider.get_model(&id).await.unwrap().options.len(), 1);
     let request = ProviderRequest {
@@ -723,4 +725,8 @@ async fn configured_custom_models_absent_from_discovery_apply_custom_settings() 
         Some(&serde_json::json!(4000))
     );
     assert_eq!(body.get("model"), Some(&serde_json::json!("custom-model")));
+    assert_eq!(
+        body.get("max_completion_tokens"),
+        Some(&serde_json::json!(8192))
+    );
 }

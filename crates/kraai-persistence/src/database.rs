@@ -12,7 +12,7 @@ use rusqlite::{
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::Semaphore;
 
-const SCHEMA_VERSION: i64 = 2;
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 const READER_CONNECTIONS: usize = 4;
 
 #[derive(Default)]
@@ -81,21 +81,19 @@ impl Database {
             .with_context(|| format!("Failed to open database {}", self.path.display()))?;
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch(
-            "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;",
+            "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;",
         )?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: i64 =
             transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
         ensure!(
-            (0..=SCHEMA_VERSION).contains(&version),
-            "Unsupported SQLite schema version {version}"
+            version == 0 || version == SCHEMA_VERSION,
+            "Database {} has schema version {version}, but this build needs version \
+             {SCHEMA_VERSION}. Delete the database to recreate it",
+            self.path.display()
         );
-        if version == 1 {
-            transaction.execute_batch(
-                "ALTER TABLE sessions ADD COLUMN lease_token INTEGER NOT NULL DEFAULT 0",
-            )?;
-        }
         transaction.execute_batch(include_str!("schema.sql"))?;
+        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
         Ok(connection)
     }

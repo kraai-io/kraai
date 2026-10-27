@@ -94,6 +94,7 @@ impl SessionActor {
                 diagnostic: Some("Script was cancelled before execution"),
                 stdout_file: None,
                 stderr_file: None,
+                sandbox_blocked: None,
             },
         );
         let cancelled = match self

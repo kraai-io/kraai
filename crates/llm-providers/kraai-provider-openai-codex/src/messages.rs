@@ -1,6 +1,8 @@
 use color_eyre::Result;
 use kraai_provider_core::ResolvedImages;
-use kraai_types::{AssistantItem, AssistantPhase, ConversationItem, ProviderId, ToolCallId};
+use kraai_types::{
+    AssistantItem, AssistantPhase, ConversationItem, ProviderId, ScriptCall, ToolCallId,
+};
 use kraai_types::{ContentPart, MessageContent};
 use serde::Serialize;
 
@@ -117,11 +119,12 @@ pub fn normalize_conversation(
                                 Some(phase_to_wire(phase)),
                             )));
                         }
-                        AssistantItem::ScriptCall {
+                        AssistantItem::ScriptCall(ScriptCall {
                             call_id,
                             name,
                             input: tool_input,
-                        } => input.push(ResponsesRequestItem::CustomToolCall(
+                            ..
+                        }) => input.push(ResponsesRequestItem::CustomToolCall(
                             ResponsesCustomToolCall {
                                 kind: "custom_tool_call",
                                 call_id,
@@ -301,11 +304,12 @@ mod tests {
                             phase: AssistantPhase::Commentary,
                             text: "Checking.".to_string(),
                         },
-                        AssistantItem::ScriptCall {
+                        AssistantItem::ScriptCall(ScriptCall {
                             call_id: ToolCallId::new("call-1"),
                             name: "kraai_nushell".to_string(),
                             input: "# timeout=10sec\nls".to_string(),
-                        },
+                            arguments_error: None,
+                        }),
                     ],
                 },
                 ConversationItem::ScriptResult {

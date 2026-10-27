@@ -2,23 +2,6 @@ use super::*;
 use kraai_execution_types::ImageAttachment;
 use kraai_types::{ContentPart, MessageContent, SessionId};
 
-#[test]
-fn continue_submits_the_current_model_selection() {
-    let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.state.config_loaded = true;
-    harness.app.state.selected_profile_id = Some("agent".into());
-    harness.app.state.selected_model_id = Some("new-model".into());
-    harness.app.state.selected_provider_id = Some("new-provider".into());
-    harness.app.handle_command("continue");
-    assert!(matches!(
-        harness.requests_rx.try_recv(),
-        Ok(RuntimeRequest::ContinueSession { session_id, model_id, provider_id, .. })
-            if session_id == SessionId::new("session") && model_id == "new-model" && provider_id == "new-provider"
-    ));
-    assert!(harness.requests_rx.try_recv().is_err());
-}
-
 fn send(harness: &mut TestHarness, text: &str) -> MessageContent {
     let message = MessageContent(vec![
         ContentPart::Text { text: text.into() },

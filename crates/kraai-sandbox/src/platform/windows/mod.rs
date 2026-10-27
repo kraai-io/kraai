@@ -13,6 +13,7 @@ use windows_sys::Win32::Security::{SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES};
 
 use crate::SandboxError;
 use crate::config::{LaunchPlan, PreparedCommand};
+use crate::platform::git_worktree::linked_worktree_common_dir;
 use crate::temp_dir::PrivateTempDir;
 
 use acl::{Access, Grants};
@@ -85,6 +86,13 @@ fn prepare_inner(
     let writable = plan
         .capabilities
         .contains(SandboxCapability::WorkspaceWrite);
+    let git_dir = writable
+        .then(|| linked_worktree_common_dir(&plan.workspace_root))
+        .flatten()
+        .and_then(|git_dir| local_path(&git_dir).ok());
+    if let Some(git_dir) = &git_dir {
+        filesystem::check(git_dir)?;
+    }
     let identity = Identity::for_workspace(&plan.workspace_root, writable)?;
     let mut capabilities = identity::capability("registryRead")?;
     if plan.capabilities.contains(SandboxCapability::Network) {
@@ -109,6 +117,9 @@ fn prepare_inner(
             Access::Read
         },
     )?;
+    if let Some(git_dir) = &git_dir {
+        grants.grant_persistent(git_dir, Access::Write)?;
+    }
     grants.grant(&temp_path, Access::Write)?;
     plan.environment
         .retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("LOCALAPPDATA"));

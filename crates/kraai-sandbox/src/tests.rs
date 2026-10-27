@@ -17,6 +17,9 @@ use crate::{
 };
 use crate::{LaunchPlan, OutputStream, SandboxError, Termination, is_likely_sandbox_denied, run};
 
+#[path = "tests/git_worktree.rs"]
+pub(crate) mod git_worktree;
+
 #[cfg(target_os = "macos")]
 #[path = "tests/macos.rs"]
 mod macos;
@@ -100,16 +103,22 @@ fn rejects_relative_executable() {
 
 #[test]
 fn sandbox_denial_keywords_are_detected() {
-    assert!(is_likely_sandbox_denied(
-        Some(1),
-        b"",
-        b"Read-only file system"
-    ));
-    assert!(!is_likely_sandbox_denied(
-        Some(0),
-        b"",
-        b"permission denied"
-    ));
+    for denial in [
+        &b"fatal: Unable to create 'index.lock': Read-only file system"[..],
+        b"Read-only filesystem or storage medium",
+        b"Operation not permitted",
+        b"Access is denied.",
+        b"Network unreachable",
+    ] {
+        assert!(is_likely_sandbox_denied(Some(1), b"", denial));
+        assert!(!is_likely_sandbox_denied(Some(0), b"", denial));
+    }
+    for unrelated in [
+        &b"cat: /root/secret: Permission denied"[..],
+        b"test sandbox::tests::denied ... FAILED",
+    ] {
+        assert!(!is_likely_sandbox_denied(Some(1), unrelated, unrelated));
+    }
 }
 
 #[tokio::test]

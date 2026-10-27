@@ -5,7 +5,7 @@ use color_eyre::eyre::{Result, bail, eyre};
 use kraai_runtime::{
     CreateSessionRequest, Event, PROTOCOL_VERSION, RuntimeHandle, RuntimeStartupState,
 };
-use kraai_types::{AssistantItem, ConversationItem, Message, MessageId, SessionId};
+use kraai_types::{AssistantItem, ConversationItem, Message, MessageId, ScriptCall, SessionId};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::{HARNESS_METRICS_SCHEMA_VERSION, HarnessMetrics, UsageMetrics};
@@ -176,7 +176,7 @@ impl Transcript {
     ) -> Result<()> {
         match item {
             AssistantItem::Text { text, .. } => self.text(output, message_id, index, text),
-            AssistantItem::ScriptCall { input, .. } => {
+            AssistantItem::ScriptCall(ScriptCall { input, .. }) => {
                 self.shown
                     .entry(message_id.to_string())
                     .or_default()
@@ -298,11 +298,12 @@ mod tests {
             &mut output,
             "m",
             1,
-            &AssistantItem::ScriptCall {
+            &AssistantItem::ScriptCall(ScriptCall {
                 call_id: kraai_types::ToolCallId::new("call"),
                 name: "kraai_nushell".into(),
                 input: "ls".into(),
-            },
+                arguments_error: None,
+            }),
         )?;
         transcript.item(&mut output, "n", 0, &text("Done."))?;
         assert_eq!(

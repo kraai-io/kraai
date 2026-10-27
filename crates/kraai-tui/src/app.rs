@@ -77,9 +77,8 @@ use self::ui::{
 };
 use self::workspace_preferences::WorkspacePreferences;
 
-const SLASH_COMMANDS: [(&str, &str); 11] = [
+const SLASH_COMMANDS: [(&str, &str); 10] = [
     ("agent", "Open agent selector"),
-    ("continue", "Reprompt the agent"),
     ("help", "Open command help"),
     ("model", "Open model selector"),
     ("option", "Configure selected model options"),

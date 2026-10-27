@@ -41,13 +41,10 @@ impl Provider for FixtureProvider {
             id: model_id(),
             name: "Offline performance fixture".into(),
             max_context: None,
+            max_output: None,
             supports_images: false,
             options: Vec::new(),
         }]
-    }
-
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
     }
 
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {

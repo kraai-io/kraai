@@ -99,11 +99,8 @@ impl Provider for TestSummarizer {
             id: ModelId::new("mock-model"),
             name: String::from("Mock model"),
             max_context: Some(32768),
+            max_output: None,
         }]
-    }
-
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
     }
 
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
@@ -320,10 +317,6 @@ impl Provider for OverflowingProvider {
         vec![super::harness::mock_model()]
     }
 
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
-    }
-
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {
         Ok(())
     }
@@ -423,10 +416,6 @@ impl Provider for SharedProvider {
 
     async fn list_models(&self) -> Vec<Model> {
         self.0.list_models().await
-    }
-
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
     }
 
     async fn register_model(&mut self, _model: ModelConfig) -> Result<()> {

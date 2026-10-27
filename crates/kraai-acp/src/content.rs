@@ -45,6 +45,17 @@ pub(crate) async fn prompt(
     Ok(MessageContent(parts))
 }
 
+pub(crate) fn script_input(source: String) -> serde_json::Value {
+    serde_json::json!({ "command": source })
+}
+
+pub(crate) fn script_call(call_id: String, source: String) -> acp::ToolCall {
+    acp::ToolCall::new(call_id, "Run Nushell script")
+        .kind(acp::ToolKind::Execute)
+        .status(acp::ToolCallStatus::Pending)
+        .raw_input(script_input(source))
+}
+
 pub(crate) fn text(value: impl Into<String>) -> acp::ContentBlock {
     acp::ContentBlock::Text(acp::TextContent::new(value))
 }

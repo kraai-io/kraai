@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     metadata_revision INTEGER NOT NULL DEFAULT 0,
     lease_active INTEGER NOT NULL DEFAULT 0,
     lease_expires_at INTEGER NOT NULL DEFAULT 0,
-    lease_token INTEGER NOT NULL DEFAULT 0
+    lease_token INTEGER NOT NULL DEFAULT 0,
+    turn_timer TEXT
 );
 CREATE TABLE IF NOT EXISTS records (
     kind TEXT NOT NULL,
@@ -42,4 +43,10 @@ CREATE TABLE IF NOT EXISTS queued_messages (
     data TEXT NOT NULL,
     PRIMARY KEY (session_id, sequence)
 ) WITHOUT ROWID;
-PRAGMA user_version = 2;
+CREATE TABLE IF NOT EXISTS model_lists (
+    provider_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT '',
+    fetched_at INTEGER NOT NULL DEFAULT 0,
+    data TEXT,
+    claimed_until INTEGER NOT NULL DEFAULT 0
+);

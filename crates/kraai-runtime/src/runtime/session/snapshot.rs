@@ -6,6 +6,7 @@ use kraai_execution_types::ScriptExecutionPhase;
 use kraai_types::{Message, MessageId, MessageStatus};
 
 use super::super::client_view::client_message;
+use super::super::session_maintenance::stored_turn_timer;
 
 use super::actor::{Responder, SessionActor, TurnState};
 use crate::api::{
@@ -45,15 +46,22 @@ impl SessionActor {
     async fn capture_snapshot(&self) -> Result<CapturedSnapshot> {
         let store = &self.runtime.session_store;
         let observation = store.observe(&self.session_id).await?;
-        if let Some(observation) = observation {
+        if let Some(observation) = &observation {
             self.runtime
                 .observed_sessions
                 .lock()
                 .await
-                .insert(self.session_id.clone(), observation);
+                .insert(self.session_id.clone(), observation.clone());
         }
-        let foreign_owner = observation.is_some_and(|observation| observation.lease_active)
-            && !store.owns_turn(&self.session_id).await?;
+        let owns_turn = store.owns_turn(&self.session_id).await?;
+        let foreign_owner = observation
+            .as_ref()
+            .is_some_and(|observation| observation.lease_active)
+            && !owns_turn;
+        let stored_timer = observation
+            .as_ref()
+            .filter(|_| !owns_turn)
+            .and_then(|observation| stored_turn_timer(&self.session_id, observation));
         let barrier = self.runtime.sessions.barrier(&self.session_id);
         let guard = barrier.write().await;
         let queued_messages = store.queued_messages(&self.session_id).await?.len();
@@ -64,7 +72,8 @@ impl SessionActor {
             .await?;
         let is_running =
             self.runtime.agent_manager.is_turn_active(&self.session_id) || foreign_owner;
-        let (event_sequence, turn_timer) = self.runtime.event_tx.timer_snapshot(&self.session_id);
+        let (event_sequence, local_timer) = self.runtime.event_tx.timer_snapshot(&self.session_id);
+        let turn_timer = stored_timer.unwrap_or(local_timer);
         drop(guard);
         Ok(CapturedSnapshot {
             reader,

@@ -189,26 +189,6 @@ impl App {
                 }
                 self.request(RuntimeRequest::UndoLastUserMessage { session_id });
             }
-            "continue" => {
-                let Some(session_id) = self.state.current_session_id.clone() else {
-                    self.state.status = String::from("No session to continue");
-                    return;
-                };
-                if self.state.turn_blocks_user_commands() {
-                    self.state.status =
-                        String::from("Cannot continue while the current turn is active");
-                    return;
-                }
-                let Some((model_id, provider_id)) = self.submission_model() else {
-                    return;
-                };
-                self.request(RuntimeRequest::ContinueSession {
-                    session_id,
-                    model_id,
-                    provider_id,
-                    options: self.state.selected_model_options.clone(),
-                });
-            }
             "help" => {
                 self.state.help_scroll.set(0);
                 self.state.mode = UiMode::Help;
@@ -220,58 +200,30 @@ impl App {
     }
 
     pub(super) fn ensure_selected_model(&mut self) {
-        let previous_provider_id = self.state.selected_provider_id.clone();
-        let previous_model_id = self.state.selected_model_id.clone();
-
-        if let Some(provider_id) = self.state.selected_provider_id.as_ref()
-            && let Some(models) = self.state.models_by_provider.get(provider_id)
-        {
-            if let Some(model_id) = self.state.selected_model_id.as_ref()
-                && models.iter().any(|model| &model.id == model_id)
-            {
-                return;
-            }
-
-            if let Some(model) = models.first() {
-                self.state.selected_model_id = Some(model.id.clone());
-                self.save_workspace_preferences_if_model_changed(
-                    previous_provider_id,
-                    previous_model_id,
-                );
-                return;
-            }
+        if self.state.selected_model_id.is_some() {
+            return;
         }
-
-        if let Some(model_id) = self.state.selected_model_id.as_ref()
-            && let Some((provider_id, _)) = self
+        let previous_provider_id = self.state.selected_provider_id.clone();
+        let selection = match previous_provider_id.as_ref() {
+            Some(provider_id) => self
+                .state
+                .models_by_provider
+                .get(provider_id)
+                .and_then(|models| models.first())
+                .map(|model| (provider_id, model)),
+            None => self
                 .state
                 .models_by_provider
                 .iter()
-                .filter(|(_, models)| models.iter().any(|model| &model.id == model_id))
-                .min_by(|(left, _), (right, _)| left.cmp(right))
-        {
-            self.state.selected_provider_id = Some(provider_id.clone());
-            self.save_workspace_preferences_if_model_changed(
-                previous_provider_id,
-                previous_model_id,
-            );
+                .filter_map(|(provider, models)| models.first().map(|model| (provider, model)))
+                .min_by(|(left, _), (right, _)| left.cmp(right)),
+        };
+        let Some((provider_id, model)) = selection else {
             return;
-        }
-
-        if let Some((provider_id, model)) = self
-            .state
-            .models_by_provider
-            .iter()
-            .filter_map(|(provider, models)| models.first().map(|model| (provider, model)))
-            .min_by(|(left, _), (right, _)| left.cmp(right))
-        {
-            self.state.selected_provider_id = Some(provider_id.clone());
-            self.state.selected_model_id = Some(model.id.clone());
-            self.save_workspace_preferences_if_model_changed(
-                previous_provider_id,
-                previous_model_id,
-            );
-        }
+        };
+        self.state.selected_provider_id = Some(provider_id.clone());
+        self.state.selected_model_id = Some(model.id.clone());
+        self.save_workspace_preferences_if_model_changed(previous_provider_id, None);
     }
 
     pub(super) fn set_input_text(&mut self, text: String) {
@@ -333,7 +285,8 @@ impl App {
         if previous_provider_id != self.state.selected_provider_id
             || previous_model_id != self.state.selected_model_id
         {
-            self.save_model_selection();
+            self.reconcile_model_options();
+            self.save_workspace_preferences();
         }
     }
 

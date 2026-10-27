@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use agent_client_protocol::{Result, schema::v1 as acp};
-use kraai_runtime::{ContinueSessionOutcome, Event, PendingScriptInfo, RuntimeHandle};
-use kraai_types::{AssistantItem, ConversationItem, MessageId, SessionId};
+use kraai_runtime::{Event, PendingScriptInfo, RuntimeHandle};
+use kraai_types::{AssistantItem, ConversationItem, MessageId, ScriptCall, SessionId};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -52,16 +52,6 @@ pub(crate) async fn run(
         Some(commands::Command::Undo) => {
             commands::undo(runtime, &id, &connection).await?;
             return Ok(command_response());
-        }
-        Some(commands::Command::Continue) => {
-            if runtime
-                .continue_turn(id.clone(), model.model, model.provider, model.options)
-                .await
-                .map_err(error::runtime)?
-                == ContinueSessionOutcome::NothingToContinue
-            {
-                return Ok(command_response());
-            }
         }
         None => {
             let message = content::prompt(runtime, request.prompt).await?;
@@ -198,6 +188,8 @@ struct Output {
     prompt_start: Option<MessageId>,
     /// The global event sequence the last resync already covered.
     covered: u64,
+    streaming: Option<String>,
+    open_text: Option<String>,
 }
 
 impl Output {
@@ -213,6 +205,8 @@ impl Output {
             open: HashSet::new(),
             prompt_start,
             covered: 0,
+            streaming: None,
+            open_text: None,
         }
     }
 
@@ -239,12 +233,18 @@ impl Output {
         messages
     }
 
-    fn update(&self, update: acp::SessionUpdate) -> Result<()> {
+    fn update(&mut self, update: acp::SessionUpdate) -> Result<()> {
+        self.open_text = match &update {
+            acp::SessionUpdate::AgentMessageChunk(chunk) => {
+                chunk.message_id.as_ref().map(ToString::to_string)
+            }
+            _ => None,
+        };
         self.connection
             .send_notification(acp::SessionNotification::new(self.id.clone(), update))
     }
 
-    fn text(&self, message_id: &str, text: String) -> Result<()> {
+    fn text(&mut self, message_id: &str, text: String) -> Result<()> {
         if text.is_empty() {
             return Ok(());
         }
@@ -272,17 +272,23 @@ impl Output {
         self.text(message_id, text)
     }
 
+    fn notice(&mut self, message_id: Option<&str>, notice: &str) -> Result<()> {
+        let mut chunk = acp::ContentChunk::new(content::text(format!("\n\n[{notice}]\n\n")));
+        if let Some(message_id) = message_id.filter(|id| self.open_text.as_deref() == Some(*id)) {
+            self.shown.remove(message_id);
+            chunk = chunk.message_id(acp::MessageId::new(message_id));
+        }
+        self.update(acp::SessionUpdate::AgentMessageChunk(chunk))
+    }
+
     fn announce(&mut self, call_id: String, input: String) -> Result<()> {
         if !self.announced.insert(call_id.clone()) {
             return Ok(());
         }
         self.open.insert(call_id.clone());
-        self.update(acp::SessionUpdate::ToolCall(
-            acp::ToolCall::new(call_id, "Run Nushell script")
-                .kind(acp::ToolKind::Execute)
-                .status(acp::ToolCallStatus::Pending)
-                .raw_input(serde_json::Value::String(input)),
-        ))
+        self.update(acp::SessionUpdate::ToolCall(content::script_call(
+            call_id, input,
+        )))
     }
 
     async fn result(
@@ -310,7 +316,7 @@ impl Output {
                 AssistantItem::Text { text, .. } => {
                     self.item_text(&message_id, item_index, &text)?;
                 }
-                AssistantItem::ScriptCall { .. } => {
+                AssistantItem::ScriptCall(_) => {
                     self.shown.insert(message_id);
                 }
                 AssistantItem::Reasoning { .. } => {}
@@ -329,13 +335,19 @@ impl Output {
                         .message_id(acp::MessageId::new(message_id)),
                 ))?;
             }
+            Event::StreamStart { message_id, .. } => self.streaming = Some(message_id),
             Event::StreamRestarted { message_id, .. } => {
                 self.sent.retain(|(id, _), _| id != &message_id);
-                self.text(
-                    &message_id,
-                    String::from("\n\n[Provider stream failed; retrying the response.]\n\n"),
+                self.notice(
+                    Some(&message_id),
+                    "Provider stream failed; retrying the response.",
                 )?;
-                self.shown.remove(&message_id);
+            }
+            Event::ContextStateChanged { notifications, .. } => {
+                let message_id = self.streaming.clone();
+                for notification in notifications {
+                    self.notice(message_id.as_deref(), &notification)?;
+                }
             }
             Event::ScriptPrepared {
                 execution_id,
@@ -389,7 +401,7 @@ impl Output {
                                 let missing = text.get(sent..).unwrap_or_default();
                                 self.item_text(&id, index, missing)?;
                             }
-                            AssistantItem::ScriptCall { call_id, input, .. } => {
+                            AssistantItem::ScriptCall(ScriptCall { call_id, input, .. }) => {
                                 self.shown.insert(id.clone());
                                 self.announce(call_id.to_string(), input.clone())?;
                             }
@@ -463,7 +475,7 @@ impl Output {
                     script.capability_additions.join(", ")
                 ))
                 .kind(acp::ToolKind::Execute)
-                .raw_input(serde_json::Value::String(script.source)),
+                .raw_input(content::script_input(script.source)),
         );
         let request = acp::RequestPermissionRequest::new(
             self.id.clone(),

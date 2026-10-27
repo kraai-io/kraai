@@ -26,16 +26,21 @@ impl Provider for CatalogProvider {
             id: ModelId::new("available"),
             name: "Available model".into(),
             max_context: Some(5_000),
+            max_output: None,
             supports_images: false,
             options: Vec::new(),
         }]
     }
 
-    async fn cache_models(&self) -> Result<()> {
+    fn model_list_source(&self) -> Option<String> {
+        Some(self.id.to_string())
+    }
+
+    async fn fetch_model_list(&self) -> Result<serde_json::Value> {
         if self.fail_cache {
             Err(eyre!("discovery failed"))
         } else {
-            Ok(())
+            Ok(serde_json::Value::Null)
         }
     }
 

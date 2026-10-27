@@ -6,7 +6,7 @@ use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderRequestContext, ProviderStreamEvent,
 };
 use kraai_types::{
-    AssistantItem, AssistantPhase, MessageId, MessageStatus, TokenUsage, ToolCallId,
+    AssistantItem, AssistantPhase, MessageId, MessageStatus, ScriptCall, TokenUsage, ToolCallId,
 };
 use std::sync::Mutex;
 
@@ -17,8 +17,14 @@ struct Summarizer {
     native: bool,
     events: Vec<ProviderStreamEvent>,
     fail: bool,
-    reject_large_input: bool,
+    large_input: Option<Overflow>,
     interruptions: usize,
+}
+
+#[derive(Clone, Copy)]
+enum Overflow {
+    Rejected,
+    Truncated,
 }
 
 #[async_trait::async_trait]
@@ -28,9 +34,6 @@ impl Provider for Summarizer {
     }
     async fn list_models(&self) -> Vec<Model> {
         Vec::new()
-    }
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
     }
     async fn register_model(&mut self, _: ModelConfig) -> Result<()> {
         Ok(())
@@ -69,17 +72,32 @@ impl Summarizer {
         &self,
         request: ProviderRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
-        let too_large = self.reject_large_input && request.messages.iter().any(|item| matches!(item, ConversationItem::ScriptResult { output, .. } if output.display_text().len() > 1000));
+        let too_large = request.messages.iter().any(|item| matches!(item, ConversationItem::ScriptResult { output, .. } if output.display_text().len() > 1000));
         let attempt = {
             let mut requests = self.requests.lock().map_err(|e| eyre!("{e}"))?;
             requests.push(request);
             requests.len()
         };
-        if too_large {
-            return Err(kraai_provider_core::ProviderError::ContextWindowExceeded(
-                "test context limit".into(),
-            )
-            .into());
+        match self.large_input.filter(|_| too_large) {
+            Some(Overflow::Rejected) => {
+                return Err(kraai_provider_core::ProviderError::ContextWindowExceeded(
+                    "test context limit".into(),
+                )
+                .into());
+            }
+            Some(Overflow::Truncated) => {
+                return Ok(Box::pin(stream::iter([
+                    Ok(ProviderStreamEvent::TextDelta {
+                        item_id: "summary".into(),
+                        phase: AssistantPhase::FinalAnswer,
+                        delta: "cut off".into(),
+                    }),
+                    Ok(ProviderStreamEvent::Finished {
+                        stop_reason: kraai_provider_core::StopReason::MaxOutputTokens,
+                    }),
+                ])));
+            }
+            None => {}
         }
         let mut events: Vec<_> = self.events.iter().cloned().map(Ok).collect();
         if attempt <= self.interruptions {
@@ -174,11 +192,12 @@ fn fixture(
                         provider_id: ProviderId::new("test"),
                         payload: serde_json::json!({"type":"reasoning","encrypted_content":"encrypted-reasoning"}),
                     },
-                    AssistantItem::ScriptCall {
+                    AssistantItem::ScriptCall(ScriptCall {
                         call_id: ToolCallId::new("call"),
                         name: "kraai_nushell".into(),
                         input: "inspect".into(),
-                    },
+                        arguments_error: None,
+                    }),
                 ],
             },
         ),
@@ -232,7 +251,7 @@ fn fixture(
             native,
             events,
             fail,
-            reject_large_input: false,
+            large_input: None,
             interruptions: 0,
         }),
     );
@@ -449,6 +468,13 @@ fn user_retention_prioritizes_recent_requests_and_preserves_unicode_boundaries()
 #[tokio::test]
 async fn fallback_context_overflow_trims_complete_exchanges_and_keeps_original_user() -> Result<()>
 {
+    for overflow in [Overflow::Rejected, Overflow::Truncated] {
+        trims_complete_exchanges_after(overflow).await?;
+    }
+    Ok(())
+}
+
+async fn trims_complete_exchanges_after(overflow: Overflow) -> Result<()> {
     let (context, mut providers, requests, root) = fixture(false, vec![], false);
     providers.register_provider(
         ProviderId::new("test"),
@@ -456,7 +482,7 @@ async fn fallback_context_overflow_trims_complete_exchanges_and_keeps_original_u
             requests: requests.clone(),
             native: false,
             fail: false,
-            reject_large_input: true,
+            large_input: Some(overflow),
             interruptions: 0,
             events: vec![ProviderStreamEvent::TextDelta {
                 item_id: "summary".into(),
@@ -494,7 +520,7 @@ async fn native_stream_retries_are_bounded_and_each_attempt_is_accounted() -> Re
             requests: requests.clone(),
             native: true,
             fail: false,
-            reject_large_input: false,
+            large_input: None,
             interruptions: usize::MAX,
             events: vec![ProviderStreamEvent::Usage(TokenUsage {
                 input_tokens: 10,
@@ -526,11 +552,12 @@ async fn native_stream_retries_are_bounded_and_each_attempt_is_accounted() -> Re
 async fn invalid_fallback_response_preserves_existing_context() -> Result<()> {
     for events in [
         vec![],
-        vec![ProviderStreamEvent::ScriptCall {
+        vec![ProviderStreamEvent::ScriptCall(ScriptCall {
             call_id: ToolCallId::new("unexpected"),
             name: "kraai_nushell".into(),
             input: "# timeout=1sec\nls".into(),
-        }],
+            arguments_error: None,
+        })],
     ] {
         let (context, providers, _, root) = fixture(false, events, false);
         ensure!(
@@ -562,7 +589,7 @@ async fn native_compaction_recovers_after_interruption_without_duplicate_checkpo
             requests: requests.clone(),
             native: true,
             fail: false,
-            reject_large_input: false,
+            large_input: None,
             interruptions: 1,
             events: vec![
                 ProviderStreamEvent::Compaction {

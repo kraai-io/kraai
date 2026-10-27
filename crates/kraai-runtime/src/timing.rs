@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
@@ -66,6 +66,12 @@ impl TurnTimer {
     pub fn last_duration(&self) -> Option<Duration> {
         self.last_duration
     }
+}
+
+pub(crate) fn instant_at(time: SystemTime) -> Instant {
+    let now = Instant::now();
+    now.checked_sub(SystemTime::now().duration_since(time).unwrap_or_default())
+        .unwrap_or(now)
 }
 
 #[cfg(test)]
@@ -144,12 +150,6 @@ mod instant_serde {
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Option<Instant>, D::Error> {
-        let value = Option::<SystemTime>::deserialize(deserializer)?;
-        let now = Instant::now();
-        let wall_time = SystemTime::now();
-        Ok(value.map(|started| {
-            now.checked_sub(wall_time.duration_since(started).unwrap_or_default())
-                .unwrap_or(now)
-        }))
+        Ok(Option::<SystemTime>::deserialize(deserializer)?.map(super::instant_at))
     }
 }

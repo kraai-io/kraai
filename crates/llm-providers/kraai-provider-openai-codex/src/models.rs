@@ -119,6 +119,7 @@ impl DiscoveredModels {
                     .collect(),
             ));
         }
+        let max_context = config.max_context.or(entry.context_window);
         Model {
             id,
             name: config.name.clone().unwrap_or_else(|| {
@@ -128,7 +129,8 @@ impl DiscoveredModels {
                     entry.display_name.clone()
                 }
             }),
-            max_context: config.max_context.or(entry.context_window),
+            max_context,
+            max_output: kraai_provider_core::max_output(config.max_output, None, max_context),
             supports_images: config.supports_images.unwrap_or_else(|| {
                 entry
                     .input_modalities

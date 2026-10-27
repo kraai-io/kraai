@@ -7,14 +7,19 @@ pub(crate) fn runtime(error: RuntimeError) -> Error {
         | RuntimeErrorKind::Validation
         | RuntimeErrorKind::NotFound
         | RuntimeErrorKind::Conflict => invalid(error.message),
-        _ => Error::internal_error().data(error.message),
+        _ => internal(error.message),
     }
 }
 
+fn with_message(mut error: Error, message: impl Into<String>) -> Error {
+    error.message = message.into();
+    error
+}
+
 pub(crate) fn invalid(message: impl Into<String>) -> Error {
-    Error::invalid_params().data(message.into())
+    with_message(Error::invalid_params(), message)
 }
 
 pub(crate) fn internal(message: impl Into<String>) -> Error {
-    Error::internal_error().data(message.into())
+    with_message(Error::internal_error(), message)
 }

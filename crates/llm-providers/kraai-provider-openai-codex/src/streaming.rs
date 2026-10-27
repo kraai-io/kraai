@@ -5,7 +5,7 @@ use futures::stream::BoxStream;
 use kraai_provider_core::{
     ProviderError, ProviderStreamEvent, SseEvent, StopReason, StreamStatus, adapt_provider_stream,
 };
-use kraai_types::{AssistantPhase, ToolCallId};
+use kraai_types::{AssistantPhase, ScriptCall, ToolCallId};
 
 use crate::wire::{ResponsesError, ResponsesStreamEvent, ResponsesUsage};
 
@@ -135,11 +135,12 @@ impl Completion {
                             let call_id =
                                 ToolCallId::try_new(call_id).map_err(|error| eyre!(error))?;
                             self.called_tool = true;
-                            pending.push_back(ProviderStreamEvent::ScriptCall {
+                            pending.push_back(ProviderStreamEvent::ScriptCall(ScriptCall {
                                 call_id,
                                 name,
                                 input,
-                            });
+                                arguments_error: None,
+                            }));
                         }
                         _ => {}
                     }
@@ -284,7 +285,7 @@ mod tests {
         );
         assert!(matches!(
             events.get(1),
-            Some(Ok(ProviderStreamEvent::ScriptCall { .. }))
+            Some(Ok(ProviderStreamEvent::ScriptCall(_)))
         ));
         assert!(
             matches!(events.get(2), Some(Ok(ProviderStreamEvent::Usage(usage))) if usage.reasoning_tokens == 15 && usage.input_tokens == 100)
@@ -459,7 +460,7 @@ mod tests {
 
         assert!(matches!(
             events.first(),
-            Some(Ok(ProviderStreamEvent::ScriptCall { call_id, name, input }))
+            Some(Ok(ProviderStreamEvent::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None })))
                 if call_id.as_str() == "call-123"
                     && name == "kraai_nushell"
                     && input == "# timeout=30sec\nls"

@@ -1,4 +1,5 @@
 use super::*;
+use kraai_types::ScriptCall;
 
 const SKIPPED_CALL_DIAGNOSTIC: &str = "Not executed: only the first script call of a response runs. Send this script again in its own response if it is still needed.";
 
@@ -270,20 +271,13 @@ impl AgentManager {
     pub async fn append_script_call(
         &self,
         message_id: &MessageId,
-        call_id: ToolCallId,
-        name: String,
-        input: String,
+        call: ScriptCall,
     ) -> Option<StreamedItem> {
-        let id = call_id.clone();
-        let call = AssistantItem::ScriptCall {
-            call_id,
-            name,
-            input,
-        };
-        self.append_item(message_id, call, |items| {
-            !items.iter().any(
-                |item| matches!(item, AssistantItem::ScriptCall { call_id, .. } if *call_id == id),
-            )
+        let id = call.call_id.clone();
+        self.append_item(message_id, AssistantItem::ScriptCall(call), |items| {
+            !items
+                .iter()
+                .any(|item| matches!(item, AssistantItem::ScriptCall(call) if call.call_id == id))
         })
         .await
     }
@@ -347,12 +341,13 @@ impl AgentManager {
                 diagnostic: Some(SKIPPED_CALL_DIAGNOSTIC),
                 stdout_file: None,
                 stderr_file: None,
+                sandbox_blocked: None,
             },
         );
         for (index, item) in items.iter().enumerate() {
-            let AssistantItem::ScriptCall {
+            let AssistantItem::ScriptCall(ScriptCall {
                 call_id: skipped, ..
-            } = item
+            }) = item
             else {
                 continue;
             };
@@ -460,7 +455,9 @@ impl AgentManager {
             async {
                 let call_id = state.message.content.assistant_items().and_then(|items| {
                     items.iter().find_map(|item| match item {
-                        AssistantItem::ScriptCall { call_id, .. } => Some(call_id.clone()),
+                        AssistantItem::ScriptCall(ScriptCall { call_id, .. }) => {
+                            Some(call_id.clone())
+                        }
                         AssistantItem::Text { .. } | AssistantItem::Reasoning { .. } => None,
                     })
                 });

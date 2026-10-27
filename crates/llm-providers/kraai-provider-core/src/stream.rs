@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use color_eyre::eyre::Result;
 use futures::{StreamExt, stream, stream::BoxStream};
-use kraai_types::{AssistantPhase, TokenUsage, ToolCallId};
+use kraai_types::{AssistantPhase, ScriptCall, TokenUsage};
 
 use crate::{ProviderError, SseEvent};
 
@@ -69,11 +69,7 @@ pub enum ProviderStreamEvent {
         phase: AssistantPhase,
         delta: String,
     },
-    ScriptCall {
-        call_id: ToolCallId,
-        name: String,
-        input: String,
-    },
+    ScriptCall(ScriptCall),
     Usage(TokenUsage),
     /// Why the provider ended the response; sent once, after its content.
     Finished {

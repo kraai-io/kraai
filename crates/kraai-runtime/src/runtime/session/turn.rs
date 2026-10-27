@@ -8,7 +8,7 @@ use super::actor::{
     Preparation, PreparationOrigin, Responder, SessionActor, SessionMessage, StreamKind, TurnState,
 };
 use crate::api::Event;
-use crate::{ContinueSessionOutcome, RuntimeError, RuntimeResult, SubmitMessageOutcome};
+use crate::{RuntimeError, RuntimeResult, SubmitMessageOutcome};
 
 /// What a preparation child asks the agent to build.
 enum PrepareRequest {
@@ -87,43 +87,10 @@ impl SessionActor {
         self.begin_preparation(
             StreamKind::Initial,
             PreparationOrigin::Send(response),
-            PrepareRequest::Start {
-                message,
-                selection: selection.clone(),
-            },
-            Some(selection),
+            PrepareRequest::Start { message, selection },
             false,
             false,
         );
-    }
-
-    pub(in crate::runtime) async fn continue_session(
-        &mut self,
-        selection: Option<ModelSelection>,
-        response: Option<Responder<ContinueSessionOutcome>>,
-    ) {
-        let idle = matches!(self.state, TurnState::Idle)
-            && !self
-                .runtime
-                .agent_manager
-                .session_has_active_stream(&self.session_id)
-                .await;
-        if self.stopping || !idle {
-            if let Some(response) = response {
-                let _ = response.send(Ok(ContinueSessionOutcome::NothingToContinue));
-            }
-            return;
-        }
-        if let Some(selection) = &selection
-            && let Err(error) = self.validate_selection(selection).await
-        {
-            if let Some(response) = response {
-                let _ = response.send(Err(error));
-            }
-            return;
-        }
-        self.start_continuation(selection, PreparationOrigin::Continue(response), false)
-            .await;
     }
 
     async fn validate_selection(&self, selection: &ModelSelection) -> RuntimeResult<()> {
@@ -167,12 +134,7 @@ impl SessionActor {
         Ok(())
     }
 
-    async fn start_continuation(
-        &mut self,
-        selection: Option<ModelSelection>,
-        origin: PreparationOrigin,
-        retried: bool,
-    ) {
+    async fn start_continuation(&mut self, retried: bool) {
         let prepared = async {
             let queued = self
                 .runtime
@@ -183,18 +145,11 @@ impl SessionActor {
             Ok::<_, color_eyre::Report>(queued)
         }
         .await;
-        let queued = match prepared {
-            Ok(queued) => queued,
-            Err(error) => {
-                origin.fail(RuntimeError::from(error));
-                return;
-            }
+        let Ok(queued) = prepared else {
+            return;
         };
         let intercepted = !queued.is_empty();
-        let request = match selection
-            .clone()
-            .or_else(|| queued.last().map(|entry| entry.message.selection.clone()))
-        {
+        let request = match queued.last().map(|entry| entry.message.selection.clone()) {
             Some(selection) => PrepareRequest::Queue {
                 entries: queued,
                 selection,
@@ -203,21 +158,18 @@ impl SessionActor {
         };
         self.begin_preparation(
             StreamKind::Continuation,
-            origin,
+            PreparationOrigin::Continue,
             request,
-            selection,
             intercepted,
             retried,
         );
     }
 
-    /// Continues the turn after a script result without a waiting caller.
     pub(in crate::runtime) async fn continue_turn(&mut self) {
         if self.stopping {
             return;
         }
-        self.start_continuation(None, PreparationOrigin::Continue(None), false)
-            .await;
+        self.start_continuation(false).await;
     }
 
     /// Starts queued messages when the session has nothing else to do.
@@ -251,7 +203,6 @@ impl SessionActor {
                 entries: queued,
                 selection,
             },
-            None,
             false,
             false,
         );
@@ -287,7 +238,6 @@ impl SessionActor {
         kind: StreamKind,
         origin: PreparationOrigin,
         request: PrepareRequest,
-        selection: Option<ModelSelection>,
         intercepted: bool,
         retried: bool,
     ) {
@@ -328,7 +278,6 @@ impl SessionActor {
             generation,
             kind,
             origin,
-            selection,
             intercepted,
             retried,
             cancel: None,
@@ -352,7 +301,6 @@ impl SessionActor {
         let Preparation {
             kind,
             origin,
-            selection,
             intercepted,
             retried,
             cancel,
@@ -378,8 +326,9 @@ impl SessionActor {
             }
             Ok(None) => {
                 match &origin {
-                    PreparationOrigin::Send(_) => self.finish_turn().await,
-                    PreparationOrigin::Continue(_) => self.finish_turn().await,
+                    PreparationOrigin::Send(_) | PreparationOrigin::Continue => {
+                        self.finish_turn().await
+                    }
                     PreparationOrigin::Queue => {}
                 }
                 origin.nothing_started();
@@ -396,30 +345,18 @@ impl SessionActor {
                     return;
                 }
                 match origin {
-                    PreparationOrigin::Continue(response)
-                        if intercepted && !retried && !self.stopping =>
-                    {
-                        self.start_continuation(
-                            selection,
-                            PreparationOrigin::Continue(response),
-                            true,
-                        )
-                        .await;
+                    PreparationOrigin::Continue if intercepted && !retried && !self.stopping => {
+                        self.start_continuation(true).await;
                     }
-                    PreparationOrigin::Continue(response) => {
+                    PreparationOrigin::Continue => {
                         self.finish_turn().await;
                         if !intercepted {
                             self.drain().await;
                         }
-                        match response {
-                            Some(response) => {
-                                let _ = response.send(Err(RuntimeError::from(error)));
-                            }
-                            None => self.runtime.send_event(Event::ContinuationFailed {
-                                session_id: self.session_id.clone(),
-                                error: error.to_string(),
-                            }),
-                        }
+                        self.runtime.send_event(Event::ContinuationFailed {
+                            session_id: self.session_id.clone(),
+                            error: error.to_string(),
+                        });
                     }
                     PreparationOrigin::Send(response) => {
                         self.finish_turn().await;
@@ -442,10 +379,7 @@ impl PreparationOrigin {
             Self::Send(response) => {
                 let _ = response.send(Ok(SubmitMessageOutcome::Started { message_id }));
             }
-            Self::Continue(Some(response)) => {
-                let _ = response.send(Ok(ContinueSessionOutcome::Started));
-            }
-            Self::Continue(None) | Self::Queue => {}
+            Self::Continue | Self::Queue => {}
         }
     }
 
@@ -456,10 +390,7 @@ impl PreparationOrigin {
                     "Failed to prepare a new message stream",
                 )));
             }
-            Self::Continue(Some(response)) => {
-                let _ = response.send(Ok(ContinueSessionOutcome::NothingToContinue));
-            }
-            Self::Continue(None) | Self::Queue => {}
+            Self::Continue | Self::Queue => {}
         }
     }
 
@@ -468,10 +399,7 @@ impl PreparationOrigin {
             Self::Send(response) => {
                 let _ = response.send(Err(error));
             }
-            Self::Continue(Some(response)) => {
-                let _ = response.send(Err(error));
-            }
-            Self::Continue(None) | Self::Queue => {}
+            Self::Continue | Self::Queue => {}
         }
     }
 }

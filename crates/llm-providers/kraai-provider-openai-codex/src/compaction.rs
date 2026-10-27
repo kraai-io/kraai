@@ -1,5 +1,5 @@
 use kraai_provider_core::ProviderRequest;
-use kraai_types::{AssistantItem, ContentPart, ConversationItem, MessageContent};
+use kraai_types::{AssistantItem, ContentPart, ConversationItem, MessageContent, ScriptCall};
 
 const TRUNCATED_OUTPUT: &str = "Output exceeded the available model context and was truncated";
 
@@ -54,7 +54,7 @@ fn visible_bytes(item: &ConversationItem) -> usize {
             .map(|item| match item {
                 AssistantItem::Text { text, .. } => text.len(),
                 AssistantItem::Reasoning { payload, .. } => encrypted_bytes(payload),
-                AssistantItem::ScriptCall { name, input, .. } => {
+                AssistantItem::ScriptCall(ScriptCall { name, input, .. }) => {
                     name.len().saturating_add(input.len())
                 }
             })
@@ -74,11 +74,12 @@ mod tests {
             payload: serde_json::json!({"type":"compaction","encrypted_content":"x".repeat(1000)}),
         };
         let call = ConversationItem::Assistant {
-            items: vec![AssistantItem::ScriptCall {
+            items: vec![AssistantItem::ScriptCall(ScriptCall {
                 call_id: ToolCallId::new("call"),
                 name: "tool".into(),
                 input: "inspect".into(),
-            }],
+                arguments_error: None,
+            })],
         };
         let mut request = ProviderRequest {
             messages: vec![

@@ -6,7 +6,7 @@ use futures::stream::BoxStream;
 use kraai_execution_types::{ScriptExecutionId, ScriptExecutionStatus};
 use kraai_provider_core::{Provider, ProviderManager, ProviderRequest, ProviderStreamEvent};
 use kraai_test_support::hang_guard;
-use kraai_types::{AssistantPhase, ModelId, ProviderId};
+use kraai_types::{AssistantPhase, ModelId, ProviderId, ScriptCall};
 use tokio::sync::{Mutex, mpsc};
 
 use super::harness::FullHistory as _;
@@ -24,9 +24,6 @@ impl Provider for ControlledProvider {
     }
     async fn list_models(&self) -> Vec<kraai_provider_core::Model> {
         vec![super::harness::mock_model()]
-    }
-    async fn cache_models(&self) -> Result<()> {
-        Ok(())
     }
     async fn register_model(&mut self, _: kraai_provider_core::ModelConfig) -> Result<()> {
         Ok(())
@@ -243,62 +240,6 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
 }
 
 #[tokio::test]
-async fn continuation_during_a_live_stream_preserves_ownership() -> Result<()> {
-    let (sender, receiver) = mpsc::unbounded_channel();
-    let mut providers = ProviderManager::new();
-    providers.register_provider(
-        ProviderId::new("mock"),
-        Box::new(ControlledProvider {
-            events: Mutex::new(VecDeque::from([receiver])),
-        }),
-    );
-    let owner = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("owner fixture");
-    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone())
-        .await
-        .expect("observer fixture");
-    let session = create_session_with_profile(&owner.handle, "test-profile").await?;
-    owner
-        .handle
-        .send_message(
-            session.clone(),
-            "first".into(),
-            "mock-model".into(),
-            "mock".into(),
-            Default::default(),
-        )
-        .await?;
-    assert_eq!(
-        owner
-            .handle
-            .continue_session(
-                session.clone(),
-                "mock-model".into(),
-                "mock".into(),
-                Default::default()
-            )
-            .await?,
-        crate::ContinueSessionOutcome::NothingToContinue
-    );
-    assert!(owner.runtime.session_store.owns_turn(&session).await?);
-    assert!(
-        observer
-            .runtime
-            .session_store
-            .claim_turn(&session)
-            .await
-            .is_err()
-    );
-    assert!(owner.runtime.agent_manager.is_turn_active(&session));
-    drop(sender);
-    owner.events.wait_for("owner completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id } if session_id == &session))).await;
-    observer.shutdown().await;
-    owner.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn failed_intercepted_continuation_releases_ownership_and_preserves_input() -> Result<()> {
     let (sender, receiver) = mpsc::unbounded_channel();
     let mut providers = ProviderManager::new();
@@ -336,11 +277,12 @@ async fn failed_intercepted_continuation_releases_ownership_and_preserves_input(
         )
         .await?;
     tokio::fs::write(owner.data_dir.join("AGENTS.md"), [0xff]).await?;
-    sender.send(Ok(ProviderStreamEvent::ScriptCall {
+    sender.send(Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
         call_id: kraai_types::ToolCallId::new("call"),
         name: "kraai_nushell".into(),
         input: "# timeout=30sec permissions=workspace-write\nprint hello".into(),
-    }))?;
+        arguments_error: None,
+    })))?;
     drop(sender);
     owner.events.wait_for("approval", |events| events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id, .. } if session_id == &session))).await;
     let pending = owner
@@ -513,6 +455,71 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
         )
         .await?;
     owner.runtime.finish_turn(&session).await;
+    observer.shutdown().await;
+    owner.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn observers_follow_the_owners_turn_timer() -> Result<()> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let mut providers = ProviderManager::new();
+    providers.register_provider(
+        ProviderId::new("mock"),
+        Box::new(ControlledProvider {
+            events: Mutex::new(VecDeque::from([receiver])),
+        }),
+    );
+    let owner = RuntimeTestHarness::new_with_parts(providers)
+        .await
+        .expect("owner fixture");
+    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone())
+        .await
+        .expect("observer fixture");
+    let session = create_session_with_profile(&owner.handle, "test-profile").await?;
+    assert!(observer.handle.load_session(session.clone()).await?);
+    let timer_of = |events: &[Event], running: bool| {
+        events.iter().any(|event| {
+            matches!(event, Event::TurnTimingChanged { session_id, timer }
+                if session_id == &session
+                    && timer.elapsed(std::time::Instant::now()).is_some() == running
+                    && (running || timer.last_duration().is_some()))
+        })
+    };
+
+    owner
+        .handle
+        .send_message(
+            session.clone(),
+            "first".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
+        )
+        .await?;
+    observer
+        .events
+        .wait_for("running timer", |events| timer_of(events, true))
+        .await;
+    let running = observer
+        .handle
+        .get_session_snapshot(session.clone())
+        .await?
+        .turn_timer;
+    assert!(running.elapsed(std::time::Instant::now()).is_some());
+
+    drop(sender);
+    observer
+        .events
+        .wait_for("finished timer", |events| timer_of(events, false))
+        .await;
+    let finished = observer
+        .handle
+        .get_session_snapshot(session.clone())
+        .await?
+        .turn_timer;
+    assert!(finished.elapsed(std::time::Instant::now()).is_none());
+    assert!(finished.last_duration().is_some());
     observer.shutdown().await;
     owner.shutdown().await;
     Ok(())

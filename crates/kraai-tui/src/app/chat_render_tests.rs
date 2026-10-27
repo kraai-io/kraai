@@ -1,6 +1,6 @@
 use kraai_types::{
-    AssistantItem, AssistantPhase, MessageGeneration, ModelId, ProviderId, StreamId, TokenUsage,
-    ToolCallId,
+    AssistantItem, AssistantPhase, MessageGeneration, ModelId, ProviderId, ScriptCall, StreamId,
+    TokenUsage, ToolCallId,
 };
 
 use super::*;
@@ -25,11 +25,12 @@ fn text_item(text: &str) -> AssistantItem {
 }
 
 fn call_item(id: &str, input: &str) -> AssistantItem {
-    AssistantItem::ScriptCall {
+    AssistantItem::ScriptCall(ScriptCall {
         call_id: ToolCallId::new(id),
         name: String::from("nushell"),
         input: input.to_string(),
-    }
+        arguments_error: None,
+    })
 }
 
 fn rendered_lines(state: &AppState) -> Vec<String> {

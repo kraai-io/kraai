@@ -5,7 +5,7 @@ use futures::stream::BoxStream;
 use kraai_provider_core::{
     ProviderStreamEvent, SseEvent, StopReason, StreamStatus, adapt_provider_stream,
 };
-use kraai_types::{AssistantPhase, ToolCallId};
+use kraai_types::{AssistantPhase, ScriptCall, ToolCallId};
 
 use crate::usage::normalize_usage;
 use crate::wire::{ChatCompletionChunk, ScriptArguments, ToolCallDelta};
@@ -112,10 +112,17 @@ impl Completion {
                 choice.index == 0,
                 "Provider returned an unexpected completion choice"
             );
-            ensure!(
-                self.finish_reason.is_none(),
-                "Provider sent a choice after completion"
-            );
+            if let Some(finished) = &self.finish_reason {
+                ensure!(
+                    choice.delta.is_empty()
+                        && choice
+                            .finish_reason
+                            .as_ref()
+                            .is_none_or(|reason| reason == finished),
+                    "Provider sent a choice after completion"
+                );
+                continue;
+            }
             if let Some(refusal) = choice.delta.refusal.filter(|text| !text.is_empty()) {
                 return Err(eyre!("Provider refused the request: {refusal}"));
             }
@@ -191,7 +198,7 @@ impl Completion {
         let mut ids: Vec<_> = calls
             .iter()
             .filter_map(|call| match call {
-                ProviderStreamEvent::ScriptCall { call_id, .. } => Some(call_id),
+                ProviderStreamEvent::ScriptCall(ScriptCall { call_id, .. }) => Some(call_id),
                 _ => None,
             })
             .collect();
@@ -203,19 +210,36 @@ impl Completion {
 }
 
 fn finish_call(call: PendingCall, tool_name: Option<&str>) -> Result<ProviderStreamEvent> {
-    ensure!(
-        Some(call.name.as_str()) == tool_name,
-        "Provider called unexpected tool '{}'",
-        call.name
-    );
+    let tool_name =
+        tool_name.ok_or_else(|| eyre!("Provider called a tool when tools were disabled"))?;
     let id = call.id.ok_or_else(|| eyre!("Tool call omitted ID"))?;
     let call_id = ToolCallId::try_new(id).map_err(|error| eyre!(error))?;
-    let arguments: ScriptArguments = serde_json::from_str(&call.arguments)?;
-    Ok(ProviderStreamEvent::ScriptCall {
+    let arguments_error = if call.name == tool_name {
+        match serde_json::from_str::<ScriptArguments>(&call.arguments) {
+            Ok(arguments) => {
+                return Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
+                    call_id,
+                    name: call.name,
+                    input: arguments.input,
+                    arguments_error: None,
+                }));
+            }
+            Err(error) => {
+                format!("arguments must be a JSON object with one string field \"input\": {error}")
+            }
+        }
+    } else {
+        format!(
+            "unknown tool '{}'; the only tool is '{tool_name}'",
+            call.name
+        )
+    };
+    Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
         call_id,
         name: call.name,
-        input: arguments.input,
-    })
+        input: call.arguments,
+        arguments_error: Some(arguments_error),
+    }))
 }
 
 pub(super) fn adapt_chat_completion_stream(

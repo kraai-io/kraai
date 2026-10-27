@@ -312,8 +312,27 @@ impl Provider for OpenAiCodexProvider {
         self.models.read().await.get(model_id, &self.model_configs)
     }
 
-    async fn cache_models(&self) -> Result<()> {
-        let models = self.fetch_models().await?;
+    fn model_list_source(&self) -> Option<String> {
+        Some(self.base_url.clone())
+    }
+
+    async fn fetch_model_list(&self) -> Result<serde_json::Value> {
+        let mut url = Url::parse(&self.endpoint("codex/models"))?;
+        url.query_pairs_mut()
+            .append_pair("client_version", CODEX_CLIENT_VERSION);
+        let request_context = ProviderRequestContext::default();
+        let response = self
+            .send_authenticated_request("list models", &request_context, |auth| {
+                self.authenticated_get(url.as_str(), auth)
+            })
+            .await?;
+        let bytes = kraai_io::http::read_response_body(response, 32 * 1024 * 1024).await?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    async fn install_model_list(&self, list: serde_json::Value) -> Result<()> {
+        let response: ListModelsResponse = serde_json::from_value(list)?;
+        let models = DiscoveredModels::new(response.models)?;
         for model in models.list(&self.model_configs) {
             kraai_types::validate_model_option_values(&model.options, &Default::default(), false)
                 .map_err(|errors| eyre!("Invalid model options for {}: {errors:?}", model.id))?;
@@ -397,21 +416,6 @@ impl OpenAiCodexProvider {
         auth.apply(builder)
     }
 
-    async fn fetch_models(&self) -> Result<DiscoveredModels> {
-        let mut url = Url::parse(&self.endpoint("codex/models"))?;
-        url.query_pairs_mut()
-            .append_pair("client_version", CODEX_CLIENT_VERSION);
-        let request_context = ProviderRequestContext::default();
-        let response = self
-            .send_authenticated_request("list models", &request_context, |auth| {
-                self.authenticated_get(url.as_str(), auth)
-            })
-            .await?;
-        let bytes = kraai_io::http::read_response_body(response, 32 * 1024 * 1024).await?;
-        let response: ListModelsResponse = serde_json::from_slice(&bytes)?;
-        DiscoveredModels::new(response.models)
-    }
-
     async fn send_responses_request(
         &self,
         model_id: &ModelId,
@@ -449,6 +453,9 @@ impl OpenAiCodexProvider {
                 description: tool.description,
             })
             .collect();
+        let max_output_tokens = (!compact)
+            .then(|| model.output_limit(&provider_request.messages))
+            .flatten();
         let normalized = normalize_conversation(provider_request.messages, &self.id, &images)?;
         let mut request = ResponsesRequest {
             model: model_id.to_string(),
@@ -459,6 +466,7 @@ impl OpenAiCodexProvider {
             tools,
             tool_choice: Some(if has_tool { "auto" } else { "none" }),
             parallel_tool_calls: has_tool.then_some(false),
+            max_output_tokens,
             stream: true,
             store: false,
             include: Vec::new(),

@@ -95,25 +95,6 @@ impl RuntimeCore {
                     response,
                 },
             ),
-            Command::ContinueSession {
-                session_id,
-                model_id,
-                provider_id,
-                options,
-                wait_for_preparation,
-                response,
-            } => (
-                session_id,
-                SessionMessage::Continue {
-                    selection: Some(ModelSelection {
-                        provider_id,
-                        model_id,
-                        options,
-                    }),
-                    wait_for_preparation,
-                    response,
-                },
-            ),
             Command::CancelStream {
                 session_id,
                 response,
@@ -499,7 +480,6 @@ impl RuntimeCore {
             }
             Command::Shutdown { .. }
             | Command::SendMessage { .. }
-            | Command::ContinueSession { .. }
             | Command::CancelStream { .. }
             | Command::CancelTurn { .. }
             | Command::ApproveScript { .. }

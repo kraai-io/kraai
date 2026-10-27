@@ -1,5 +1,6 @@
 use kraai_types::{
-    ConversationItem, MessageGeneration, ModelId, ProviderId, SessionId, StreamId, TokenUsage,
+    ConversationItem, MessageGeneration, ModelId, ProviderId, ScriptCall, SessionId, StreamId,
+    TokenUsage,
 };
 
 use super::*;
@@ -132,13 +133,14 @@ fn item_events_build_the_streaming_message_and_gaps_request_a_snapshot() {
         session_id: SessionId::new("session"),
         message_id: "answer".into(),
         item_index: 1,
-        item: kraai_types::AssistantItem::ScriptCall {
+        item: kraai_types::AssistantItem::ScriptCall(ScriptCall {
             call_id: kraai_types::ToolCallId::new("call"),
             name: "kraai_nushell".into(),
             input: "# timeout=1sec
 print '</tool_call>'"
                 .into(),
-        },
+            arguments_error: None,
+        }),
     };
     harness.app.handle_runtime_event(call.clone());
     harness.app.handle_runtime_event(call);
@@ -146,7 +148,7 @@ print '</tool_call>'"
         &harness.app.state.chat_history.get(&MessageId::new("answer")).unwrap().content,
         ConversationItem::Assistant { items }
             if matches!(items.as_slice(),
-                [kraai_types::AssistantItem::Text { text, .. }, kraai_types::AssistantItem::ScriptCall { input, .. }]
+                [kraai_types::AssistantItem::Text { text, .. }, kraai_types::AssistantItem::ScriptCall(ScriptCall { input, .. })]
                 if text == "answer text continued" && input == "# timeout=1sec\nprint '</tool_call>'")
     ));
     harness.drain_requests();
@@ -234,6 +236,39 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
         Some("new-model")
     );
     assert_eq!(harness.app.state.selected_model_options, draft_options);
+}
+
+#[test]
+fn snapshot_older_than_a_session_event_still_restores_the_model() {
+    let mut harness = test_harness();
+    harness
+        .app
+        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
+    harness
+        .app
+        .handle_runtime_event_bridge_message(stream_event(
+            5,
+            Event::HistoryUpdated {
+                session_id: SessionId::new("session"),
+            },
+        ));
+    let mut snapshot = session_snapshot_at(3, None);
+    snapshot.session.selected_model = Some(kraai_types::ModelSelection {
+        provider_id: ProviderId::new("saved-provider"),
+        model_id: ModelId::new("saved-model"),
+        options: Default::default(),
+    });
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
+            session_id: SessionId::new("session"),
+            result: Box::new(Ok(snapshot)),
+        });
+    assert_eq!(
+        harness.app.state.selected_model_id.as_deref(),
+        Some("saved-model")
+    );
 }
 
 #[test]

@@ -8,9 +8,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::RuntimeError;
 use crate::{
-    AgentProfileCatalog, AgentProfilesState, ContinueSessionOutcome, CreateSessionRequest, Model,
-    RuntimeEvent, RuntimeResult, RuntimeStartupState, Session, SessionContextUsage,
-    SessionSnapshot, SettingsDocument, SubmitMessageOutcome, WorkspaceState,
+    AgentProfileCatalog, AgentProfilesState, CreateSessionRequest, Model, RuntimeEvent,
+    RuntimeResult, RuntimeStartupState, Session, SessionContextUsage, SessionSnapshot,
+    SettingsDocument, SubmitMessageOutcome, WorkspaceState,
 };
 
 mod command;
@@ -436,53 +436,6 @@ impl RuntimeHandle {
         .await
     }
 
-    pub async fn continue_session(
-        &self,
-        session_id: SessionId,
-        model_id: String,
-        provider_id: String,
-        options: ModelOptionValues,
-    ) -> RuntimeResult<ContinueSessionOutcome> {
-        self.request_continuation(session_id, model_id, provider_id, options, false)
-            .await
-    }
-
-    pub async fn continue_turn(
-        &self,
-        session_id: SessionId,
-        model_id: String,
-        provider_id: String,
-        options: ModelOptionValues,
-    ) -> RuntimeResult<ContinueSessionOutcome> {
-        self.request_continuation(session_id, model_id, provider_id, options, true)
-            .await
-    }
-
-    async fn request_continuation(
-        &self,
-        session_id: SessionId,
-        model_id: String,
-        provider_id: String,
-        options: ModelOptionValues,
-        wait_for_preparation: bool,
-    ) -> RuntimeResult<ContinueSessionOutcome> {
-        let model_id = ModelId::try_new(model_id).map_err(|error| {
-            RuntimeError::invalid_argument(format!("invalid model_id: {error}"))
-        })?;
-        let provider_id = ProviderId::try_new(provider_id).map_err(|error| {
-            RuntimeError::invalid_argument(format!("invalid provider_id: {error}"))
-        })?;
-        self.request(|response| Command::ContinueSession {
-            session_id,
-            model_id,
-            provider_id,
-            options,
-            wait_for_preparation,
-            response,
-        })
-        .await
-    }
-
     /// The sign-in state of every provider type that signs in with an account.
     pub async fn get_provider_auth_statuses(
         &self,
@@ -586,8 +539,6 @@ macro_rules! runtime_methods {
                 deny_script(session_id: $crate::__types::SessionId, execution_id: String) -> ();
                 cancel_stream(session_id: $crate::__types::SessionId) -> bool;
                 cancel_turn(session_id: $crate::__types::SessionId) -> bool;
-                continue_session(session_id: $crate::__types::SessionId, model_id: String, provider_id: String, options: $crate::__types::ModelOptionValues) -> $crate::ContinueSessionOutcome;
-                continue_turn(session_id: $crate::__types::SessionId, model_id: String, provider_id: String, options: $crate::__types::ModelOptionValues) -> $crate::ContinueSessionOutcome;
                 get_provider_auth_statuses() -> Vec<$crate::ProviderAuthStatus>;
                 start_provider_login(provider_type: String, method: $crate::LoginMethod) -> $crate::ProviderAuthStatus;
                 cancel_provider_login(provider_type: String) -> $crate::ProviderAuthStatus;
