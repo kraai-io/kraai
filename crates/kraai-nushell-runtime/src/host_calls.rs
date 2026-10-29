@@ -12,6 +12,7 @@ use kraai_execution_types::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
 use crate::effects::StateEffectHandler;
@@ -199,6 +200,7 @@ pub(crate) async fn serve(
     secret: [u8; 32],
     services: HostServices,
     active_commands: &[String],
+    stopped: &CancellationToken,
 ) -> Result<(), HostProtocolError> {
     let mut expected_sequence = 1_u64;
     while let Some(frame) =
@@ -213,59 +215,17 @@ pub(crate) async fn serve(
         expected_sequence = expected_sequence
             .checked_add(1)
             .ok_or(HostProtocolError::SequenceExhausted)?;
-        let response = match frame.payload {
+        let request = match frame.payload {
             Request::Output(output) => {
                 let _ = services.output.send(output);
                 continue;
             }
-            Request::Mcp(request) => Response::Mcp(
-                match require_service(active_commands, HostService::Mcp)
-                    .and_then(|()| request.validate())
-                {
-                    Ok(()) => services.mcp.execute(request).await,
-                    Err(error) => Err(error),
-                },
-            ),
-            Request::ExistingImage { id } => Response::ImageAttachment(
-                match require_service(active_commands, HostService::Images)
-                    .and_then(|()| validate_image_id(&id))
-                {
-                    Ok(()) => services.images.attach_existing(frame.sequence, id).await,
-                    Err(error) => Err(error),
-                },
-            ),
-            Request::ImageAttachment { base64 } => Response::ImageAttachment(
-                match require_service(active_commands, HostService::Images)
-                    .and_then(|()| decode_image(&base64))
-                {
-                    Ok(bytes) => services.images.attach(frame.sequence, bytes).await,
-                    Err(error) => Err(error),
-                },
-            ),
-            Request::StateEffect(request) => {
-                if request.sequence != frame.sequence {
-                    return Err(HostProtocolError::PayloadSequence {
-                        frame: frame.sequence,
-                        payload: request.sequence,
-                    });
-                }
-                let error = match require_service(active_commands, HostService::StateEffects) {
-                    Ok(()) => services.effects.apply(&request).await.err(),
-                    Err(error) => Some(error),
-                };
-                Response::StateEffect(StateEffectAck {
-                    error,
-                    invocation_id: request.invocation_id,
-                })
-            }
-            Request::WebSearch(request) => Response::WebSearch(
-                match require_service(active_commands, HostService::WebSearch)
-                    .and_then(|()| request.validate())
-                {
-                    Ok(()) => services.web.search(&request).await,
-                    Err(error) => Err(error),
-                },
-            ),
+            request => request,
+        };
+        let response = tokio::select! {
+            biased;
+            () = stopped.cancelled() => return Ok(()),
+            response = respond(request, frame.sequence, &services, active_commands) => response?,
         };
         write_authenticated_async(
             &mut writer,
@@ -277,6 +237,65 @@ pub(crate) async fn serve(
         .await?;
     }
     Ok(())
+}
+
+async fn respond(
+    request: Request,
+    sequence: u64,
+    services: &HostServices,
+    active_commands: &[String],
+) -> Result<Response, HostProtocolError> {
+    Ok(match request {
+        Request::Output(_) => unreachable!("output frames need no response"),
+        Request::Mcp(request) => Response::Mcp(
+            match require_service(active_commands, HostService::Mcp)
+                .and_then(|()| request.validate())
+            {
+                Ok(()) => services.mcp.execute(request).await,
+                Err(error) => Err(error),
+            },
+        ),
+        Request::ExistingImage { id } => Response::ImageAttachment(
+            match require_service(active_commands, HostService::Images)
+                .and_then(|()| validate_image_id(&id))
+            {
+                Ok(()) => services.images.attach_existing(sequence, id).await,
+                Err(error) => Err(error),
+            },
+        ),
+        Request::ImageAttachment { base64 } => Response::ImageAttachment(
+            match require_service(active_commands, HostService::Images)
+                .and_then(|()| decode_image(&base64))
+            {
+                Ok(bytes) => services.images.attach(sequence, bytes).await,
+                Err(error) => Err(error),
+            },
+        ),
+        Request::StateEffect(request) => {
+            if request.sequence != sequence {
+                return Err(HostProtocolError::PayloadSequence {
+                    frame: sequence,
+                    payload: request.sequence,
+                });
+            }
+            let error = match require_service(active_commands, HostService::StateEffects) {
+                Ok(()) => services.effects.apply(&request).await.err(),
+                Err(error) => Some(error),
+            };
+            Response::StateEffect(StateEffectAck {
+                error,
+                invocation_id: request.invocation_id,
+            })
+        }
+        Request::WebSearch(request) => Response::WebSearch(
+            match require_service(active_commands, HostService::WebSearch)
+                .and_then(|()| request.validate())
+            {
+                Ok(()) => services.web.search(&request).await,
+                Err(error) => Err(error),
+            },
+        ),
+    })
 }
 
 fn decode_image(encoded: &str) -> Result<Vec<u8>, String> {

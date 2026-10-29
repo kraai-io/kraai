@@ -261,7 +261,7 @@ async fn unfinished_lists_keep_their_rows_when_execution_is_cancelled() {
     let workspace = TestWorkspace::new();
     let source = r#"
 print "started"
-[1 2] | each {|n| if $n == 2 { "" | save waiting.txt; sleep 1hr }; {n: $n} }
+[1 2] | each {|n| if $n == 2 { print "waiting"; sleep 1hr }; {n: $n} }
 "#;
     let mut execution = plan(source.as_bytes().to_vec(), &workspace);
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -272,20 +272,13 @@ print "started"
     hang_guard(async {
         while let Some(event) = receiver.recv().await {
             received.extend_from_slice(&event.bytes);
-            if received.ends_with(b"started\n") {
+            if received.ends_with(b"started\nwaiting\n") {
                 break;
             }
         }
     })
     .await
-    .expect("text output should stream before the script finishes");
-    hang_guard(async {
-        while !workspace.0.join("waiting.txt").exists() {
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .expect("second row should start");
+    .expect("output printed by the second row should stream after the first row");
     cancellation.cancel();
     let result = run
         .await
@@ -294,7 +287,7 @@ print "started"
     assert_eq!(result.output.termination, Termination::Cancelled);
     assert_eq!(
         String::from_utf8_lossy(&result.output.stdout),
-        "started\n[1]{n}:\n  1\n"
+        "started\nwaiting\n[1]{n}:\n  1\n"
     );
 }
 

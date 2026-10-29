@@ -19,6 +19,8 @@ use crate::request::{HOST_PROTOCOL_VERSION, HostRequest};
 use crate::transport;
 use crate::wire::write_request;
 
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
+
 pub struct ScriptExecutionPlan {
     pub execution_id: ScriptExecutionId,
     pub host_executable: PathBuf,
@@ -155,6 +157,8 @@ pub async fn execute(
     let channel_execution_id = execution_id.clone();
     let connected = Arc::new(AtomicBool::new(false));
     let connected_for_task = connected.clone();
+    let channel_stop = CancellationToken::new();
+    let stopped = channel_stop.clone();
     let mut channel_task = AbortOnDropHandle::new(tokio::spawn(async move {
         let transport = transport::accept(listener, spawned_rx, startup_timeout)
             .await
@@ -189,6 +193,7 @@ pub async fn execute(
                     output: output_frames,
                 },
                 &host_request.active_commands,
+                &stopped,
             )
             .await
             .map_err(|error| ChannelError::Host(error.to_string()))
@@ -246,7 +251,7 @@ pub async fn execute(
                     tokio::select! {
                         biased;
                         () = cancellation.cancelled() => {
-                            channel_task.abort();
+                            drain_output(&mut channel_task, &channel_stop).await;
                             Ok(())
                         }
                         result = &mut channel_task => channel_result(result),
@@ -258,7 +263,7 @@ pub async fn execute(
                     }
                 }
             } else {
-                channel_task.abort();
+                drain_output(&mut channel_task, &channel_stop).await;
                 Ok(())
             };
             (output.stdout, output.stderr) = renderer
@@ -279,6 +284,19 @@ pub async fn execute(
             channel_task.abort();
             Err(RuntimeError::Sandbox(error))
         }
+    }
+}
+
+async fn drain_output(
+    channel_task: &mut AbortOnDropHandle<Result<(), ChannelError>>,
+    stop: &CancellationToken,
+) {
+    stop.cancel();
+    if tokio::time::timeout(OUTPUT_DRAIN_TIMEOUT, &mut *channel_task)
+        .await
+        .is_err()
+    {
+        channel_task.abort();
     }
 }
 

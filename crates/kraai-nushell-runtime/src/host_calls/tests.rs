@@ -81,6 +81,7 @@ async fn image_requests_require_enabled_command_and_preserve_authenticated_bytes
                     output: tokio::sync::mpsc::unbounded_channel().0,
                 },
                 &commands,
+                &CancellationToken::new(),
             )
             .await
         });
@@ -146,6 +147,75 @@ async fn image_requests_require_enabled_command_and_preserve_authenticated_bytes
         drop(reader);
         task.await??;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn stopped_channels_forward_queued_output_but_serve_no_requests()
+-> Result<(), Box<dyn std::error::Error>> {
+    let images = Arc::new(RecordingImages::default());
+    let recorded = images.clone();
+    let execution_id = ScriptExecutionId::new("stopped-test");
+    let secret = rand::random::<[u8; 32]>();
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (_client_reader, mut client_writer) = tokio::io::split(client);
+    let frames = [
+        OutputFrame::ListEnd { id: 2, list: 1 },
+        OutputFrame::ListEnd { id: 4, list: 3 },
+    ];
+    for (sequence, frame) in (1..).zip(frames.clone()) {
+        write_authenticated_async(
+            &mut client_writer,
+            &execution_id,
+            sequence,
+            &Request::Output(frame),
+            &secret,
+        )
+        .await?;
+    }
+    write_authenticated_async(
+        &mut client_writer,
+        &execution_id,
+        3,
+        &Request::ImageAttachment {
+            base64: base64::engine::general_purpose::STANDARD.encode([0]),
+        },
+        &secret,
+    )
+    .await?;
+    drop(client_writer);
+    let stopped = CancellationToken::new();
+    stopped.cancel();
+    let (output, mut forwarded) = tokio::sync::mpsc::unbounded_channel();
+    let (reader, writer) = tokio::io::split(server);
+    serve(
+        reader,
+        writer,
+        execution_id,
+        secret,
+        HostServices {
+            mcp: Arc::new(kraai_mcp::McpManager::default()),
+            effects: Arc::new(crate::RejectStateEffects),
+            web: Arc::new(kraai_web::ExaSearch::default()),
+            images,
+            output,
+        },
+        &[String::from(kraai_commands::view_image::METADATA.id)],
+        &stopped,
+    )
+    .await?;
+    let mut received = Vec::new();
+    while let Ok(frame) = forwarded.try_recv() {
+        received.push(frame);
+    }
+    assert_eq!(received, frames);
+    assert!(
+        recorded
+            .0
+            .lock()
+            .map_err(|error| error.to_string())?
+            .is_empty()
+    );
     Ok(())
 }
 

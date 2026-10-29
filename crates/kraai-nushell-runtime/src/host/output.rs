@@ -50,6 +50,7 @@ impl Command for ModelPrint {
         mut input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         if call.has_flag(engine, stack, "raw")? {
+            self.sink.flush().map_err(|error| *error)?;
             return self.original.run(engine, stack, call, input);
         }
         let args: Vec<Value> = call.rest(engine, stack, 0)?;
@@ -107,22 +108,28 @@ fn render(
 ) -> Result<(), Box<ShellError>> {
     match input {
         PipelineData::Empty | PipelineData::Value(Value::Nothing { .. }, _) => Ok(()),
-        PipelineData::ByteStream(stream, _) => write_bytes(engine, stream, no_newline, stderr),
+        PipelineData::ByteStream(stream, _) => {
+            write_bytes(sink, engine, stream, no_newline, stderr)
+        }
         PipelineData::Value(
             Value::Binary {
                 val, internal_span, ..
             },
             _,
         ) => write_bytes(
+            sink,
             engine,
             ByteStream::read_binary(val, internal_span, engine.signals().clone()),
             no_newline,
             stderr,
         ),
-        PipelineData::Value(value @ Value::String { .. }, _) => value
-            .into_pipeline_data()
-            .print_raw(engine, no_newline, stderr)
-            .map_err(Box::new),
+        PipelineData::Value(value @ Value::String { .. }, _) => {
+            sink.flush()?;
+            value
+                .into_pipeline_data()
+                .print_raw(engine, no_newline, stderr)
+                .map_err(Box::new)
+        }
         PipelineData::Value(Value::List { vals, .. }, _) if vals.is_empty() => {
             sink.value(OutputValue::List(Vec::new()), stderr, !no_newline)
         }
@@ -172,11 +179,13 @@ fn render_list(
 }
 
 fn write_bytes(
+    sink: &OutputSink,
     engine: &EngineState,
     stream: ByteStream,
     no_newline: bool,
     stderr: bool,
 ) -> Result<(), Box<ShellError>> {
+    sink.flush()?;
     let span = stream.span();
     let last = if stderr {
         copy_bytes(stream, std::io::stderr())
