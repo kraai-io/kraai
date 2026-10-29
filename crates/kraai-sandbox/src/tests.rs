@@ -64,7 +64,7 @@ fn executable(name: &str) -> PathBuf {
 }
 
 fn capabilities(values: impl IntoIterator<Item = SandboxCapability>) -> SandboxCapabilities {
-    SandboxCapabilities::new(values).expect("valid test capabilities")
+    SandboxCapabilities::new(values)
 }
 
 fn shell_plan(

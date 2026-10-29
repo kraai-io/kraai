@@ -35,7 +35,7 @@ impl Fixture {
         let mut plan = LaunchPlan::new(
             executable.clone(),
             self.0.join("workspace"),
-            SandboxCapabilities::new(capabilities.iter().copied()).expect("valid capabilities"),
+            SandboxCapabilities::new(capabilities.iter().copied()),
             HANG_TIMEOUT,
         );
         plan.runtime_roots.push(executable);

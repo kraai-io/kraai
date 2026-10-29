@@ -10703,6 +10703,10 @@ rec {
             packageId = "kraai-web";
           }
           {
+            name = "miette";
+            packageId = "miette 7.6.0";
+          }
+          {
             name = "nix";
             packageId = "nix 0.31.3";
             target = { target, features }: (target."unix" or false);
@@ -10733,10 +10737,6 @@ rec {
             packageId = "nu-experimental";
           }
           {
-            name = "nu-json";
-            packageId = "nu-json";
-          }
-          {
             name = "nu-parser";
             packageId = "nu-parser";
           }
@@ -10747,6 +10747,10 @@ rec {
           {
             name = "rand";
             packageId = "rand 0.10.3";
+          }
+          {
+            name = "rmp-serde";
+            packageId = "rmp-serde";
           }
           {
             name = "rustix";
@@ -10855,6 +10859,14 @@ rec {
           {
             name = "kraai-provider-core";
             packageId = "kraai-provider-core";
+          }
+          {
+            name = "kraai-providers";
+            packageId = "kraai-providers";
+          }
+          {
+            name = "kraai-runtime";
+            packageId = "kraai-runtime";
           }
           {
             name = "kraai-sandbox";
@@ -11255,12 +11267,6 @@ rec {
             packageId = "tracing";
           }
           {
-            name = "ts-rs";
-            packageId = "ts-rs";
-            optional = true;
-            features = [ "serde-json-impl" ];
-          }
-          {
             name = "url";
             packageId = "url";
           }
@@ -11279,10 +11285,7 @@ rec {
             packageId = "ulid";
           }
         ];
-        features = {
-          "typescript" = [ "dep:ts-rs" ];
-        };
-        resolvedDefaultFeatures = [ "typescript" ];
+
       };
       "kraai-providers" = rec {
         crateName = "kraai-providers";
@@ -15323,7 +15326,7 @@ rec {
           "nu-protocol" = [ "dep:nu-protocol" ];
           "preserve_order" = [ "linked-hash-map" "linked-hash-map/serde_impl" "serde_json/preserve_order" ];
         };
-        resolvedDefaultFeatures = [ "default" "linked-hash-map" "nu-protocol" "preserve_order" ];
+        resolvedDefaultFeatures = [ "linked-hash-map" "nu-protocol" "preserve_order" ];
       };
       "nu-parser" = rec {
         crateName = "nu-parser";
@@ -20960,6 +20963,35 @@ rec {
           "std" = [ "num-traits/std" ];
         };
         resolvedDefaultFeatures = [ "default" "std" ];
+      };
+      "rmp-serde" = rec {
+        crateName = "rmp-serde";
+        version = "1.3.1";
+        edition = "2024";
+        sha256 = "0md1cx5w0hwc40nb55z3c4j26b4npkmp06k8s5vvbycfikp1py3j";
+        libName = "rmp_serde";
+        license = "MIT";
+        authors = [
+          "Evgeny Safronov <division494@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "rmp";
+            packageId = "rmp";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+        ];
+
       };
       "roxmltree" = rec {
         crateName = "roxmltree";

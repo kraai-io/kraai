@@ -13,11 +13,8 @@ use tokio_util::sync::CancellationToken;
 use crate::config::{LaunchPlan, PreparedCommand};
 use crate::error::SandboxError;
 use crate::output::{ExecutionOutput, OutputEvent, OutputStream, Termination};
+use crate::output_capture::OutputCapture;
 use crate::platform::prepare_command;
-
-#[path = "output_capture.rs"]
-mod output_capture;
-use output_capture::OutputCapture;
 
 pub async fn run(
     mut plan: LaunchPlan,

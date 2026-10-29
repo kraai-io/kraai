@@ -94,15 +94,11 @@ impl SessionActor {
             .runtime
             .agent_manager
             .script_turn_context(&self.session_id)?;
-        let resolution = turn
-            .profile
-            .permissions
-            .resolve(
-                &script.requested_capabilities,
-                &turn.profile.permission_rules,
-                turn.profile.escalation_policy,
-            )
-            .map_err(|error| eyre!(error))?;
+        let resolution = turn.profile.permissions.resolve(
+            &script.requested_capabilities,
+            &turn.profile.permission_rules,
+            turn.profile.escalation_policy,
+        );
         let (effective_capabilities, additions, decision) = match resolution {
             PermissionResolution::Denied { denied } => (
                 turn.profile.permissions.capabilities().clone(),

@@ -13,7 +13,6 @@ pub const METADATA: CommandMetadata = command_metadata! {
     examples: [
         {
             description: "Find tools with their argument schemas",
-            timeout: "30sec",
             script: "kraai-mcp search 'search issues' --limit 3",
         },
     ];

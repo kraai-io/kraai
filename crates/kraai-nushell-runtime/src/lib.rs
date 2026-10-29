@@ -5,6 +5,7 @@ mod execution;
 mod host;
 mod host_calls;
 mod images;
+mod rendering;
 pub mod request;
 mod transport;
 mod wire;
@@ -55,7 +56,7 @@ pub fn run_host_process() -> i32 {
         host_client.clone(),
         host_client.clone(),
         host_client.clone(),
-        host_client,
+        host_client.clone(),
     );
     let registry = match kraai_commands::command_registry(context) {
         Ok(registry) => registry,
@@ -64,7 +65,7 @@ pub fn run_host_process() -> i32 {
             return 70;
         }
     };
-    match host::run_request(request, &registry) {
+    match host::run_request(request, &registry, host_client) {
         Ok(exit_code) => exit_code,
         Err(error) => {
             report_host_error(error);

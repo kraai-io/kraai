@@ -125,10 +125,6 @@ pub fn available_command_ids() -> HashSet<String> {
     kraai_commands::command_id_set()
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "built-in capability sets are fixed and valid"
-)]
 fn built_in_profiles() -> Vec<AgentProfile> {
     let (read_capability, nushell_startup) = if cfg!(windows) {
         (SandboxCapability::WorkspaceRead, NushellStartup::Clean)
@@ -153,8 +149,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
             read_capability,
             SandboxCapability::WorkspaceWrite,
             SandboxCapability::Network,
-        ])
-        .expect("valid coding capabilities"),
+        ]),
         permission_rules: CapabilityPermissionRules::default(),
         escalation_policy: EscalationPolicy::Prompt,
         environment: EnvironmentPolicy::Inherit,
@@ -166,8 +161,7 @@ fn built_in_profiles() -> Vec<AgentProfile> {
         id: String::from("coding-no-sandbox"),
         display_name: String::from("Coding (no sandbox)"),
         description: String::from("Implementation agent without sandbox restrictions"),
-        permissions: SandboxPermissionSet::new([SandboxCapability::NoSandbox])
-            .expect("valid unsandboxed coding capabilities"),
+        permissions: SandboxPermissionSet::new([SandboxCapability::NoSandbox]),
         ..coding.clone()
     };
     vec![coding, coding_no_sandbox]
@@ -318,25 +312,11 @@ fn resolve_external_profile(
         .commands
         .or_else(|| base.as_ref().map(|profile| profile.commands.clone()))
         .unwrap_or_default();
-    let permissions = external.capabilities.map_or_else(
-        || {
-            base.as_ref()
-                .map(|profile| profile.permissions.clone())
-                .ok_or_else(|| field("capabilities"))
-        },
-        |capabilities| {
-            SandboxPermissionSet::new(capabilities).map_err(|error| {
-                profile_warning(
-                    source,
-                    path,
-                    format!(
-                        "Profile '{}' has invalid capabilities: {error}",
-                        external.id
-                    ),
-                )
-            })
-        },
-    )?;
+    let permissions = external
+        .capabilities
+        .map(SandboxPermissionSet::new)
+        .or_else(|| base.as_ref().map(|profile| profile.permissions.clone()))
+        .ok_or_else(|| field("capabilities"))?;
     let permission_rules = external.permission_rules.map_or_else(
         || {
             base.as_ref()

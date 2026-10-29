@@ -16,9 +16,10 @@ use ulid::Ulid;
 
 use crate::effects::StateEffectHandler;
 use crate::images::ImageAttachmentHandler;
+use crate::rendering::OutputFrame;
 use kraai_execution_types::image::{MAX_IMAGE_BYTES, validate_image_id};
 use protocol::{
-    HostProtocolError, read_authenticated_sync, read_frame_async, verify_frame,
+    HostProtocolError, read_authenticated_async, read_authenticated_sync,
     write_authenticated_async, write_authenticated_sync,
 };
 
@@ -29,6 +30,7 @@ enum Request {
     WebSearch(WebSearchRequest),
     ImageAttachment { base64: String },
     ExistingImage { id: String },
+    Output(OutputFrame),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -66,7 +68,14 @@ impl DescriptorClient {
         }
     }
 
-    fn call(&self, request: impl FnOnce(u64) -> Request) -> Result<Response, String> {
+    pub(crate) fn send_output(&self, frame: OutputFrame) -> Result<(), String> {
+        self.send(|_| Request::Output(frame)).map(drop)
+    }
+
+    fn send(
+        &self,
+        request: impl FnOnce(u64) -> Request,
+    ) -> Result<(std::sync::MutexGuard<'_, Transport>, u64), String> {
         let mut transport = self
             .transport
             .lock()
@@ -81,6 +90,11 @@ impl DescriptorClient {
             &self.secret,
         )
         .map_err(|error| error.to_string())?;
+        Ok((transport, sequence))
+    }
+
+    fn call(&self, request: impl FnOnce(u64) -> Request) -> Result<Response, String> {
+        let (mut transport, sequence) = self.send(request)?;
         let (received, response) =
             read_authenticated_sync(&mut transport.channel, &self.execution_id, &self.secret)
                 .map_err(|error| error.to_string())?;
@@ -175,6 +189,7 @@ pub(crate) struct HostServices {
     pub(crate) effects: Arc<dyn StateEffectHandler>,
     pub(crate) web: Arc<dyn kraai_web::WebSearch>,
     pub(crate) images: Arc<dyn ImageAttachmentHandler>,
+    pub(crate) output: tokio::sync::mpsc::UnboundedSender<OutputFrame>,
 }
 
 pub(crate) async fn serve(
@@ -186,8 +201,9 @@ pub(crate) async fn serve(
     active_commands: &[String],
 ) -> Result<(), HostProtocolError> {
     let mut expected_sequence = 1_u64;
-    while let Some(frame) = read_frame_async::<Request>(&mut reader).await? {
-        verify_frame(&frame, &execution_id, &secret)?;
+    while let Some(frame) =
+        read_authenticated_async::<Request>(&mut reader, &execution_id, &secret).await?
+    {
         if frame.sequence != expected_sequence {
             return Err(HostProtocolError::Sequence {
                 expected: expected_sequence,
@@ -198,6 +214,10 @@ pub(crate) async fn serve(
             .checked_add(1)
             .ok_or(HostProtocolError::SequenceExhausted)?;
         let response = match frame.payload {
+            Request::Output(output) => {
+                let _ = services.output.send(output);
+                continue;
+            }
             Request::Mcp(request) => Response::Mcp(
                 match require_service(active_commands, HostService::Mcp)
                     .and_then(|()| request.validate())

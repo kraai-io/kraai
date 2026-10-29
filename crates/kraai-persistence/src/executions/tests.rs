@@ -23,8 +23,7 @@ fn execution(id: &ScriptExecutionId) -> NewScriptExecution {
             commands: Vec::new(),
             permissions: kraai_execution_types::SandboxPermissionSet::new([
                 SandboxCapability::WorkspaceRead,
-            ])
-            .unwrap(),
+            ]),
             permission_rules: kraai_execution_types::CapabilityPermissionRules::default(),
             escalation_policy: kraai_execution_types::EscalationPolicy::Prompt,
             environment: kraai_execution_types::EnvironmentPolicy::AllowList,
@@ -33,8 +32,7 @@ fn execution(id: &ScriptExecutionId) -> NewScriptExecution {
         },
         source: b"1 + 1".to_vec(),
         requested_capabilities: SandboxCapabilities::default(),
-        effective_capabilities: SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
-            .unwrap(),
+        effective_capabilities: SandboxCapabilities::new([SandboxCapability::WorkspaceRead]),
         timeout: Some(Duration::from_secs(10)),
     }
 }

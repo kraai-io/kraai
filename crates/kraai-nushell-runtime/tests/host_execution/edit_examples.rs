@@ -32,9 +32,9 @@ async fn documented_edits_produce_the_shown_files()
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(std::fs::read(workspace.0.join(path))?, after.as_bytes());
-        let result: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        assert_eq!(result.get("success"), Some(&serde_json::json!(true)));
-        assert_eq!(result.get("operation"), Some(&serde_json::json!("edited")));
+        let stdout = String::from_utf8(output.stdout)?;
+        assert!(stdout.contains("success: true\n"), "{stdout}");
+        assert!(stdout.contains("operation: edited\n"), "{stdout}");
     }
     Ok(())
 }

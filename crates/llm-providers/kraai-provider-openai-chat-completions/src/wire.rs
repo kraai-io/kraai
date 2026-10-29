@@ -67,7 +67,7 @@ impl From<kraai_provider_core::ScriptToolDefinition> for FunctionTool {
                 description: tool.description,
                 parameters: serde_json::json!({
                     "type": "object",
-                    "properties": { "input": { "type": "string", "description": "Complete Nushell script, including its metadata comment." } },
+                    "properties": { "input": { "type": "string", "description": "Complete Nushell script." } },
                     "required": ["input"],
                     "additionalProperties": false,
                 }),

@@ -2,7 +2,7 @@ use color_eyre::eyre::{Result, eyre};
 
 use crate::benchmark::Workload;
 
-crate::benchmark::register_workloads!(agent, streaming, persistence, nushell);
+crate::benchmark::register_workloads!(agent, runtime, streaming, persistence, nushell);
 
 pub(crate) fn find(name: &str) -> Result<Workload> {
     catalog()?

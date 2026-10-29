@@ -78,6 +78,7 @@ async fn image_requests_require_enabled_command_and_preserve_authenticated_bytes
                     effects: Arc::new(crate::RejectStateEffects),
                     web: Arc::new(kraai_web::ExaSearch::default()),
                     images,
+                    output: tokio::sync::mpsc::unbounded_channel().0,
                 },
                 &commands,
             )
@@ -95,10 +96,9 @@ async fn image_requests_require_enabled_command_and_preserve_authenticated_bytes
             &secret,
         )
         .await?;
-        let response = read_frame_async::<Response>(&mut reader)
+        let response = read_authenticated_async::<Response>(&mut reader, &execution_id, &secret)
             .await?
             .ok_or("missing response")?;
-        verify_frame(&response, &execution_id, &secret)?;
         assert_eq!(response.sequence, 1);
         let Response::ImageAttachment(result) = response.payload else {
             return Err("wrong response type".into());
@@ -132,10 +132,10 @@ async fn image_requests_require_enabled_command_and_preserve_authenticated_bytes
                 &secret,
             )
             .await?;
-            let response = read_frame_async::<Response>(&mut reader)
-                .await?
-                .ok_or("missing response")?;
-            verify_frame(&response, &execution_id, &secret)?;
+            let response =
+                read_authenticated_async::<Response>(&mut reader, &execution_id, &secret)
+                    .await?
+                    .ok_or("missing response")?;
             assert_eq!(response.sequence, sequence);
             let Response::ImageAttachment(result) = response.payload else {
                 return Err("wrong response type".into());

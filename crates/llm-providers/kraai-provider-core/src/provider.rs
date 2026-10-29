@@ -82,7 +82,7 @@ impl ScriptToolDefinition {
     pub fn nushell() -> Self {
         Self {
             name: Self::NAME.to_string(),
-            description: "Execute a Nushell script. Supply the complete script, beginning with a header comment containing its timeout and any extra sandbox capabilities it requests, such as `# timeout=30sec` or `# timeout=30sec permissions=host-write`.".to_string(),
+            description: "Execute a complete Nushell script.".to_string(),
         }
     }
 }

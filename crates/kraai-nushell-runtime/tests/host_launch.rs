@@ -20,7 +20,7 @@ async fn unavailable_host(mode: u32) -> Result<(), Box<dyn std::error::Error + S
         host,
         b"'must not run'".to_vec(),
         workspace.to_path_buf(),
-        SandboxCapabilities::new([SandboxCapability::NoSandbox])?,
+        SandboxCapabilities::new([SandboxCapability::NoSandbox]),
         HANG_TIMEOUT * 2,
     );
     plan.startup_timeout = HANG_TIMEOUT * 2;

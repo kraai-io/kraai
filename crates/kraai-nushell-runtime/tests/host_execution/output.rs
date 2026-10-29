@@ -37,26 +37,26 @@ print "once"
 "piped" | print
 "last"
 "#,
-        "4\n6\n4\na;b\nc\nonce\npiped\nlast\n",
+        "[2]: 4,6\n4\na;b\nc\nonce\npiped\nlast\n",
     )
     .await;
 }
 
 #[tokio::test]
-async fn nested_values_stay_local_and_definitions_share_state() {
+async fn function_values_stay_local_and_inline_blocks_emit_statements() {
     assert_script(
         r#"
 def answer [] { "hidden"; 42 }
 let closure = { "hidden"; 7 }
 answer
 do $closure
-for n in [1 2] { "hidden"; print $n }
-if true { "hidden"; "selected" }
+for n in [1 2] { "loop"; print $n }
+if true { "branch"; "selected" }
 module helpers { export def value [] { "hidden"; "imported" } }
 use helpers value
 value
 "#,
-        "42\n7\n1\n2\nselected\nimported\n",
+        "42\n7\nloop\n1\nloop\n2\nbranch\nselected\nimported\n",
     )
     .await;
 }
@@ -71,13 +71,13 @@ try { error make {msg: 'expected failure'} } catch { ignore }
 let nothing = ("assigned" | str uppercase)
 open --raw result.txt
 "#,
-        "saved",
+        "saved\n",
     )
     .await;
 }
 
 #[tokio::test]
-async fn structured_results_and_print_share_nested_json_formatting() {
+async fn structured_results_and_print_share_toon_formatting() {
     let source = r#"
 {nested: {items: [{name: "a very long string that must never wrap", enabled: true}]}, empty: []}
 print {nested: {items: [{name: "a very long string that must never wrap", enabled: true}]}, empty: []}
@@ -85,10 +85,10 @@ print {nested: {items: [{name: "a very long string that must never wrap", enable
 ["a\nb" null [1 2]]
 1..3
 "#;
-    let record = "{\"nested\":{\"items\":[{\"name\":\"a very long string that must never wrap\",\"enabled\":true}]},\"empty\":[]}\n";
+    let record = "nested:\n  items[1]{name,enabled}:\n    a very long string that must never wrap,true\nempty[0]:\n";
     assert_script(
         source,
-        &format!("{record}{record}[]\n[\"a\\nb\",null,[1,2]]\n[1,2,3]\n"),
+        &format!("{record}{record}[0]:\n[3]:\n  - \"a\\nb\"\n  - null\n  - [2]: 1,2\n[3]: 1,2,3\n"),
     )
     .await;
 }
@@ -106,11 +106,8 @@ async fn print_preserves_flags_and_does_not_emit_twice() {
     .expect("execute print fixture")
     .output;
     assert_eq!(result.termination, Termination::Exited { code: Some(0) });
-    assert_eq!(String::from_utf8_lossy(&result.stdout), "a{\"b\":2}c\nAB");
-    assert_eq!(
-        String::from_utf8_lossy(&result.stderr),
-        "{\"error\":[1,2]}\n"
-    );
+    assert_eq!(String::from_utf8_lossy(&result.stdout), "ab: 2c\nAB");
+    assert_eq!(String::from_utf8_lossy(&result.stderr), "error[2]: 1,2\n");
 }
 
 #[tokio::test]
@@ -154,7 +151,7 @@ async fn parse_errors_prevent_all_execution_and_runtime_errors_stop_later_statem
 
 #[tokio::test]
 async fn lazy_stream_errors_preserve_emitted_values_and_remain_failures() {
-    for (failure_at, expected) in [(1, ""), (2, "1\n")] {
+    for (failure_at, expected) in [(1, ""), (2, "[1]: 1\n")] {
         for sink in ["", " | print", " | print --stderr"] {
             let workspace = TestWorkspace::new();
             let source = format!(
@@ -182,14 +179,12 @@ async fn lazy_stream_errors_preserve_emitted_values_and_remain_failures() {
 }
 
 #[tokio::test]
-async fn printing_inside_lazy_streams_does_not_add_array_delimiters() {
+async fn printing_inside_lazy_streams_comes_before_the_finished_list() {
     for sink in ["", " | print"] {
         assert_script(&format!("[1 2] | each {{|n| print $n}}{sink}"), "1\n2\n").await;
         assert_script(
-            &format!(
-                r#"[1 2] | each {{|n| print $n; {{value: $n, nested: ["a" "b"]}}}}{sink}"#
-            ),
-            "1\n{\"value\":1,\"nested\":[\"a\",\"b\"]}\n2\n{\"value\":2,\"nested\":[\"a\",\"b\"]}\n",
+            &format!(r#"[1 2] | each {{|n| print $n; {{value: $n, nested: ["a" "b"]}}}}{sink}"#),
+            "1\n2\n[2]:\n  - value: 1\n    nested[2]: a,b\n  - value: 2\n    nested[2]: a,b\n",
         )
         .await;
     }
@@ -213,7 +208,7 @@ async fn lazy_streams_keep_print_output_on_its_requested_stream() {
     assert_eq!(String::from_utf8_lossy(&result.stdout), "3\n4\n");
     assert_eq!(
         String::from_utf8_lossy(&result.stderr),
-        "1\n{\"value\":1}\n2\n{\"value\":2}\n{\"value\":3}\n{\"value\":4}\n"
+        "1\n2\n[2]{value}:\n  1\n  2\n[2]{value}:\n  3\n  4\n"
     );
 }
 
@@ -238,37 +233,36 @@ try { error make {msg: 'caught failure'} } catch {|err| $err }
         String::from_utf8_lossy(&result.stderr)
     );
     let stdout = String::from_utf8(result.stdout).expect("text output");
-    let record: serde_json::Value =
-        serde_json::from_str(stdout.lines().next().expect("error record"))
-            .expect("JSON error record");
-    assert!(
-        record["msg"]
-            .as_str()
-            .is_some_and(|message| message.contains("caught failure"))
-    );
-    assert!(record["raw"].is_string());
+    assert!(stdout.starts_with("msg: caught failure\n"), "{stdout}");
+    assert!(stdout.contains("\nraw: "), "{stdout}");
     assert!(stdout.ends_with("\nafter\n"));
     assert!(result.stderr.is_empty());
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn external_text_and_complete_results_are_emitted_once() {
+async fn byte_results_end_on_their_own_line_unless_print_suppresses_it() {
     assert_script(
         r#"
 ^/bin/sh -c 'printf raw'
 ^/bin/sh -c 'printf captured; printf warning >&2; exit 7' | complete
+^/bin/sh -c 'printf "ends\n"'
+^/bin/sh -c 'printf kept' | print -n
+0x[41 42]
 "after"
 "#,
-        "raw{\"stdout\":\"captured\",\"stderr\":\"warning\",\"exit_code\":7}\nafter\n",
+        "raw\nstdout: captured\nstderr: warning\nexit_code: 7\nends\nkeptAB\nafter\n",
     )
     .await;
 }
 
 #[tokio::test]
-async fn results_stream_before_a_pipeline_finishes_and_cancellation_still_works() {
+async fn unfinished_lists_keep_their_rows_when_execution_is_cancelled() {
     let workspace = TestWorkspace::new();
-    let source = r#"[1 2] | each {|n| if $n == 2 { sleep 1hr }; {n: $n} }"#;
+    let source = r#"
+print "started"
+[1 2] | each {|n| if $n == 2 { "" | save waiting.txt; sleep 1hr }; {n: $n} }
+"#;
     let mut execution = plan(source.as_bytes().to_vec(), &workspace);
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     execution.output_events = Some(sender);
@@ -278,20 +272,30 @@ async fn results_stream_before_a_pipeline_finishes_and_cancellation_still_works(
     hang_guard(async {
         while let Some(event) = receiver.recv().await {
             received.extend_from_slice(&event.bytes);
-            if String::from_utf8_lossy(&received).contains("{\"n\":1}") {
+            if received.ends_with(b"started\n") {
                 break;
             }
         }
     })
     .await
-    .expect("first JSON element should stream before the second finishes");
+    .expect("text output should stream before the script finishes");
+    hang_guard(async {
+        while !workspace.0.join("waiting.txt").exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("second row should start");
     cancellation.cancel();
     let result = run
         .await
         .expect("execution panicked")
         .expect("cancel execution");
-    assert!(String::from_utf8_lossy(&received).contains("{\"n\":1}"));
     assert_eq!(result.output.termination, Termination::Cancelled);
+    assert_eq!(
+        String::from_utf8_lossy(&result.output.stdout),
+        "started\n[1]{n}:\n  1\n"
+    );
 }
 
 #[tokio::test]
@@ -360,14 +364,14 @@ $env.STARTUP = "ready"
     assert_eq!(result.termination, Termination::Exited { code: Some(0) });
     assert_eq!(
         String::from_utf8_lossy(&result.stdout),
-        "{\"a\":[1,2]}\n{\"b\":3}\nready\n"
+        "a[2]: 1,2\nb: 3\nready\n"
     );
     assert!(result.stderr.is_empty());
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn unhandled_external_failures_stop_execution_but_complete_allows_inspection() {
+async fn unhandled_external_failures_stop_execution_and_name_the_command() {
     for source in [
         "^/bin/sh -c 'exit 7'; 'after'",
         "^/bin/sh -c 'exit 7' out> result.txt; 'after'",
@@ -387,5 +391,144 @@ async fn unhandled_external_failures_stop_execution_but_complete_allows_inspecti
             String::from_utf8_lossy(&result.stderr)
         );
         assert!(!String::from_utf8_lossy(&result.stdout).contains("after"));
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("exited with code 7"),
+            "{source}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn row_commands_split_external_text_into_lines() {
+    assert_script(
+        r#"
+def text [] { ^/bin/sh -c 'printf "b\na\nc\n"' }
+text | first 2
+text | where $it != "a"
+text | length
+text | sort
+text | each {|line| $line | str uppercase }
+text | str join ","
+^/bin/sh -c 'exit 0' | length
+text | str trim
+"#,
+        "[2]: b,a\n[2]: b,c\n3\n[3]: a,b,c\n[3]: B,A,C\nb,a,c\n0\nb\na\nc\n",
+    )
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn row_commands_keep_binary_external_output_as_bytes() {
+    assert_script(
+        r#"
+^/bin/sh -c 'printf "a\000b"' | length
+^/bin/sh -c 'printf "\377\376"' | first 1 | describe
+"#,
+        "3\nbinary (stream)\n",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn row_commands_still_reject_unsupported_values() {
+    let workspace = TestWorkspace::new();
+    let result = execute(
+        plan(b"'before'; 'text' | sort; 'after'".to_vec(), &workspace),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("execute unsupported input")
+    .output;
+    assert_eq!(result.termination, Termination::Exited { code: Some(1) });
+    assert_eq!(String::from_utf8_lossy(&result.stdout), "before\n");
+    assert!(String::from_utf8_lossy(&result.stderr).contains("only_supports_this_input_type"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn loop_bodies_emit_each_statement_result() {
+    assert_script(
+        r#"
+for n in [1 2] { $n * 10 }
+mut i = 0
+while $i < 2 { $i += 1; $"w($i)" }
+loop { if $i >= 3 { break }; $i += 1; {i: $i} }
+for n in [1 2 3] { if $n == 2 { continue }; $n }
+let silent = (for n in [1] { "never" })
+try { "tried"; error make {msg: "fixture"} } catch { "caught" }
+match 1 { 1 => { "arm"; "matched" } }
+for n in [1] { ^/bin/sh -c 'printf "external\n"'; ^/bin/sh -c 'exit 0' }
+$env.LAST_EXIT_CODE
+"#,
+        "10\n20\nw1\nw2\ni: 3\n1\n3\ntried\ncaught\narm\nmatched\nexternal\n0\n",
+    )
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failing_externals_inside_loops_stop_execution() {
+    let workspace = TestWorkspace::new();
+    let result = execute(
+        plan(
+            b"for n in [1 2] { $n; ^/bin/sh -c 'exit 7' }; 'after'".to_vec(),
+            &workspace,
+        ),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("execute failing loop")
+    .output;
+    assert_eq!(String::from_utf8_lossy(&result.stdout), "1\n");
+    assert_ne!(result.termination, Termination::Exited { code: Some(0) });
+}
+
+#[tokio::test]
+async fn output_has_no_colors_and_errors_use_compact_snippets() {
+    let workspace = TestWorkspace::new();
+    let result = execute(
+        plan(
+            b"[apple banana] | find ban\n[1 2] | get 5".to_vec(),
+            &workspace,
+        ),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("execute plain output fixture")
+    .output;
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert_eq!(stdout, "[1]: banana\n");
+    assert_eq!(
+        stderr,
+        "Error: Row number too large (max: 1).\nline 2: [1 2] | get 5\n  at column 13: index too large (max: 1)\ncode: nu::shell::access_beyond_end\n"
+    );
+}
+
+#[tokio::test]
+async fn warnings_and_errors_in_other_files_use_the_compact_format() {
+    let workspace = TestWorkspace::new();
+    std::fs::write(
+        workspace.0.join("helper.nu"),
+        "export def boom [] {\n    [1 2] | get 5\n}\n",
+    )
+    .expect("write helper module");
+    let result = execute(
+        plan(
+            b"@deprecated \"use new\"\ndef old [] { 1 }\nold\nuse helper.nu\nhelper boom".to_vec(),
+            &workspace,
+        ),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("execute diagnostics fixture")
+    .output;
+    assert_eq!(String::from_utf8_lossy(&result.stdout), "1\n");
+    assert_eq!(
+        String::from_utf8_lossy(&result.stderr),
+        "Warning: Command deprecated.\nline 3: old\n  at columns 1 to 3: old is deprecated and will be removed in a future release.\nhelp: use new\ncode: nu::parser::deprecated\nError: Row number too large (max: 1).\nline 2 of helper.nu:     [1 2] | get 5\n  at column 17: index too large (max: 1)\ncode: nu::shell::access_beyond_end\n"
+    );
 }

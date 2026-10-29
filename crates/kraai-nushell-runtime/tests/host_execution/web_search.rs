@@ -29,11 +29,10 @@ async fn web_search_works_without_sandbox_network_access() {
     listener.set_nonblocking(true).expect("nonblocking fixture");
     let address = listener.local_addr().expect("fixture address");
     let mut execution = plan(
-        format!("try {{ http get --max-time 1sec http://{address} | ignore }} catch {{ null }}; kraai-web-search 'test query' --limit 3 --max-chars 100").into_bytes(),
+        format!("try {{ http get --max-time 1sec http://{address} | ignore }} catch {{ null }}; kraai-web-search 'test query' --limit 3 --max-chars 100 | to json -r").into_bytes(),
         &workspace,
     );
-    execution.capabilities =
-        SandboxCapabilities::new([SandboxCapability::WorkspaceRead]).expect("capabilities");
+    execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead]);
     execution.runtime_roots = sandbox_runtime_roots(host_executable());
     execution.active_commands = vec![String::from("kraai-web-search")];
     execution.web_search = Arc::new(FixtureSearch);
@@ -107,8 +106,7 @@ async fn cancelling_execution_drops_host_search()
 async fn live_anonymous_exa_search_without_sandbox_network() {
     let workspace = TestWorkspace::new();
     let mut execution = plan(b"kraai-web-search 'Nushell custom commands official documentation' --limit 3 --max-chars 4000 | to json --raw".to_vec(), &workspace);
-    execution.capabilities =
-        SandboxCapabilities::new([SandboxCapability::WorkspaceRead]).expect("capabilities");
+    execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead]);
     execution.runtime_roots = sandbox_runtime_roots(host_executable());
     execution.active_commands = vec![String::from("kraai-web-search")];
     let result = execute(execution, CancellationToken::new())

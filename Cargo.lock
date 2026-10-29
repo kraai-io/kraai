@@ -3289,6 +3289,7 @@ dependencies = [
  "kraai-sandbox",
  "kraai-test-support",
  "kraai-web",
+ "miette 7.6.0",
  "nix 0.31.3",
  "nu-cli",
  "nu-cmd-lang",
@@ -3296,10 +3297,10 @@ dependencies = [
  "nu-config",
  "nu-engine",
  "nu-experimental",
- "nu-json",
  "nu-parser",
  "nu-protocol",
  "rand 0.10.3",
+ "rmp-serde",
  "rustix 1.1.5",
  "serde",
  "serde_json",
@@ -3323,6 +3324,8 @@ dependencies = [
  "kraai-nushell-runtime",
  "kraai-persistence",
  "kraai-provider-core",
+ "kraai-providers",
+ "kraai-runtime",
  "kraai-sandbox",
  "kraai-test-support",
  "kraai-types",
@@ -3425,7 +3428,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "ts-rs",
  "ulid",
  "url",
  "urlencoding",
@@ -6080,6 +6082,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ba8be72d372b2c9b35542551678538b562e7cf86c3315773cae48dfbfe7790c"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "rmp-serde"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72f81bee8c8ef9b577d1681a70ebbc962c232461e397b22c208c43c04b67a155"
+dependencies = [
+ "rmp",
+ "serde",
 ]
 
 [[package]]

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use kraai_execution_types::{NushellStartup, ScriptExecutionId};
 use serde::{Deserialize, Serialize};
 
-pub const HOST_PROTOCOL_VERSION: u32 = 6;
+pub const HOST_PROTOCOL_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostRequest {
@@ -16,5 +16,6 @@ pub struct HostRequest {
     pub active_commands: Vec<String>,
     pub nushell_startup: NushellStartup,
     pub event_secret: [u8; 32],
+    pub(crate) output_marker: crate::rendering::Marker,
     pub restrict_network: bool,
 }

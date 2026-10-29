@@ -20,7 +20,9 @@ pub struct InvalidScriptBlock {
     pub requested_capabilities: SandboxCapabilities,
 }
 
-pub const SCRIPT_METADATA_PREFIX: &str = "#";
+const SCRIPT_METADATA_PREFIX: &str = "#";
+
+pub const DEFAULT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn parse_script_input(input: &str) -> Result<ScriptBlock, ProtocolError> {
     let header_start = input
@@ -29,40 +31,41 @@ pub fn parse_script_input(input: &str) -> Result<ScriptBlock, ProtocolError> {
         .ok_or(ProtocolError::EmptyScript)?;
     let header_tail = &input[header_start..];
     let header_end = header_tail.find(['\n', '\r']).unwrap_or(header_tail.len());
-    let header = &header_tail[..header_end];
-    let fields = header
-        .strip_prefix(SCRIPT_METADATA_PREFIX)
-        .filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace))
-        .ok_or_else(|| {
-            ProtocolError::MalformedMetadata(format!(
-                "first non-empty line must start with '{SCRIPT_METADATA_PREFIX}'"
-            ))
-        })?;
-    let attributes = parse_fields(fields)?;
+    let (attributes, source) = match metadata_fields(&header_tail[..header_end]) {
+        Some(fields) => (
+            parse_fields(fields)?,
+            header_tail[header_end..].trim_start_matches(['\r', '\n']),
+        ),
+        None => (ScriptMetadata::default(), header_tail),
+    };
     let timeout = attributes
         .timeout
-        .ok_or(ProtocolError::MissingTimeout)
-        .and_then(parse_duration)?;
+        .map_or(Ok(DEFAULT_SCRIPT_TIMEOUT), parse_duration)?;
     let requested_capabilities = attributes
         .permissions
         .map(|value| parse_permissions(value).map_err(ProtocolError::InvalidPermissions))
         .transpose()?
         .unwrap_or_default();
 
-    let source_start = header_start + header_end;
-    let source = input[source_start..]
-        .trim_start_matches(['\r', '\n'])
-        .as_bytes();
-    if source.iter().all(u8::is_ascii_whitespace) {
+    if source.bytes().all(|byte| byte.is_ascii_whitespace()) {
         return Err(ProtocolError::EmptyScript);
     }
 
     Ok(ScriptBlock {
         input: input.to_string(),
-        source: source.to_vec(),
+        source: source.as_bytes().to_vec(),
         timeout,
         requested_capabilities,
     })
+}
+
+fn metadata_fields(line: &str) -> Option<&str> {
+    line.strip_prefix(SCRIPT_METADATA_PREFIX)
+        .filter(|tail| tail.starts_with(char::is_whitespace))
+        .filter(|tail| {
+            tail.split_ascii_whitespace()
+                .any(|field| field.contains('='))
+        })
 }
 
 #[derive(Default)]
@@ -119,7 +122,7 @@ fn parse_permissions(value: &str) -> Result<SandboxCapabilities, String> {
         }
         capabilities.push(capability);
     }
-    SandboxCapabilities::new(capabilities).map_err(|error| error.to_string())
+    Ok(SandboxCapabilities::new(capabilities))
 }
 
 #[cfg(test)]
@@ -153,8 +156,41 @@ mod tests {
     }
 
     #[test]
+    fn no_sandbox_may_be_combined_with_other_permissions() {
+        let script =
+            parse_script_input("# permissions=network,no-sandbox\nls").expect("valid script input");
+        assert!(script.requested_capabilities.is_unsandboxed());
+    }
+
+    #[test]
+    fn scripts_without_metadata_use_defaults_and_keep_comments() {
+        for (input, source) in [
+            ("ls", "ls"),
+            ("\n  ls | get name", "ls | get name"),
+            ("# list files\nls", "# list files\nls"),
+            ("#\nls", "#\nls"),
+            ("#!/usr/bin/env nu\nls", "#!/usr/bin/env nu\nls"),
+        ] {
+            let script = parse_script_input(input).expect("valid script input");
+            assert_eq!(script.timeout, DEFAULT_SCRIPT_TIMEOUT, "{input:?}");
+            assert_eq!(script.source, source.as_bytes(), "{input:?}");
+            assert_eq!(
+                script.requested_capabilities,
+                SandboxCapabilities::default()
+            );
+        }
+        let script = parse_script_input("# permissions=network\nls").expect("valid script input");
+        assert_eq!(script.timeout, DEFAULT_SCRIPT_TIMEOUT);
+        assert_eq!(script.source, b"ls");
+        assert!(
+            script
+                .requested_capabilities
+                .contains(SandboxCapability::Network)
+        );
+    }
+
+    #[test]
     fn rejects_missing_duplicate_and_unknown_metadata() {
-        assert!(parse_script_input("#\necho hi").is_err());
         assert!(parse_script_input("# kraai timeout=1sec\necho hi").is_err());
         assert!(parse_script_input("# timeout=1sec timeout=2sec\necho hi").is_err());
         assert!(parse_script_input("# timeout=1sec mystery=x\necho hi").is_err());
@@ -185,7 +221,7 @@ mod tests {
             ),
             (
                 "# permissions=invalid\necho hi",
-                ProtocolError::MissingTimeout,
+                ProtocolError::InvalidPermissions(String::from("unknown capability 'invalid'")),
             ),
             (
                 "# timeout=invalid missing\necho hi",

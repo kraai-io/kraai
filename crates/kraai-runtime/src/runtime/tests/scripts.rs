@@ -493,7 +493,7 @@ async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Resu
     let Some(harness) = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::native_call(
             "call-1",
-            "# permissions=network\nhttp get https://example.com",
+            "# timeout=soon permissions=network\nhttp get https://example.com",
         )],
         vec![ScriptedChunk::plain("The script request was invalid.")],
     ])

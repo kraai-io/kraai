@@ -14,6 +14,7 @@ use tokio_util::task::AbortOnDropHandle;
 use crate::effects::{RejectStateEffects, StateEffectHandler};
 use crate::host_calls::{HostServices, serve};
 use crate::images::{ImageAttachmentHandler, RejectImageAttachments};
+use crate::rendering::Marker;
 use crate::request::{HOST_PROTOCOL_VERSION, HostRequest};
 use crate::transport;
 use crate::wire::write_request;
@@ -93,6 +94,7 @@ pub async fn execute(
     let timeout = plan.timeout;
     let startup_timeout = plan.startup_timeout;
     let secret = rand::random::<[u8; 32]>();
+    let output_marker = Marker::random();
     let host_request = HostRequest {
         protocol_version: HOST_PROTOCOL_VERSION,
         execution_id: execution_id.clone(),
@@ -102,6 +104,7 @@ pub async fn execute(
         active_commands: plan.active_commands,
         nushell_startup: plan.nushell_startup,
         event_secret: secret,
+        output_marker: output_marker.clone(),
         restrict_network: !plan.capabilities.is_unsandboxed()
             && !plan
                 .capabilities
@@ -130,7 +133,15 @@ pub async fn execute(
         .map(|(name, value)| (OsString::from(name), OsString::from(value)))
         .collect();
     launch.runtime_roots = plan.runtime_roots;
-    launch.output_events = plan.output_events;
+    let (raw_output, raw_output_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (output_frames, output_frames_rx) = tokio::sync::mpsc::unbounded_channel();
+    launch.output_events = Some(raw_output);
+    let renderer = AbortOnDropHandle::new(tokio::spawn(crate::rendering::render(
+        output_marker,
+        output_frames_rx,
+        raw_output_rx,
+        plan.output_events,
+    )));
     launch.private_temp = private_temp;
     launch.args(plan.host_arguments);
     listener.configure_launch(&mut launch);
@@ -166,7 +177,7 @@ pub async fn execute(
                 .await
                 .map_err(|error| ChannelError::Request(error.to_string()))?;
             serve(
-                channel_reader,
+                tokio::io::BufReader::new(channel_reader),
                 channel_writer,
                 channel_execution_id,
                 secret,
@@ -175,6 +186,7 @@ pub async fn execute(
                     web: plan.web_search,
                     mcp: plan.mcp,
                     images: plan.image_attachment_handler,
+                    output: output_frames,
                 },
                 &host_request.active_commands,
             )
@@ -249,6 +261,9 @@ pub async fn execute(
                 channel_task.abort();
                 Ok(())
             };
+            (output.stdout, output.stderr) = renderer
+                .await
+                .map_err(|error| RuntimeError::ChannelTask(error.to_string()))?;
             if cancellation.is_cancelled() {
                 output.termination = kraai_sandbox::Termination::Cancelled;
                 output.sandbox_denied = false;

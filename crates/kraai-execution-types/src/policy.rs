@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{SandboxCapabilities, SandboxCapability, SandboxCapabilityError};
+use crate::{SandboxCapabilities, SandboxCapability};
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
@@ -42,12 +42,10 @@ impl SandboxPermissionSet {
         }
     }
 
-    pub fn new(
-        capabilities: impl IntoIterator<Item = SandboxCapability>,
-    ) -> Result<Self, SandboxCapabilityError> {
-        Ok(Self {
-            capabilities: SandboxCapabilities::new(capabilities)?,
-        })
+    pub fn new(capabilities: impl IntoIterator<Item = SandboxCapability>) -> Self {
+        Self {
+            capabilities: SandboxCapabilities::new(capabilities),
+        }
     }
 
     pub fn capabilities(&self) -> &SandboxCapabilities {
@@ -102,13 +100,13 @@ impl SandboxPermissionSet {
         requested: &SandboxCapabilities,
         rules: &CapabilityPermissionRules,
         fallback: EscalationPolicy,
-    ) -> Result<PermissionResolution, SandboxCapabilityError> {
+    ) -> PermissionResolution {
         let additions = requested_additions(&self.capabilities, requested);
         if additions.is_empty() {
-            return Ok(PermissionResolution::Allowed(ResolvedPermissions {
+            return PermissionResolution::Allowed(ResolvedPermissions {
                 effective: self.capabilities.clone(),
                 additions,
-            }));
+            });
         }
 
         let mut denied = Vec::new();
@@ -121,20 +119,20 @@ impl SandboxPermissionSet {
             }
         }
         if !denied.is_empty() {
-            return Ok(PermissionResolution::Denied { denied });
+            return PermissionResolution::Denied { denied };
         }
 
-        let effective = merge_capabilities(&self.capabilities, requested)?;
+        let effective = merge_capabilities(&self.capabilities, requested);
         let resolved = ResolvedPermissions {
             effective,
             additions,
         };
         if prompt {
-            Ok(PermissionResolution::Prompt {
+            PermissionResolution::Prompt {
                 candidate: resolved,
-            })
+            }
         } else {
-            Ok(PermissionResolution::Allowed(resolved))
+            PermissionResolution::Allowed(resolved)
         }
     }
 }
@@ -155,15 +153,8 @@ fn requested_additions(
 fn merge_capabilities(
     defaults: &SandboxCapabilities,
     requested: &SandboxCapabilities,
-) -> Result<SandboxCapabilities, SandboxCapabilityError> {
-    if requested.is_unsandboxed() {
-        return SandboxCapabilities::new([SandboxCapability::NoSandbox]);
-    }
-    let combined = defaults
-        .iter()
-        .chain(requested.iter())
-        .collect::<BTreeSet<_>>();
-    SandboxCapabilities::new(combined)
+) -> SandboxCapabilities {
+    SandboxCapabilities::new(defaults.iter().chain(requested.iter()))
 }
 
 #[cfg(test)]
@@ -179,24 +170,20 @@ mod tests {
 
     fn permissions(values: impl IntoIterator<Item = SandboxCapability>) -> SandboxPermissionSet {
         SandboxPermissionSet::new(values)
-            .unwrap_or_else(|error| panic!("invalid permission set: {error}"))
     }
 
     fn requested(values: impl IntoIterator<Item = SandboxCapability>) -> SandboxCapabilities {
         SandboxCapabilities::new(values)
-            .unwrap_or_else(|error| panic!("invalid requested capabilities: {error}"))
     }
 
     #[test]
     fn already_granted_capabilities_are_semantic_no_ops() {
         let defaults = permissions([SandboxCapability::HostRead]);
-        let resolution = defaults
-            .resolve(
-                &requested([SandboxCapability::WorkspaceRead]),
-                &CapabilityPermissionRules::default(),
-                EscalationPolicy::Deny,
-            )
-            .unwrap_or_else(|error| panic!("resolution failed: {error}"));
+        let resolution = defaults.resolve(
+            &requested([SandboxCapability::WorkspaceRead]),
+            &CapabilityPermissionRules::default(),
+            EscalationPolicy::Deny,
+        );
         let PermissionResolution::Allowed(resolved) = resolution else {
             panic!("semantic no-op should be allowed");
         };
@@ -211,16 +198,14 @@ mod tests {
             (SandboxCapability::WorkspaceWrite, EscalationPolicy::Prompt),
             (SandboxCapability::Network, EscalationPolicy::Deny),
         ]);
-        let resolution = defaults
-            .resolve(
-                &requested([
-                    SandboxCapability::WorkspaceWrite,
-                    SandboxCapability::Network,
-                ]),
-                &rules,
-                EscalationPolicy::Allow,
-            )
-            .unwrap_or_else(|error| panic!("resolution failed: {error}"));
+        let resolution = defaults.resolve(
+            &requested([
+                SandboxCapability::WorkspaceWrite,
+                SandboxCapability::Network,
+            ]),
+            &rules,
+            EscalationPolicy::Allow,
+        );
         assert_eq!(
             resolution,
             PermissionResolution::Denied {
@@ -232,16 +217,14 @@ mod tests {
     #[test]
     fn multiple_prompted_capabilities_produce_one_candidate() {
         let defaults = permissions([SandboxCapability::WorkspaceRead]);
-        let resolution = defaults
-            .resolve(
-                &requested([
-                    SandboxCapability::WorkspaceWrite,
-                    SandboxCapability::Network,
-                ]),
-                &CapabilityPermissionRules::default(),
-                EscalationPolicy::Prompt,
-            )
-            .unwrap_or_else(|error| panic!("resolution failed: {error}"));
+        let resolution = defaults.resolve(
+            &requested([
+                SandboxCapability::WorkspaceWrite,
+                SandboxCapability::Network,
+            ]),
+            &CapabilityPermissionRules::default(),
+            EscalationPolicy::Prompt,
+        );
         let PermissionResolution::Prompt { candidate } = resolution else {
             panic!("request should require one prompt");
         };
@@ -257,13 +240,11 @@ mod tests {
     #[test]
     fn allowed_no_sandbox_replaces_the_default_sandbox() {
         let defaults = permissions([SandboxCapability::WorkspaceRead]);
-        let resolution = defaults
-            .resolve(
-                &requested([SandboxCapability::NoSandbox]),
-                &CapabilityPermissionRules::default(),
-                EscalationPolicy::Allow,
-            )
-            .unwrap_or_else(|error| panic!("resolution failed: {error}"));
+        let resolution = defaults.resolve(
+            &requested([SandboxCapability::NoSandbox]),
+            &CapabilityPermissionRules::default(),
+            EscalationPolicy::Allow,
+        );
         let PermissionResolution::Allowed(resolved) = resolution else {
             panic!("no-sandbox should be allowed");
         };

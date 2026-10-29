@@ -1,17 +1,32 @@
+mod line_input;
 mod output;
+mod report;
 mod script;
+mod sink;
 mod startup;
+mod statement_output;
 
 use startup::load_startup_files;
+
+use std::sync::Arc;
 
 use kraai_commands::{CommandRegistry, CommandRegistryError};
 use kraai_execution_types::NushellStartup;
 use nu_protocol::engine::{EngineState, Stack, StateWorkingSet};
 
+use crate::host_calls::DescriptorClient;
 use crate::request::{HOST_PROTOCOL_VERSION, HostRequest};
+use sink::OutputSink;
 
-pub fn run_request(request: HostRequest, registry: &CommandRegistry) -> Result<i32, HostError> {
+pub(crate) fn run_request(
+    request: HostRequest,
+    registry: &CommandRegistry,
+    client: Arc<DescriptorClient>,
+) -> Result<i32, HostError> {
     validate_request(&request)?;
+    let sink = OutputSink::new(client, request.output_marker.clone()).map_err(|error| {
+        HostError::Initialization(format!("unable to start the output flusher: {error}"))
+    })?;
     std::env::set_current_dir(&request.workspace_root).map_err(|error| {
         HostError::Initialization(format!(
             "unable to enter workspace '{}': {error}",
@@ -22,15 +37,15 @@ pub fn run_request(request: HostRequest, registry: &CommandRegistry) -> Result<i
     let commands = registry
         .select(&request.active_commands)
         .map_err(HostError::Commands)?;
-    let mut engine_state = build_engine(&request, commands)?;
+    let mut engine_state = build_engine(&request, commands, &sink)?;
     let mut stack = Stack::new();
     load_startup_files(&request, &mut engine_state, &mut stack)?;
+    output::configure(&mut engine_state, &mut stack);
     engine_state.report_log = Default::default();
-    Ok(script::evaluate(
-        &mut engine_state,
-        &mut stack,
-        &request.source,
-    ))
+    let exit_code = script::evaluate(&sink, &mut engine_state, &mut stack, &request.source);
+    std::mem::forget(stack);
+    std::mem::forget(engine_state);
+    Ok(exit_code)
 }
 
 fn validate_request(request: &HostRequest) -> Result<(), HostError> {
@@ -52,6 +67,7 @@ fn validate_request(request: &HostRequest) -> Result<(), HostError> {
 fn build_engine(
     request: &HostRequest,
     commands: Vec<Box<dyn nu_protocol::engine::Command>>,
+    sink: &Arc<OutputSink>,
 ) -> Result<EngineState, HostError> {
     nu_command::tls::CRYPTO_PROVIDER.default();
     let mut engine_state = nu_cli::add_cli_context(nu_command::add_shell_command_context(
@@ -65,7 +81,9 @@ fn build_engine(
     nu_cli::gather_parent_env_vars(&mut engine_state, &request.workspace_root);
 
     let mut working_set = StateWorkingSet::new(&engine_state);
-    output::register(&mut working_set)?;
+    output::register(&mut working_set, sink)?;
+    line_input::register(&mut working_set)?;
+    statement_output::register(&mut working_set, sink)?;
     for command in commands {
         let name = command.name().as_bytes();
         if working_set.find_decl(name).is_some() {
