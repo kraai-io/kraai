@@ -1,4 +1,4 @@
-//! Limits shared by tests.
+//! Limits and fixtures shared by tests.
 //!
 //! Tests run next to other builds on shared machines, where disk and CPU latency vary by
 //! orders of magnitude. A wall-clock bound in a test only detects a hang: it is never an
@@ -6,6 +6,8 @@
 
 use std::future::IntoFuture;
 use std::time::Duration;
+
+pub mod http;
 
 /// How long a test waits for something that must eventually happen before declaring a hang.
 pub const HANG_TIMEOUT: Duration = Duration::from_secs(120);

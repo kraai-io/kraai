@@ -98,6 +98,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use color_eyre::eyre::ensure;
 use kraai_provider_openai_codex::{OpenAiCodexAuthController, OpenAiCodexAuthControllerOptions};
+use kraai_test_support::http;
 use reqwest::header::HeaderValue;
 use tokio::io::AsyncReadExt;
 
@@ -108,9 +109,10 @@ async fn listener_failure_drains_tasks_and_records_failed_requests() -> Result<(
         ulid::Ulid::generate()
     ));
     fs::create_dir(&root)?;
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let listener = http::Listener::bind("/v1/").await?;
     let address = listener.local_addr()?;
-    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let listener = tokio::sync::Mutex::new(listener);
+    let mut upstream = http::Listener::bind("/v1/").await?;
     let metrics = Arc::new(Mutex::new(ProxyMetrics::default()));
     let state = Arc::new(ProxyState {
         upstream: format!("http://{}", upstream.local_addr()?),
@@ -147,7 +149,7 @@ async fn listener_failure_drains_tasks_and_records_failed_requests() -> Result<(
         let mut upstream_ready = upstream_ready.clone();
         async move {
             if first {
-                listener.accept().await
+                listener.lock().await.accept().await
             } else {
                 upstream_ready
                     .wait_for(|ready| *ready)
@@ -208,7 +210,7 @@ async fn listener_failure_drains_tasks_and_records_failed_requests() -> Result<(
 
 #[tokio::test]
 async fn proxy_injects_real_credential_streams_and_rejects_unallowed_requests() -> Result<()> {
-    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let mut upstream = http::Listener::bind("/v1/").await?;
     let upstream_address = upstream.local_addr()?;
     let upstream_task = tokio::spawn(async move {
         let (mut stream, _) = upstream.accept().await?;
@@ -326,7 +328,7 @@ async fn proxy_injects_real_credential_streams_and_rejects_unallowed_requests() 
 
 #[tokio::test]
 async fn finish_drains_in_flight_response_before_snapshotting_metrics() -> Result<()> {
-    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let mut upstream = http::Listener::bind("/v1/").await?;
     let upstream_address = upstream.local_addr()?;
     let (accepted_tx, accepted_rx) = oneshot::channel();
     let upstream_task = tokio::spawn(async move {
@@ -402,7 +404,7 @@ async fn finish_drains_in_flight_response_before_snapshotting_metrics() -> Resul
 
 #[tokio::test]
 async fn rejected_requests_cannot_hide_model_calls_aborted_during_shutdown() -> Result<()> {
-    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let mut upstream = http::Listener::bind("/v1/").await?;
     let upstream_address = upstream.local_addr()?;
     let (accepted_tx, accepted_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
@@ -680,7 +682,7 @@ fn extracts_and_normalizes_chat_completions_usage() {
 #[tokio::test]
 async fn codex_proxy_keeps_subscription_tokens_outside_client_and_adds_account_headers()
 -> Result<()> {
-    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let mut upstream = http::Listener::bind("/backend-api/").await?;
     let upstream_address = upstream.local_addr()?;
     let upstream_task = tokio::spawn(async move {
         let (mut stream, _) = upstream.accept().await?;

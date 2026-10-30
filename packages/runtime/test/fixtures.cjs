@@ -25,6 +25,9 @@ async function localProvider(t, replies, { codex = false } = {}) {
           slug: 'test-model', display_name: 'Test Model', visibility: 'list',
           supported_reasoning_levels: [],
         }] } : { data: [{ id: 'test-model' }] }));
+      } else if (request.method !== 'POST' || request.url !== (codex ? '/codex/responses' : '/chat/completions')) {
+        response.statusCode = 404;
+        response.end();
       } else {
         const index = requests.length;
         const reply = replies[index] ?? 'Done';

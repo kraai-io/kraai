@@ -568,8 +568,9 @@ async fn inherited_pipe_delivers_authenticated_effects_without_network_access() 
     let mut execution = plan(
         format!(
             "kraai-open-files notes.txt | ignore; \
-             try {{ http get --max-time 1sec http://{address} | ignore }} catch {{ ignore }}; \
-             'effect-acknowledged'"
+             try {{ http get --max-time 1sec http://{address}{} | ignore }} catch {{ ignore }}; \
+             'effect-acknowledged'",
+            kraai_test_support::http::PATH
         )
         .into_bytes(),
         &workspace,
@@ -597,10 +598,10 @@ async fn inherited_pipe_delivers_authenticated_effects_without_network_access() 
         String::from_utf8_lossy(&result.output.stdout),
         "effect-acknowledged\n"
     );
-    assert!(matches!(
-        listener.accept(),
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
-    ));
+    assert!(
+        !kraai_test_support::http::received(&listener, kraai_test_support::http::PATH)
+            .expect("read network fixture")
+    );
     let requests = effects
         .requests
         .lock()

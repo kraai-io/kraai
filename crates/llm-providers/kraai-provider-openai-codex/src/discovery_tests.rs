@@ -8,17 +8,17 @@ use crate::auth::OpenAiCodexAuthControllerOptions;
 use color_eyre::eyre::ensure;
 use futures::TryStreamExt;
 use kraai_provider_core::ScriptToolDefinition;
+use kraai_test_support::http;
 use kraai_types::{AssistantPhase, ConversationItem, TokenUsage};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 async fn server(
     responses: Vec<(&'static str, String)>,
 ) -> Result<(String, JoinHandle<Result<Vec<String>>>)> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let base_url = format!("http://{}/backend-api", listener.local_addr()?);
+    let mut listener = http::Listener::bind("/backend-api").await?;
+    let base_url = listener.url()?;
     let task = tokio::spawn(async move {
         kraai_test_support::hang_guard(async move {
             let mut requests = Vec::new();
@@ -275,8 +275,8 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
 }
 
 async fn redirect_server(location: &str) -> Result<(String, JoinHandle<Result<()>>)> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let address = listener.local_addr()?;
+    let mut listener = http::Listener::bind("/backend-api").await?;
+    let url = listener.url()?;
     let response = format!(
         "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     );
@@ -290,7 +290,7 @@ async fn redirect_server(location: &str) -> Result<(String, JoinHandle<Result<()
         stream.write_all(response.as_bytes()).await?;
         Ok::<_, color_eyre::Report>(())
     });
-    Ok((format!("http://{address}/backend-api"), server))
+    Ok((url, server))
 }
 
 #[tokio::test]

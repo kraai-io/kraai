@@ -20,8 +20,8 @@ mod tests {
         )
     }
     use futures::StreamExt;
+    use kraai_test_support::http;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
 
     fn build_test_client(builder: ClientBuilder) -> Client {
         builder
@@ -32,8 +32,8 @@ mod tests {
 
     #[tokio::test]
     async fn finite_client_times_out_waiting_for_headers() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
+        let mut listener = http::Listener::bind(http::PATH).await.unwrap();
+        let url = listener.url().unwrap();
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = [0_u8; 1024];
@@ -45,19 +45,15 @@ mod tests {
                 .timeout(Duration::from_millis(25)),
         );
 
-        let error = client
-            .get(format!("http://{address}/"))
-            .send()
-            .await
-            .unwrap_err();
+        let error = client.get(url).send().await.unwrap_err();
 
         assert!(error.is_timeout());
     }
 
     #[tokio::test]
     async fn streaming_client_times_out_when_body_stalls() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
+        let mut listener = http::Listener::bind(http::PATH).await.unwrap();
+        let url = listener.url().unwrap();
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = [0_u8; 1024];
@@ -76,11 +72,7 @@ mod tests {
             Duration::from_millis(25),
         ));
 
-        let response = client
-            .get(format!("http://{address}/"))
-            .send()
-            .await
-            .unwrap();
+        let response = client.get(url).send().await.unwrap();
         let mut body = crate::stream_sse_data(response);
         assert_eq!(
             body.next().await.unwrap().unwrap(),

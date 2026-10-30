@@ -6,13 +6,12 @@
 )]
 
 use super::*;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use futures::{StreamExt, TryStreamExt};
 use kraai_provider_core::{ProviderRequestContext, ProviderRetryEvent, ProviderRetryObserver};
+use kraai_test_support::http;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 
 #[test]
 fn provider_creation_uses_the_same_catalog_identity_as_pricing() {
@@ -71,15 +70,12 @@ fn test_client_or_skip() -> Option<Client> {
 }
 
 fn discovery_provider(
-    address: SocketAddr,
+    url: String,
 ) -> Option<ChatCompletionsProvider<GenericChatCompletionsProfile>> {
     match create_provider::<GenericChatCompletionsProfile>(
         ProviderId::new("fixture"),
         DynamicConfig::from([
-            (
-                "base_url".into(),
-                DynamicValue::String(format!("http://{address}")),
-            ),
+            ("base_url".into(), DynamicValue::String(url)),
             ("api_key".into(), DynamicValue::String("fixture-key".into())),
             ("only_listed_models".into(), DynamicValue::Bool(false)),
         ]),
@@ -120,15 +116,15 @@ enum ScriptedResponse {
     },
 }
 
-async fn spawn_server(script: Vec<ScriptedResponse>) -> SocketAddr {
+async fn spawn_server(script: Vec<ScriptedResponse>) -> String {
     spawn_recording_server(script).await.0
 }
 
 async fn spawn_recording_server(
     script: Vec<ScriptedResponse>,
-) -> (SocketAddr, tokio::task::JoinHandle<Vec<String>>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
+) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+    let mut listener = http::Listener::bind(http::PATH).await.unwrap();
+    let url = listener.url().unwrap();
     let task = tokio::spawn(async move {
         let mut requests = Vec::new();
         for next in script {
@@ -163,7 +159,7 @@ async fn spawn_recording_server(
         }
         requests
     });
-    (address, task)
+    (url, task)
 }
 
 async fn write_json_response(stream: &mut tokio::net::TcpStream, status_line: &str, body: &str) {
@@ -178,7 +174,7 @@ async fn write_json_response(stream: &mut tokio::net::TcpStream, status_line: &s
 
 #[tokio::test]
 async fn generate_reply_stream_forwards_retry_observer_to_http_retry_layer() {
-    let address = spawn_server(vec![
+    let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "429 Too Many Requests",
             body: r#"{"error":{"message":"slow down"}}"#,
@@ -197,7 +193,7 @@ async fn generate_reply_stream_forwards_retry_observer_to_http_retry_layer() {
     let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
         id: ProviderId::new("openai-chat-completions"),
         client,
-        base_url: format!("http://{address}"),
+        base_url: url,
         auth: ApiKeyAuth::resolve(&BTreeMap::from([(
             String::from("api_key"),
             kraai_provider_core::DynamicValue::from("test-key"),
@@ -245,7 +241,7 @@ async fn generate_reply_stream_forwards_retry_observer_to_http_retry_layer() {
 
 #[tokio::test]
 async fn successful_http_status_does_not_hide_a_streamed_provider_failure() {
-    let address = spawn_server(vec![ScriptedResponse::Status {
+    let url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "200 OK",
         body: concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
@@ -257,7 +253,7 @@ async fn successful_http_status_does_not_hide_a_streamed_provider_failure() {
     let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
         id: ProviderId::new("fixture"),
         client: Client::builder().tls_certs_only([]).build().unwrap(),
-        base_url: format!("http://{address}"),
+        base_url: url,
         auth: ApiKeyAuth::resolve(&BTreeMap::from([(
             String::from("api_key"),
             DynamicValue::from("test-key"),
@@ -302,7 +298,7 @@ async fn successful_http_status_does_not_hide_a_streamed_provider_failure() {
 #[tokio::test]
 async fn model_cache_replacement_preserves_selection_metadata_and_failed_refreshes() {
     for only_listed_models in [false, true] {
-        let address = spawn_server(vec![
+        let url = spawn_server(vec![
             ScriptedResponse::Status {
                 status_line: "200 OK",
                 body: r#"{"data":[{"id":"zeta"},{"id":"alpha"},{"id":"alpha"}]}"#,
@@ -335,7 +331,7 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
         let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
             id: ProviderId::new("fixture"),
             client,
-            base_url: format!("http://{address}"),
+            base_url: url,
             auth: ApiKeyAuth::resolve(&BTreeMap::from([(
                 String::from("api_key"),
                 DynamicValue::from("fixture-key"),
@@ -391,11 +387,11 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
 
 #[tokio::test]
 async fn discovery_requires_advertised_reasoning_and_applies_native_modes_to_http_requests() {
-    let (address, server) = spawn_recording_server(vec![
+    let (url, server) = spawn_recording_server(vec![
         ScriptedResponse::Status { status_line: "200 OK", body: r#"{"data":[{"id":"future-model","reasoning_options":[{"type":"effort","values":[null,"future-effort"]}],"experimental":{"modes":{"fast":{"provider":{"body":{"speed":"fast"},"headers":{"x-mode":"fast"}}}}}}]}"# },
         ScriptedResponse::Status { status_line: "200 OK", body: "data: [DONE]\n\n" },
     ]).await;
-    let Some(provider) = discovery_provider(address) else {
+    let Some(provider) = discovery_provider(url) else {
         return;
     };
     provider.refresh_model_list().await.unwrap();
@@ -470,8 +466,8 @@ async fn supported_reasoning_levels_preserve_explicit_descriptors_and_generic_to
         status_line: "200 OK",
         body: "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
     }));
-    let (address, server) = spawn_recording_server(responses).await;
-    let Some(provider) = discovery_provider(address) else {
+    let (url, server) = spawn_recording_server(responses).await;
+    let Some(provider) = discovery_provider(url) else {
         return;
     };
     provider.refresh_model_list().await.unwrap();
@@ -551,7 +547,7 @@ async fn supported_reasoning_levels_preserve_explicit_descriptors_and_generic_to
 
 #[tokio::test]
 async fn configured_reasoning_options_keep_unconditional_and_custom_conditions_after_discovery() {
-    let (address, server) = spawn_recording_server(vec![
+    let (url, server) = spawn_recording_server(vec![
         ScriptedResponse::Status {
             status_line: "200 OK",
             body: r#"{"data":[{"id":"configured-model","supported_reasoning_levels":[{"effort":"native-effort"}],"options":[
@@ -568,7 +564,7 @@ async fn configured_reasoning_options_keep_unconditional_and_custom_conditions_a
         },
     ])
     .await;
-    let Some(mut provider) = discovery_provider(address) else {
+    let Some(mut provider) = discovery_provider(url) else {
         return;
     };
     let id = ModelId::new("configured-model");
@@ -670,7 +666,7 @@ async fn configured_reasoning_options_keep_unconditional_and_custom_conditions_a
 
 #[tokio::test]
 async fn configured_custom_models_absent_from_discovery_apply_custom_settings() {
-    let (address, server) = spawn_recording_server(vec![
+    let (url, server) = spawn_recording_server(vec![
         ScriptedResponse::Status {
             status_line: "200 OK",
             body: r#"{"data":[]}"#,
@@ -681,7 +677,7 @@ async fn configured_custom_models_absent_from_discovery_apply_custom_settings() 
         },
     ])
     .await;
-    let Some(mut provider) = discovery_provider(address) else {
+    let Some(mut provider) = discovery_provider(url) else {
         return;
     };
     let id = ModelId::new("custom-model");

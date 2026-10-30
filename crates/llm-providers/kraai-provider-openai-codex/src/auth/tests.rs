@@ -1,6 +1,7 @@
 use super::token::{IdTokenClaims, normalize_plan_type};
 use super::*;
 use base64::Engine;
+use kraai_test_support::http;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -476,8 +477,8 @@ fn stored_auth(
 }
 
 async fn scripted_refresh_server(account_id: &str) -> (String, Arc<AtomicUsize>, AbortHandle) {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-    let address = listener.local_addr().unwrap();
+    let mut listener = http::Listener::bind(http::PATH).await.unwrap();
+    let url = listener.url().unwrap();
     let requests = Arc::new(AtomicUsize::new(0));
     let server_requests = requests.clone();
     let id_token = fake_jwt("refreshed@example.com", "pro", account_id);
@@ -516,12 +517,12 @@ async fn scripted_refresh_server(account_id: &str) -> (String, Arc<AtomicUsize>,
             });
         }
     });
-    (format!("http://{address}"), requests, task.abort_handle())
+    (url, requests, task.abort_handle())
 }
 
 async fn stalled_refresh_server() -> (String, oneshot::Receiver<()>, AbortHandle) {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-    let address = listener.local_addr().unwrap();
+    let mut listener = http::Listener::bind(http::PATH).await.unwrap();
+    let url = listener.url().unwrap();
     let (request_received, received) = oneshot::channel();
     let task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
@@ -530,7 +531,7 @@ async fn stalled_refresh_server() -> (String, oneshot::Receiver<()>, AbortHandle
         let _ = request_received.send(());
         std::future::pending::<()>().await;
     });
-    (format!("http://{address}"), received, task.abort_handle())
+    (url, received, task.abort_handle())
 }
 
 async fn run_concurrent_refreshes(

@@ -27,7 +27,7 @@ async fn routing_state_round_trips_without_credentials_and_counts_final_usage_on
 }
 
 async fn exercise_routing_round_trip(log_path: PathBuf) -> Result<()> {
-    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let mut upstream = http::Listener::bind("/v1/").await?;
     let upstream_address = upstream.local_addr()?;
     let upstream_task = tokio::spawn(async move {
         for index in 0..2 {
