@@ -15,7 +15,10 @@ use crate::{
     bwrap_probe_failure_message, find_bwrap, restricted_network_seccomp_program,
     run_bwrap_sandbox_probe,
 };
-use crate::{LaunchPlan, OutputStream, SandboxError, Termination, is_likely_sandbox_denied, run};
+use crate::{
+    LaunchPlan, MAX_CAPTURE_BYTES, OutputStream, SandboxError, Termination,
+    is_likely_sandbox_denied, run,
+};
 
 #[path = "tests/git_worktree.rs"]
 pub(crate) mod git_worktree;
@@ -144,13 +147,16 @@ async fn no_sandbox_captures_output_and_clears_unspecified_environment() {
 }
 
 #[tokio::test]
-async fn live_output_events_reconstruct_authoritative_capture() {
+async fn live_output_events_carry_every_byte_past_the_capture_limit() {
     let workspace = temp_dir("events");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let mut plan = shell_plan(
         &workspace,
-        "printf first; printf second; printf problem >&2",
+        format!(
+            "printf first; head -c {} /dev/zero; printf problem >&2",
+            MAX_CAPTURE_BYTES * 2
+        ),
         capabilities([SandboxCapability::NoSandbox]),
         HANG_TIMEOUT,
     );
@@ -167,7 +173,11 @@ async fn live_output_events_reconstruct_authoritative_capture() {
             OutputStream::Stderr => stderr.extend(event.bytes),
         }
     }
-    assert_eq!(stdout, output.stdout);
+    assert_eq!(stdout.len(), 5 + MAX_CAPTURE_BYTES * 2);
+    assert!(stdout.starts_with(b"first"));
+    assert!(output.stdout.len() < stdout.len());
+    assert!(stdout.starts_with(output.stdout.get(..MAX_CAPTURE_BYTES).unwrap_or_default()));
+    assert_eq!(stderr, b"problem");
     assert_eq!(stderr, output.stderr);
     let _ = std::fs::remove_dir_all(workspace);
 }

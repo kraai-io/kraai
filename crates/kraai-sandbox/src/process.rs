@@ -204,9 +204,9 @@ async fn read_output(
             break;
         }
         let bytes = buffer.get(..read).unwrap_or(&buffer);
-        emit_output(&events, stream, captured.push(bytes));
+        captured.push(bytes);
+        emit_output(&events, stream, bytes);
     }
-    emit_output(&events, stream, captured.finish());
     Ok(captured.into_bytes())
 }
 

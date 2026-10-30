@@ -292,6 +292,12 @@ print "started"
 }
 
 #[tokio::test]
+async fn markers_do_not_count_toward_the_capture_limit() {
+    let expected: String = (1..=60000).map(|n| format!("{n}\n")).collect();
+    assert_script("1..60000 | each {|n| print $n }; null", &expected).await;
+}
+
+#[tokio::test]
 async fn capture_limits_both_streams_and_keeps_draining_until_the_script_finishes() {
     let workspace = TestWorkspace::new();
     let source = r#"
