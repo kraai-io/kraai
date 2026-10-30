@@ -21,6 +21,7 @@ use crate::wire::write_request;
 
 const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 const RAW_OUTPUT_EVENTS: usize = 64;
+const OUTPUT_FRAMES: usize = 16;
 
 pub struct ScriptExecutionPlan {
     pub execution_id: ScriptExecutionId,
@@ -137,7 +138,7 @@ pub async fn execute(
         .collect();
     launch.runtime_roots = plan.runtime_roots;
     let (raw_output, raw_output_rx) = tokio::sync::mpsc::channel(RAW_OUTPUT_EVENTS);
-    let (output_frames, output_frames_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (output_frames, output_frames_rx) = tokio::sync::mpsc::channel(OUTPUT_FRAMES);
     launch.output_events = Some(raw_output);
     let renderer = AbortOnDropHandle::new(tokio::spawn(crate::rendering::render(
         output_marker,

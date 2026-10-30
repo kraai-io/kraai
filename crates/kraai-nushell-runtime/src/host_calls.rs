@@ -190,7 +190,7 @@ pub(crate) struct HostServices {
     pub(crate) effects: Arc<dyn StateEffectHandler>,
     pub(crate) web: Arc<dyn kraai_web::WebSearch>,
     pub(crate) images: Arc<dyn ImageAttachmentHandler>,
-    pub(crate) output: tokio::sync::mpsc::UnboundedSender<OutputFrame>,
+    pub(crate) output: tokio::sync::mpsc::Sender<OutputFrame>,
 }
 
 pub(crate) async fn serve(
@@ -217,7 +217,7 @@ pub(crate) async fn serve(
             .ok_or(HostProtocolError::SequenceExhausted)?;
         let request = match frame.payload {
             Request::Output(output) => {
-                let _ = services.output.send(output);
+                let _ = services.output.send(output).await;
                 continue;
             }
             request => request,

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use kraai_sandbox::{MAX_CAPTURE_BYTES, OutputCapture, OutputEvent, OutputStream};
-use tokio::sync::mpsc::{Receiver, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{Receiver, UnboundedSender};
 
 use super::marker::Scan;
 use super::{Marker, OutputFrame, OutputValue, toon};
@@ -10,7 +10,7 @@ const FRAME_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub(crate) async fn render(
     marker: Marker,
-    frames: UnboundedReceiver<OutputFrame>,
+    frames: Receiver<OutputFrame>,
     mut raw: Receiver<OutputEvent>,
     events: Option<UnboundedSender<OutputEvent>>,
 ) -> (Vec<u8>, Vec<u8>) {
@@ -69,7 +69,7 @@ impl List {
 
 struct Splice {
     marker: Marker,
-    frames: UnboundedReceiver<OutputFrame>,
+    frames: Receiver<OutputFrame>,
     frames_closed: bool,
     ready: HashMap<u64, String>,
     lists: BTreeMap<u64, List>,
@@ -224,7 +224,7 @@ mod tests {
     async fn markers_are_replaced_by_frames_that_arrive_later_even_when_split()
     -> Result<(), Box<dyn std::error::Error>> {
         let marker = Marker::random();
-        let (frames_tx, frames) = tokio::sync::mpsc::unbounded_channel();
+        let (frames_tx, frames) = tokio::sync::mpsc::channel(8);
         let (raw_tx, raw) = tokio::sync::mpsc::channel(8);
         let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
         let task = tokio::spawn(render(marker.clone(), frames, raw, Some(events_tx)));
@@ -263,7 +263,7 @@ mod tests {
                 values: vec![OutputValue::Text("cut off".into())],
             },
         ] {
-            frames_tx.send(frame).ok();
+            frames_tx.send(frame).await.ok();
         }
         drop(raw_tx);
         drop(frames_tx);

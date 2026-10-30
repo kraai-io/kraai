@@ -78,7 +78,7 @@ async fn image_requests_require_enabled_command_and_preserve_authenticated_bytes
                     effects: Arc::new(crate::RejectStateEffects),
                     web: Arc::new(kraai_web::ExaSearch::default()),
                     images,
-                    output: tokio::sync::mpsc::unbounded_channel().0,
+                    output: tokio::sync::mpsc::channel(1).0,
                 },
                 &commands,
                 &CancellationToken::new(),
@@ -186,7 +186,7 @@ async fn stopped_channels_forward_queued_output_but_serve_no_requests()
     drop(client_writer);
     let stopped = CancellationToken::new();
     stopped.cancel();
-    let (output, mut forwarded) = tokio::sync::mpsc::unbounded_channel();
+    let (output, mut forwarded) = tokio::sync::mpsc::channel(8);
     let (reader, writer) = tokio::io::split(server);
     serve(
         reader,
