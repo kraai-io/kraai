@@ -43,7 +43,8 @@ async fn mcp_works_without_sandbox_network_and_preserves_record_arguments() {
     let address = listener.local_addr().expect("fixture address");
     let mut plan = plan(
         format!(
-            "try {{ http get --max-time 1sec http://{address} | ignore }} catch {{ null }}; kraai-mcp call fixture echo {{items: [{{title: 'å' value: 42}}]}} | get structuredContent.items | first | to json --raw"
+            "try {{ http get --max-time 1sec http://{address}{} | ignore }} catch {{ null }}; kraai-mcp call fixture echo {{items: [{{title: 'å' value: 42}}]}} | get structuredContent.items | first | to json --raw",
+            kraai_test_support::http::PATH
         ),
         &workspace,
     );
@@ -65,7 +66,8 @@ async fn mcp_works_without_sandbox_network_and_preserves_record_arguments() {
     let result: Value = serde_json::from_slice(&result.output.stdout).expect("MCP output");
     assert_eq!(result, json!({"title": "å", "value": 42}));
     assert!(
-        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        !kraai_test_support::http::received(&listener, kraai_test_support::http::PATH)
+            .expect("read network fixture")
     );
 }
 

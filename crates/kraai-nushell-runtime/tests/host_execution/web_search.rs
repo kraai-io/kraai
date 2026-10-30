@@ -29,7 +29,7 @@ async fn web_search_works_without_sandbox_network_access() {
     listener.set_nonblocking(true).expect("nonblocking fixture");
     let address = listener.local_addr().expect("fixture address");
     let mut execution = plan(
-        format!("try {{ http get --max-time 1sec http://{address} | ignore }} catch {{ null }}; kraai-web-search 'test query' --limit 3 --max-chars 100 | to json -r").into_bytes(),
+        format!("try {{ http get --max-time 1sec http://{address}{} | ignore }} catch {{ null }}; kraai-web-search 'test query' --limit 3 --max-chars 100 | to json -r", kraai_test_support::http::PATH).into_bytes(),
         &workspace,
     );
     execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead]);
@@ -52,7 +52,8 @@ async fn web_search_works_without_sandbox_network_access() {
     assert_eq!(value["content"], "fixture search result");
     assert_eq!(value["truncated"], false);
     assert!(
-        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        !kraai_test_support::http::received(&listener, kraai_test_support::http::PATH)
+            .expect("read network fixture")
     );
 }
 

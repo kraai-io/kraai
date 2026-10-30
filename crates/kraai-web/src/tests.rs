@@ -1,4 +1,5 @@
 use super::*;
+use kraai_test_support::http;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
@@ -17,8 +18,8 @@ async fn anonymous_request_and_http_failures() -> Result<(), Box<dyn std::error:
         ("401 Unauthorized", "", "anonymous access"),
         ("503 Unavailable", "", "HTTP error"),
     ] {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let endpoint = format!("http://{}", listener.local_addr()?);
+        let mut listener = http::Listener::bind(http::PATH).await?;
+        let endpoint = listener.url()?;
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await?;
             let mut request = vec![0; 8192];
@@ -52,8 +53,8 @@ async fn anonymous_request_and_http_failures() -> Result<(), Box<dyn std::error:
 #[tokio::test]
 async fn oversized_stream_is_rejected_before_eof() -> Result<(), Box<dyn std::error::Error>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let endpoint = format!("http://{}", listener.local_addr()?);
+    let mut listener = http::Listener::bind(http::PATH).await?;
+    let endpoint = listener.url()?;
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await?;
         let mut request = vec![0; 8192];

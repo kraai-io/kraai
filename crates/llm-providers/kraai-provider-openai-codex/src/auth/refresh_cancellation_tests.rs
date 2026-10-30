@@ -1,4 +1,5 @@
 use super::*;
+use kraai_test_support::http;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Clone, Copy)]
@@ -17,8 +18,8 @@ async fn paused_rotating_server(
     Arc<AtomicUsize>,
     AbortOnDropHandle<()>,
 ) {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-    let address = listener.local_addr().unwrap();
+    let mut listener = http::Listener::bind(http::PATH).await.unwrap();
+    let url = listener.url().unwrap();
     let requests = Arc::new(AtomicUsize::new(0));
     let server_requests = Arc::clone(&requests);
     let (received, request_received) = oneshot::channel();
@@ -87,13 +88,7 @@ async fn paused_rotating_server(
             let _ = stream.get_mut().write_all(response.as_bytes()).await;
         }
     }));
-    (
-        format!("http://{address}"),
-        request_received,
-        release,
-        requests,
-        task,
-    )
+    (url, request_received, release, requests, task)
 }
 
 #[tokio::test]

@@ -1,13 +1,14 @@
 use super::*;
+use kraai_test_support::http;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn http_client_is_initialized_for_scripts_and_inherited_startup() {
     for startup in [NushellStartup::Clean, NushellStartup::Inherit] {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        let mut listener = http::Listener::bind(http::PATH)
             .await
             .expect("bind HTTP fixture");
-        let address = listener.local_addr().expect("HTTP fixture address");
+        let url = listener.url().expect("HTTP fixture URL");
         let server = tokio::spawn(async move {
             hang_guard(async move {
                 let (mut stream, _) = listener.accept().await.expect("accept HTTP request");
@@ -16,16 +17,13 @@ async fn http_client_is_initialized_for_scripts_and_inherited_startup() {
                     assert!(request.len() < 8192, "oversized HTTP request");
                     assert_ne!(stream.read_buf(&mut request).await.expect("read HTTP request"), 0);
                 }
-                assert!(request.starts_with(b"GET / HTTP/1.1\r\n"));
+                assert!(request.starts_with(format!("GET {} HTTP/1.1\r\n", http::PATH).as_bytes()));
                 stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nConnection: close\r\n\r\nhttp-ok\n")
                     .await.expect("write HTTP response");
             }).await.expect("HTTP fixture timed out");
         });
         let workspace = TestWorkspace::new();
-        let fetch = format!(
-            "http get --max-time {}sec http://{address}",
-            HANG_TIMEOUT.as_secs()
-        );
+        let fetch = format!("http get --max-time {}sec {url}", HANG_TIMEOUT.as_secs());
         let mut execution = if startup == NushellStartup::Inherit {
             let config_home = workspace.0.join("config");
             let nushell_config = config_home.join("nushell");

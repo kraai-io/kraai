@@ -12,7 +12,7 @@ async fn chat_completions_compaction_replays_tools_and_resumes_with_native_calls
     use serde_json::{Value, json};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let mut listener = kraai_test_support::http::Listener::bind("/chat/completions").await?;
     let address = listener.local_addr()?;
     let server = tokio::spawn(async move {
         let mut requests = Vec::new();

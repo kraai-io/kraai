@@ -1,14 +1,14 @@
 use super::*;
 use color_eyre::{Result, eyre::eyre};
 use std::collections::VecDeque;
-use std::net::{SocketAddr, TcpListener as StdTcpListener};
+use std::net::TcpListener as StdTcpListener;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use crate::request_context::ProviderRetryObserver;
 
+use kraai_test_support::http;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 
 fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
     let mut current = Some(error);
@@ -88,9 +88,9 @@ enum ScriptedResponse {
     },
 }
 
-async fn spawn_server(script: Vec<ScriptedResponse>) -> Result<SocketAddr> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let address = listener.local_addr()?;
+async fn spawn_server(script: Vec<ScriptedResponse>) -> Result<String> {
+    let mut listener = http::Listener::bind(http::PATH).await?;
+    let url = listener.url()?;
     let script = Arc::new(tokio::sync::Mutex::new(VecDeque::from(script)));
 
     tokio::spawn(async move {
@@ -132,7 +132,7 @@ async fn spawn_server(script: Vec<ScriptedResponse>) -> Result<SocketAddr> {
         }
     });
 
-    Ok(address)
+    Ok(url)
 }
 
 async fn write_response(
@@ -191,7 +191,7 @@ async fn failed_attempt_record_prevents_retry_send() -> Result<()> {
             })
         }
     }
-    let address = spawn_server(vec![ScriptedResponse::Status {
+    let url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "500 Internal Server Error",
         headers: Vec::new(),
         body: "try again",
@@ -204,7 +204,7 @@ async fn failed_attempt_record_prevents_retry_send() -> Result<()> {
     let mut sends = 0;
     let result = send_with_retry("test", &test_policy(), &context, || {
         sends += 1;
-        client.get(format!("http://{address}/")).send()
+        client.get(&url).send()
     })
     .await;
     assert_eq!(sends, 1);
@@ -214,7 +214,7 @@ async fn failed_attempt_record_prevents_retry_send() -> Result<()> {
 
 #[tokio::test]
 async fn retries_500_then_succeeds() -> Result<()> {
-    let address = spawn_server(vec![
+    let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "500 Internal Server Error",
             headers: Vec::new(),
@@ -233,10 +233,8 @@ async fn retries_500_then_succeeds() -> Result<()> {
 
     let observer = Arc::new(RetryCollector::default());
     let context = ProviderRequestContext::with_retry_observer(observer.clone());
-    let response = send_with_retry("test", &test_policy(), &context, || {
-        client.get(format!("http://{address}/")).send()
-    })
-    .await?;
+    let response =
+        send_with_retry("test", &test_policy(), &context, || client.get(&url).send()).await?;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -251,7 +249,7 @@ async fn retries_500_then_succeeds() -> Result<()> {
 
 #[tokio::test]
 async fn retries_429_then_succeeds() -> Result<()> {
-    let address = spawn_server(vec![
+    let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "429 Too Many Requests",
             headers: Vec::new(),
@@ -270,10 +268,8 @@ async fn retries_429_then_succeeds() -> Result<()> {
 
     let observer = Arc::new(RetryCollector::default());
     let context = ProviderRequestContext::with_retry_observer(observer.clone());
-    let response = send_with_retry("test", &test_policy(), &context, || {
-        client.get(format!("http://{address}/")).send()
-    })
-    .await?;
+    let response =
+        send_with_retry("test", &test_policy(), &context, || client.get(&url).send()).await?;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -288,7 +284,7 @@ async fn retries_429_then_succeeds() -> Result<()> {
 
 #[tokio::test]
 async fn retries_408_then_succeeds() -> Result<()> {
-    let address = spawn_server(vec![
+    let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "408 Request Timeout",
             headers: Vec::new(),
@@ -307,10 +303,8 @@ async fn retries_408_then_succeeds() -> Result<()> {
 
     let observer = Arc::new(RetryCollector::default());
     let context = ProviderRequestContext::with_retry_observer(observer.clone());
-    let response = send_with_retry("test", &test_policy(), &context, || {
-        client.get(format!("http://{address}/")).send()
-    })
-    .await?;
+    let response =
+        send_with_retry("test", &test_policy(), &context, || client.get(&url).send()).await?;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -325,7 +319,7 @@ async fn retries_408_then_succeeds() -> Result<()> {
 
 #[tokio::test]
 async fn retries_409_then_succeeds() -> Result<()> {
-    let address = spawn_server(vec![
+    let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "409 Conflict",
             headers: Vec::new(),
@@ -346,7 +340,7 @@ async fn retries_409_then_succeeds() -> Result<()> {
         "test",
         &test_policy(),
         &ProviderRequestContext::default(),
-        || client.get(format!("http://{address}/")).send(),
+        || client.get(&url).send(),
     )
     .await?;
 
@@ -356,7 +350,7 @@ async fn retries_409_then_succeeds() -> Result<()> {
 
 #[tokio::test]
 async fn does_not_retry_400() -> Result<()> {
-    let address = spawn_server(vec![ScriptedResponse::Status {
+    let url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "400 Bad Request",
         headers: Vec::new(),
         body: "bad request",
@@ -371,7 +365,7 @@ async fn does_not_retry_400() -> Result<()> {
         "test",
         &test_policy(),
         &ProviderRequestContext::with_retry_observer(collector.clone()),
-        || client.get(format!("http://{address}/")).send(),
+        || client.get(&url).send(),
     )
     .await?;
 
@@ -382,7 +376,7 @@ async fn does_not_retry_400() -> Result<()> {
 
 #[tokio::test]
 async fn does_not_retry_401() -> Result<()> {
-    let address = spawn_server(vec![ScriptedResponse::Status {
+    let url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "401 Unauthorized",
         headers: Vec::new(),
         body: "nope",
@@ -397,7 +391,7 @@ async fn does_not_retry_401() -> Result<()> {
         "test",
         &test_policy(),
         &ProviderRequestContext::with_retry_observer(collector.clone()),
-        || client.get(format!("http://{address}/")).send(),
+        || client.get(&url).send(),
     )
     .await?;
 
@@ -408,14 +402,13 @@ async fn does_not_retry_401() -> Result<()> {
 
 #[tokio::test]
 async fn retries_transport_connect_failure() -> Result<()> {
-    let ok_address = spawn_server(vec![ScriptedResponse::Status {
+    let ok_url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "200 OK",
         headers: Vec::new(),
         body: "ok",
     }])
     .await?;
     let closed_url = closed_port_url()?;
-    let ok_url = format!("http://{ok_address}/");
     let Some(client) = test_client_or_skip() else {
         return Ok(());
     };
@@ -451,21 +444,19 @@ async fn retries_transport_connect_failure() -> Result<()> {
 
 #[tokio::test]
 async fn retries_transport_timeout() -> Result<()> {
-    let slow_address = spawn_server(vec![ScriptedResponse::DelayedStatus {
+    let slow_url = spawn_server(vec![ScriptedResponse::DelayedStatus {
         delay: Duration::from_millis(50),
         status_line: "200 OK",
         headers: Vec::new(),
         body: "slow",
     }])
     .await?;
-    let ok_address = spawn_server(vec![ScriptedResponse::Status {
+    let ok_url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "200 OK",
         headers: Vec::new(),
         body: "ok",
     }])
     .await?;
-    let slow_url = format!("http://{slow_address}/");
-    let ok_url = format!("http://{ok_address}/");
     let Some(client) = test_client_from_builder_or_skip(
         reqwest::Client::builder().timeout(Duration::from_millis(10)),
     ) else {
@@ -503,7 +494,7 @@ async fn retries_transport_timeout() -> Result<()> {
 
 #[tokio::test]
 async fn stops_after_max_attempts() -> Result<()> {
-    let address = spawn_server(vec![
+    let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "500 Internal Server Error",
             headers: Vec::new(),
@@ -536,7 +527,7 @@ async fn stops_after_max_attempts() -> Result<()> {
         "test",
         &policy,
         &ProviderRequestContext::with_retry_observer(collector.clone()),
-        || client.get(format!("http://{address}/")).send(),
+        || client.get(&url).send(),
     )
     .await?;
 
@@ -547,7 +538,7 @@ async fn stops_after_max_attempts() -> Result<()> {
 
 #[tokio::test]
 async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
-    let address = spawn_server(vec![
+    let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "500 Internal Server Error",
             headers: Vec::new(),
@@ -580,7 +571,7 @@ async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
         "responses",
         &policy,
         &ProviderRequestContext::with_retry_observer(collector.clone()),
-        || client.get(format!("http://{address}/")).send(),
+        || client.get(&url).send(),
     )
     .await?;
 
@@ -603,7 +594,7 @@ async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
 
 #[tokio::test]
 async fn a_shorter_retry_after_still_waits_the_backoff() -> Result<()> {
-    let address = spawn_server(vec![
+    let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "429 Too Many Requests",
             headers: vec![("Retry-After", String::from("0"))],
@@ -625,7 +616,7 @@ async fn a_shorter_retry_after_still_waits_the_backoff() -> Result<()> {
         "responses",
         &test_policy(),
         &ProviderRequestContext::with_retry_observer(collector.clone()),
-        || client.get(format!("http://{address}/")).send(),
+        || client.get(&url).send(),
     )
     .await?;
 
@@ -641,7 +632,7 @@ async fn a_shorter_retry_after_still_waits_the_backoff() -> Result<()> {
 
 #[tokio::test]
 async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
-    let address = spawn_server(vec![
+    let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "503 Service Unavailable",
             headers: vec![("Retry-After", String::from("not-a-date"))],
@@ -669,7 +660,7 @@ async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
         "responses",
         &policy,
         &ProviderRequestContext::with_retry_observer(collector.clone()),
-        || client.get(format!("http://{address}/")).send(),
+        || client.get(&url).send(),
     )
     .await?;
 
@@ -707,7 +698,7 @@ fn default_retry_policy_is_bounded_and_jitter_stays_within_limits() {
 
 #[tokio::test]
 async fn returns_rate_limit_when_retry_after_exceeds_the_budget() -> Result<()> {
-    let address = spawn_server(vec![ScriptedResponse::Status {
+    let url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "429 Too Many Requests",
         headers: vec![("Retry-After", String::from("999999"))],
         body: "wait",
@@ -722,7 +713,7 @@ async fn returns_rate_limit_when_retry_after_exceeds_the_budget() -> Result<()> 
         "responses",
         &test_policy(),
         &ProviderRequestContext::with_retry_observer(collector.clone()),
-        || client.get(format!("http://{address}/")).send(),
+        || client.get(&url).send(),
     )
     .await?;
 
@@ -733,7 +724,7 @@ async fn returns_rate_limit_when_retry_after_exceeds_the_budget() -> Result<()> 
 
 #[tokio::test]
 async fn honors_retry_after_longer_than_max_delay_within_the_budget() -> Result<()> {
-    let address = spawn_server(vec![
+    let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "429 Too Many Requests",
             headers: vec![("Retry-After", String::from("1"))],
@@ -755,7 +746,7 @@ async fn honors_retry_after_longer_than_max_delay_within_the_budget() -> Result<
         "responses",
         &test_policy(),
         &ProviderRequestContext::with_retry_observer(collector.clone()),
-        || client.get(format!("http://{address}/")).send(),
+        || client.get(&url).send(),
     )
     .await?;
 
@@ -769,7 +760,7 @@ async fn honors_retry_after_longer_than_max_delay_within_the_budget() -> Result<
 
 #[tokio::test]
 async fn zero_attempt_policy_is_normalized_to_one_attempt() -> Result<()> {
-    let address = spawn_server(vec![ScriptedResponse::Status {
+    let url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "200 OK",
         headers: Vec::new(),
         body: "ok",
@@ -786,7 +777,7 @@ async fn zero_attempt_policy_is_normalized_to_one_attempt() -> Result<()> {
     };
 
     let response = send_with_retry("test", &policy, &ProviderRequestContext::default(), || {
-        client.get(format!("http://{address}/")).send()
+        client.get(&url).send()
     })
     .await?;
 

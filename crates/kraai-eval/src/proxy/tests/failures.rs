@@ -54,9 +54,9 @@ fn read_event(root: &std::path::Path) -> Result<serde_json::Value> {
 #[tokio::test]
 async fn truncated_http_response_records_original_status_and_error_chain() -> Result<()> {
     let (root, mut state, _) = fixture()?;
-    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let mut upstream = http::Listener::bind("/v1/").await?;
     state.upstream = format!("http://{}", upstream.local_addr()?);
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let mut listener = http::Listener::bind("/v1/").await?;
     let address = listener.local_addr()?;
     let state = Arc::new(state);
     let serve = async {
