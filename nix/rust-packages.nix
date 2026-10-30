@@ -64,7 +64,6 @@
           } or (throw "nix/rust-packages.nix does not translate profile.release.${key}")
       )
       cargoToml.profile.release;
-    gnuRustcOpts = cargoConfig.target."cfg(all(target_os = \"linux\", target_env = \"gnu\"))".rustflags;
     crate2nixTestMemberNames =
       map
       (member: member.name)
@@ -113,7 +112,6 @@
           // {
             extraRustcOpts =
               (crate.extraRustcOpts or [])
-              ++ lib.optionals pkgs.stdenv.hostPlatform.isGnu gnuRustcOpts
               ++ lib.optionals (crate.release or true) cargoConfig.profile.release.rustflags
               ++ lib.optionals (crate.release or true) (
                 lib.concatLists (lib.attrValues (

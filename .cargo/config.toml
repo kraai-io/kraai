@@ -11,6 +11,3 @@ rustflags = ["-Zunstable-options", "--jobs-frontend=8"]
 
 [profile.release]
 rustflags = ["-Zlocation-detail=none"]
-
-[target.'cfg(all(target_os = "linux", target_env = "gnu"))']
-rustflags = ["-C", "link-arg=-Wl,-z,pack-relative-relocs"]
