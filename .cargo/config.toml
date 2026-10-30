@@ -1,0 +1,13 @@
+[unstable]
+feature-unification = true
+fine-grain-locking = true
+profile-rustflags = true
+
+[resolver]
+feature-unification = "workspace"
+
+[profile.dev]
+rustflags = ["-Zunstable-options", "--jobs-frontend=8"]
+
+[profile.release]
+rustflags = ["-Zlocation-detail=none"]

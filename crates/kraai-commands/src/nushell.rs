@@ -395,13 +395,7 @@ mod tests {
                 for (example, metadata) in examples.iter().zip(metadata.examples) {
                     assert_eq!(example.description, metadata.description);
                     assert_eq!(example.example, metadata.script);
-                    assert_eq!(
-                        metadata
-                            .script_input
-                            .split_once('\n')
-                            .map(|(_, script)| script),
-                        Some(metadata.script)
-                    );
+                    assert!(metadata.script_input.ends_with(metadata.script));
                 }
             }
         }

@@ -39,7 +39,7 @@ fn open_file_scope_is_derived_from_the_actual_path_and_execution_authority() {
             .unwrap_err();
     assert!(denied.contains("without host-read"));
 
-    let host_read = SandboxCapabilities::new([SandboxCapability::HostRead]).unwrap();
+    let host_read = SandboxCapabilities::new([SandboxCapability::HostRead]);
     let host_mutations =
         authorize_context_mutations(&open_request("/host/file.txt"), workspace, &host_read)
             .unwrap();

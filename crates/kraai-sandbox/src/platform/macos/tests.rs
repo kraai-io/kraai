@@ -18,7 +18,7 @@ fn fixture(capabilities: &[SandboxCapability]) -> (PrivateTempDir, LaunchPlan, P
     let plan = LaunchPlan::new(
         PathBuf::from("/bin/sh"),
         workspace,
-        SandboxCapabilities::new(capabilities.iter().copied()).expect("valid capabilities"),
+        SandboxCapabilities::new(capabilities.iter().copied()),
         Duration::from_secs(5),
     );
     (root, plan, private_temp)
@@ -136,8 +136,7 @@ fn network_access_is_explicit_and_private_ipc_is_limited_to_one_path() {
     assert!(!source(&args).contains("network-bind"));
 
     plan.capabilities =
-        SandboxCapabilities::new([SandboxCapability::WorkspaceRead, SandboxCapability::Network])
-            .expect("network capabilities");
+        SandboxCapabilities::new([SandboxCapability::WorkspaceRead, SandboxCapability::Network]);
     let args = build_args(&plan, &private_temp).expect("network policy");
     assert!(source(&args).contains("(allow network*)"));
     assert!(source(&args).contains("com.apple.SystemConfiguration.DNSConfiguration"));
@@ -194,7 +193,7 @@ fn workspace_write_allows_linked_worktree_common_dir_over_runtime_roots() {
         let mut plan = LaunchPlan::new(
             PathBuf::from("/bin/sh"),
             worktree.workspace.clone(),
-            SandboxCapabilities::new([capability]).expect("valid capabilities"),
+            SandboxCapabilities::new([capability]),
             Duration::from_secs(5),
         );
         plan.runtime_roots.push(

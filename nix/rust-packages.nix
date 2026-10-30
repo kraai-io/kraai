@@ -1,15 +1,17 @@
 {inputs, ...}: {
   perSystem = {
+    evalRustToolchain,
     lib,
     pkgs,
+    rustToolchain,
     self',
+    withMold,
     ...
   }: let
-    rustToolchain = pkgs.rust-bin.stable.latest.default;
     src = lib.fileset.toSource {
       root = ../.;
       fileset = lib.fileset.unions [
-        ../.cargo/audit.toml
+        ../.cargo
         ../Cargo.lock
         ../Cargo.toml
         ../Cargo.nix
@@ -23,15 +25,45 @@
         ../packages/runtime/test
       ];
     };
+    cargoToml = lib.importTOML ../Cargo.toml;
+    cargoConfig = lib.importTOML ../.cargo/config.toml;
     workspaceMembers =
       map
       (memberPath: let
-        cargoToml = lib.importTOML (../. + "/${memberPath}/Cargo.toml");
+        memberCargoToml = lib.importTOML (../. + "/${memberPath}/Cargo.toml");
       in {
-        name = cargoToml.package.name;
-        procMacro = cargoToml.lib.proc-macro or false;
+        name = memberCargoToml.package.name;
+        procMacro = memberCargoToml.lib.proc-macro or false;
       })
-      (lib.importTOML ../Cargo.toml).workspace.members;
+      cargoToml.workspace.members;
+    # crate2nix ignores Cargo profiles, so translate the release profile into rustc flags.
+    releaseRustcOpts =
+      lib.mapAttrs (
+        key: value:
+          {
+            codegen-units = ["-C" "codegen-units=${toString value}"];
+            lto = lib.optionals (value != false) [
+              "-C"
+              "lto=${
+                if value == true
+                then "fat"
+                else value
+              }"
+            ];
+            opt-level = ["-C" "opt-level=${toString value}"];
+            strip = lib.optionals (value != false) [
+              "-C"
+              "strip=${
+                if value == true
+                then "symbols"
+                else value
+              }"
+            ];
+          }.${
+            key
+          } or (throw "nix/rust-packages.nix does not translate profile.release.${key}")
+      )
+      cargoToml.profile.release;
     crate2nixTestMemberNames =
       map
       (member: member.name)
@@ -44,7 +76,7 @@
       (member: member.name)
       (lib.filter (member: member.procMacro) workspaceMembers);
     workspaceTestInputs = {
-      "kraai-eval" = [pkgs.git pkgs.clang pkgs.coreutils pkgs.findutils rustToolchain];
+      "kraai-eval" = [pkgs.git pkgs.clang pkgs.coreutils pkgs.findutils evalRustToolchain];
     };
     darwinNestedSandboxTests = {
       "kraai-sandbox" = ["tests::macos::"];
@@ -54,8 +86,9 @@
       ];
     };
 
-    buildRustCrateForPkgs = pkgs:
-      pkgs.buildRustCrate.override {
+    buildRustCrateForPkgs = pkgs: let
+      buildRustCrate = pkgs.buildRustCrate.override {
+        stdenv = withMold pkgs.stdenv;
         cargo = rustToolchain;
         rustc = rustToolchain;
         defaultCrateOverrides =
@@ -73,6 +106,23 @@
             };
           };
       };
+    in
+      crate:
+        buildRustCrate (crate
+          // {
+            extraRustcOpts =
+              (crate.extraRustcOpts or [])
+              ++ lib.optionals (crate.release or true) cargoConfig.profile.release.rustflags
+              ++ lib.optionals (crate.release or true) (
+                lib.concatLists (lib.attrValues (
+                  # rustc rejects LTO when a library also builds a non-rlib output. The binary's LTO
+                  # still covers these crates through the bitcode in their rlibs.
+                  if !(crate.procMacro or false) && lib.all (type: type == "lib" || type == "rlib") (crate.type or ["lib"])
+                  then releaseRustcOpts
+                  else removeAttrs releaseRustcOpts ["lto"]
+                ))
+              );
+          });
     mkCargoNix = release:
       pkgs.callPackage ../Cargo.nix {
         inherit release buildRustCrateForPkgs;
@@ -97,7 +147,7 @@
       buildInputs ? [],
       env ? {},
     }:
-      pkgs.stdenv.mkDerivation {
+      (withMold pkgs.stdenv).mkDerivation {
         pname = name;
         version = "0.0.0";
         inherit src;
@@ -194,7 +244,7 @@
             pkgs.nix
             pkgs.uv
             pkgs.python312
-            rustToolchain
+            evalRustToolchain
           ]}
         '';
       meta =

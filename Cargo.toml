@@ -37,6 +37,7 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+opt-level = 1
 
 [profile.release]
 codegen-units = 1 # Allows compiler to perform better optimization.
@@ -105,6 +106,7 @@ image = { version = "0.25.10", default-features = false, features = [
 ] }
 libc = "0.2.186"
 markdown = "1.0.0"
+miette = "7.6.0"
 nix = { version = "0.31.3", features = ["process", "signal"] }
 notify = "8.2.0"
 nu-cli = "=0.116.1"
@@ -113,7 +115,6 @@ nu-command = "=0.116.1"
 nu-config = "=0.116.1"
 nu-engine = "=0.116.1"
 nu-experimental = "=0.116.1"
-nu-json = "=0.116.1"
 nu-parser = "=0.116.1"
 nu-protocol = "=0.116.1"
 rand = "0.10.2"
@@ -125,6 +126,7 @@ ratatui = { version = "0.30.2", features = [
 ] }
 regex = "1.13.0"
 reqwest = { features = ["json", "stream"], version = "0.13.4" }
+rmp-serde = "1.3.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustix = { version = "1.1.4", features = ["fs", "net", "pipe"] }
 serde = { features = ["derive"], version = "1.0.228" }

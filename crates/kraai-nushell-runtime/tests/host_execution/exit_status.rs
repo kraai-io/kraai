@@ -5,7 +5,7 @@ async fn successful_externals_set_exit_status_before_the_next_statement() {
     for setup in ["hide-env -i LAST_EXIT_CODE", "$env.LAST_EXIT_CODE = 7"] {
         for (command, output) in [
             ("^/bin/sh -c 'exit 0'", ""),
-            ("^/bin/sh -c 'printf hello'", "hello"),
+            ("^/bin/sh -c 'printf hello'", "hello\n"),
         ] {
             assert_script(
                 &format!("{setup}; {command}; $env.LAST_EXIT_CODE"),
@@ -29,7 +29,7 @@ let silent = "assigned"
 "ignored" | ignore
 $env.LAST_EXIT_CODE
 "#,
-        "value\n{\"a\":1}\n1\n2\nprinted\n7\n",
+        "value\na: 1\n[2]: 1,2\nprinted\n7\n",
     )
     .await;
 }
@@ -43,7 +43,7 @@ $env.LAST_EXIT_CODE = 7
 $env.LAST_EXIT_CODE
 open --raw result.txt
 "#,
-        "7\nhello",
+        "7\nhello\n",
     )
     .await;
 }

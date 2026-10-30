@@ -52,7 +52,7 @@ impl Fixture {
         let mut plan = LaunchPlan::new(
             executable.clone(),
             self.root.join("workspace"),
-            SandboxCapabilities::new(capabilities.iter().copied()).expect("capabilities"),
+            SandboxCapabilities::new(capabilities.iter().copied()),
             HANG_TIMEOUT,
         );
         plan.runtime_roots
@@ -241,8 +241,7 @@ async fn verify(capabilities: &[SandboxCapability], linked: bool) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let capabilities =
-        SandboxCapabilities::new(capabilities.iter().copied()).expect("capabilities");
+    let capabilities = SandboxCapabilities::new(capabilities.iter().copied());
     assert_eq!(
         std::fs::read_to_string(fixture.root.join("secret")).expect("host file"),
         if capabilities.contains(SandboxCapability::HostWrite) {

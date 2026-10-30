@@ -15,7 +15,10 @@ use crate::{
     bwrap_probe_failure_message, find_bwrap, restricted_network_seccomp_program,
     run_bwrap_sandbox_probe,
 };
-use crate::{LaunchPlan, OutputStream, SandboxError, Termination, is_likely_sandbox_denied, run};
+use crate::{
+    LaunchPlan, MAX_CAPTURE_BYTES, OutputStream, SandboxError, Termination,
+    is_likely_sandbox_denied, run,
+};
 
 #[path = "tests/git_worktree.rs"]
 pub(crate) mod git_worktree;
@@ -64,7 +67,7 @@ fn executable(name: &str) -> PathBuf {
 }
 
 fn capabilities(values: impl IntoIterator<Item = SandboxCapability>) -> SandboxCapabilities {
-    SandboxCapabilities::new(values).expect("valid test capabilities")
+    SandboxCapabilities::new(values)
 }
 
 fn shell_plan(
@@ -144,31 +147,62 @@ async fn no_sandbox_captures_output_and_clears_unspecified_environment() {
 }
 
 #[tokio::test]
-async fn live_output_events_reconstruct_authoritative_capture() {
+async fn live_output_events_carry_every_byte_past_the_capture_limit() {
     let workspace = temp_dir("events");
     std::fs::create_dir_all(&workspace).expect("create workspace");
-    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(16);
     let mut plan = shell_plan(
         &workspace,
-        "printf first; printf second; printf problem >&2",
+        format!(
+            "printf first; head -c {} /dev/zero; printf problem >&2",
+            MAX_CAPTURE_BYTES * 2
+        ),
         capabilities([SandboxCapability::NoSandbox]),
         HANG_TIMEOUT,
     );
     plan.output_events = Some(sender);
 
-    let output = run(plan, CancellationToken::new())
-        .await
-        .expect("process should run");
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    while let Some(event) = receiver.recv().await {
-        match event.stream {
-            OutputStream::Stdout => stdout.extend(event.bytes),
-            OutputStream::Stderr => stderr.extend(event.bytes),
+    let collect = async {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        while let Some(event) = receiver.recv().await {
+            match event.stream {
+                OutputStream::Stdout => stdout.extend(event.bytes),
+                OutputStream::Stderr => stderr.extend(event.bytes),
+            }
         }
-    }
-    assert_eq!(stdout, output.stdout);
+        (stdout, stderr)
+    };
+    let (output, (stdout, stderr)) = tokio::join!(run(plan, CancellationToken::new()), collect);
+    let output = output.expect("process should run");
+    assert_eq!(stdout.len(), 5 + MAX_CAPTURE_BYTES * 2);
+    assert!(stdout.starts_with(b"first"));
+    assert!(output.stdout.len() >= MAX_CAPTURE_BYTES);
+    assert!(output.stdout.len() < stdout.len());
+    assert!(stdout.starts_with(output.stdout.get(..MAX_CAPTURE_BYTES).unwrap_or_default()));
+    assert_eq!(stderr, b"problem");
     assert_eq!(stderr, output.stderr);
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[tokio::test]
+async fn undrained_output_events_hold_the_process_back_until_it_times_out() {
+    let workspace = temp_dir("undrained-events");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    let mut plan = shell_plan(
+        &workspace,
+        "cat /dev/zero",
+        capabilities([SandboxCapability::NoSandbox]),
+        Duration::from_millis(200),
+    );
+    plan.output_events = Some(sender);
+    let output = hang_guard(run(plan, CancellationToken::new()))
+        .await
+        .expect("an undrained receiver does not hang the run")
+        .expect("timeout is a stable process outcome");
+    assert_eq!(output.termination, Termination::TimedOut);
+    assert!(receiver.len() <= 1);
     let _ = std::fs::remove_dir_all(workspace);
 }
 
@@ -280,7 +314,7 @@ async fn cancellation_returns_capture_and_kills_process() {
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let cancellation = CancellationToken::new();
     let cancel = cancellation.clone();
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, mut events) = tokio::sync::mpsc::channel(16);
     let mut plan = shell_plan(
         &workspace,
         format!("printf before; sleep {}", (HANG_TIMEOUT * 2).as_secs()),

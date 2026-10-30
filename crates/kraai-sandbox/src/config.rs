@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kraai_execution_types::SandboxCapabilities;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 use crate::output::OutputEvent;
 
@@ -17,7 +17,7 @@ pub struct LaunchPlan {
     pub runtime_roots: Vec<PathBuf>,
     pub capabilities: SandboxCapabilities,
     pub timeout: Duration,
-    pub output_events: Option<UnboundedSender<OutputEvent>>,
+    pub output_events: Option<Sender<OutputEvent>>,
     pub process_spawned: Option<tokio::sync::oneshot::Sender<tokio::time::Instant>>,
     pub execution_started: Option<tokio::sync::oneshot::Receiver<tokio::time::Instant>>,
     pub private_temp: PrivateTempConfig,
@@ -115,7 +115,7 @@ pub(crate) struct PreparedCommand {
     pub(crate) cwd: PathBuf,
     pub(crate) environment: BTreeMap<OsString, OsString>,
     pub(crate) sandboxed: bool,
-    pub(crate) output_events: Option<UnboundedSender<OutputEvent>>,
+    pub(crate) output_events: Option<Sender<OutputEvent>>,
     #[cfg(windows)]
     pub(crate) windows_sandbox: Option<crate::platform::windows::Sandbox>,
     pub(crate) private_temp: Option<crate::temp_dir::PrivateTempDir>,

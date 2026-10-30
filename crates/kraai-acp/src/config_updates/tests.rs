@@ -42,7 +42,7 @@ async fn foreground_publication_unlocks_before_waking_the_refresh_worker() {
     });
     let waker = Waker::from(probe.clone());
     let mut context = Context::from_waker(&waker);
-    let mut notified = Box::pin(updated.wake.notified());
+    let mut notified = std::pin::pin!(updated.wake.notified());
     assert!(notified.as_mut().poll(&mut context).is_pending());
     drop(publication);
     assert!(probe.notified.load(Ordering::SeqCst));
@@ -64,7 +64,7 @@ async fn waiting_publisher_observes_new_generation_when_the_mutex_unlocks() {
     });
     let waker = Waker::from(probe.clone());
     let mut context = Context::from_waker(&waker);
-    let mut waiting = Box::pin(session.configuration.lock());
+    let mut waiting = std::pin::pin!(session.configuration.lock());
     assert!(waiting.as_mut().poll(&mut context).is_pending());
     drop(publication);
     assert!(probe.notified.load(Ordering::SeqCst));
@@ -141,7 +141,7 @@ async fn foreground_refresh_requests_coalesce_and_background_publication_does_no
         assert_eq!(session.config_generation.load(Ordering::Acquire), 3);
     }
     assert!(futures::poll!(Box::pin(updated.wake.notified())).is_ready());
-    let mut waiting = Box::pin(updated.wake.notified());
+    let mut waiting = std::pin::pin!(updated.wake.notified());
     assert!(futures::poll!(waiting.as_mut()).is_pending());
     for session in &sessions {
         drop(session.configuration.lock().await);
@@ -157,7 +157,7 @@ async fn an_active_turn_does_not_block_configuration_publication() {
     let session = Arc::new(Session::new(Arc::new(ConfigUpdates::default())));
     let active = session.begin_turn();
     assert!(active.is_ok());
-    let mut publication = Box::pin(lock(&session));
+    let mut publication = std::pin::pin!(lock(&session));
     assert!(futures::poll!(publication.as_mut()).is_ready());
     assert!(session.turn.try_lock().is_err());
     drop(active);

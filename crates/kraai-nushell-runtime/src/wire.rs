@@ -7,7 +7,7 @@ pub(crate) async fn write_request(
     writer: &mut (impl AsyncWrite + Unpin),
     request: &HostRequest,
 ) -> Result<(), WireError> {
-    let bytes = serde_json::to_vec(request).map_err(WireError::Serialize)?;
+    let bytes = rmp_serde::to_vec_named(request).map_err(WireError::Serialize)?;
     let length = u64::try_from(bytes.len()).map_err(|_error| WireError::FrameTooLarge)?;
     writer
         .write_all(&length.to_be_bytes())
@@ -26,15 +26,15 @@ pub(crate) fn read_request(
         usize::try_from(u64::from_be_bytes(length)).map_err(|_error| WireError::FrameTooLarge)?;
     let mut bytes = vec![0_u8; length];
     transport.read_exact(&mut bytes).map_err(WireError::Io)?;
-    let request = serde_json::from_slice(&bytes).map_err(WireError::Deserialize)?;
+    let request = rmp_serde::from_slice(&bytes).map_err(WireError::Deserialize)?;
     Ok((request, transport))
 }
 
 #[derive(Debug)]
 pub(crate) enum WireError {
     Io(std::io::Error),
-    Serialize(serde_json::Error),
-    Deserialize(serde_json::Error),
+    Serialize(rmp_serde::encode::Error),
+    Deserialize(rmp_serde::decode::Error),
     FrameTooLarge,
 }
 

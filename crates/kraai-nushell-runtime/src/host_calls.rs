@@ -12,13 +12,15 @@ use kraai_execution_types::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
 use crate::effects::StateEffectHandler;
 use crate::images::ImageAttachmentHandler;
+use crate::rendering::OutputFrame;
 use kraai_execution_types::image::{MAX_IMAGE_BYTES, validate_image_id};
 use protocol::{
-    HostProtocolError, read_authenticated_sync, read_frame_async, verify_frame,
+    HostProtocolError, read_authenticated_async, read_authenticated_sync,
     write_authenticated_async, write_authenticated_sync,
 };
 
@@ -29,6 +31,7 @@ enum Request {
     WebSearch(WebSearchRequest),
     ImageAttachment { base64: String },
     ExistingImage { id: String },
+    Output(OutputFrame),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -66,7 +69,14 @@ impl DescriptorClient {
         }
     }
 
-    fn call(&self, request: impl FnOnce(u64) -> Request) -> Result<Response, String> {
+    pub(crate) fn send_output(&self, frame: OutputFrame) -> Result<(), String> {
+        self.send(|_| Request::Output(frame)).map(drop)
+    }
+
+    fn send(
+        &self,
+        request: impl FnOnce(u64) -> Request,
+    ) -> Result<(std::sync::MutexGuard<'_, Transport>, u64), String> {
         let mut transport = self
             .transport
             .lock()
@@ -81,6 +91,11 @@ impl DescriptorClient {
             &self.secret,
         )
         .map_err(|error| error.to_string())?;
+        Ok((transport, sequence))
+    }
+
+    fn call(&self, request: impl FnOnce(u64) -> Request) -> Result<Response, String> {
+        let (mut transport, sequence) = self.send(request)?;
         let (received, response) =
             read_authenticated_sync(&mut transport.channel, &self.execution_id, &self.secret)
                 .map_err(|error| error.to_string())?;
@@ -175,6 +190,7 @@ pub(crate) struct HostServices {
     pub(crate) effects: Arc<dyn StateEffectHandler>,
     pub(crate) web: Arc<dyn kraai_web::WebSearch>,
     pub(crate) images: Arc<dyn ImageAttachmentHandler>,
+    pub(crate) output: tokio::sync::mpsc::Sender<OutputFrame>,
 }
 
 pub(crate) async fn serve(
@@ -184,10 +200,12 @@ pub(crate) async fn serve(
     secret: [u8; 32],
     services: HostServices,
     active_commands: &[String],
+    stopped: &CancellationToken,
 ) -> Result<(), HostProtocolError> {
     let mut expected_sequence = 1_u64;
-    while let Some(frame) = read_frame_async::<Request>(&mut reader).await? {
-        verify_frame(&frame, &execution_id, &secret)?;
+    while let Some(frame) =
+        read_authenticated_async::<Request>(&mut reader, &execution_id, &secret).await?
+    {
         if frame.sequence != expected_sequence {
             return Err(HostProtocolError::Sequence {
                 expected: expected_sequence,
@@ -197,55 +215,17 @@ pub(crate) async fn serve(
         expected_sequence = expected_sequence
             .checked_add(1)
             .ok_or(HostProtocolError::SequenceExhausted)?;
-        let response = match frame.payload {
-            Request::Mcp(request) => Response::Mcp(
-                match require_service(active_commands, HostService::Mcp)
-                    .and_then(|()| request.validate())
-                {
-                    Ok(()) => services.mcp.execute(request).await,
-                    Err(error) => Err(error),
-                },
-            ),
-            Request::ExistingImage { id } => Response::ImageAttachment(
-                match require_service(active_commands, HostService::Images)
-                    .and_then(|()| validate_image_id(&id))
-                {
-                    Ok(()) => services.images.attach_existing(frame.sequence, id).await,
-                    Err(error) => Err(error),
-                },
-            ),
-            Request::ImageAttachment { base64 } => Response::ImageAttachment(
-                match require_service(active_commands, HostService::Images)
-                    .and_then(|()| decode_image(&base64))
-                {
-                    Ok(bytes) => services.images.attach(frame.sequence, bytes).await,
-                    Err(error) => Err(error),
-                },
-            ),
-            Request::StateEffect(request) => {
-                if request.sequence != frame.sequence {
-                    return Err(HostProtocolError::PayloadSequence {
-                        frame: frame.sequence,
-                        payload: request.sequence,
-                    });
-                }
-                let error = match require_service(active_commands, HostService::StateEffects) {
-                    Ok(()) => services.effects.apply(&request).await.err(),
-                    Err(error) => Some(error),
-                };
-                Response::StateEffect(StateEffectAck {
-                    error,
-                    invocation_id: request.invocation_id,
-                })
+        let request = match frame.payload {
+            Request::Output(output) => {
+                let _ = services.output.send(output).await;
+                continue;
             }
-            Request::WebSearch(request) => Response::WebSearch(
-                match require_service(active_commands, HostService::WebSearch)
-                    .and_then(|()| request.validate())
-                {
-                    Ok(()) => services.web.search(&request).await,
-                    Err(error) => Err(error),
-                },
-            ),
+            request => request,
+        };
+        let response = tokio::select! {
+            biased;
+            () = stopped.cancelled() => return Ok(()),
+            response = respond(request, frame.sequence, &services, active_commands) => response?,
         };
         write_authenticated_async(
             &mut writer,
@@ -257,6 +237,65 @@ pub(crate) async fn serve(
         .await?;
     }
     Ok(())
+}
+
+async fn respond(
+    request: Request,
+    sequence: u64,
+    services: &HostServices,
+    active_commands: &[String],
+) -> Result<Response, HostProtocolError> {
+    Ok(match request {
+        Request::Output(_) => unreachable!("output frames need no response"),
+        Request::Mcp(request) => Response::Mcp(
+            match require_service(active_commands, HostService::Mcp)
+                .and_then(|()| request.validate())
+            {
+                Ok(()) => services.mcp.execute(request).await,
+                Err(error) => Err(error),
+            },
+        ),
+        Request::ExistingImage { id } => Response::ImageAttachment(
+            match require_service(active_commands, HostService::Images)
+                .and_then(|()| validate_image_id(&id))
+            {
+                Ok(()) => services.images.attach_existing(sequence, id).await,
+                Err(error) => Err(error),
+            },
+        ),
+        Request::ImageAttachment { base64 } => Response::ImageAttachment(
+            match require_service(active_commands, HostService::Images)
+                .and_then(|()| decode_image(&base64))
+            {
+                Ok(bytes) => services.images.attach(sequence, bytes).await,
+                Err(error) => Err(error),
+            },
+        ),
+        Request::StateEffect(request) => {
+            if request.sequence != sequence {
+                return Err(HostProtocolError::PayloadSequence {
+                    frame: sequence,
+                    payload: request.sequence,
+                });
+            }
+            let error = match require_service(active_commands, HostService::StateEffects) {
+                Ok(()) => services.effects.apply(&request).await.err(),
+                Err(error) => Some(error),
+            };
+            Response::StateEffect(StateEffectAck {
+                error,
+                invocation_id: request.invocation_id,
+            })
+        }
+        Request::WebSearch(request) => Response::WebSearch(
+            match require_service(active_commands, HostService::WebSearch)
+                .and_then(|()| request.validate())
+            {
+                Ok(()) => services.web.search(&request).await,
+                Err(error) => Err(error),
+            },
+        ),
+    })
 }
 
 fn decode_image(encoded: &str) -> Result<Vec<u8>, String> {

@@ -45,8 +45,7 @@ impl Drop for TestWorkspace {
 }
 
 fn plan(source: impl Into<Vec<u8>>, workspace: &TestWorkspace) -> ScriptExecutionPlan {
-    let capabilities = SandboxCapabilities::new([SandboxCapability::NoSandbox])
-        .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
+    let capabilities = SandboxCapabilities::new([SandboxCapability::NoSandbox]);
     let mut plan = ScriptExecutionPlan::new(
         kraai_execution_types::ScriptExecutionId::new(Ulid::generate()),
         host_executable(),
@@ -330,7 +329,7 @@ async fn sandboxed_host_accepts_a_workspace_symlink_alias() {
     ] {
         let mut execution = plan(b"$env.PWD".to_vec(), &workspace);
         execution.workspace_root = alias.clone();
-        execution.capabilities = SandboxCapabilities::new([capability]).expect("capabilities");
+        execution.capabilities = SandboxCapabilities::new([capability]);
         execution.runtime_roots = sandbox_runtime_roots(host_executable());
         let result = execute(execution, CancellationToken::new())
             .await
@@ -425,8 +424,7 @@ async fn private_transport_crosses_the_sandbox_boundary() {
         b"{transport: private, engine: embedded} | to json --raw".to_vec(),
         &workspace,
     );
-    execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
-        .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
+    execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead]);
     execution.runtime_roots = sandbox_runtime_roots(host_executable());
 
     let result = match execute(execution, CancellationToken::new()).await {
@@ -456,8 +454,7 @@ async fn native_commands_remain_registered_when_the_sandbox_denies_the_operation
         b"kraai-edit-file denied.txt --create --contents 'denied'".to_vec(),
         &workspace,
     );
-    execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
-        .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
+    execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead]);
     execution.active_commands = vec![String::from("kraai-edit-file")];
     execution.runtime_roots = sandbox_runtime_roots(host_executable());
 
@@ -577,8 +574,7 @@ async fn inherited_pipe_delivers_authenticated_effects_without_network_access() 
         .into_bytes(),
         &workspace,
     );
-    execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead])
-        .unwrap_or_else(|error| panic!("invalid test capabilities: {error}"));
+    execution.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead]);
     let runtime = TestWorkspace::new();
     let host = runtime.0.join("kraai-nushell-host.exe");
     std::fs::copy(host_executable(), &host).expect("copy host without Cargo's hard links");

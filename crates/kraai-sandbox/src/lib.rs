@@ -3,6 +3,7 @@
 mod config;
 mod error;
 mod output;
+mod output_capture;
 mod platform;
 mod process;
 mod process_spawn;
@@ -11,6 +12,7 @@ mod temp_dir;
 pub use config::{LaunchPlan, PrivateTempConfig};
 pub use error::SandboxError;
 pub use output::{ExecutionOutput, OutputEvent, OutputStream, Termination};
+pub use output_capture::{MAX_CAPTURE_BYTES, OutputCapture};
 pub use process::run;
 pub use process_spawn::{spawn_command, spawn_tokio_command};
 

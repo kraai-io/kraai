@@ -49,15 +49,11 @@ impl SandboxCapabilities {
         ]))
     }
 
-    pub fn new(
-        capabilities: impl IntoIterator<Item = SandboxCapability>,
-    ) -> Result<Self, SandboxCapabilityError> {
-        let requested = capabilities.into_iter().collect::<BTreeSet<_>>();
-        if requested.contains(&SandboxCapability::NoSandbox) && requested.len() != 1 {
-            return Err(SandboxCapabilityError::NoSandboxMustBeExclusive);
+    pub fn new(capabilities: impl IntoIterator<Item = SandboxCapability>) -> Self {
+        let mut effective = capabilities.into_iter().collect::<BTreeSet<_>>();
+        if effective.contains(&SandboxCapability::NoSandbox) {
+            return Self(BTreeSet::from([SandboxCapability::NoSandbox]));
         }
-
-        let mut effective = requested;
         if effective.contains(&SandboxCapability::HostWrite) {
             effective.extend([
                 SandboxCapability::HostRead,
@@ -72,7 +68,7 @@ impl SandboxCapabilities {
             effective.insert(SandboxCapability::WorkspaceRead);
         }
 
-        Ok(Self(effective))
+        Self(effective)
     }
 
     pub fn contains(&self, capability: SandboxCapability) -> bool {
@@ -88,38 +84,13 @@ impl SandboxCapabilities {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SandboxCapabilityError {
-    NoSandboxMustBeExclusive,
-}
-
-impl std::fmt::Display for SandboxCapabilityError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoSandboxMustBeExclusive => {
-                write!(
-                    f,
-                    "no-sandbox must be the only requested sandbox capability"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for SandboxCapabilityError {}
-
 #[cfg(test)]
-#[expect(
-    clippy::panic,
-    reason = "capability unit tests require direct construction assertions"
-)]
 mod tests {
-    use super::{SandboxCapabilities, SandboxCapability, SandboxCapabilityError};
+    use super::{SandboxCapabilities, SandboxCapability};
 
     #[test]
     fn computes_semantic_capability_closure() {
-        let capabilities = SandboxCapabilities::new([SandboxCapability::HostWrite])
-            .unwrap_or_else(|error| panic!("unexpected capability error: {error}"));
+        let capabilities = SandboxCapabilities::new([SandboxCapability::HostWrite]);
 
         for expected in [
             SandboxCapability::HostRead,
@@ -133,10 +104,13 @@ mod tests {
     }
 
     #[test]
-    fn no_sandbox_is_exclusive() {
+    fn no_sandbox_supersedes_other_capabilities() {
+        let capabilities =
+            SandboxCapabilities::new([SandboxCapability::NoSandbox, SandboxCapability::Network]);
         assert_eq!(
-            SandboxCapabilities::new([SandboxCapability::NoSandbox, SandboxCapability::Network,]),
-            Err(SandboxCapabilityError::NoSandboxMustBeExclusive)
+            capabilities.iter().collect::<Vec<_>>(),
+            [SandboxCapability::NoSandbox]
         );
+        assert!(capabilities.is_unsandboxed());
     }
 }

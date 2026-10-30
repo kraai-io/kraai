@@ -1,8 +1,9 @@
 use color_eyre::eyre::{Result, bail, ensure};
 use futures::stream::{self, BoxStream};
 use kraai_provider_core::{
-    Model, ModelConfig, Provider, ProviderManager, ProviderRequest, ProviderRequestContext,
-    ProviderStreamEvent,
+    DynamicConfig, Model, ModelConfig, Provider, ProviderDefinition, ProviderFactory,
+    ProviderManager, ProviderPricingCatalog, ProviderPricingPolicy, ProviderRequest,
+    ProviderRequestContext, ProviderStreamEvent,
 };
 use kraai_types::{AssistantPhase, ModelId, ProviderId};
 
@@ -29,6 +30,37 @@ pub(crate) fn chunk(index: usize) -> String {
 }
 
 struct FixtureProvider;
+
+pub(crate) struct FixtureFactory;
+
+impl ProviderFactory for FixtureFactory {
+    const TYPE_ID: &'static str = "performance-offline";
+
+    fn definition() -> ProviderDefinition {
+        ProviderDefinition {
+            type_id: String::new(),
+            display_name: "Offline performance fixture".into(),
+            protocol_family: "performance".into(),
+            description: "Offline provider for performance workloads".into(),
+            provider_fields: Vec::new(),
+            model_fields: Vec::new(),
+            supports_model_discovery: true,
+            default_provider_id_prefix: "performance".into(),
+        }
+    }
+
+    fn pricing_policy() -> ProviderPricingPolicy {
+        ProviderPricingPolicy {
+            subscription: true,
+            catalog: |_| ProviderPricingCatalog::default(),
+        }
+    }
+
+    fn create(id: ProviderId, _config: DynamicConfig) -> Result<Box<dyn Provider>> {
+        ensure!(id == provider_id(), "Unexpected offline provider id {id}");
+        Ok(Box::new(FixtureProvider))
+    }
+}
 
 #[async_trait::async_trait]
 impl Provider for FixtureProvider {

@@ -3,19 +3,14 @@
     lib,
     system,
     pkgs,
+    rustToolchain,
+    withMold,
     ...
   }: {
-    _module.args.pkgs = import inputs.nixpkgs {
-      inherit system;
-      overlays = [(import inputs.rust-overlay)];
-    };
     devShells = {
       default =
         (pkgs.mkShell.override {
-          stdenv =
-            if pkgs.stdenv.hostPlatform.isLinux
-            then pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv
-            else pkgs.clangStdenv;
+          stdenv = withMold pkgs.clangStdenv;
         }) {
           buildInputs = with pkgs;
             [
@@ -32,9 +27,7 @@
               cargo-autoinherit
               inputs.crate2nix.packages.${system}.default
               samply
-              (rust-bin.stable.latest.default.override {
-                extensions = ["llvm-tools-preview"];
-              })
+              rustToolchain
               rust-analyzer
 
               just
@@ -50,6 +43,12 @@
             ]
             ++ lib.optionals stdenv.hostPlatform.isLinux [bubblewrap binutils docker-client docker-compose perf inferno valgrind]
             ++ lib.optionals stdenv.hostPlatform.isDarwin [darwin.cctools];
+          # Nightly cargo defaults to a new build layout and metadata-only rlibs. The eval graders'
+          # hidden-test builds, which kraai-eval's tests run with this cargo, need the stable ones.
+          env = {
+            CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT = "false";
+            CARGO_UNSTABLE_EMBED_METADATA = "true";
+          };
         };
     };
   };

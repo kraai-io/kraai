@@ -31,7 +31,7 @@ impl FakeHost {
             shell,
             source,
             std::env::current_dir()?,
-            SandboxCapabilities::new([SandboxCapability::NoSandbox])?,
+            SandboxCapabilities::new([SandboxCapability::NoSandbox]),
             timeout,
         );
         plan.host_arguments = vec![

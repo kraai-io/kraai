@@ -36,7 +36,7 @@ macro_rules! command_metadata {
             $(
                 {
                     description: $example_description:literal,
-                    timeout: $timeout:literal,
+                    $(header: $header:literal,)?
                     script: $script:literal
                     $(, setup: $setup:literal)?
                     $(, outcome: $outcome:literal)? $(,)?
@@ -56,7 +56,7 @@ macro_rules! command_metadata {
                         description: $example_description,
                         setup: concat!($($setup)?),
                         script: $script,
-                        script_input: concat!("# timeout=", $timeout, "\n", $script),
+                        script_input: concat!($($header, "\n",)? $script),
                         outcome: concat!($($outcome)?),
                     }
                 ),*

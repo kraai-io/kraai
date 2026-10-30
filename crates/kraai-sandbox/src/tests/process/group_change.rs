@@ -55,7 +55,7 @@ async fn changing_group_does_not_prevent_termination(cancelled: bool) {
     );
     plan.args(["--exact", PROBE, "--nocapture"]);
     plan.environment.insert(MODE.into(), "parent".into());
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, mut events) = tokio::sync::mpsc::channel(16);
     plan.output_events = Some(sender);
     let (started, execution_started) = tokio::sync::oneshot::channel();
     plan.execution_started = Some(execution_started);

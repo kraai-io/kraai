@@ -21,7 +21,7 @@ pub use id::{__private, validate_id, validate_message_id};
 pub use id::{CommandInvocationId, ScriptExecutionId};
 pub use image::ImageAttachment;
 pub use mcp::McpRequest;
-pub use permissions::{SandboxCapabilities, SandboxCapability, SandboxCapabilityError};
+pub use permissions::{SandboxCapabilities, SandboxCapability};
 pub use policy::{
     CapabilityPermissionRules, EscalationPolicy, PermissionResolution, ResolvedPermissions,
     SandboxPermissionSet,

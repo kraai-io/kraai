@@ -1,14 +1,15 @@
-const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
+pub const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 const TRUNCATION_MARKER: &[u8] = b"\n[kraai: output truncated after 1 MiB; redirect large output to a file and inspect selected excerpts]\n";
 
-pub(super) struct OutputCapture {
+#[derive(Default)]
+pub struct OutputCapture {
     bytes: Vec<u8>,
     emitted: usize,
     truncated: bool,
 }
 
 impl OutputCapture {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             bytes: Vec::new(),
             emitted: 0,
@@ -16,7 +17,7 @@ impl OutputCapture {
         }
     }
 
-    pub(super) fn push(&mut self, bytes: &[u8]) -> &[u8] {
+    pub fn push(&mut self, bytes: &[u8]) -> &[u8] {
         if self.truncated {
             return &[];
         }
@@ -35,13 +36,13 @@ impl OutputCapture {
         self.bytes.get(start..end).unwrap_or_default()
     }
 
-    pub(super) fn finish(&mut self) -> &[u8] {
+    pub fn finish(&mut self) -> &[u8] {
         let start = self.emitted;
         self.emitted = self.bytes.len();
         self.bytes.get(start..).unwrap_or_default()
     }
 
-    pub(super) fn into_bytes(self) -> Vec<u8> {
+    pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
 }

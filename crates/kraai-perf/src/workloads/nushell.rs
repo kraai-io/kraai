@@ -26,7 +26,7 @@ impl Benchmark for Case {
             std::env::current_exe()?,
             b"1..4096 | each {|number| $number * 2 } | math sum | to json --raw".to_vec(),
             context.directory.clone(),
-            SandboxCapabilities::new([SandboxCapability::NoSandbox])?,
+            SandboxCapabilities::new([SandboxCapability::NoSandbox]),
             Duration::from_secs(10),
         );
         if context.profiling {

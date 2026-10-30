@@ -240,11 +240,8 @@ mod tests {
         let unrestricted = kraai_execution_types::SandboxCapabilities::new([
             kraai_execution_types::SandboxCapability::HostWrite,
             kraai_execution_types::SandboxCapability::Network,
-        ])
-        .ok();
-        assert!(unrestricted.map(notice).is_some_and(|rendered| {
-            rendered.contains("permissions=no-sandbox`. Not granted: no-sandbox.")
-        }));
+        ]);
+        assert!(notice(unrestricted).contains("permissions=no-sandbox`. Not granted: no-sandbox."));
     }
 
     #[test]

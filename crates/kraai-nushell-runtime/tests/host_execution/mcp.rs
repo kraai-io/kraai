@@ -47,8 +47,7 @@ async fn mcp_works_without_sandbox_network_and_preserves_record_arguments() {
         ),
         &workspace,
     );
-    plan.capabilities =
-        SandboxCapabilities::new([SandboxCapability::WorkspaceRead]).expect("capabilities");
+    plan.capabilities = SandboxCapabilities::new([SandboxCapability::WorkspaceRead]);
     plan.runtime_roots = sandbox_runtime_roots(host_executable());
     plan.active_commands = vec![String::from("kraai-mcp")];
     plan.mcp = Arc::new(FixtureMcp);

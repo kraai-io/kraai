@@ -321,7 +321,7 @@ async fn script_examples_use_the_shared_tool_prompt() -> Result<()> {
         let (script, _) = block
             .split_once("\n```")
             .ok_or_else(|| eyre!("unclosed Nushell example"))?;
-        assert!(script.trim_start().starts_with("# timeout="));
+        kraai_script_protocol::parse_script_input(script)?;
     }
     cleanup_dir(data_dir).await;
     Ok(())
@@ -355,6 +355,11 @@ async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt()
             .system_prompt
             .is_empty()
     );
+    assert_eq!(
+        kraai_script_protocol::DEFAULT_SCRIPT_TIMEOUT,
+        std::time::Duration::from_secs(30)
+    );
+    assert!(system_prompt.contains("Scripts time out after 30sec."));
     let edit_command = kraai_commands::edit_file::METADATA;
     assert!(system_prompt.contains(edit_command.description));
     assert!(system_prompt.contains(edit_command.signature_help));
@@ -376,7 +381,7 @@ async fn execution_context_reports_selected_profile_grants_and_policy() -> Resul
     let mut profile = manager.resolve_selected_profile(&session)?;
     profile.permissions = kraai_execution_types::SandboxPermissionSet::new([
         kraai_execution_types::SandboxCapability::WorkspaceRead,
-    ])?;
+    ]);
     profile.permission_rules = kraai_execution_types::CapabilityPermissionRules::new([(
         kraai_execution_types::SandboxCapability::Network,
         kraai_execution_types::EscalationPolicy::Deny,
@@ -386,7 +391,7 @@ async fn execution_context_reports_selected_profile_grants_and_policy() -> Resul
         if unsandboxed {
             profile.permissions = kraai_execution_types::SandboxPermissionSet::new([
                 kraai_execution_types::SandboxCapability::NoSandbox,
-            ])?;
+            ]);
         }
         let prompt = manager
             .build_turn_system_prompt(&session_id, &profile, &session.workspace_dir)
