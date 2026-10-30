@@ -7,7 +7,7 @@ mod process_group;
 use tokio::io::{AsyncRead, AsyncReadExt};
 #[cfg(not(windows))]
 use tokio::process::Command;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{LaunchPlan, PreparedCommand};
@@ -189,7 +189,7 @@ async fn terminate_process_tree(
 async fn read_output(
     mut reader: impl AsyncRead + Unpin,
     stream: OutputStream,
-    events: Option<UnboundedSender<OutputEvent>>,
+    events: Option<Sender<OutputEvent>>,
     cancellation: CancellationToken,
 ) -> std::io::Result<Vec<u8>> {
     let mut captured = OutputCapture::new();
@@ -205,20 +205,19 @@ async fn read_output(
         }
         let bytes = buffer.get(..read).unwrap_or(&buffer);
         captured.push(bytes);
-        emit_output(&events, stream, bytes);
+        if let Some(events) = &events {
+            let event = OutputEvent {
+                stream,
+                bytes: bytes.to_vec(),
+            };
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => break,
+                _sent = events.send(event) => {}
+            }
+        }
     }
     Ok(captured.into_bytes())
-}
-
-fn emit_output(events: &Option<UnboundedSender<OutputEvent>>, stream: OutputStream, bytes: &[u8]) {
-    if !bytes.is_empty()
-        && let Some(events) = events
-    {
-        let _ = events.send(OutputEvent {
-            stream,
-            bytes: bytes.to_vec(),
-        });
-    }
 }
 
 async fn finish_outputs(

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use kraai_sandbox::{MAX_CAPTURE_BYTES, OutputCapture, OutputEvent, OutputStream};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{Receiver, UnboundedReceiver, UnboundedSender};
 
 use super::marker::Scan;
 use super::{Marker, OutputFrame, OutputValue, toon};
@@ -11,7 +11,7 @@ const FRAME_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
 pub(crate) async fn render(
     marker: Marker,
     frames: UnboundedReceiver<OutputFrame>,
-    mut raw: UnboundedReceiver<OutputEvent>,
+    mut raw: Receiver<OutputEvent>,
     events: Option<UnboundedSender<OutputEvent>>,
 ) -> (Vec<u8>, Vec<u8>) {
     let mut splice = Splice {
@@ -225,7 +225,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let marker = Marker::random();
         let (frames_tx, frames) = tokio::sync::mpsc::unbounded_channel();
-        let (raw_tx, raw) = tokio::sync::mpsc::unbounded_channel();
+        let (raw_tx, raw) = tokio::sync::mpsc::channel(8);
         let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
         let task = tokio::spawn(render(marker.clone(), frames, raw, Some(events_tx)));
 
@@ -233,14 +233,15 @@ mod tests {
         let (head, tail) = value.split_at(5);
         let mut first = b"before\n".to_vec();
         first.extend_from_slice(head);
-        raw_tx.send(event(OutputStream::Stdout, &first)).ok();
+        raw_tx.send(event(OutputStream::Stdout, &first)).await.ok();
         let mut second = tail.to_vec();
         second.extend_from_slice(b"\n");
         second.extend(marker.encode(3));
         second.extend_from_slice(b"\n\x1eplain\n");
-        raw_tx.send(event(OutputStream::Stdout, &second)).ok();
+        raw_tx.send(event(OutputStream::Stdout, &second)).await.ok();
         raw_tx
             .send(event(OutputStream::Stderr, &marker.encode(9)))
+            .await
             .ok();
         tokio::task::yield_now().await;
         for frame in [

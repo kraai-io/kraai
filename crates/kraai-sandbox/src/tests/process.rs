@@ -62,7 +62,7 @@ pub(super) async fn detached_output(mode: &str, capability: SandboxCapability, c
     plan.environment = std::env::vars_os().collect();
     plan.environment
         .insert("KRAAI_DETACHED_OUTPUT".into(), mode.into());
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, mut events) = tokio::sync::mpsc::channel(16);
     plan.output_events = Some(sender);
     let (started, execution_started) = tokio::sync::oneshot::channel();
     plan.execution_started = Some(execution_started);
@@ -187,7 +187,7 @@ pub(super) async fn assert_process_group_stops(mode: &str, capability: SandboxCa
         (HANG_TIMEOUT * 2).as_secs()
     );
     plan.args(["-c", script.as_str()]);
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, mut events) = tokio::sync::mpsc::channel(16);
     plan.output_events = Some(sender);
     let cancellation = CancellationToken::new();
     let (started, execution_started) = tokio::sync::oneshot::channel();

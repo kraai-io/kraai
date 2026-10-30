@@ -238,7 +238,7 @@ async fn captures_output_and_preserves_environment_values() {
 
 async fn assert_tree_stopped(fixture: &Fixture, cancel: bool) {
     let mut plan = fixture.plan("tree", &[SandboxCapability::WorkspaceWrite]);
-    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::channel(16);
     plan.output_events = Some(sender);
     let cancellation = CancellationToken::new();
     if !cancel {
@@ -306,7 +306,7 @@ async fn normal_exit_kills_remaining_descendants() {
 async fn dropping_execution_kills_descendants() {
     let fixture = Fixture::new();
     let mut plan = fixture.plan("tree", &[SandboxCapability::WorkspaceWrite]);
-    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::channel(16);
     plan.output_events = Some(sender);
     let execution = tokio::spawn(kraai_sandbox::run(plan, CancellationToken::new()));
     wait_for_descendant(events).await;
@@ -322,7 +322,7 @@ async fn dropping_execution_kills_descendants() {
 async fn aborted_cleanup_does_not_block_the_runtime() {
     let fixture = Fixture::new();
     let mut plan = fixture.plan("tree", &[SandboxCapability::WorkspaceWrite]);
-    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::channel(16);
     plan.output_events = Some(sender);
     let execution = tokio::spawn(kraai_sandbox::run(plan, CancellationToken::new()));
     wait_for_descendant(events).await;
@@ -375,9 +375,7 @@ fn hold_cleanup_lock(
     assert_ne!(unsafe { ReleaseMutex(handle.as_raw_handle()) }, 0);
 }
 
-async fn wait_for_descendant(
-    mut events: tokio::sync::mpsc::UnboundedReceiver<kraai_sandbox::OutputEvent>,
-) {
+async fn wait_for_descendant(mut events: tokio::sync::mpsc::Receiver<kraai_sandbox::OutputEvent>) {
     hang_guard(async {
         let mut output = Vec::new();
         while let Some(event) = events.recv().await {
