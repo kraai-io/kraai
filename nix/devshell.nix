@@ -20,7 +20,10 @@
               cargo-audit
               cargo-deny
               cargo-nextest
-              cargo-llvm-cov
+              # Its tests build with nixpkgs rustc 1.99, which links LLVM 22 instead of 23 and
+              # segfaults under coverage. We use the toolchain's llvm-tools, so the tool itself works.
+              # Drop once https://github.com/NixOS/nixpkgs/pull/578990 reaches nixos-unstable.
+              (cargo-llvm-cov.overrideAttrs {doCheck = false;})
               cargo-geiger
               cargo-crev
               cargo-flamegraph
