@@ -86,13 +86,22 @@
       ];
     };
 
-    buildRustCrateForPkgs = pkgs: let
-      buildRustCrate = pkgs.buildRustCrate.override {
-        stdenv = withMold pkgs.stdenv;
+    releaseRustflags =
+      cargoConfig.profile.release.rustflags
+      ++ lib.concatLists (lib.attrValues releaseRustcOpts);
+    # rustc rejects LTO when a library also builds a non-rlib output. The binary's LTO still
+    # covers these crates through the bitcode in their rlibs.
+    releaseRustflagsWithoutLto =
+      cargoConfig.profile.release.rustflags
+      ++ lib.concatLists (lib.attrValues (removeAttrs releaseRustcOpts ["lto"]));
+
+    mkBuildRustCrate = cratePkgs: let
+      buildRustCrate = cratePkgs.buildRustCrate.override {
+        stdenv = withMold cratePkgs.stdenv;
         cargo = rustToolchain;
         rustc = rustToolchain;
         defaultCrateOverrides =
-          pkgs.defaultCrateOverrides
+          cratePkgs.defaultCrateOverrides
           // {
             rmcp = _: {CARGO_CRATE_NAME = "rmcp";};
             # Its macro emits items in HashMap order, so every build of a parser crate gets a
@@ -112,33 +121,39 @@
           // {
             extraRustcOpts =
               (crate.extraRustcOpts or [])
-              ++ lib.optionals (crate.release or true) cargoConfig.profile.release.rustflags
               ++ lib.optionals (crate.release or true) (
-                lib.concatLists (lib.attrValues (
-                  # rustc rejects LTO when a library also builds a non-rlib output. The binary's LTO
-                  # still covers these crates through the bitcode in their rlibs.
-                  if !(crate.procMacro or false) && lib.all (type: type == "lib" || type == "rlib") (crate.type or ["lib"])
-                  then releaseRustcOpts
-                  else removeAttrs releaseRustcOpts ["lto"]
-                ))
+                if !(crate.procMacro or false) && lib.all (type: type == "lib" || type == "rlib") (crate.type or ["lib"])
+                then releaseRustflags
+                else releaseRustflagsWithoutLto
               );
           });
+    # Cargo.nix calls this once per crate. Rebuilding the mold stdenv and the buildRustCrate
+    # override on every call dominated evaluation time.
+    hostBuildRustCrate = mkBuildRustCrate pkgs;
+    buildRustCrateForPkgs = cratePkgs:
+      if cratePkgs.stdenv.hostPlatform.config == pkgs.stdenv.hostPlatform.config
+      then hostBuildRustCrate
+      else mkBuildRustCrate cratePkgs;
     mkCargoNix = release:
       pkgs.callPackage ../Cargo.nix {
         inherit release buildRustCrateForPkgs;
       };
 
-    cargoNix = mkCargoNix true;
-    cargoCheckNix = mkCargoNix false;
-    vmTestBinaries = name:
-      ((cargoCheckNix.internal.builtRustCratesWithFeatures {
-          packageId = name;
-          features = ["default"];
-          buildRustCrateForPkgsFunc = buildRustCrateForPkgs;
-          runTests = true;
-        }).crates.${
-          name
-        }).override {buildTests = true;};
+    unifiedCrates = import ./unified-crates.nix {
+      inherit lib;
+      inherit (pkgs) stdenv;
+    };
+    releaseCrates = unifiedCrates {
+      cargoNix = mkCargoNix true;
+      inherit buildRustCrateForPkgs;
+      withDevDependencies = false;
+    };
+    debugCrates = unifiedCrates {
+      cargoNix = mkCargoNix false;
+      inherit buildRustCrateForPkgs;
+      withDevDependencies = true;
+    };
+    vmTestBinaries = name: debugCrates.testCrates.${name}.override {buildTests = true;};
 
     mkCargoCheck = {
       name,
@@ -179,6 +194,8 @@
           mkdir -p "$HOME"
           export CARGO_TARGET_DIR="$TMPDIR/target"
           export CARGO_TERM_COLOR=always
+          export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
+          export NEXTEST_TEST_THREADS="$NIX_BUILD_CORES"
 
           ${exportEnv}
 
@@ -191,74 +208,78 @@
         '';
       };
 
+    # Wraps a copy of the release crate's binaries instead of overriding the crate itself. An
+    # override is a second derivation that recompiles the crate, and other members still link the
+    # unwrapped one. Copying keeps current_exe() and its sibling binaries inside the package.
+    wrapReleaseBinary = {
+      member,
+      binary,
+      wrapperArgs,
+    }: let
+      crate = releaseCrates.crates.${member};
+    in
+      pkgs.runCommand "${binary}-${crate.version}" {
+        nativeBuildInputs = [pkgs.makeWrapper];
+        passthru.unwrapped = crate;
+        meta = (crate.meta or {}) // {mainProgram = binary;};
+      } ''
+        mkdir -p "$out/bin"
+        cp ${crate}/bin/* "$out/bin/"
+        wrapProgram "$out/bin/${binary}" ${wrapperArgs}
+      '';
+
     frontendPackage = member: binary:
-      cargoNix.workspaceMembers.${member}.build.overrideAttrs (old: {
-        nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.makeWrapper];
-        postInstall =
-          (old.postInstall or "")
-          + ''
-            wrapProgram "$out/bin/${binary}" \
-              --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
-              --prefix PATH : ${lib.makeBinPath (
-              [pkgs.ripgrep]
-              ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.bubblewrap]
-            )} \
-              --set KRAAI_SCRIPT_RUNTIME_ROOTS /nix/store
-          '';
-        meta =
-          (old.meta or {})
-          // {
-            mainProgram = binary;
-          };
-      });
+      wrapReleaseBinary {
+        inherit member binary;
+        wrapperArgs = ''
+          --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
+          --prefix PATH : ${lib.makeBinPath (
+            [pkgs.ripgrep]
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.bubblewrap]
+          )} \
+          --set KRAAI_SCRIPT_RUNTIME_ROOTS /nix/store
+        '';
+      };
 
     kraai = frontendPackage "kraai-tui" "kraai";
     kraai-acp = frontendPackage "kraai-acp" "kraai-acp";
     kraai-headless = frontendPackage "kraai-headless" "kraai-headless";
     kraai-perf = frontendPackage "kraai-perf" "kraai-perf";
 
-    kraai-eval = cargoNix.workspaceMembers."kraai-eval".build.overrideAttrs (old: {
-      nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.makeWrapper];
-      postInstall =
-        (old.postInstall or "")
-        + ''
-          wrapProgram "$out/bin/kraai-eval" \
-            --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
-            --set-default KRAAI_EVAL_TASKS ${../evals/tasks} \
-            --set-default KRAAI_EVAL_HARBOR ${../evals/harbor} \
-            --set-default KRAAI_EVAL_VIEWER_ASSETS ${self'.packages.kraai-eval-viewer} \
-            --prefix PATH : ${lib.makeBinPath [
-            kraai-headless
-            pkgs.bubblewrap
-            pkgs.clang
-            pkgs.coreutils
-            pkgs.findutils
-            pkgs.git
-            pkgs.gnutar
-            pkgs.docker-client
-            pkgs.docker-compose
-            pkgs.gnused
-            pkgs.pkg-config
-            pkgs.ripgrep
-            pkgs.systemd
-            pkgs.nix
-            pkgs.uv
-            pkgs.python312
-            evalRustToolchain
-          ]}
-        '';
-      meta =
-        (old.meta or {})
-        // {
-          mainProgram = "kraai-eval";
-        };
-    });
+    kraai-eval = wrapReleaseBinary {
+      member = "kraai-eval";
+      binary = "kraai-eval";
+      wrapperArgs = ''
+        --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
+        --set-default KRAAI_EVAL_TASKS ${../evals/tasks} \
+        --set-default KRAAI_EVAL_HARBOR ${../evals/harbor} \
+        --set-default KRAAI_EVAL_VIEWER_ASSETS ${self'.packages.kraai-eval-viewer} \
+        --prefix PATH : ${lib.makeBinPath [
+          kraai-headless
+          pkgs.bubblewrap
+          pkgs.clang
+          pkgs.coreutils
+          pkgs.findutils
+          pkgs.git
+          pkgs.gnutar
+          pkgs.docker-client
+          pkgs.docker-compose
+          pkgs.gnused
+          pkgs.pkg-config
+          pkgs.ripgrep
+          pkgs.systemd
+          pkgs.nix
+          pkgs.uv
+          pkgs.python312
+          evalRustToolchain
+        ]}
+      '';
+    };
 
     workspaceTestChecks = builtins.listToAttrs (
       map
       (name: let
-        tested = cargoCheckNix.workspaceMembers.${name}.build.override {
-          runTests = true;
+        tested = debugCrates.withTests name {
           testInputs = workspaceTestInputs.${name} or [];
           testCrateFlags =
             lib.optionals pkgs.stdenv.hostPlatform.isDarwin (
