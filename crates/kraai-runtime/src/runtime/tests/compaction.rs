@@ -117,7 +117,7 @@ impl Provider for TestSummarizer {
             matches!(message, ConversationItem::User { content } if content.display_text().contains("CONTEXT CHECKPOINT COMPACTION"))
         });
         if is_summary {
-            assert!(request.script_tool.is_none());
+            assert!(request.script_tool.is_some());
             if self.fail {
                 return Err(color_eyre::eyre::eyre!("summary provider rejected request"));
             }
