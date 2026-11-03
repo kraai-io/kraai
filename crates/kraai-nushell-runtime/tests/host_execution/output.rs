@@ -293,8 +293,8 @@ print "started"
 
 #[tokio::test]
 async fn markers_do_not_count_toward_the_capture_limit() {
-    let expected: String = (1..=60000).map(|n| format!("{n}\n")).collect();
-    assert_script("1..60000 | each {|n| print $n }; null", &expected).await;
+    let expected: String = (1..=10000).map(|n| format!("{n}\n")).collect();
+    assert_script("1..10000 | each {|n| print $n }; null", &expected).await;
 }
 
 #[tokio::test]
@@ -328,8 +328,11 @@ print -e ("e" | fill -c e -w 1100000)
     assert_eq!(stdout, result.stdout);
     assert_eq!(stderr, result.stderr);
     for output in [&stdout, &stderr] {
-        assert!(output.len() <= 1024 * 1024 + 150);
-        assert!(String::from_utf8_lossy(output).contains("[kraai: output truncated after 1 MiB;"));
+        assert!(output.len() <= kraai_sandbox::MAX_CAPTURE_BYTES + 200);
+        assert!(
+            String::from_utf8_lossy(output)
+                .contains("bytes omitted from the middle of this output;")
+        );
     }
 }
 

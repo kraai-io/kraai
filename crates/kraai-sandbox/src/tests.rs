@@ -177,9 +177,12 @@ async fn live_output_events_carry_every_byte_past_the_capture_limit() {
     let output = output.expect("process should run");
     assert_eq!(stdout.len(), 5 + MAX_CAPTURE_BYTES * 2);
     assert!(stdout.starts_with(b"first"));
-    assert!(output.stdout.len() >= MAX_CAPTURE_BYTES);
+    assert!(output.stdout.len() > MAX_CAPTURE_BYTES);
     assert!(output.stdout.len() < stdout.len());
-    assert!(stdout.starts_with(output.stdout.get(..MAX_CAPTURE_BYTES).unwrap_or_default()));
+    let head = crate::output_capture::CAPTURE_HEAD_BYTES;
+    let tail = crate::output_capture::CAPTURE_TAIL_BYTES;
+    assert!(output.stdout.starts_with(&stdout[..head]));
+    assert!(output.stdout.ends_with(&stdout[stdout.len() - tail..]));
     assert_eq!(stderr, b"problem");
     assert_eq!(stderr, output.stderr);
     let _ = std::fs::remove_dir_all(workspace);
