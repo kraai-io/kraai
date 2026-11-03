@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result, bail, eyre};
 use kraai_provider_core::{DynamicValue, ModelConfig, ProviderConfig, ProviderManagerConfig};
+use kraai_provider_openai_chat_completions::OpenAiChatCompletionsFactory;
 
 const CODEX_PROXY_TOKEN_ENV: &str = "KRAAI_EVAL_CODEX_PROXY_TOKEN";
 const OPENAI_PROXY_TOKEN_ENV: &str = "OPENAI_API_KEY";
@@ -77,6 +78,10 @@ impl KraaiProviderConfigRequest {
                     .insert(String::from("allow_http_proxy"), DynamicValue::Bool(true));
             }
             KraaiProviderKind::ChatCompletions => {
+                // The proxy replaces base_url, which would change the endpoint-based defaults.
+                provider
+                    .config
+                    .extend(OpenAiChatCompletionsFactory::cache_hint_settings(&config)?);
                 for key in ["only_listed_models", "catalog_provider"] {
                     if let Some(value) = config.remove(key) {
                         provider.config.insert(String::from(key), value);
@@ -369,9 +374,46 @@ provider_id = "local"
             .materialize(&root, "http://127.0.0.1:1234/v1")?;
         let materialized: ProviderManagerConfig = toml::from_slice(&fs::read(path)?)?;
         let expected: ProviderManagerConfig = toml::from_str(
-            "[[provider]]\nid = 'local'\ntype = 'openai-chat-completions'\nbase_url = 'http://127.0.0.1:1234/v1'\nenv_var_api_key = 'OPENAI_API_KEY'\nonly_listed_models = false\n[[model]]\nid = 'local-model'\nprovider_id = 'local'\n",
+            "[[provider]]\nid = 'local'\ntype = 'openai-chat-completions'\nbase_url = 'http://127.0.0.1:1234/v1'\ncache_breakpoints = false\nenv_var_api_key = 'OPENAI_API_KEY'\nonly_listed_models = false\nprompt_cache_key = false\n[[model]]\nid = 'local-model'\nprovider_id = 'local'\n",
         )?;
         ensure!(toml::to_string(&materialized)? == toml::to_string(&expected)?);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn chat_completions_cache_hints_survive_the_proxy_base_url() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-chat-cache-hints-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&root)?;
+        let source = root.join("providers.toml");
+        fs::write(
+            &source,
+            r#"
+[[provider]]
+id = "openrouter"
+type = "openai-chat-completions"
+api_key = "key"
+base_url = "https://openrouter.ai/api/v1"
+prompt_cache_key = true
+"#,
+        )?;
+        let path = KraaiProviderConfigRequest::new(source, None)
+            .prepare()?
+            .materialize(&root, "http://127.0.0.1:1234/v1")?;
+        let materialized: ProviderManagerConfig = toml::from_slice(&fs::read(path)?)?;
+        let provider = materialized
+            .providers
+            .first()
+            .ok_or_else(|| eyre!("provider was removed"))?;
+        for key in ["cache_breakpoints", "prompt_cache_key"] {
+            ensure!(
+                provider.config.get(key) == Some(&DynamicValue::Bool(true)),
+                "{key} was not kept"
+            );
+        }
         fs::remove_dir_all(root)?;
         Ok(())
     }

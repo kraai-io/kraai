@@ -200,6 +200,7 @@ async fn generate_reply_stream_forwards_retry_observer_to_http_retry_layer() {
         )]))
         .unwrap(),
         only_listed_models: false,
+        cache_hints: CacheHints::default(),
         cached_models: ModelMetadataCache::default(),
         model_configs: BTreeMap::new(),
         model_catalog: None,
@@ -260,6 +261,7 @@ async fn successful_http_status_does_not_hide_a_streamed_provider_failure() {
         )]))
         .unwrap(),
         only_listed_models: false,
+        cache_hints: CacheHints::default(),
         cached_models: ModelMetadataCache::default(),
         model_configs: BTreeMap::new(),
         model_catalog: None,
@@ -338,6 +340,7 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
             )]))
             .unwrap(),
             only_listed_models,
+            cache_hints: CacheHints::default(),
             cached_models,
             model_configs: BTreeMap::from([(
                 ModelId::new("alpha"),
@@ -734,4 +737,79 @@ async fn configured_custom_models_absent_from_discovery_apply_custom_settings() 
         body.get("max_completion_tokens"),
         Some(&serde_json::json!(8192))
     );
+}
+
+/// Sends one request with the cache hints set to `enabled` and returns its JSON body, or `None`
+/// when the system has no CA bundle to build a client with.
+async fn cache_hint_request_body(enabled: bool) -> Option<serde_json::Value> {
+    let (url, server) = spawn_recording_server(vec![ScriptedResponse::Status {
+        status_line: "200 OK",
+        body: "data: [DONE]\n\n",
+    }])
+    .await;
+    let provider = match create_provider::<GenericChatCompletionsProfile>(
+        ProviderId::new("fixture"),
+        DynamicConfig::from([
+            ("base_url".into(), DynamicValue::String(url)),
+            ("api_key".into(), DynamicValue::String("fixture-key".into())),
+            ("only_listed_models".into(), DynamicValue::Bool(false)),
+            ("cache_breakpoints".into(), DynamicValue::Bool(enabled)),
+            ("prompt_cache_key".into(), DynamicValue::Bool(enabled)),
+        ]),
+    ) {
+        Ok(provider) => provider,
+        Err(error) if is_missing_system_ca_error(error.as_ref()) => return None,
+        Err(error) => panic!("unexpected provider creation error: {error}"),
+    };
+    provider
+        .generate_reply_stream(
+            &ModelId::new("fixture-model"),
+            ProviderRequest {
+                cacheable_messages: None,
+                options: Default::default(),
+                messages: vec![
+                    kraai_types::ConversationItem::System {
+                        text: "instructions".into(),
+                    },
+                    kraai_types::ConversationItem::User {
+                        content: String::from("hello").into(),
+                    },
+                ],
+                script_tool: None,
+            },
+            &ProviderRequestContext::with_prompt_cache_key("session".into()),
+        )
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    let requests = tokio::time::timeout(kraai_test_support::HANG_TIMEOUT, server)
+        .await
+        .unwrap_or_else(|_| panic!("provider sent no request"))
+        .unwrap();
+    let (_, body) = requests[0].split_once("\r\n\r\n").unwrap();
+    Some(serde_json::from_str(body).unwrap())
+}
+
+#[tokio::test]
+async fn cache_hints_mark_breakpoints_and_send_the_prompt_cache_key() {
+    let Some(body) = cache_hint_request_body(true).await else {
+        return;
+    };
+    assert_eq!(body["prompt_cache_key"], serde_json::json!("session"));
+    for (index, text) in [(0, "instructions"), (1, "hello")] {
+        assert_eq!(
+            body["messages"][index]["content"],
+            serde_json::json!([{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}])
+        );
+    }
+}
+
+#[tokio::test]
+async fn disabled_cache_hints_leave_the_request_unmarked() {
+    let Some(body) = cache_hint_request_body(false).await else {
+        return;
+    };
+    assert!(body.get("prompt_cache_key").is_none());
+    assert!(!body.to_string().contains("cache_control"));
 }
