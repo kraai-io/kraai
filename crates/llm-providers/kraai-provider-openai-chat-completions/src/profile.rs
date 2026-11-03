@@ -83,6 +83,28 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
                     )),
                     default_value: Some(DynamicValue::Bool(true)),
                 },
+                FieldDefinition {
+                    key: String::from("cache_breakpoints"),
+                    label: String::from("Cache Breakpoints"),
+                    value_kind: FieldValueKind::Boolean,
+                    required: false,
+                    secret: false,
+                    help_text: Some(String::from(
+                        "Mark cache_control breakpoints for models that only cache explicitly marked prompts, such as Anthropic models. Defaults to on for OpenRouter",
+                    )),
+                    default_value: None,
+                },
+                FieldDefinition {
+                    key: String::from("prompt_cache_key"),
+                    label: String::from("Prompt Cache Key"),
+                    value_kind: FieldValueKind::Boolean,
+                    required: false,
+                    secret: false,
+                    help_text: Some(String::from(
+                        "Send the session ID as prompt_cache_key so requests reach the same prompt cache. Defaults to on for api.openai.com",
+                    )),
+                    default_value: None,
+                },
             ],
             model_fields: ConfiguredModelMetadata::fields(),
             supports_model_discovery: true,
@@ -133,13 +155,19 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
             });
         }
 
-        if let Some(value) = config.get("only_listed_models")
-            && value.as_bool().is_none()
-        {
-            errors.push(ValidationError {
-                field: String::from("only_listed_models"),
-                message: String::from("Only Listed Models must be a boolean"),
-            });
+        for (field, label) in [
+            ("only_listed_models", "Only Listed Models"),
+            ("cache_breakpoints", "Cache Breakpoints"),
+            ("prompt_cache_key", "Prompt Cache Key"),
+        ] {
+            if let Some(value) = config.get(field)
+                && value.as_bool().is_none()
+            {
+                errors.push(ValidationError {
+                    field: String::from(field),
+                    message: format!("{label} must be a boolean"),
+                });
+            }
         }
 
         errors

@@ -13,9 +13,9 @@ pub fn normalize_chat_messages(
     for message in kraai_provider_core::prepare_history(messages, provider_id) {
         match message {
             ConversationItem::Compaction { .. } => {}
-            ConversationItem::System { text } => {
-                normalized.push(RequestMessage::System { content: text })
-            }
+            ConversationItem::System { text } => normalized.push(RequestMessage::System {
+                content: RequestContent::Text(text),
+            }),
             ConversationItem::FileContext { text } => normalized.push(RequestMessage::User {
                 content: RequestContent::Text(text),
             }),
@@ -65,7 +65,7 @@ pub fn normalize_chat_messages(
             } => {
                 normalized.push(RequestMessage::Tool {
                     tool_call_id: call_id,
-                    content: output.display_text().into_owned(),
+                    content: RequestContent::Text(output.display_text().into_owned()),
                 });
             }
         }
@@ -82,7 +82,10 @@ fn content_parts(content: MessageContent, images: &ResolvedImages) -> Result<Req
             .parts()
             .iter()
             .map(|part| match part {
-                ContentPart::Text { text } => Ok(RequestContentPart::Text { text: text.clone() }),
+                ContentPart::Text { text } => Ok(RequestContentPart::Text {
+                    text: text.clone(),
+                    cache_control: None,
+                }),
                 ContentPart::Image { image } => Ok(RequestContentPart::ImageUrl {
                     image_url: ImageUrl {
                         url: images.data_url(image)?.to_string(),
