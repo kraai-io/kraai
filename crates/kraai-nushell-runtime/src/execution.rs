@@ -99,6 +99,8 @@ pub async fn execute(
     let startup_timeout = plan.startup_timeout;
     let secret = rand::random::<[u8; 32]>();
     let output_marker = Marker::random();
+    let startup_files = crate::startup_files(plan.nushell_startup, &plan.environment)
+        .map_err(RuntimeError::Startup)?;
     let host_request = HostRequest {
         protocol_version: HOST_PROTOCOL_VERSION,
         execution_id: execution_id.clone(),
@@ -107,6 +109,7 @@ pub async fn execute(
         environment: plan.environment.clone(),
         active_commands: plan.active_commands,
         nushell_startup: plan.nushell_startup,
+        startup_files,
         event_secret: secret,
         output_marker: output_marker.clone(),
         restrict_network: !plan.capabilities.is_unsandboxed()
@@ -326,6 +329,7 @@ pub enum RuntimeError {
     RequestChannel(String),
     ChannelTask(String),
     HostChannel(String),
+    Startup(String),
     Sandbox(kraai_sandbox::SandboxError),
 }
 
@@ -336,6 +340,7 @@ impl std::fmt::Display for RuntimeError {
             Self::RequestChannel(message) => write!(f, "unable to send host request: {message}"),
             Self::ChannelTask(message) => write!(f, "host channel task failed: {message}"),
             Self::HostChannel(message) => write!(f, "host channel failed: {message}"),
+            Self::Startup(message) => write!(f, "{message}; script was not executed"),
             Self::Sandbox(error) => write!(f, "unable to execute Nushell host: {error}"),
         }
     }

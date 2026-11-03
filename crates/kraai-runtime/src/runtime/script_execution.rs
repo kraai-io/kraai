@@ -336,7 +336,8 @@ fn completion_from_runtime_error(
         RuntimeError::Transport(_) | RuntimeError::Sandbox(SandboxError::Spawn { .. }) => {
             ScriptExecutionStatus::HostUnavailable
         }
-        RuntimeError::Sandbox(
+        RuntimeError::Startup(_)
+        | RuntimeError::Sandbox(
             SandboxError::ExecutableMustBeAbsolute
             | SandboxError::ExecutableNotVisible(_)
             | SandboxError::InvalidTimeout

@@ -189,6 +189,16 @@ impl CommandContext {
         }
     }
 
+    /// A context for engines that parse scripts but never run Kraai commands.
+    pub fn parse_only() -> Self {
+        Self::new(
+            Arc::new(ParseOnly),
+            Arc::new(ParseOnly),
+            Arc::new(ParseOnly),
+            Arc::new(ParseOnly),
+        )
+    }
+
     pub fn images(&self) -> &dyn ImageAttachmentClient {
         self.images.as_ref()
     }
@@ -203,6 +213,45 @@ impl CommandContext {
 
     pub fn state_effects(&self) -> &dyn StateEffectClient {
         self.state_effects.as_ref()
+    }
+}
+
+/// Clients for commands that are only parsed, never run.
+struct ParseOnly;
+
+const PARSE_ONLY: &str = "Kraai commands cannot run in a parse-only engine";
+
+impl McpClient for ParseOnly {
+    fn execute(&self, _: kraai_execution_types::McpRequest) -> Result<serde_json::Value, String> {
+        Err(String::from(PARSE_ONLY))
+    }
+}
+
+impl StateEffectClient for ParseOnly {
+    fn apply(
+        &self,
+        _command_id: &'static str,
+        _deltas: Vec<ContextStateDelta>,
+    ) -> Result<(), StateEffectError> {
+        Err(StateEffectError::new(PARSE_ONLY))
+    }
+}
+
+impl WebSearchClient for ParseOnly {
+    fn search(
+        &self,
+        _: kraai_execution_types::WebSearchRequest,
+    ) -> Result<kraai_execution_types::WebSearchResponse, String> {
+        Err(String::from(PARSE_ONLY))
+    }
+}
+
+impl ImageAttachmentClient for ParseOnly {
+    fn attach_existing(&self, _: String) -> Result<kraai_execution_types::ImageAttachment, String> {
+        Err(String::from(PARSE_ONLY))
+    }
+    fn attach(&self, _: Vec<u8>) -> Result<kraai_execution_types::ImageAttachment, String> {
+        Err(String::from(PARSE_ONLY))
     }
 }
 
@@ -325,60 +374,13 @@ mod tests {
 
     use super::*;
 
-    struct UnusedEffects;
-
-    impl McpClient for UnusedEffects {
-        fn execute(
-            &self,
-            _: kraai_execution_types::McpRequest,
-        ) -> Result<serde_json::Value, String> {
-            Err(String::from("test commands must not run"))
-        }
-    }
-
-    impl StateEffectClient for UnusedEffects {
-        fn apply(
-            &self,
-            _command_id: &'static str,
-            _deltas: Vec<ContextStateDelta>,
-        ) -> Result<(), StateEffectError> {
-            Err(StateEffectError::new("test commands must not run"))
-        }
-    }
-
-    impl WebSearchClient for UnusedEffects {
-        fn search(
-            &self,
-            _: kraai_execution_types::WebSearchRequest,
-        ) -> Result<kraai_execution_types::WebSearchResponse, String> {
-            Err(String::from("test commands must not run"))
-        }
-    }
-
-    impl ImageAttachmentClient for UnusedEffects {
-        fn attach_existing(
-            &self,
-            _: String,
-        ) -> Result<kraai_execution_types::ImageAttachment, String> {
-            Err(String::from("test commands must not run"))
-        }
-        fn attach(&self, _: Vec<u8>) -> Result<kraai_execution_types::ImageAttachment, String> {
-            Err(String::from("test commands must not run"))
-        }
-    }
-
     #[test]
     #[expect(
         clippy::panic_in_result_fn,
         reason = "catalog consistency test propagates setup errors and asserts the command contract"
     )]
     fn executable_commands_match_the_prompt_catalog() -> Result<(), Box<dyn std::error::Error>> {
-        let registry = command_registry(CommandContext::new(
-            Arc::new(UnusedEffects),
-            Arc::new(UnusedEffects),
-            Arc::new(UnusedEffects),
-            Arc::new(UnusedEffects),
-        ))?;
+        let registry = command_registry(CommandContext::parse_only())?;
         assert_eq!(
             registry.command_ids().collect::<BTreeSet<_>>(),
             crate::command_ids().collect::<BTreeSet<_>>()

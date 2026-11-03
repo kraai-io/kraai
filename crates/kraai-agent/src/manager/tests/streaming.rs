@@ -336,6 +336,7 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
                 name: String::from("kraai_nushell"),
                 input: String::from("# timeout: 1\n42"),
                 arguments_error: None,
+                rewritten_from: None,
             },
         )
         .await

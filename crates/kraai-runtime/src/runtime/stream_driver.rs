@@ -478,6 +478,12 @@ impl StreamReader {
                             call.name
                         ));
                     }
+                    let profile = self
+                        .agent_manager
+                        .script_turn_context(&self.session_id)
+                        .ok()
+                        .map(|turn| turn.profile);
+                    let call = super::bash_habits::rewrite_script_call(call, profile).await;
                     response.boundary = Some(protocol_boundary(&call));
                     drain_deadline =
                         Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);

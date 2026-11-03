@@ -1,3 +1,4 @@
+mod bash_habits;
 mod builder;
 mod cache_warming;
 mod client_view;

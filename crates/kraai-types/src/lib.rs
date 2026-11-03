@@ -197,6 +197,7 @@ mod tests {
                 name: String::from("kraai_nushell"),
                 input: input.to_string(),
                 arguments_error: None,
+                rewritten_from: None,
             })
         };
         for (items, expected) in [

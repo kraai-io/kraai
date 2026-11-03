@@ -140,6 +140,7 @@ impl Completion {
                                 name,
                                 input,
                                 arguments_error: None,
+                                rewritten_from: None,
                             }));
                         }
                         _ => {}
@@ -460,7 +461,7 @@ mod tests {
 
         assert!(matches!(
             events.first(),
-            Some(Ok(ProviderStreamEvent::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None })))
+            Some(Ok(ProviderStreamEvent::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None, rewritten_from: None })))
                 if call_id.as_str() == "call-123"
                     && name == "kraai_nushell"
                     && input == "# timeout=30sec\nls"

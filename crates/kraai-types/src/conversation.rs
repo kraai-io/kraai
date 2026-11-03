@@ -147,6 +147,8 @@ pub struct ScriptCall {
     pub name: String,
     pub input: String,
     pub arguments_error: Option<String>,
+    /// The script the model wrote, when Kraai rewrote its bash syntax into `input`.
+    pub rewritten_from: Option<String>,
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -260,6 +262,7 @@ mod tests {
             name: "kraai_nushell".into(),
             input: "ls".into(),
             arguments_error: None,
+            rewritten_from: None,
         });
         assert_eq!(
             serde_json::to_value(&call)?,
@@ -269,6 +272,7 @@ mod tests {
                 "name": "kraai_nushell",
                 "input": "ls",
                 "arguments_error": null,
+                "rewritten_from": null,
             })
         );
         let without_error = serde_json::json!({

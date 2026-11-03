@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+mod bash_habits;
 mod effects;
 mod execution;
 mod host;
@@ -7,12 +8,15 @@ mod host_calls;
 mod images;
 mod rendering;
 pub mod request;
+mod startup_files;
 mod transport;
 mod wire;
 
+pub use bash_habits::rewrite_bash_habits;
 pub use effects::{RejectStateEffects, StateEffectHandler};
 pub use execution::{RuntimeError, ScriptExecutionPlan, ScriptExecutionResult, execute};
 pub use images::{ImageAttachmentHandler, RejectImageAttachments};
+pub use startup_files::{StartupFile, startup_files};
 
 #[doc(hidden)]
 pub const INTERNAL_HOST_ARGUMENT: &str = "--kraai-internal-nushell-host";

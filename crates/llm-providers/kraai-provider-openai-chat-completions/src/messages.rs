@@ -37,6 +37,7 @@ pub fn normalize_chat_messages(
                             name,
                             input,
                             arguments_error,
+                            ..
                         }) => {
                             let arguments = match arguments_error {
                                 Some(_) => input,
@@ -116,6 +117,7 @@ mod tests {
                         name: "kraai_nushell".into(),
                         input: "# timeout=1sec\nls".into(),
                         arguments_error: None,
+                        rewritten_from: None,
                     }),
                 ],
             }];
@@ -192,6 +194,7 @@ mod tests {
                         name: "kraai_nushell".to_string(),
                         input: "# timeout=10sec\nls".to_string(),
                         arguments_error: None,
+                        rewritten_from: None,
                     }),
                 ],
             }],
@@ -221,6 +224,7 @@ mod tests {
                     name: "bash".to_string(),
                     input: r#"{"command": "ls"}"#.to_string(),
                     arguments_error: Some("unknown tool 'bash'".to_string()),
+                    rewritten_from: None,
                 })],
             }],
             &ResolvedImages::default(),

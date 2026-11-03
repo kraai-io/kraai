@@ -215,6 +215,7 @@ impl kraai_provider_core::Provider for ScriptedProvider {
                         name,
                         input,
                         arguments_error,
+                        rewritten_from: None,
                     },
                 )),
                 ScriptedChunkKind::Usage(usage) => {
