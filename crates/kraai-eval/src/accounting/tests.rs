@@ -73,6 +73,29 @@ fn missing_usage_or_unrecorded_requests_never_look_like_complete_cheap_runs() ->
 }
 
 #[test]
+fn rejected_requests_without_usage_are_not_model_requests() -> Result<()> {
+    let (root, options) = fixture()?;
+    let path = root.join("proxy.events.jsonl");
+    let mut rejected = event(1, 0, 1, 0);
+    let object = rejected
+        .as_object_mut()
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing object"))?;
+    object.remove("usage");
+    object.insert("status".into(), serde_json::json!(503));
+    let mut answered = event(100, 0, 10, 0);
+    answered
+        .as_object_mut()
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing object"))?
+        .insert("status".into(), serde_json::json!(200));
+    fs::write(&path, format!("{rejected}\n{answered}\n"))?;
+    let result = analyze_requests(&path, 2, &options)?;
+    ensure!(result.model_requests == 1 && result.unpriced_requests == 0);
+    ensure!(result.complete_cost().is_some() && result.complete_context().is_some());
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
 fn service_tiers_use_standard_rates_and_stale_sidecars_are_rejected() -> Result<()> {
     let (root, options) = fixture()?;
     let path = root.join("proxy.events.jsonl");

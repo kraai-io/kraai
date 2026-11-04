@@ -32,6 +32,13 @@ impl RequestMeasurement {
         if !path.ends_with("/responses") && !path.ends_with("/chat/completions") {
             return Ok(None);
         }
+        let rejected = event
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| !(200..300).contains(&status));
+        if rejected && event.get("usage").is_none_or(Value::is_null) {
+            return Ok(None);
+        }
         let usage = event
             .get_mut("usage")
             .filter(|value| !value.is_null())
