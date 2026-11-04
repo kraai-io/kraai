@@ -6,7 +6,7 @@ use crate::read::ReadPrefix;
 
 pub const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const HTTP_FINITE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-pub const HTTP_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+pub const HTTP_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HttpTimeouts {

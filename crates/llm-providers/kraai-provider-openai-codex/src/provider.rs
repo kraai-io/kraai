@@ -1,7 +1,6 @@
 use kraai_io::http::{finite_request, streaming_http_client_builder};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
 use futures::stream::BoxStream;
@@ -88,7 +87,6 @@ fn build_codex_http_client(
     base_url: &str,
 ) -> Result<Client> {
     Ok(streaming_http_client_builder()
-        .read_timeout(Duration::from_secs(300))
         .https_only(!proxy_token)
         .redirect(codex_redirect_policy(
             proxy_token,
