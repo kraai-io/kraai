@@ -36,34 +36,12 @@
         procMacro = memberCargoToml.lib.proc-macro or false;
       })
       cargoToml.workspace.members;
-    # crate2nix ignores Cargo profiles, so translate the release profile into rustc flags.
-    releaseRustcOpts =
-      lib.mapAttrs (
-        key: value:
-          {
-            codegen-units = ["-C" "codegen-units=${toString value}"];
-            lto = lib.optionals (value != false) [
-              "-C"
-              "lto=${
-                if value == true
-                then "fat"
-                else value
-              }"
-            ];
-            opt-level = ["-C" "opt-level=${toString value}"];
-            strip = lib.optionals (value != false) [
-              "-C"
-              "strip=${
-                if value == true
-                then "symbols"
-                else value
-              }"
-            ];
-          }.${
-            key
-          } or (throw "nix/rust-packages.nix does not translate profile.release.${key}")
-      )
-      cargoToml.profile.release;
+    cargoProfiles = import ./cargo-profiles.nix {
+      inherit lib;
+      manifest = cargoToml;
+      config = cargoConfig;
+      memberNames = map (member: member.name) workspaceMembers;
+    };
     crate2nixTestMemberNames =
       map
       (member: member.name)
@@ -86,15 +64,6 @@
       ];
     };
 
-    releaseRustflags =
-      cargoConfig.profile.release.rustflags
-      ++ lib.concatLists (lib.attrValues releaseRustcOpts);
-    # rustc rejects LTO when a library also builds a non-rlib output. The binary's LTO still
-    # covers these crates through the bitcode in their rlibs.
-    releaseRustflagsWithoutLto =
-      cargoConfig.profile.release.rustflags
-      ++ lib.concatLists (lib.attrValues (removeAttrs releaseRustcOpts ["lto"]));
-
     mkBuildRustCrate = cratePkgs: let
       buildRustCrate = cratePkgs.buildRustCrate.override {
         stdenv = withMold cratePkgs.stdenv;
@@ -116,16 +85,33 @@
           };
       };
     in
-      crate:
+      crate: let
+        procMacro = crate.procMacro or false;
+        rustcOpts = args:
+          cargoProfiles.rustcOpts ({
+              profile =
+                if crate.release or true
+                then "release"
+                else "test";
+              inherit (crate) crateName;
+            }
+            // args);
+        buildUnitOpts = rustcOpts {
+          buildUnit = true;
+          withLto = false;
+        };
+      in
         buildRustCrate (crate
           // {
             extraRustcOpts =
               (crate.extraRustcOpts or [])
-              ++ lib.optionals (crate.release or true) (
-                if !(crate.procMacro or false) && lib.all (type: type == "lib" || type == "rlib") (crate.type or ["lib"])
-                then releaseRustflags
-                else releaseRustflagsWithoutLto
-              );
+              ++ rustcOpts {
+                withLto = !procMacro && lib.all (type: type == "lib" || type == "rlib") (crate.type or ["lib"]);
+              };
+            extraRustcOptsForBuildRs = (crate.extraRustcOptsForBuildRs or []) ++ buildUnitOpts;
+          }
+          // lib.optionalAttrs procMacro {
+            extraRustcOptsForProcMacro = (crate.extraRustcOptsForProcMacro or crate.extraRustcOpts or []) ++ buildUnitOpts;
           });
     # Cargo.nix calls this once per crate. Rebuilding the mold stdenv and the buildRustCrate
     # override on every call dominated evaluation time.
@@ -155,57 +141,85 @@
     };
     vmTestBinaries = name: debugCrates.testCrates.${name}.override {buildTests = true;};
 
+    cargoArtifacts = import ./cargo-artifacts.nix {
+      inherit lib;
+      inherit (pkgs) runCommand;
+      root = ../.;
+      manifest = cargoToml;
+    };
+
+    # dependenciesCommand compiles the check's dependencies against stubbed members ahead of time.
+    # It must resolve the same features and profile as command, or cargo rebuilds them anyway.
     mkCargoCheck = {
       name,
       command,
+      dependenciesCommand ? null,
       nativeBuildInputs ? [],
       buildInputs ? [],
       env ? {},
-    }:
-      (withMold pkgs.stdenv).mkDerivation {
-        pname = name;
-        version = "0.0.0";
-        inherit src;
-        strictDeps = true;
-        nativeBuildInputs =
-          [
-            rustToolchain
-            pkgs.rustPlatform.cargoSetupHook
-            pkgs.pkg-config
-          ]
-          ++ nativeBuildInputs;
-        buildInputs =
-          [
-            pkgs.openssl
-          ]
-          ++ buildInputs;
-        cargoDeps = pkgs.rustPlatform.importCargoLock {
-          lockFile = ../Cargo.lock;
-          outputHashes = {
-            "ts-rs-macros-12.0.1" = "0zhwi4457nv5wyb9rzlway280sh6cwb6244ycfs630dk9hh8sdcy";
-          };
-        };
-        buildPhase = let
-          exportEnv = lib.concatLines (
-            lib.mapAttrsToList (name: value: "export ${name}=${lib.escapeShellArg value}") env
-          );
-        in ''
-          export HOME="$TMPDIR/home"
-          mkdir -p "$HOME"
-          export CARGO_TARGET_DIR="$TMPDIR/target"
-          export CARGO_TERM_COLOR=always
-          export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
-          export NEXTEST_TEST_THREADS="$NIX_BUILD_CORES"
+    }: let
+      mkCargoDerivation = {script, ...} @ args:
+        (withMold pkgs.stdenv).mkDerivation ((removeAttrs args ["script"])
+          // {
+            version = "0.0.0";
+            strictDeps = true;
+            nativeBuildInputs =
+              [
+                rustToolchain
+                pkgs.rustPlatform.cargoSetupHook
+                pkgs.pkg-config
+              ]
+              ++ nativeBuildInputs;
+            buildInputs =
+              [
+                pkgs.openssl
+              ]
+              ++ buildInputs;
+            cargoDeps = pkgs.rustPlatform.importCargoLock {
+              lockFile = ../Cargo.lock;
+              outputHashes = {
+                "ts-rs-macros-12.0.1" = "0zhwi4457nv5wyb9rzlway280sh6cwb6244ycfs630dk9hh8sdcy";
+              };
+            };
+            buildPhase = ''
+              export HOME="$TMPDIR/home"
+              mkdir -p "$HOME"
+              export CARGO_TARGET_DIR="$TMPDIR/target"
+              export CARGO_TERM_COLOR=always
+              export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
+              export NEXTEST_TEST_THREADS="$NIX_BUILD_CORES"
 
-          ${exportEnv}
+              ${lib.concatLines (lib.mapAttrsToList (name: value: "export ${name}=${lib.escapeShellArg value}") env)}
 
-          runHook preBuild
-          ${command}
-          runHook postBuild
+              runHook preBuild
+              ${script}
+              runHook postBuild
+            '';
+          });
+      dependencies = mkCargoDerivation {
+        pname = "${name}-dependencies";
+        src = cargoArtifacts.source;
+        script = ''
+          ${dependenciesCommand}
+          ${cargoArtifacts.removeMembers ''"$CARGO_TARGET_DIR"''}
         '';
+        installPhase = ''
+          cp -r "$CARGO_TARGET_DIR" "$out"
+        '';
+        # Stripping or patching would change the artifacts cargo already fingerprinted.
+        dontFixup = true;
+      };
+    in
+      mkCargoDerivation {
+        pname = name;
+        inherit src;
+        script =
+          lib.optionalString (dependenciesCommand != null) (cargoArtifacts.restore dependencies ''"$CARGO_TARGET_DIR"'')
+          + command;
         installPhase = ''
           mkdir -p "$out"
         '';
+        passthru = lib.optionalAttrs (dependenciesCommand != null) {inherit dependencies;};
       };
 
     # Wraps a copy of the release crate's binaries instead of overriding the crate itself. An
@@ -351,12 +365,20 @@
             ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.binutils pkgs.bubblewrap]
             ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [pkgs.darwin.cctools];
           env.SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+          # packages/runtime/scripts/build.mjs builds two members. With workspace feature
+          # unification, building all of them compiles the same dependencies.
+          dependenciesCommand = ''
+            cargo build --locked --workspace
+          '';
           command = ''
             ${pkgs.just}/bin/just check-node ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "test:portable"}
           '';
         };
         clippy = mkCargoCheck {
           name = "clippy";
+          dependenciesCommand = ''
+            cargo clippy --workspace --all-targets --all-features
+          '';
           command = ''
             ${pkgs.just}/bin/just lint
           '';
@@ -365,6 +387,9 @@
         doc = mkCargoCheck {
           name = "doc";
           env.RUSTDOCFLAGS = "--deny warnings";
+          dependenciesCommand = ''
+            cargo doc --workspace --no-deps
+          '';
           command = ''
             cargo doc --workspace --no-deps
           '';
