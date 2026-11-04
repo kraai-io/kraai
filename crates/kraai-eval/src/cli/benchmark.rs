@@ -240,7 +240,7 @@ pub(super) fn execute(args: BenchmarkArgs, json: bool) -> Result<ExitCode> {
             String::from("--max-requests"),
             profile.max_requests.to_string(),
         ];
-        args.pricing.append(&mut proxy_command)?;
+        args.pricing.append(&mut proxy_command);
         if profile.proxy == ProxyKind::Openai {
             proxy_command.extend([
                 String::from("--proxy"),

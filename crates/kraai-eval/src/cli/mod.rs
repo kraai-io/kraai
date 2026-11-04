@@ -420,6 +420,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn flat_prices_need_input_and_output() -> Result<()> {
+        let run = |extra: &[&str]| {
+            let mut args = vec!["kraai-eval", "run", "--model", "test"];
+            args.extend_from_slice(extra);
+            Cli::try_parse_from(args)
+        };
+        let Command::Run(args) = run(&[
+            "--price-input",
+            "1.25",
+            "--price-output",
+            "10",
+            "--price-cache-read",
+            "0.125",
+        ])?
+        .command
+        else {
+            color_eyre::eyre::bail!("expected the run command");
+        };
+        let rates = args
+            .pricing
+            .options()?
+            .rates
+            .ok_or_else(|| color_eyre::eyre::eyre!("missing flat rates"))?;
+        color_eyre::eyre::ensure!(rates.input == kraai_types::Usd(1_250_000_000));
+        color_eyre::eyre::ensure!(rates.cache_read == Some(kraai_types::Usd(125_000_000)));
+        color_eyre::eyre::ensure!(rates.reasoning.is_none());
+        color_eyre::eyre::ensure!(run(&["--price-input", "1"]).is_err());
+        color_eyre::eyre::ensure!(run(&["--price-output", "1"]).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn run_requires_a_model_and_rejects_zero_attempts() {
         assert!(Cli::try_parse_from(["kraai-eval", "run"]).is_err());
         assert!(

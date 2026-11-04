@@ -128,7 +128,6 @@ impl ModelProxyRequest {
     }
 
     fn start_at(&self, log_path: PathBuf, listen_address: SocketAddr) -> Result<ModelProxy> {
-        let pricing = self.pricing.freeze()?;
         if self.max_requests == 0 {
             bail!("model proxy max_requests must be greater than zero");
         }
@@ -144,7 +143,7 @@ impl ModelProxyRequest {
             max_requests: self.max_requests,
             shutdown_drain_timeout: SHUTDOWN_DRAIN_TIMEOUT,
         })?;
-        proxy.pricing = pricing;
+        proxy.pricing = self.pricing.clone();
         Ok(proxy)
     }
 }

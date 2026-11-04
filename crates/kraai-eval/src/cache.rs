@@ -398,13 +398,12 @@ mod tests {
                 },
             );
             fs::create_dir_all(&store.final_dir)?;
-            let pricing = PricingOptions::new(Some(root.join("prices.toml")), None);
+            let pricing = price_per_million(2);
             let fixture = Self {
                 root,
                 store,
                 pricing,
             };
-            fixture.set_price(2)?;
             fs::write(
                 fixture.store.final_dir.join("proxy.events.jsonl"),
                 serde_json::to_vec(&serde_json::json!({
@@ -442,15 +441,19 @@ mod tests {
             Ok(fixture)
         }
 
-        fn set_price(&self, price: u64) -> Result<()> {
-            fs::write(
-                self.root.join("prices.toml"),
-                format!(
-                    "[[provider]]\nid = \"test\"\ntype = \"custom\"\n[[model]]\nid = \"model\"\nprovider_id = \"test\"\nprice_input = \"{price}\"\nprice_output = \"0\"\n"
-                ),
-            )?;
-            Ok(())
+        fn set_price(&mut self, price: u64) {
+            self.pricing = price_per_million(price);
         }
+    }
+
+    fn price_per_million(input: u64) -> PricingOptions {
+        PricingOptions::flat(kraai_types::TokenRates {
+            input: kraai_types::Usd(input * 1_000_000_000),
+            output: kraai_types::Usd(0),
+            cache_read: None,
+            cache_write: None,
+            reasoning: None,
+        })
     }
 
     impl Drop for AccountingFixture {
@@ -471,10 +474,10 @@ mod tests {
 
     #[test]
     fn cached_and_direct_loads_use_repriced_sidecars_and_reject_changed_events() -> Result<()> {
-        let fixture = AccountingFixture::new()?;
+        let mut fixture = AccountingFixture::new()?;
         let path = fixture.store.final_dir.join("result.json");
         let original = fs::read(&path)?;
-        fixture.set_price(20)?;
+        fixture.set_price(20);
         let accounting = crate::analyze_requests(
             &path.with_file_name("proxy.events.jsonl"),
             1,
@@ -499,7 +502,7 @@ mod tests {
 
     #[test]
     fn explicit_resume_prices_saved_requests_without_changing_run_or_proxy_events() -> Result<()> {
-        let fixture = AccountingFixture::new()?;
+        let mut fixture = AccountingFixture::new()?;
         let path = fixture.store.final_dir.join("result.json");
         let mut failed_accounting = read_run_result(&path)?;
         let proxy = failed_accounting
@@ -512,7 +515,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&failed_accounting)?)?;
         let original = fs::read(&path)?;
         let events = fs::read(path.with_file_name("proxy.events.jsonl"))?;
-        fixture.set_price(20)?;
+        fixture.set_price(20);
         let repriced = fixture
             .store
             .load_result_with_pricing(Some(&fixture.pricing))?

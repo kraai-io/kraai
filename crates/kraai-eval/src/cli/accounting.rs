@@ -1,48 +1,74 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use color_eyre::eyre::{Result, ensure};
+use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_eval::{AccountingSummary, PricingOptions, SuiteResult};
+use kraai_types::{TokenRates, Usd};
 
 #[derive(Debug, Clone, Default, Args, serde::Serialize)]
 pub(super) struct PricingArgs {
     #[arg(
         long,
-        help = "Provider configuration containing benchmark price overrides; model IDs must match actual request models"
+        value_name = "USD",
+        requires = "price_output",
+        help = "Input price per million tokens for every request, instead of catalog prices"
     )]
-    pricing_config: Option<PathBuf>,
+    price_input: Option<f64>,
     #[arg(
         long,
-        requires = "pricing_config",
-        help = "Provider ID to use for price estimates"
+        value_name = "USD",
+        requires = "price_input",
+        help = "Output price per million tokens for every request"
     )]
-    pricing_provider: Option<String>,
+    price_output: Option<f64>,
+    #[arg(
+        long,
+        value_name = "USD",
+        requires = "price_input",
+        help = "Cached input price per million tokens; uncounted when unset"
+    )]
+    price_cache_read: Option<f64>,
+    #[arg(
+        long,
+        value_name = "USD",
+        requires = "price_input",
+        help = "Cache write price per million tokens; uncounted when unset"
+    )]
+    price_cache_write: Option<f64>,
 }
 
 impl PricingArgs {
     pub fn options(&self) -> Result<PricingOptions> {
-        let options = PricingOptions::new(
-            self.pricing_config
-                .as_ref()
-                .map(|path| path.canonicalize())
-                .transpose()?,
-            self.pricing_provider.clone(),
-        );
-        options.validate()?;
-        Ok(options)
+        let (Some(input), Some(output)) = (self.price_input, self.price_output) else {
+            return Ok(PricingOptions::default());
+        };
+        let usd = |flag: &str, value: f64| {
+            Usd::from_dollars(value).ok_or_else(|| {
+                eyre!("--{flag} must be a non-negative USD price per million tokens")
+            })
+        };
+        let optional =
+            |flag: &str, value: Option<f64>| value.map(|value| usd(flag, value)).transpose();
+        Ok(PricingOptions::flat(TokenRates {
+            input: usd("price-input", input)?,
+            output: usd("price-output", output)?,
+            cache_read: optional("price-cache-read", self.price_cache_read)?,
+            cache_write: optional("price-cache-write", self.price_cache_write)?,
+            reasoning: None,
+        }))
     }
 
-    pub fn append(&self, command: &mut Vec<String>) -> Result<()> {
-        if let Some(path) = self.options()?.config {
-            command.extend([
-                String::from("--pricing-config"),
-                path.to_string_lossy().into_owned(),
-            ]);
+    pub fn append(&self, command: &mut Vec<String>) {
+        for (flag, value) in [
+            ("--price-input", self.price_input),
+            ("--price-output", self.price_output),
+            ("--price-cache-read", self.price_cache_read),
+            ("--price-cache-write", self.price_cache_write),
+        ] {
+            if let Some(value) = value {
+                command.extend([String::from(flag), value.to_string()]);
+            }
         }
-        if let Some(provider) = &self.pricing_provider {
-            command.extend([String::from("--pricing-provider"), provider.clone()]);
-        }
-        Ok(())
     }
 }
 

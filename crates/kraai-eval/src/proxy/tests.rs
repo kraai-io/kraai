@@ -436,20 +436,6 @@ async fn rejected_requests_cannot_hide_model_calls_aborted_during_shutdown() -> 
         ulid::Ulid::generate()
     ));
     fs::create_dir(&root)?;
-    let pricing_config = root.join("prices.toml");
-    fs::write(
-        &pricing_config,
-        r#"
-[[provider]]
-id = "test"
-type = "custom"
-[[model]]
-id = "model"
-provider_id = "test"
-price_input = "2"
-price_output = "8"
-"#,
-    )?;
     let mut proxy = ModelProxy::start(ProxyServerConfig {
         listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         upstream: format!("http://{upstream_address}"),
@@ -464,7 +450,13 @@ price_output = "8"
         max_requests: 2,
         shutdown_drain_timeout: Duration::from_millis(50),
     })?;
-    proxy.pricing.config = Some(pricing_config);
+    proxy.pricing = crate::PricingOptions::flat(kraai_types::TokenRates {
+        input: kraai_types::Usd(2_000_000_000),
+        output: kraai_types::Usd(8_000_000_000),
+        cache_read: None,
+        cache_write: None,
+        reasoning: None,
+    });
     let client = Client::new();
     let rejected = client
         .get(format!("http://{}/v1/models", proxy.address))

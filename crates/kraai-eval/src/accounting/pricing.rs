@@ -1,103 +1,51 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use color_eyre::eyre::{Result, ensure};
+use color_eyre::eyre::Result;
 use kraai_provider_core::{
     DynamicConfig, DynamicValue, Pricing, ProviderConfig, ProviderFactory, ProviderManagerConfig,
-    ProviderPricingPolicy,
 };
-use kraai_provider_openai_chat_completions::{OpenAiChatCompletionsFactory, OpenAiFactory};
-use kraai_provider_openai_codex::OpenAiCodexFactory;
-use kraai_types::{ModelId, ProviderId, RequestCost, TokenUsage};
+use kraai_provider_openai_chat_completions::OpenAiFactory;
+use kraai_types::{ModelId, ProviderId, RequestCost, TokenRates, TokenUsage};
 
 use super::RequestMeasurement;
 
 #[derive(Debug, Clone, Default)]
 pub struct PricingOptions {
-    pub config: Option<PathBuf>,
-    pub provider: Option<String>,
-    pub(crate) snapshot: Option<Arc<ProviderManagerConfig>>,
+    pub rates: Option<TokenRates>,
 }
 
 impl PricingOptions {
-    pub fn new(config: Option<PathBuf>, provider: Option<String>) -> Self {
-        Self {
-            config,
-            provider,
-            snapshot: None,
-        }
-    }
-
-    pub fn freeze(&self) -> Result<Self> {
-        let snapshot = RequestPricing::configuration(self)?;
-        Pricing::new(&snapshot, pricing_policy)?;
-        Ok(Self {
-            snapshot: Some(snapshot),
-            ..self.clone()
-        })
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        let config = RequestPricing::configuration(self)?;
-        Pricing::new(&config, pricing_policy)?;
-        Ok(())
+    pub fn flat(rates: TokenRates) -> Self {
+        Self { rates: Some(rates) }
     }
 }
 
-pub(super) struct RequestPricing {
-    pricing: Pricing,
-    provider: ProviderId,
+pub(super) enum RequestPricing {
+    Flat(TokenRates),
+    Catalog {
+        pricing: Pricing,
+        provider: ProviderId,
+    },
 }
 
 impl RequestPricing {
-    fn configuration(options: &PricingOptions) -> Result<Arc<ProviderManagerConfig>> {
-        if let Some(snapshot) = &options.snapshot {
-            return Ok(snapshot.clone());
-        }
-        let config = if let Some(path) = &options.config {
-            let mut config: ProviderManagerConfig = toml::from_slice(&std::fs::read(path)?)?;
-            config.providers.retain(|provider| {
-                options
-                    .provider
-                    .as_ref()
-                    .is_none_or(|id| provider.id.as_str() == id)
-            });
-            ensure!(
-                config.providers.len() == 1,
-                "pricing config must select exactly one provider; use --pricing-provider"
-            );
-            config
-        } else {
-            ensure!(
-                options.provider.is_none(),
-                "pricing-provider requires pricing-config"
-            );
-            ProviderManagerConfig {
-                providers: vec![ProviderConfig {
-                    id: ProviderId::new("benchmark"),
-                    type_id: String::from("openai"),
-                    config: DynamicConfig::from([(
-                        String::from("pricing_provider"),
-                        DynamicValue::from("openai"),
-                    )]),
-                }],
-                models: vec![],
-            }
-        };
-        Ok(Arc::new(config))
-    }
-
     pub async fn load(options: &PricingOptions) -> Result<Self> {
-        let config = Self::configuration(options)?;
-        let provider = config
-            .providers
-            .first()
-            .ok_or_else(|| color_eyre::eyre::eyre!("missing pricing provider"))?
-            .id
-            .clone();
-        let pricing = Pricing::new(&config, pricing_policy)?;
+        if let Some(rates) = &options.rates {
+            return Ok(Self::Flat(rates.clone()));
+        }
+        let provider = ProviderId::new("benchmark");
+        let config = ProviderManagerConfig {
+            providers: vec![ProviderConfig {
+                id: provider.clone(),
+                type_id: String::from(OpenAiFactory::TYPE_ID),
+                config: DynamicConfig::from([(
+                    String::from("pricing_provider"),
+                    DynamicValue::from("openai"),
+                )]),
+            }],
+            models: vec![],
+        };
+        let pricing = Pricing::new(&config, |_| OpenAiFactory::pricing_policy())?;
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), pricing.refresh()).await;
-        Ok(Self { pricing, provider })
+        Ok(Self::Catalog { pricing, provider })
     }
 
     pub async fn estimate(
@@ -113,11 +61,13 @@ impl RequestPricing {
             .as_deref()
             .ok_or_else(|| String::from("missing actual model"))?;
         let model = ModelId::new(model);
-        let quote = self
-            .pricing
-            .quote(&self.provider, &model, &model)
-            .await
-            .ok_or_else(|| String::from("model pricing is unavailable"))?;
+        let quote = match self {
+            Self::Flat(rates) => kraai_provider_core::PriceQuote::Configured(rates.clone()),
+            Self::Catalog { pricing, provider } => pricing
+                .quote(provider, &model, &model)
+                .await
+                .ok_or_else(|| String::from("model pricing is unavailable"))?,
+        };
         let basis = match &quote {
             kraai_provider_core::PriceQuote::Configured(rates) => {
                 serde_json::json!({"model": model.as_str(), "configured": rates})
@@ -146,14 +96,6 @@ impl RequestPricing {
     }
 }
 
-fn pricing_policy(type_id: &str) -> ProviderPricingPolicy {
-    match type_id {
-        OpenAiFactory::TYPE_ID => OpenAiFactory::pricing_policy(),
-        OpenAiCodexFactory::TYPE_ID => OpenAiCodexFactory::pricing_policy(),
-        _ => OpenAiChatCompletionsFactory::pricing_policy(),
-    }
-}
-
 fn hash_pricing_basis(mut basis: serde_json::Value) -> serde_json::Result<String> {
     basis.sort_all_objects();
     Ok(crate::cache::hash_chunks(&[serde_json::to_vec(&basis)?]))
@@ -161,37 +103,9 @@ fn hash_pricing_basis(mut basis: serde_json::Value) -> serde_json::Result<String
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use color_eyre::eyre::ensure;
 
-    #[test]
-    fn pricing_policies_preserve_defaults_and_unknown_provider_endpoints() {
-        let empty = DynamicConfig::new();
-        let direct = pricing_policy(OpenAiFactory::TYPE_ID);
-        assert_eq!((direct.catalog)(&empty).provider.as_deref(), Some("openai"));
-        assert_eq!(
-            (direct.catalog)(&empty).api.as_deref(),
-            Some("https://api.openai.com/v1")
-        );
-        let subscription = pricing_policy(OpenAiCodexFactory::TYPE_ID);
-        assert!(subscription.subscription);
-        assert_eq!(
-            (subscription.catalog)(&empty).provider.as_deref(),
-            Some("openai")
-        );
-        for provider_type in [OpenAiChatCompletionsFactory::TYPE_ID, "custom-provider"] {
-            let policy = pricing_policy(provider_type);
-            assert!(!policy.subscription);
-            assert!((policy.catalog)(&empty).provider.is_none());
-            let config = DynamicConfig::from([(
-                "base_url".into(),
-                DynamicValue::from(" https://api.openai.com/v1/ "),
-            )]);
-            assert_eq!(
-                (policy.catalog)(&config).provider.as_deref(),
-                Some("openai")
-            );
-        }
-    }
+    use super::*;
 
     #[test]
     fn pricing_basis_is_independent_of_recursive_object_key_order() -> Result<()> {

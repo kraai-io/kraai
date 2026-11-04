@@ -163,7 +163,7 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
         .model_proxy
         .as_ref()
         .map(ModelProxyRequest::pricing)
-        .filter(|pricing| request.reuse_result && pricing.config.is_some());
+        .filter(|pricing| request.reuse_result && pricing.rates.is_some());
     if let Some(result) = store.load_result_with_pricing(pricing)? {
         if request.reuse_result {
             return Ok(result);

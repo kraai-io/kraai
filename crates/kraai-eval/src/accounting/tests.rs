@@ -7,29 +7,15 @@ use color_eyre::eyre::{Result, ensure};
 fn fixture() -> Result<(std::path::PathBuf, PricingOptions)> {
     let root = std::env::temp_dir().join(format!("kraai-accounting-{}", ulid::Ulid::generate()));
     fs::create_dir(&root)?;
-    let config = root.join("prices.toml");
-    fs::write(
-        &config,
-        r#"
-[[provider]]
-id = "test"
-type = "custom"
-[[model]]
-id = "model"
-provider_id = "test"
-price_input = "2"
-price_output = "8"
-price_cache_read = "0.5"
-price_cache_write = "3"
-"#,
-    )?;
     Ok((
         root,
-        PricingOptions {
-            config: Some(config),
-            provider: None,
-            ..Default::default()
-        },
+        PricingOptions::flat(kraai_types::TokenRates {
+            input: Usd(2_000_000_000),
+            output: Usd(8_000_000_000),
+            cache_read: Some(Usd(500_000_000)),
+            cache_write: Some(Usd(3_000_000_000)),
+            reasoning: None,
+        }),
     ))
 }
 
@@ -128,12 +114,11 @@ fn comparisons_exclude_mismatched_price_tables_but_keep_context_measurements() -
     let path = root.join("proxy.events.jsonl");
     fs::write(&path, format!("{}\n", event(100, 400, 20, 10)))?;
     let left = analyze_requests(&path, 1, &options)?;
-    let config = root.join("prices.toml");
-    fs::write(
-        &config,
-        fs::read_to_string(&config)?.replace("price_input = \"2\"", "price_input = \"20\""),
-    )?;
-    let right = analyze_requests(&path, 1, &options)?;
+    let mut raised = options.clone();
+    if let Some(rates) = raised.rates.as_mut() {
+        rates.input = Usd(20_000_000_000);
+    }
+    let right = analyze_requests(&path, 1, &raised)?;
     let mut comparison = PairedRequestMetrics::default();
     comparison.record(Some(&left), Some(&right));
     ensure!(
@@ -173,21 +158,6 @@ fn incomplete_proxy_coverage_cannot_fall_back_to_harness_totals() -> Result<()> 
         harness: Some(harness),
     };
     ensure!(metrics.usage().is_none());
-    fs::remove_dir_all(root)?;
-    Ok(())
-}
-
-#[test]
-fn frozen_pricing_survives_source_configuration_removal() -> Result<()> {
-    let (root, options) = fixture()?;
-    let frozen = options.freeze()?;
-    fs::remove_file(root.join("prices.toml"))?;
-    let frozen = frozen.clone().freeze()?;
-    frozen.validate()?;
-    let path = root.join("proxy.events.jsonl");
-    fs::write(&path, format!("{}\n", event(100, 400, 20, 10)))?;
-    let result = analyze_requests(&path, 1, &frozen)?;
-    ensure!(result.complete_cost() == Some(Usd(640_000)));
     fs::remove_dir_all(root)?;
     Ok(())
 }
