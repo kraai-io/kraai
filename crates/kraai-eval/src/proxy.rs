@@ -74,6 +74,20 @@ impl ModelProxyRequest {
         }
     }
 
+    pub fn kraai_provider(
+        provider: crate::KraaiProviderConfigRequest,
+        max_requests: u64,
+    ) -> Result<Self> {
+        Ok(match provider.kind()? {
+            crate::KraaiProviderKind::Codex => Self::codex_subscription(max_requests),
+            crate::KraaiProviderKind::ChatCompletions => Self {
+                credentials: ProxyCredentialRequest::ChatCompletions { provider },
+                pricing: crate::PricingOptions::default(),
+                max_requests,
+            },
+        })
+    }
+
     pub fn with_pricing(mut self, pricing: crate::PricingOptions) -> Self {
         self.pricing = pricing;
         self
@@ -83,8 +97,14 @@ impl ModelProxyRequest {
         &self.pricing
     }
 
-    pub(crate) fn is_codex_subscription(&self) -> bool {
-        matches!(self.credentials, ProxyCredentialRequest::CodexSubscription)
+    pub(crate) fn kraai_provider_kind(&self) -> Option<crate::KraaiProviderKind> {
+        match self.credentials {
+            ProxyCredentialRequest::CodexSubscription => Some(crate::KraaiProviderKind::Codex),
+            ProxyCredentialRequest::ChatCompletions { .. } => {
+                Some(crate::KraaiProviderKind::ChatCompletions)
+            }
+            ProxyCredentialRequest::OpenAiApiKey { .. } => None,
+        }
     }
 
     pub(crate) fn identity(&self) -> Result<ModelProxyIdentity> {

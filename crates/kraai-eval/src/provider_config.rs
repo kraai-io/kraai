@@ -1,12 +1,28 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{Context, Result, bail};
+use color_eyre::eyre::{Context, Result, bail, eyre};
 use kraai_provider_core::{DynamicValue, ModelConfig, ProviderConfig, ProviderManagerConfig};
 
-const CODEX_PROVIDER_TYPE: &str = "openai-codex";
-const PROXY_TOKEN_ENV: &str = "KRAAI_EVAL_CODEX_PROXY_TOKEN";
+const CODEX_PROXY_TOKEN_ENV: &str = "KRAAI_EVAL_CODEX_PROXY_TOKEN";
+const OPENAI_PROXY_TOKEN_ENV: &str = "OPENAI_API_KEY";
 const EVAL_AGENT_PROFILES: &str = include_str!("eval-agents.toml");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KraaiProviderKind {
+    Codex,
+    ChatCompletions,
+}
+
+impl KraaiProviderKind {
+    fn from_type_id(type_id: &str) -> Option<Self> {
+        match type_id {
+            "openai-codex" => Some(Self::Codex),
+            "openai-chat-completions" => Some(Self::ChatCompletions),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct KraaiProviderConfigRequest {
@@ -19,6 +35,18 @@ pub(crate) struct PreparedKraaiProviderConfig {
     models: Vec<ModelConfig>,
 }
 
+pub(crate) struct ChatCompletionsUpstream {
+    pub(crate) provider_id: String,
+    pub(crate) base_url: String,
+    pub(crate) api_key: String,
+}
+
+struct SelectedProvider {
+    kind: KraaiProviderKind,
+    provider: ProviderConfig,
+    models: Vec<ModelConfig>,
+}
+
 impl KraaiProviderConfigRequest {
     pub fn new(source: PathBuf, provider_id: Option<String>) -> Self {
         Self {
@@ -27,7 +55,77 @@ impl KraaiProviderConfigRequest {
         }
     }
 
+    pub(crate) fn kind(&self) -> Result<KraaiProviderKind> {
+        Ok(self.select()?.kind)
+    }
+
     pub(crate) fn prepare(&self) -> Result<PreparedKraaiProviderConfig> {
+        let SelectedProvider {
+            kind,
+            mut provider,
+            models,
+        } = self.select()?;
+        let mut config = std::mem::take(&mut provider.config);
+        match kind {
+            KraaiProviderKind::Codex => {
+                provider.config.insert(
+                    String::from("proxy_token_env"),
+                    DynamicValue::String(String::from(CODEX_PROXY_TOKEN_ENV)),
+                );
+                provider
+                    .config
+                    .insert(String::from("allow_http_proxy"), DynamicValue::Bool(true));
+            }
+            KraaiProviderKind::ChatCompletions => {
+                for key in ["only_listed_models", "catalog_provider"] {
+                    if let Some(value) = config.remove(key) {
+                        provider.config.insert(String::from(key), value);
+                    }
+                }
+                provider.config.insert(
+                    String::from("env_var_api_key"),
+                    DynamicValue::String(String::from(OPENAI_PROXY_TOKEN_ENV)),
+                );
+            }
+        }
+        Ok(PreparedKraaiProviderConfig { provider, models })
+    }
+
+    pub(crate) fn chat_completions_upstream(&self) -> Result<ChatCompletionsUpstream> {
+        let SelectedProvider { kind, provider, .. } = self.select()?;
+        if kind != KraaiProviderKind::ChatCompletions {
+            bail!("only chat-completions providers have a configured upstream");
+        }
+        let setting = |key: &str| {
+            provider
+                .config
+                .get(key)
+                .and_then(DynamicValue::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        };
+        let base_url = setting("base_url")
+            .ok_or_else(|| eyre!("provider {} has no base_url", provider.id.as_str()))?
+            .to_owned();
+        let api_key = match (setting("api_key"), setting("env_var_api_key")) {
+            (Some(key), _) => key.to_owned(),
+            (None, Some(name)) => std::env::var(name)
+                .ok()
+                .filter(|key| !key.trim().is_empty())
+                .ok_or_else(|| eyre!("API key environment variable {name} is unavailable"))?,
+            (None, None) => bail!(
+                "provider {} has neither api_key nor env_var_api_key",
+                provider.id.as_str()
+            ),
+        };
+        Ok(ChatCompletionsUpstream {
+            provider_id: provider.id.as_str().to_owned(),
+            base_url,
+            api_key,
+        })
+    }
+
+    fn select(&self) -> Result<SelectedProvider> {
         let bytes = fs::read(&self.source)
             .wrap_err_with(|| format!("read provider config {}", self.source.display()))?;
         let config: ProviderManagerConfig = toml::from_slice(&bytes)
@@ -35,36 +133,43 @@ impl KraaiProviderConfigRequest {
         let mut matching = config
             .providers
             .into_iter()
-            .filter(|provider| provider.type_id == CODEX_PROVIDER_TYPE)
             .filter(|provider| {
                 self.provider_id
                     .as_deref()
                     .is_none_or(|id| provider.id.as_str() == id)
             })
+            .filter_map(|provider| {
+                KraaiProviderKind::from_type_id(&provider.type_id).map(|kind| (kind, provider))
+            })
             .collect::<Vec<_>>();
         if matching.len() != 1 {
-            bail!(
-                "expected exactly one matching openai-codex provider in {}, found {}",
-                self.source.display(),
-                matching.len()
-            );
+            let found = matching
+                .iter()
+                .map(|(_, provider)| provider.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            match &self.provider_id {
+                Some(id) => bail!(
+                    "{} has no openai-codex or openai-chat-completions provider {id}",
+                    self.source.display()
+                ),
+                None => bail!(
+                    "pass --provider to pick one openai-codex or openai-chat-completions provider from {}; found: {found}",
+                    self.source.display()
+                ),
+            }
         }
-        let mut provider = matching.remove(0);
-        provider.config.clear();
-        provider.config.insert(
-            String::from("proxy_token_env"),
-            DynamicValue::String(String::from(PROXY_TOKEN_ENV)),
-        );
-        provider
-            .config
-            .insert(String::from("allow_http_proxy"), DynamicValue::Bool(true));
-        let provider_id = provider.id.clone();
+        let (kind, provider) = matching.remove(0);
         let models = config
             .models
             .into_iter()
-            .filter(|model| model.provider_id == provider_id)
+            .filter(|model| model.provider_id == provider.id)
             .collect();
-        Ok(PreparedKraaiProviderConfig { provider, models })
+        Ok(SelectedProvider {
+            kind,
+            provider,
+            models,
+        })
     }
 }
 
@@ -215,6 +320,58 @@ provider_id = "api-key-provider"
             !rendered.contains("secret-model"),
             "unselected model leaked"
         );
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn sanitizer_routes_chat_completions_provider_through_proxy_token() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-chat-provider-config-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&root)?;
+        let source = root.join("providers.toml");
+        fs::write(
+            &source,
+            r#"
+[[provider]]
+id = "codex-main"
+type = "openai-codex"
+
+[[provider]]
+id = "local"
+type = "openai-chat-completions"
+api_key = "must-not-leak"
+base_url = "http://127.0.0.1:10014/v1"
+only_listed_models = false
+custom_header = "must-not-leak-either"
+
+[[model]]
+id = "local-model"
+provider_id = "local"
+"#,
+        )?;
+        ensure!(
+            KraaiProviderConfigRequest::new(source.clone(), None)
+                .kind()
+                .is_err_and(|error| error.to_string().contains("found: codex-main, local"))
+        );
+        let request = KraaiProviderConfigRequest::new(source, Some(String::from("local")));
+        ensure!(request.kind()? == KraaiProviderKind::ChatCompletions);
+        let upstream = request.chat_completions_upstream()?;
+        ensure!(upstream.provider_id == "local");
+        ensure!(upstream.base_url == "http://127.0.0.1:10014/v1");
+        ensure!(upstream.api_key == "must-not-leak");
+
+        let path = request
+            .prepare()?
+            .materialize(&root, "http://127.0.0.1:1234/v1")?;
+        let materialized: ProviderManagerConfig = toml::from_slice(&fs::read(path)?)?;
+        let expected: ProviderManagerConfig = toml::from_str(
+            "[[provider]]\nid = 'local'\ntype = 'openai-chat-completions'\nbase_url = 'http://127.0.0.1:1234/v1'\nenv_var_api_key = 'OPENAI_API_KEY'\nonly_listed_models = false\n[[model]]\nid = 'local-model'\nprovider_id = 'local'\n",
+        )?;
+        ensure!(toml::to_string(&materialized)? == toml::to_string(&expected)?);
         fs::remove_dir_all(root)?;
         Ok(())
     }

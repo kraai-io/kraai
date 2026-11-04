@@ -82,8 +82,8 @@ struct RunArgs {
     model: String,
     #[arg(
         long,
-        help = "Harness TOML profile; defaults to Kraai with the subscription proxy",
-        long_help = "Harness TOML profile with schema_version = 1, name, program, and args. Arguments support {model}, {prompt}, {workspace}, and {proxy_url}. Set proxy to none, openai, or codex_subscription. Kraai profiles can set sanitize_kraai_provider = true and use {provider_id} and {provider_config}. Relative executable paths resolve from the profile directory; bare names resolve on PATH. Nix-packaged executables include their runtime dependencies in the sandbox. See evals/harnesses/kraai.toml for a complete example."
+        help = "Harness TOML profile; defaults to Kraai",
+        long_help = "Harness TOML profile with schema_version = 1, name, program, and args. Arguments support {model}, {prompt}, {workspace}, and {proxy_url}. Set proxy to none, openai, or codex_subscription. Kraai profiles set sanitize_kraai_provider = true instead, use {provider_id} and {provider_config}, and get the proxy that matches the selected provider's type. Relative executable paths resolve from the profile directory; bare names resolve on PATH. Nix-packaged executables include their runtime dependencies in the sandbox. See evals/harnesses/kraai.toml for a complete example."
     )]
     harness: Option<PathBuf>,
     #[arg(
@@ -93,7 +93,7 @@ struct RunArgs {
     runner: Option<PathBuf>,
     #[arg(
         long,
-        help = "Kraai subscription provider ID; inferred when there is only one"
+        help = "Kraai provider ID from providers.toml; its type picks the proxy. Inferred when there is only one openai-codex or openai-chat-completions provider"
     )]
     provider: Option<String>,
     #[arg(
@@ -246,7 +246,11 @@ fn execute(args: RunArgs, directory: &Path, json: bool) -> Result<ExitCode> {
             "args": harness.args,
             "version": harness.version,
             "model": harness.model_label,
-            "proxy": profile.proxy,
+            "proxy": if profile.sanitize_kraai_provider {
+                serde_json::json!("kraai_provider")
+            } else {
+                serde_json::json!(profile.proxy)
+            },
             "max_requests": profile.max_requests,
             "attempts": args.attempts,
             "start_attempt": args.start_attempt,
@@ -266,6 +270,9 @@ fn execute(args: RunArgs, directory: &Path, json: bool) -> Result<ExitCode> {
     } else {
         None
     };
+    let model_proxy = profile
+        .model_proxy(provider_config.as_ref())?
+        .map(|proxy| proxy.with_pricing(pricing));
     fs::create_dir_all(&args.cache_dir)?;
     let output_root = args.cache_dir.canonicalize()?;
     let progress = ProgressReporter::new();
@@ -283,9 +290,7 @@ fn execute(args: RunArgs, directory: &Path, json: bool) -> Result<ExitCode> {
                 attempt,
                 cache_dir: output_root.clone(),
                 reuse_result: args.resume,
-                model_proxy: profile
-                    .model_proxy()
-                    .map(|proxy| proxy.with_pricing(pricing.clone())),
+                model_proxy: model_proxy.clone(),
                 kraai_provider_config: provider_config.clone(),
                 progress: Some(progress.clone()),
             });

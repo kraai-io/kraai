@@ -60,6 +60,12 @@ fn fingerprint(bytes: &[u8]) -> String {
     crate::cache::hash_chunks(&[bytes])
 }
 
+fn reasoning_effort(body: &serde_json::Value) -> Option<&str> {
+    body.pointer("/reasoning/effort")
+        .or_else(|| body.get("reasoning_effort"))
+        .and_then(serde_json::Value::as_str)
+}
+
 #[derive(Serialize)]
 struct ProxyEvent<'a> {
     timestamp_ms: u128,
@@ -116,10 +122,7 @@ pub(super) fn write_event(
         usage: &outcome.usage,
         routing_hint_derived: derived_hint.is_some(),
         model: field("model"),
-        reasoning_effort: body
-            .as_ref()
-            .and_then(|value| value.pointer("/reasoning/effort"))
-            .and_then(serde_json::Value::as_str),
+        reasoning_effort: body.as_ref().and_then(reasoning_effort),
         service_tier: field("service_tier"),
         request_cache_state: CacheState::from_request(
             request,
@@ -145,6 +148,20 @@ mod tests {
 
     use super::*;
     use crate::proxy::headers::{forward_request_headers, missing_routing_hint};
+
+    #[test]
+    fn reasoning_effort_reads_responses_and_chat_completions_bodies() {
+        for (body, expected) in [
+            (
+                serde_json::json!({"reasoning": {"effort": "high"}}),
+                Some("high"),
+            ),
+            (serde_json::json!({"reasoning_effort": "low"}), Some("low")),
+            (serde_json::json!({"model": "model"}), None),
+        ] {
+            assert_eq!(reasoning_effort(&body), expected);
+        }
+    }
 
     #[test]
     fn shared_body_preserves_cache_hashes_and_malformed_body_fallback() -> Result<()> {

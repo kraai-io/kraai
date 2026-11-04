@@ -165,7 +165,8 @@ async fn send_upstream(
     request: &ParsedRequest,
 ) -> Result<reqwest::Response> {
     match &state.credentials {
-        UpstreamCredentials::OpenAiApiKey { credential, .. } => {
+        UpstreamCredentials::OpenAiApiKey { credential, .. }
+        | UpstreamCredentials::ChatCompletions { credential, .. } => {
             Ok(upstream_request(state, method, request)
                 .bearer_auth(credential)
                 .send()

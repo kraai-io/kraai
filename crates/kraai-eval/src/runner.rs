@@ -92,13 +92,14 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
     let runner_artifact_sha256 = cache::hash_file(&request.runner_program)?;
     let task_sha256 = task.public_digest(task_dir)?;
     let grader_sha256 = task.grader_digest(task_dir)?;
-    if request.kraai_provider_config.is_some()
-        && !request
+    if let Some(config) = &request.kraai_provider_config
+        && request
             .model_proxy
             .as_ref()
-            .is_some_and(ModelProxyRequest::is_codex_subscription)
+            .and_then(ModelProxyRequest::kraai_provider_kind)
+            != Some(config.kind()?)
     {
-        bail!("Kraai provider config sanitization requires the Codex subscription proxy");
+        bail!("Kraai provider config sanitization requires a proxy for the same provider type");
     }
     let provider_config = request
         .kraai_provider_config

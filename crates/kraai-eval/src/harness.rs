@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use color_eyre::eyre::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::ModelProxyRequest;
 use crate::cache::hash_file;
+use crate::{KraaiProviderConfigRequest, ModelProxyRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,7 +81,7 @@ impl HarnessProfile {
             .map(String::from)
             .to_vec(),
             version: None,
-            proxy: ProxyKind::CodexSubscription,
+            proxy: ProxyKind::None,
             api_key_env: default_api_key_env(),
             max_requests: default_max_requests(),
             sanitize_kraai_provider: true,
@@ -115,8 +115,18 @@ impl HarnessProfile {
         })
     }
 
-    pub fn model_proxy(&self) -> Option<ModelProxyRequest> {
-        match self.proxy {
+    pub fn model_proxy(
+        &self,
+        provider: Option<&KraaiProviderConfigRequest>,
+    ) -> Result<Option<ModelProxyRequest>> {
+        if self.sanitize_kraai_provider {
+            let Some(provider) = provider else {
+                bail!("a Kraai profile needs a provider config to choose its proxy");
+            };
+            return ModelProxyRequest::kraai_provider(provider.clone(), self.max_requests)
+                .map(Some);
+        }
+        Ok(match self.proxy {
             ProxyKind::None => None,
             ProxyKind::Openai => Some(ModelProxyRequest::openai(
                 self.api_key_env.clone(),
@@ -125,7 +135,11 @@ impl HarnessProfile {
             ProxyKind::CodexSubscription => {
                 Some(ModelProxyRequest::codex_subscription(self.max_requests))
             }
-        }
+        })
+    }
+
+    pub fn has_model_proxy(&self) -> bool {
+        self.sanitize_kraai_provider || self.proxy != ProxyKind::None
     }
 
     fn validate(&self) -> Result<()> {
@@ -157,8 +171,8 @@ impl HarnessProfile {
         if self.proxy == ProxyKind::Openai && !valid_environment_name(&self.api_key_env) {
             bail!("harness api_key_env must be a valid environment variable name");
         }
-        if self.sanitize_kraai_provider && self.proxy != ProxyKind::CodexSubscription {
-            bail!("sanitizing a Kraai provider requires the codex_subscription proxy");
+        if self.sanitize_kraai_provider && self.proxy != ProxyKind::None {
+            bail!("Kraai profiles take their proxy from the selected provider; remove proxy");
         }
         if !self.sanitize_kraai_provider
             && self
@@ -168,8 +182,7 @@ impl HarnessProfile {
         {
             bail!("provider placeholders require sanitize_kraai_provider = true");
         }
-        if self.proxy == ProxyKind::None && self.args.iter().any(|arg| arg.contains("{proxy_url}"))
-        {
+        if !self.has_model_proxy() && self.args.iter().any(|arg| arg.contains("{proxy_url}")) {
             bail!("the proxy_url placeholder requires a model proxy");
         }
         Ok(())
@@ -301,7 +314,7 @@ api_key_env = "KRAAI_EVAL_TEST_NONEXISTENT_API_KEY"
                     "{proxy_url}",
                 ]
         );
-        ensure!(profile.model_proxy().is_some());
+        ensure!(profile.model_proxy(None)?.is_some());
         Ok(())
     }
 
@@ -363,7 +376,7 @@ api_key_env = "KRAAI_EVAL_TEST_NONEXISTENT_API_KEY"
                 ..profile.clone()
             },
             HarnessProfile {
-                proxy: ProxyKind::None,
+                proxy: ProxyKind::CodexSubscription,
                 ..profile.clone()
             },
             HarnessProfile {
@@ -427,6 +440,7 @@ api_key_env = "KRAAI_EVAL_TEST_NONEXISTENT_API_KEY"
         let example =
             HarnessProfile::load(&crate::eval_assets_directory().join("harnesses/kraai.toml"))?;
         ensure!(serde_json::to_value(&example)? == serde_json::to_value(HarnessProfile::kraai())?);
+        ensure!(example.model_proxy(None).is_err());
         Ok(())
     }
 }

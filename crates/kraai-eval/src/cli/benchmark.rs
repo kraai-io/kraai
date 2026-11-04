@@ -88,7 +88,7 @@ pub(super) fn execute(args: BenchmarkArgs, json: bool) -> Result<ExitCode> {
         .unwrap_or_else(HarnessProfile::kraai);
     if !args.oracle && !args.status {
         ensure!(
-            profile.proxy != ProxyKind::None,
+            profile.has_model_proxy(),
             "public harness comparisons require a model proxy for usage accounting"
         );
         ensure!(
@@ -239,16 +239,15 @@ pub(super) fn execute(args: BenchmarkArgs, json: bool) -> Result<ExitCode> {
             proxy_host.clone(),
             String::from("--max-requests"),
             profile.max_requests.to_string(),
-            String::from("--proxy"),
-            String::from(if profile.proxy == ProxyKind::Openai {
-                "openai"
-            } else {
-                "codex_subscription"
-            }),
         ];
         args.pricing.append(&mut proxy_command)?;
         if profile.proxy == ProxyKind::Openai {
-            proxy_command.extend([String::from("--credential-env"), profile.api_key_env]);
+            proxy_command.extend([
+                String::from("--proxy"),
+                String::from("openai"),
+                String::from("--credential-env"),
+                profile.api_key_env,
+            ]);
         }
         if profile.sanitize_kraai_provider {
             let source = args.provider_config.map_or_else(

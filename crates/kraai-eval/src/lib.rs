@@ -43,6 +43,7 @@ pub use harness::{HarnessProfile, ProxyKind, ResolvedHarness};
 pub use manifest::{CommandSpec, NetworkPolicy, TaskManifest};
 pub use metrics::{EvaluationMetrics, HarnessMetrics, ProxyMetrics, UsageMetrics};
 pub use provider_config::KraaiProviderConfigRequest;
+pub(crate) use provider_config::KraaiProviderKind;
 pub use proxy::ModelProxyRequest;
 pub use proxy::service::{ProxyServiceRequest, serve_model_proxy};
 pub use suite::{SuiteRequest, SuiteResult, run_suite};
