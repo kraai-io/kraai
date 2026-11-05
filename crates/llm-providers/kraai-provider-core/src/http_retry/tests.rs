@@ -680,7 +680,7 @@ fn default_retry_policy_is_bounded_and_jitter_stays_within_limits() {
     assert_eq!(DEFAULT_HTTP_RETRY_POLICY.max_delay, Duration::from_secs(15));
     assert_eq!(
         DEFAULT_HTTP_RETRY_POLICY.max_elapsed,
-        Duration::from_secs(60)
+        Duration::from_secs(300)
     );
     assert_eq!(
         apply_jitter(Duration::from_secs(10), 80),

@@ -74,7 +74,7 @@ pub const DEFAULT_HTTP_RETRY_POLICY: HttpRetryPolicy = HttpRetryPolicy {
     max_attempts: 10,
     initial_backoff: Duration::from_secs(1),
     max_delay: Duration::from_secs(15),
-    max_elapsed: Duration::from_secs(60),
+    max_elapsed: Duration::from_secs(300),
 };
 
 pub async fn send_with_retry<F, Fut>(
