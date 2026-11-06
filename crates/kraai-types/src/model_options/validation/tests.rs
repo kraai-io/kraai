@@ -27,13 +27,18 @@ fn effort(values: &[&str]) -> ModelOptionDefinition {
 #[test]
 fn required_values_are_explicit_and_model_specific() {
     let first = vec![effort(&["light", "future-effort"])];
-    let second = vec![effort(&["medium", "high"])];
+    let mut second = effort(&["medium", "high"]);
     let values = ModelOptionValues::from([(
         "effort".into(),
         ModelOptionValue::Choice("future-effort".into()),
     )]);
     assert!(validate_model_options(&first, &values).is_ok());
-    assert!(validate_model_options(&second, &values).is_err());
+    assert!(validate_model_options(std::slice::from_ref(&second), &values).is_ok());
+    second.binding = None;
+    assert!(validate_model_options(&[second], &values).is_err());
+    let empty =
+        ModelOptionValues::from([("effort".into(), ModelOptionValue::Choice(String::new()))]);
+    assert!(validate_model_options(&first, &empty).is_err());
     assert!(validate_model_options(&first, &Default::default()).is_err());
     assert!(validate_model_option_values(&first, &Default::default(), false).is_ok());
 }
@@ -132,13 +137,16 @@ fn assignment_parsing_preserves_exact_ids_and_requires_explicit_values() {
                 .is_err()
         );
     }
-    assert!(
+    assert_eq!(
         crate::parse_model_option_assignments(
             &definitions,
             &["effort=other".into()],
             Default::default()
-        )
-        .is_err()
+        ),
+        Ok(ModelOptionValues::from([(
+            "effort".into(),
+            ModelOptionValue::Choice("other".into())
+        )]))
     );
 }
 
@@ -284,6 +292,7 @@ fn reconciliation_drops_incompatible_values_and_preserves_false_zero_and_custom_
     let mut definitions = optional_controls();
     let mut changed = effort(&["new"]);
     changed.id = "changed".into();
+    changed.binding = None;
     let mut child = effort(&["on"]);
     child.id = "child".into();
     child.active_when = Some(ModelOptionCondition {
@@ -340,4 +349,17 @@ fn reconciliation_drops_incompatible_values_and_preserves_false_zero_and_custom_
         values.get("changed"),
         Some(&ModelOptionValue::Choice("new".into()))
     );
+}
+
+#[test]
+fn bound_choices_keep_values_outside_the_advertised_list() {
+    let definitions = vec![effort(&["low"])];
+    let mut values =
+        ModelOptionValues::from([("effort".into(), ModelOptionValue::Choice("xhigh".into()))]);
+    reconcile_model_option_values(&definitions, &mut values);
+    assert_eq!(
+        values.get("effort"),
+        Some(&ModelOptionValue::Choice("xhigh".into()))
+    );
+    assert!(validate_model_options(&definitions, &values).is_ok());
 }

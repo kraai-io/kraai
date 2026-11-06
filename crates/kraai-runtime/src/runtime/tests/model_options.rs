@@ -245,7 +245,7 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
             "invalid queued".into(),
             "model".into(),
             "configured".into(),
-            values("unsupported"),
+            values(""),
         )
         .await
         .expect_err("invalid queued settings are rejected");

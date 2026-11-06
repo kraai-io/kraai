@@ -124,7 +124,13 @@ fn real_model_names_never_collide_with_reasoning_choices() -> Result<()> {
     let plain = models
         .get(&ModelId::new("new-model-high"), &BTreeMap::new())
         .ok_or_else(|| eyre!("missing real model"))?;
-    assert!(plain.options.is_empty());
+    assert!(
+        plain
+            .options
+            .iter()
+            .map(|option| (option.id.as_str(), option.required))
+            .eq([("reasoning_effort", false)])
+    );
     assert!(
         models
             .get(&ModelId::new("hidden"), &BTreeMap::new())
@@ -173,7 +179,9 @@ fn malformed_discovery_fails_without_inventing_models_or_controls() -> Result<()
             .get(&ModelId::new("no-capability-metadata"), &BTreeMap::new())
             .ok_or_else(|| eyre!("missing model without advertised controls"))?
             .options
-            .is_empty()
+            .iter()
+            .map(|option| (option.id.as_str(), option.required))
+            .eq([("reasoning_effort", false)])
     );
     let duplicate = model("duplicate")?;
     assert!(DiscoveredModels::new(vec![duplicate.clone(), duplicate]).is_err());
@@ -229,5 +237,45 @@ fn configured_models_absent_from_discovery_keep_their_identity_and_custom_option
     assert_eq!(found.name, "Custom");
     assert!(found.supports_images);
     assert_eq!(found.options.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn configured_models_absent_from_discovery_accept_reasoning_settings_unless_removed() -> Result<()>
+{
+    let models = DiscoveredModels::default();
+    let id = ModelId::new("custom-model");
+    let config = |remove_options: Vec<String>| {
+        BTreeMap::from([(
+            id.clone(),
+            ConfiguredModelMetadata {
+                remove_options,
+                ..ConfiguredModelMetadata::default()
+            },
+        )])
+    };
+    let configs = config(Vec::new());
+    for model in [
+        models.list(&configs).remove(0),
+        models
+            .get(&id, &configs)
+            .ok_or_else(|| eyre!("custom model missing"))?,
+    ] {
+        kraai_types::parse_model_option_assignments(
+            &model.options,
+            &["reasoning_effort=xhigh".into()],
+            ModelOptionValues::new(),
+        )
+        .map_err(|error| eyre!(error))?;
+    }
+    let removed = models
+        .get(&id, &config(vec!["reasoning_effort".into()]))
+        .ok_or_else(|| eyre!("custom model missing"))?;
+    assert!(
+        removed
+            .options
+            .iter()
+            .all(|option| option.id != "reasoning_effort")
+    );
     Ok(())
 }

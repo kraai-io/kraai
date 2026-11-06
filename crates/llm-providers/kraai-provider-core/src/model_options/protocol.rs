@@ -90,6 +90,25 @@ pub fn reasoning_budget_option(
     ))
 }
 
+pub fn optional_reasoning_options(
+    protocol: ModelOptionsProtocol,
+) -> impl Iterator<Item = ModelOptionDefinition> {
+    [
+        Some(reasoning_effort_option(
+            protocol,
+            ["low", "medium", "high"].map(String::from),
+        )),
+        reasoning_toggle_option(protocol),
+        reasoning_budget_option(protocol, None, None),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|mut option| {
+        option.required = false;
+        option
+    })
+}
+
 pub fn service_tier_options(choices: Vec<ModelOptionChoice>) -> Vec<ModelOptionDefinition> {
     if choices.is_empty() {
         return Vec::new();

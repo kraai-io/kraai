@@ -186,11 +186,16 @@ fn changing_options(updated: bool) -> String {
             "low",
             50,
             "choice",
-            "\nchoices = [{ id = \"on\", label = \"On\" }]",
+            "\nchoices = [{ id = \"on\", label = \"On\", patch = { body = { custom = { gate = \"on\" } } } }]",
             "\"on\"",
         )
     } else {
         ("high", 100, "boolean", "", "true")
+    };
+    let gate_binding = if updated {
+        ""
+    } else {
+        "\n[model.options.binding]\ntype = \"body\"\npath = \"/custom/gate\""
     };
     let removed = if updated {
         ""
@@ -212,10 +217,7 @@ id = "effort"
 label = "Effort"
 type = "choice"
 required = true
-choices = [{{ id = "{effort}", label = "{effort}" }}]
-[model.options.binding]
-type = "body"
-path = "/reasoning_effort"
+choices = [{{ id = "{effort}", label = "{effort}", patch = {{ body = {{ reasoning_effort = "{effort}" }} }} }}]
 
 [[model.options]]
 id = "budget"
@@ -230,10 +232,7 @@ path = "/custom/budget"
 [[model.options]]
 id = "gate"
 label = "Gate"
-type = "{kind}"{choices}
-[model.options.binding]
-type = "body"
-path = "/custom/gate"
+type = "{kind}"{choices}{gate_binding}
 
 [[model.options]]
 id = "dependent"

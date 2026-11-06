@@ -53,8 +53,9 @@ pub use model_discovery::DiscoveredModelOptions;
 pub use model_metadata::ConfiguredModelMetadata;
 pub use model_metadata_cache::ModelMetadataCache;
 pub use model_options::{
-    ModelOptionsProtocol, apply_model_options, reasoning_budget_option, reasoning_effort_option,
-    reasoning_toggle_option, service_tier_options, validate_model_option_effects,
+    ModelOptionsProtocol, apply_model_options, optional_reasoning_options, reasoning_budget_option,
+    reasoning_effort_option, reasoning_toggle_option, service_tier_options,
+    validate_model_option_effects,
 };
 pub use provider::{Model, Provider, ProviderRequest, ScriptToolDefinition};
 pub use registry::{ProviderFactory, ProviderRegistry};

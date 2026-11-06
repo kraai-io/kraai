@@ -173,11 +173,10 @@ fn unsupported_protocol_controls_are_not_exposed_and_toggle_gates_dependent_cont
     let metadata: DiscoveredModelOptions = serde_json::from_value(json!({
         "reasoning_options":[{"type":"toggle"},{"type":"budget_tokens","min":1024,"max":16384}]
     }))?;
-    assert!(
-        metadata
-            .definitions(ModelOptionsProtocol::OpenAiChatCompletions)
-            .is_empty()
-    );
+    assert!(crate::model_options::only_optional_reasoning(
+        &metadata.definitions(ModelOptionsProtocol::OpenAiChatCompletions),
+        ModelOptionsProtocol::OpenAiChatCompletions
+    ));
     let definitions = metadata.definitions(ModelOptionsProtocol::OpenRouterChatCompletions);
     let mut body = json!({});
     crate::apply_model_options(
@@ -194,6 +193,56 @@ fn unsupported_protocol_controls_are_not_exposed_and_toggle_gates_dependent_cont
     assert_eq!(
         body,
         json!({"reasoning":{"enabled":true,"max_tokens":4096}})
+    );
+    let toggle_only: DiscoveredModelOptions =
+        serde_json::from_value(json!({"reasoning_options":[{"type":"toggle"}]}))?;
+    let definitions = toggle_only.definitions(ModelOptionsProtocol::OpenRouterChatCompletions);
+    assert!(
+        crate::apply_model_options(
+            &definitions,
+            &ModelOptionValues::from([
+                ("reasoning_enabled".into(), ModelOptionValue::Boolean(false)),
+                ("reasoning_budget".into(), ModelOptionValue::Integer(4096)),
+            ]),
+            &mut json!({}),
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn models_without_reasoning_metadata_still_send_explicit_reasoning_settings() -> Result<()> {
+    let definitions =
+        DiscoveredModelOptions::default().definitions(ModelOptionsProtocol::OpenAiChatCompletions);
+    let mut body = json!({});
+    crate::apply_model_options(&definitions, &ModelOptionValues::new(), &mut body)?;
+    assert_eq!(body, json!({}));
+    let values = kraai_types::parse_model_option_assignments(
+        &definitions,
+        &["reasoning_effort=xhigh".into()],
+        ModelOptionValues::new(),
+    )
+    .map_err(|error| color_eyre::eyre::eyre!(error))?;
+    crate::apply_model_options(&definitions, &values, &mut body)?;
+    assert_eq!(body, json!({"reasoning_effort":"xhigh"}));
+    let router = DiscoveredModelOptions::default()
+        .definitions(ModelOptionsProtocol::OpenRouterChatCompletions);
+    let mut body = json!({});
+    crate::apply_model_options(
+        &router,
+        &ModelOptionValues::from([
+            (
+                "reasoning_effort".into(),
+                ModelOptionValue::Choice("high".into()),
+            ),
+            ("reasoning_budget".into(), ModelOptionValue::Integer(2048)),
+        ]),
+        &mut body,
+    )?;
+    assert_eq!(
+        body,
+        json!({"reasoning":{"effort":"high","max_tokens":2048}})
     );
     Ok(())
 }

@@ -144,7 +144,10 @@ async fn catalog_recovery_and_updates_refresh_cached_limits_and_options_without_
         .await;
     let missing = cached_model(&cache, &catalog).await?;
     assert_eq!(missing.max_context, None);
-    assert!(missing.options.is_empty());
+    assert!(crate::model_options::only_optional_reasoning(
+        &missing.options,
+        ModelOptionsProtocol::OpenAiChatCompletions
+    ));
 
     catalog.replace_snapshot(snapshot(4096, &["low"])?).await;
     updates.changed().await?;
@@ -160,7 +163,14 @@ async fn catalog_recovery_and_updates_refresh_cached_limits_and_options_without_
     let updated = cached_model(&cache, &catalog).await?;
     assert_eq!(updated.max_context, Some(8192));
     check_effort(&updated, "high")?;
-    assert!(check_effort(&updated, "low").is_err());
+    assert!(updated.options.iter().any(|option| {
+        option.id == "reasoning_effort"
+            && matches!(
+                &option.kind,
+                kraai_types::ModelOptionKind::Choice { choices }
+                    if choices.iter().map(|choice| choice.id.as_str()).eq(["high"])
+            )
+    }));
 
     cache
         .install(

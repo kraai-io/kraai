@@ -186,7 +186,8 @@ fn header_character(byte: u8) -> bool {
 fn value_error(definition: &ModelOptionDefinition, value: &ModelOptionValue) -> Option<String> {
     match (&definition.kind, value) {
         (ModelOptionKind::Choice { choices }, ModelOptionValue::Choice(value)) => {
-            (!choices.iter().any(|choice| &choice.id == value))
+            let listed = choices.iter().any(|choice| &choice.id == value);
+            (value.is_empty() || (!listed && definition.binding.is_none()))
                 .then(|| format!("Unsupported choice '{value}' for {}", definition.label))
         }
         (ModelOptionKind::Boolean { .. }, ModelOptionValue::Boolean(_)) => None,

@@ -137,11 +137,10 @@ async fn advertised_owners_do_not_override_known_endpoints_or_configured_catalog
             .await
             .ok_or_else(|| color_eyre::eyre::eyre!("missing canonical metadata"))?;
         assert_eq!(metadata.max_context, Some(1050000));
-        assert!(
-            discovery
-                .definitions(ModelOptionsProtocol::OpenAiChatCompletions)
-                .is_empty()
-        );
+        assert!(crate::model_options::only_optional_reasoning(
+            &discovery.definitions(ModelOptionsProtocol::OpenAiChatCompletions),
+            ModelOptionsProtocol::OpenAiChatCompletions
+        ));
     }
     Ok(())
 }

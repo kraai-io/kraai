@@ -7,9 +7,12 @@ use crate::support::{Harness, Reply, prompt};
 
 fn configuration(provider: &str, updated: bool, extra_model: bool) -> String {
     let choices = if updated {
-        r#"[{ id = "low", label = "Low" }]"#
+        r#"[{ id = "low", label = "Low", patch = { body = { reasoning_effort = "low" } } }]"#
     } else {
-        r#"[{ id = "high", label = "High" }, { id = "low", label = "Low" }]"#
+        r#"[
+            { id = "high", label = "High", patch = { body = { reasoning_effort = "high" } } },
+            { id = "low", label = "Low", patch = { body = { reasoning_effort = "low" } } },
+        ]"#
     };
     let removed = if updated {
         ""
@@ -45,9 +48,6 @@ label = "Effort"
 type = "choice"
 required = true
 choices = {choices}
-[model.options.binding]
-type = "body"
-path = "/reasoning_effort"
 
 [[model.options]]
 id = "retained"
