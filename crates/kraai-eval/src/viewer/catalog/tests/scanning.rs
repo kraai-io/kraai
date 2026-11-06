@@ -20,11 +20,11 @@ fn scan_limit_retains_completed_native_results() -> Result<()> {
     let mut other = native(json!({}));
     set(&mut other, "experiment_id", json!("other"))?;
     fixture.write(
-        "runs/task/codex/version/model/attempt-0/other/result.json",
+        "in-house/model/2026-01-01-codex-0123abcd/task/attempt-2/result.json",
         &other,
     )?;
-    let mut catalog = limited_catalog(&fixture, 6)?;
-    catalog.native_runs();
+    let mut catalog = limited_catalog(&fixture, 5)?;
+    catalog.harness_folders();
     ensure!(catalog.attempts.len() == 1);
     ensure!(
         catalog
@@ -48,8 +48,8 @@ fn scan_limit_retains_completed_native_results() -> Result<()> {
 fn scan_limit_never_returns_intermediate_directories_as_attempts() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.write(&format!("{NATIVE}/result.json"), &native(json!({})))?;
-    let mut catalog = limited_catalog(&fixture, 4)?;
-    catalog.native_runs();
+    let mut catalog = limited_catalog(&fixture, 2)?;
+    catalog.harness_folders();
     ensure!(catalog.attempts.is_empty());
     ensure!(catalog.versions.is_empty());
     ensure!(catalog.total_scanned_entries == files::DIRECTORY_SCAN_LIMIT);

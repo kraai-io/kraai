@@ -77,11 +77,7 @@ pub(super) fn select(directory: &Path, selectors: &[String]) -> Result<Vec<Task>
             catalog
                 .as_mut()
                 .and_then(|tasks| tasks.remove(selector))
-                .ok_or_else(|| {
-                    color_eyre::eyre::eyre!(
-                        "unknown or repeated task {selector:?}; use `kraai-eval list`"
-                    )
-                })?
+                .ok_or_else(|| color_eyre::eyre::eyre!("unknown or repeated task {selector:?}"))?
         };
         if !ids.insert(task.manifest.id.clone()) {
             bail!("task {} was selected more than once", task.manifest.id);

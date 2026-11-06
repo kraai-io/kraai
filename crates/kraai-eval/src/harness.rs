@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use color_eyre::eyre::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::cache::hash_file;
+use crate::cache::sha256_file;
 use crate::{KraaiProviderConfigRequest, ModelProxyRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,7 +15,8 @@ pub struct HarnessProfile {
     pub program: PathBuf,
     #[serde(default)]
     pub args: Vec<String>,
-    pub version: Option<String>,
+    #[serde(default)]
+    pub reasoning_args: Vec<String>,
     #[serde(default)]
     pub proxy: ProxyKind,
     #[serde(default = "default_api_key_env")]
@@ -41,7 +42,17 @@ pub struct ResolvedHarness {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub version: String,
-    pub model_label: String,
+    pub model: String,
+    pub reasoning: Option<String>,
+}
+
+impl ResolvedHarness {
+    pub fn model_label(&self) -> String {
+        match &self.reasoning {
+            Some(reasoning) => format!("{}-{reasoning}", self.model),
+            None => self.model.clone(),
+        }
+    }
 }
 
 impl HarnessProfile {
@@ -80,7 +91,9 @@ impl HarnessProfile {
             ]
             .map(String::from)
             .to_vec(),
-            version: None,
+            reasoning_args: ["--option", "reasoning_effort={reasoning}"]
+                .map(String::from)
+                .to_vec(),
             proxy: ProxyKind::None,
             api_key_env: default_api_key_env(),
             max_requests: default_max_requests(),
@@ -88,30 +101,41 @@ impl HarnessProfile {
         }
     }
 
-    pub fn resolve(&self, model: &str, program_override: Option<&Path>) -> Result<ResolvedHarness> {
+    pub fn resolve(
+        &self,
+        model: &str,
+        reasoning: Option<&str>,
+        program_override: Option<&Path>,
+    ) -> Result<ResolvedHarness> {
         self.validate()?;
-        let model = model.trim();
-        if model.trim().is_empty() || model.contains('\0') {
-            bail!("harness model must not be empty or contain a null byte");
-        }
-        if model.contains(['{', '}']) {
-            bail!("harness model must not contain braces");
+        let model = template_value("model", model)?;
+        let reasoning = reasoning
+            .map(|reasoning| template_value("reasoning", reasoning))
+            .transpose()?;
+        if reasoning.is_some() && self.reasoning_args.is_empty() {
+            bail!(
+                "harness profile {} has no reasoning_args, so it cannot set --reasoning",
+                self.name
+            );
         }
         let program = resolve_program(program_override.unwrap_or(&self.program))?;
-        let version = match &self.version {
-            Some(version) => version.clone(),
-            None => format!("sha256:{}", hash_file(&program)?),
-        };
+        let reasoning_args = reasoning.map_or_else(Vec::new, |reasoning| {
+            self.reasoning_args
+                .iter()
+                .map(|arg| arg.replace("{reasoning}", reasoning))
+                .collect()
+        });
         Ok(ResolvedHarness {
             name: self.name.trim().to_owned(),
+            version: sha256_file(&program)?,
             program,
-            args: self
-                .args
+            args: reasoning_args
                 .iter()
+                .chain(&self.args)
                 .map(|arg| arg.replace("{model}", model))
                 .collect(),
-            version,
-            model_label: model.to_owned(),
+            model: model.to_owned(),
+            reasoning: reasoning.map(str::to_owned),
         })
     }
 
@@ -155,15 +179,24 @@ impl HarnessProfile {
         if self.program.as_os_str().is_empty() {
             bail!("harness program must not be empty");
         }
-        if self.args.iter().any(|arg| arg.contains('\0')) {
+        if self
+            .args
+            .iter()
+            .chain(&self.reasoning_args)
+            .any(|arg| arg.contains('\0'))
+        {
             bail!("harness arguments must not contain null bytes");
         }
-        if self
-            .version
-            .as_ref()
-            .is_some_and(|version| version.trim().is_empty() || version.contains('\0'))
+        if self.args.iter().any(|arg| arg.contains("{reasoning}")) {
+            bail!("put {{reasoning}} in reasoning_args, which are only passed with --reasoning");
+        }
+        if !self.reasoning_args.is_empty()
+            && !self
+                .reasoning_args
+                .iter()
+                .any(|arg| arg.contains("{reasoning}"))
         {
-            bail!("harness version must not be empty or contain a null byte");
+            bail!("reasoning_args must use the {{reasoning}} placeholder");
         }
         if self.max_requests == 0 {
             bail!("harness max_requests must be greater than zero");
@@ -187,6 +220,17 @@ impl HarnessProfile {
         }
         Ok(())
     }
+}
+
+fn template_value<'a>(name: &str, value: &'a str) -> Result<&'a str> {
+    let value = value.trim();
+    if value.is_empty() || value.contains('\0') {
+        bail!("harness {name} must not be empty or contain a null byte");
+    }
+    if value.contains(['{', '}']) {
+        bail!("harness {name} must not contain braces");
+    }
+    Ok(value)
 }
 
 fn default_api_key_env() -> String {
@@ -301,10 +345,10 @@ api_key_env = "KRAAI_EVAL_TEST_NONEXISTENT_API_KEY"
 "#,
         )?;
         let profile = HarnessProfile::load(&path)?;
-        let resolved = profile.resolve("model with spaces", None)?;
+        let resolved = profile.resolve("model with spaces", None, None)?;
         ensure!(resolved.program == executable.canonicalize()?);
         ensure!(resolved.name == "custom");
-        ensure!(resolved.model_label == "model with spaces");
+        ensure!(resolved.model_label() == "model with spaces");
         ensure!(
             resolved.args
                 == [
@@ -319,20 +363,48 @@ api_key_env = "KRAAI_EVAL_TEST_NONEXISTENT_API_KEY"
     }
 
     #[test]
-    fn artifact_version_changes_when_program_changes() -> Result<()> {
+    fn version_is_the_program_sha256() -> Result<()> {
         let fixture = Fixture::new()?;
-        let program = fixture.executable("agent", "#!/bin/sh\nexit 0\n")?;
+        let program = fixture.executable("agent", "abc")?;
         let profile = HarnessProfile::kraai();
-        let initial = profile.resolve("test-model", Some(&program))?;
+        let initial = profile.resolve("test-model", None, Some(&program))?;
+        ensure!(
+            initial.version == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
         fs::write(&program, "#!/bin/sh\nexit 1\n")?;
-        let changed = profile.resolve("test-model", Some(&program))?;
+        let changed = profile.resolve("test-model", None, Some(&program))?;
         ensure!(initial.version != changed.version);
-        ensure!(changed.version.starts_with("sha256:"));
-        let pinned = HarnessProfile {
-            version: Some(String::from("v1.2.3")),
+        Ok(())
+    }
+
+    #[test]
+    fn reasoning_args_come_first_and_only_with_reasoning() -> Result<()> {
+        let program = std::env::current_exe()?;
+        let profile = HarnessProfile::kraai();
+        let plain = profile.resolve("test-model", None, Some(&program))?;
+        ensure!(plain.args.first().map(String::as_str) == Some("--provider"));
+        ensure!(plain.model_label() == "test-model");
+        let high = profile.resolve("test-model", Some("high"), Some(&program))?;
+        ensure!(
+            high.args.get(..3)
+                == Some(
+                    &[
+                        String::from("--option"),
+                        String::from("reasoning_effort=high"),
+                        String::from("--provider"),
+                    ][..]
+                )
+        );
+        ensure!(high.model_label() == "test-model-high");
+        let without = HarnessProfile {
+            reasoning_args: Vec::new(),
             ..profile
         };
-        ensure!(pinned.resolve("test-model", Some(&program))?.version == "v1.2.3");
+        ensure!(
+            without
+                .resolve("test-model", Some("high"), Some(&program))
+                .is_err()
+        );
         Ok(())
     }
 
@@ -342,7 +414,7 @@ api_key_env = "KRAAI_EVAL_TEST_NONEXISTENT_API_KEY"
             program: PathBuf::from("sh"),
             ..HarnessProfile::kraai()
         };
-        let resolved = profile.resolve("test-model", None)?;
+        let resolved = profile.resolve("test-model", None, None)?;
         ensure!(resolved.program.is_absolute());
         ensure!(is_executable(&resolved.program));
         Ok(())
@@ -368,7 +440,11 @@ api_key_env = "KRAAI_EVAL_TEST_NONEXISTENT_API_KEY"
                 ..profile.clone()
             },
             HarnessProfile {
-                version: Some(String::new()),
+                args: vec![String::from("{reasoning}")],
+                ..profile.clone()
+            },
+            HarnessProfile {
+                reasoning_args: vec![String::from("--effort")],
                 ..profile.clone()
             },
             HarnessProfile {
@@ -386,11 +462,12 @@ api_key_env = "KRAAI_EVAL_TEST_NONEXISTENT_API_KEY"
                 ..profile.clone()
             },
         ] {
-            ensure!(invalid.resolve("test-model", None).is_err());
+            ensure!(invalid.resolve("test-model", None, None).is_err());
         }
-        ensure!(profile.resolve(" ", None).is_err());
-        ensure!(profile.resolve("model\0name", None).is_err());
-        ensure!(profile.resolve("model-{prompt}", None).is_err());
+        ensure!(profile.resolve(" ", None, None).is_err());
+        ensure!(profile.resolve("model\0name", None, None).is_err());
+        ensure!(profile.resolve("model-{prompt}", None, None).is_err());
+        ensure!(profile.resolve("model", Some("{prompt}"), None).is_err());
         Ok(())
     }
 
@@ -405,7 +482,7 @@ api_key_env = "KRAAI_EVAL_TEST_NONEXISTENT_API_KEY"
                 sanitize_kraai_provider: false,
                 ..HarnessProfile::kraai()
             };
-            ensure!(profile.resolve("test-model", None).is_err());
+            ensure!(profile.resolve("test-model", None, None).is_err());
         }
         Ok(())
     }
@@ -424,12 +501,16 @@ api_key_env = "KRAAI_EVAL_TEST_NONEXISTENT_API_KEY"
         let program = fixture.0.join("agent");
         fs::write(&program, "not executable")?;
         let profile = HarnessProfile::kraai();
-        ensure!(profile.resolve("test-model", Some(&fixture.0)).is_err());
-        #[cfg(unix)]
-        ensure!(profile.resolve("test-model", Some(&program)).is_err());
         ensure!(
             profile
-                .resolve("test-model", Some(&fixture.0.join("absent")))
+                .resolve("test-model", None, Some(&fixture.0))
+                .is_err()
+        );
+        #[cfg(unix)]
+        ensure!(profile.resolve("test-model", None, Some(&program)).is_err());
+        ensure!(
+            profile
+                .resolve("test-model", None, Some(&fixture.0.join("absent")))
                 .is_err()
         );
         Ok(())

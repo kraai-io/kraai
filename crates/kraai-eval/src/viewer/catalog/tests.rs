@@ -33,8 +33,9 @@ impl Drop for Fixture {
     }
 }
 
-const NATIVE: &str = "runs/task/codex/version/model/attempt-0/experiment";
-const JOB: &str = "public/benchmark/codex/version/model/job";
+const FOLDER: &str = "in-house/model/2026-01-01-codex-0123abcd";
+const NATIVE: &str = "in-house/model/2026-01-01-codex-0123abcd/task/attempt-1";
+const JOB: &str = "benchmark/model/2026-01-01-codex-0123abcd/harbor";
 
 fn set(value: &mut Value, key: &str, field: Value) -> Result<()> {
     value
@@ -47,7 +48,7 @@ fn set(value: &mut Value, key: &str, field: Value) -> Result<()> {
 fn native(metrics: Value) -> Value {
     json!({
         "schema_version": 6, "experiment_id": "experiment", "artifact_path": NATIVE,
-        "task_id": "task", "harness_name": "codex", "model_label": "model", "attempt": 0,
+        "task_id": "task", "harness_name": "codex", "model_label": "model", "attempt": 1,
         "runner_version": "version", "runner_artifact_sha256": "runner", "task_sha256": "task",
         "grader_sha256": "grader", "status": "passed", "graders": [],
         "sandbox": {"backend": "test", "network": "disabled", "environment_cleared": true,
@@ -81,7 +82,7 @@ fn accounting(directory: &Path) -> Result<()> {
 }
 
 fn suite() -> Value {
-    json!({"schema_version": 1, "suite_id": "suite", "artifact_path": "suites/codex/version/model/suite",
+    json!({"schema_version": 2, "artifact_path": FOLDER,
         "harness_name": "codex", "runner_version": "version", "model_label": "model",
         "started_at_ms": 100, "completed_at_ms": 300, "duration_ms": 200,
         "requested_runs": 1, "evaluated_runs": 1, "passed_runs": 1, "failed_runs": 0,
@@ -89,8 +90,9 @@ fn suite() -> Value {
         "wall_time_ms": {"samples": 0},
         "total_tokens": {"total": 0, "distribution": {"samples": 0}},
         "used_context_tokens": {"total": 0, "distribution": {"samples": 0}},
-        "runs": [{"task_id": "task", "attempt": 0, "status": "passed",
-            "experiment_id": "experiment", "artifact_path": NATIVE, "duration_ms": 200}]
+        "runs": [{"task_id": "task", "attempt": 1, "status": "passed",
+            "experiment_id": "experiment", "artifact_path": NATIVE, "duration_ms": 200},
+            {"task_id": "other", "attempt": 1, "error": "launch failed"}]
     })
 }
 
@@ -105,7 +107,7 @@ fn harbor_result() -> Value {
 }
 
 #[test]
-fn discovers_saved_codex_and_counts_reused_suite_runs_once() -> Result<()> {
+fn discovers_saved_attempts_and_summary_launch_failures_once() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.write(
         &format!("{NATIVE}/result.json"),
@@ -113,18 +115,20 @@ fn discovers_saved_codex_and_counts_reused_suite_runs_once() -> Result<()> {
         "harness": {"schema_version": 1, "turns": 2, "final_context_tokens": 99}})),
     )?;
     accounting(&fixture.0.join(NATIVE))?;
-    for name in ["first", "second"] {
-        fixture.write(
-            &format!("suites/codex/version/model/{name}/summary.json"),
-            &suite(),
-        )?;
-    }
+    fixture.write(&format!("{FOLDER}/summary.json"), &suite())?;
     let catalog = Catalog::load(&fixture.0)?;
     ensure!(catalog.warnings.is_empty(), "{:?}", catalog.warnings);
-    ensure!(catalog.versions.len() == 1 && catalog.attempts.len() == 1);
+    ensure!(catalog.versions.len() == 1 && catalog.attempts.len() == 2);
+    ensure!(
+        catalog
+            .attempts
+            .iter()
+            .any(|attempt| attempt.task == "other" && attempt.status == "error")
+    );
     let attempt = catalog
         .attempts
-        .first()
+        .iter()
+        .find(|attempt| attempt.task == "task")
         .ok_or_else(|| eyre!("missing attempt"))?;
     let metrics = &attempt.metrics;
     ensure!(metrics.input_tokens == Some(60));
@@ -137,7 +141,11 @@ fn discovers_saved_codex_and_counts_reused_suite_runs_once() -> Result<()> {
         catalog
             .versions
             .first()
-            .is_some_and(|version| version.harness == "codex")
+            .is_some_and(|version| version.harness == "codex"
+                && version.label == "0123abcd"
+                && version.model.as_deref() == Some("model")
+                && version.benchmark == "in-house"
+                && version.latest_at_ms == Some(100))
     );
     Ok(())
 }
@@ -147,12 +155,15 @@ fn unavailable_measurements_remain_null_and_corrupt_results_remain_visible() -> 
     let fixture = Fixture::new()?;
     fixture.write(&format!("{NATIVE}/result.json"), &native(json!({})))?;
     let broken = fixture.write(
-        "runs/broken/kraai/v/m/attempt-1/id/result.json",
+        &format!("{FOLDER}/broken/attempt-1/result.json"),
         &Value::Null,
     )?;
     fs::write(broken, b"{partial")?;
-    fs::create_dir_all(fixture.0.join("runs/missing/kraai/v/m/attempt-2/id"))?;
-    fixture.write("dependencies/ignored/result.json", &native(json!({})))?;
+    fs::create_dir_all(fixture.0.join(FOLDER).join("missing/attempt-2"))?;
+    fixture.write(
+        ".cache/staging/in-house/model/2026-01-01-codex-0123abcd/task/attempt-3/result.json",
+        &native(json!({})),
+    )?;
     let catalog = Catalog::load(&fixture.0)?;
     ensure!(catalog.attempts.len() == 3);
     let saved = catalog
@@ -334,98 +345,30 @@ fn symlinks_are_rejected_at_registration_and_at_read_time() -> Result<()> {
 }
 
 #[test]
-fn model_settings_split_versions_and_task_changes_are_reported() -> Result<()> {
+fn one_folder_is_one_version_and_task_changes_are_reported() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.write(&format!("{NATIVE}/result.json"), &native(json!({})))?;
     let mut revised = native(json!({}));
     set(&mut revised, "task_sha256", json!("updated-task"))?;
-    set(&mut revised, "experiment_id", json!("revised"))?;
+    set(&mut revised, "provider_config_sha256", json!("different"))?;
+    fixture.write(&format!("{FOLDER}/task/attempt-2/result.json"), &revised)?;
     fixture.write(
-        "runs/task/codex/version/model/attempt-1/revised/result.json",
-        &revised,
-    )?;
-    set(
-        &mut revised,
-        "provider_config_sha256",
-        json!("different-settings"),
-    )?;
-    set(&mut revised, "experiment_id", json!("different-settings"))?;
-    fixture.write(
-        "runs/task/codex/version/model/attempt-2/settings/result.json",
-        &revised,
-    )?;
-    set(
-        &mut revised,
-        "rust_environment_programs",
-        json!(["cargo", "rustc"]),
-    )?;
-    set(
-        &mut revised,
-        "experiment_id",
-        json!("different-environment"),
-    )?;
-    fixture.write(
-        "runs/task/codex/version/model/attempt-3/environment/result.json",
-        &revised,
+        "in-house/model/2026-02-01-codex-89abcdef/task/attempt-1/result.json",
+        &native(json!({})),
     )?;
     let catalog = Catalog::load(&fixture.0)?;
-    ensure!(catalog.versions.len() == 3);
+    ensure!(catalog.versions.len() == 2 && catalog.attempts.len() == 3);
     ensure!(
         catalog
             .versions
             .iter()
-            .all(|version| version.label == "version")
+            .any(|version| version.harness == "codex" && version.label == "89abcdef")
     );
     ensure!(
         catalog
             .warnings
             .iter()
             .any(|warning| warning.contains("different saved task"))
-    );
-    Ok(())
-}
-
-#[test]
-fn canonical_native_result_replaces_archived_copy_regardless_of_status() -> Result<()> {
-    for (canonical_status, archived_status) in [("passed", "runner_failed"), ("failed", "passed")] {
-        let fixture = Fixture::new()?;
-        let mut canonical = native(json!({}));
-        set(&mut canonical, "status", json!(canonical_status))?;
-        fixture.write(&format!("{NATIVE}/result.json"), &canonical)?;
-        let mut archived = canonical.clone();
-        set(&mut archived, "status", json!(archived_status))?;
-        set(&mut archived, "completed_at_ms", json!(999))?;
-        fixture.write("failures/host-bus-experiment/result.json", &archived)?;
-        let catalog = Catalog::load(&fixture.0)?;
-        ensure!(catalog.attempts.len() == 1 && catalog.versions.len() == 1);
-        let attempt = catalog
-            .attempts
-            .first()
-            .ok_or_else(|| eyre!("missing native result"))?;
-        ensure!(attempt.status == canonical_status);
-        let log = catalog.read_log(&attempt.id, "result.json")?;
-        ensure!(serde_json::from_str::<Value>(&log.content)? == canonical);
-    }
-    Ok(())
-}
-
-#[test]
-fn archived_experiments_without_committed_results_keep_only_latest_record() -> Result<()> {
-    let fixture = Fixture::new()?;
-    let mut old = native(json!({}));
-    set(&mut old, "status", json!("runner_failed"))?;
-    fixture.write("failures/first-experiment/result.json", &old)?;
-    let mut latest = old;
-    set(&mut latest, "status", json!("controller_failed"))?;
-    set(&mut latest, "completed_at_ms", json!(400))?;
-    fixture.write("failures/latest-experiment/result.json", &latest)?;
-    let catalog = Catalog::load(&fixture.0)?;
-    ensure!(catalog.attempts.len() == 1);
-    ensure!(
-        catalog
-            .attempts
-            .first()
-            .is_some_and(|attempt| attempt.status == "error")
     );
     Ok(())
 }
@@ -452,24 +395,29 @@ fn cancelled_harbor_trials_remain_interrupted_even_with_finish_time_and_reward()
 }
 
 #[test]
-fn harbor_proxy_request_budgets_create_separate_versions() -> Result<()> {
+fn harbor_attempts_count_from_one_per_task() -> Result<()> {
     let fixture = Fixture::new()?;
-    for (job, budget) in [("first", 10), ("second", 20)] {
-        let directory = format!("public/benchmark/kraai/version/model/{job}");
-        fixture.write(
-            &format!("{directory}/kraai-run.json"),
-            &json!({"identity": {
-                "dataset": "benchmark@1", "model": "model", "spec": {"harness": "kraai",
-                    "proxy_command": ["/bin/proxy", "--max-requests", budget.to_string()]}
-            }}),
-        )?;
-        fixture.write(
-            &format!("{directory}/task__trial/result.json"),
-            &harbor_result(),
-        )?;
+    for (trial, started) in [
+        ("task__a", "2026-09-20T10:00:00Z"),
+        ("task__b", "2026-09-20T11:00:00Z"),
+    ] {
+        let mut result = harbor_result();
+        set(&mut result, "started_at", json!(started))?;
+        fixture.write(&format!("{JOB}/{trial}/result.json"), &result)?;
     }
+    fixture.write(
+        "benchmark/model/2026-01-01-codex-0123abcd/interrupted/task__c/result.json",
+        &harbor_result(),
+    )?;
     let catalog = Catalog::load(&fixture.0)?;
-    ensure!(catalog.versions.len() == 2 && catalog.attempts.len() == 2);
+    let mut attempts = catalog
+        .attempts
+        .iter()
+        .map(|attempt| attempt.attempt)
+        .collect::<Vec<_>>();
+    attempts.sort_unstable();
+    ensure!(attempts == [1, 2], "{attempts:?}");
+    ensure!(catalog.versions.len() == 1);
     Ok(())
 }
 

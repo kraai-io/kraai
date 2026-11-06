@@ -91,6 +91,7 @@ impl Catalog {
             }
             self.total_scanned_entries += 1;
             match entry {
+                Ok(entry) if entry.file_name().to_string_lossy().starts_with('.') => {}
                 Ok(entry) => match entry.file_type() {
                     Ok(kind) if kind.is_dir() => {
                         self.collect_directories(&entry.path(), depth - 1, directories);

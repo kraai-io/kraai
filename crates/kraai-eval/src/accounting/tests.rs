@@ -132,32 +132,6 @@ fn service_tiers_use_standard_rates_and_stale_sidecars_are_rejected() -> Result<
 }
 
 #[test]
-fn comparisons_exclude_mismatched_price_tables_but_keep_context_measurements() -> Result<()> {
-    let (root, options) = fixture()?;
-    let path = root.join("proxy.events.jsonl");
-    fs::write(&path, format!("{}\n", event(100, 400, 20, 10)))?;
-    let left = analyze_requests(&path, 1, &options)?;
-    let mut raised = options.clone();
-    if let Some(rates) = raised.rates.as_mut() {
-        rates.input = Usd(20_000_000_000);
-    }
-    let right = analyze_requests(&path, 1, &raised)?;
-    let mut comparison = PairedRequestMetrics::default();
-    comparison.record(Some(&left), Some(&right));
-    ensure!(
-        comparison.estimated_cost_nanousd.samples == 0 && comparison.cost_basis_mismatches == 1
-    );
-    ensure!(
-        comparison.context_paired_runs == 1 && comparison.left_mean_context_tokens == Some(500.0)
-    );
-    let mut equal = PairedRequestMetrics::default();
-    equal.record(Some(&left), Some(&left));
-    ensure!(equal.estimated_cost_nanousd.samples == 1 && equal.cost_basis_mismatches == 0);
-    fs::remove_dir_all(root)?;
-    Ok(())
-}
-
-#[test]
 fn incomplete_proxy_coverage_cannot_fall_back_to_harness_totals() -> Result<()> {
     let (root, options) = fixture()?;
     let path = root.join("proxy.events.jsonl");

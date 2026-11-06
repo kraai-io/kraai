@@ -2,9 +2,17 @@ use color_eyre::eyre::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::JsonField;
-use super::PairedMetric;
 use crate::ProxyMetrics;
+
+trait JsonField {
+    fn field(&self, pointer: &str) -> &Value;
+}
+
+impl JsonField for Value {
+    fn field(&self, pointer: &str) -> &Value {
+        self.pointer(pointer).unwrap_or(&Self::Null)
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HarborTrialMetrics {
@@ -20,91 +28,6 @@ pub struct HarborTrialMetrics {
     pub usage_source: String,
     #[serde(default)]
     pub accounting: Option<crate::RequestAccounting>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct HarborEfficiencyMetrics {
-    pub wall_time_ms: PairedMetric,
-    pub runner_time_ms: PairedMetric,
-    pub total_tokens: PairedMetric,
-    pub input_tokens: PairedMetric,
-    pub uncached_input_tokens: PairedMetric,
-    pub cache_read_tokens: PairedMetric,
-    pub output_tokens: PairedMetric,
-    pub reasoning_tokens: PairedMetric,
-    pub proxy_requests: PairedMetric,
-    #[serde(default)]
-    pub request_metrics: crate::PairedRequestMetrics,
-}
-
-impl HarborEfficiencyMetrics {
-    pub(super) fn record(&mut self, left: &HarborTrialMetrics, right: &HarborTrialMetrics) {
-        self.request_metrics
-            .record(left.accounting.as_ref(), right.accounting.as_ref());
-        for (metric, left, right) in [
-            (
-                &mut self.wall_time_ms,
-                left.wall_time_ms,
-                right.wall_time_ms,
-            ),
-            (
-                &mut self.runner_time_ms,
-                left.runner_time_ms,
-                right.runner_time_ms,
-            ),
-            (
-                &mut self.total_tokens,
-                left.total_tokens,
-                right.total_tokens,
-            ),
-            (
-                &mut self.input_tokens,
-                left.input_tokens,
-                right.input_tokens,
-            ),
-            (
-                &mut self.uncached_input_tokens,
-                left.uncached_input_tokens,
-                right.uncached_input_tokens,
-            ),
-            (
-                &mut self.cache_read_tokens,
-                left.cache_read_tokens,
-                right.cache_read_tokens,
-            ),
-            (
-                &mut self.output_tokens,
-                left.output_tokens,
-                right.output_tokens,
-            ),
-            (
-                &mut self.reasoning_tokens,
-                left.reasoning_tokens,
-                right.reasoning_tokens,
-            ),
-            (
-                &mut self.proxy_requests,
-                left.proxy_requests,
-                right.proxy_requests,
-            ),
-        ] {
-            metric.record(left, right);
-        }
-    }
-
-    pub(super) fn rows(&self) -> [(&'static str, &PairedMetric); 9] {
-        [
-            ("Total tokens", &self.total_tokens),
-            ("Input tokens including cache", &self.input_tokens),
-            ("Uncached input tokens", &self.uncached_input_tokens),
-            ("Cached input tokens", &self.cache_read_tokens),
-            ("Output tokens including reasoning", &self.output_tokens),
-            ("Reasoning tokens", &self.reasoning_tokens),
-            ("Proxy requests", &self.proxy_requests),
-            ("Runner time (ms)", &self.runner_time_ms),
-            ("Wall time (ms)", &self.wall_time_ms),
-        ]
-    }
 }
 
 pub(crate) fn trial_metrics(
@@ -185,7 +108,7 @@ fn count(value: &Value) -> Result<Option<u128>> {
     })?)))
 }
 
-pub(super) fn duration(start: &Value, end: &Value) -> Result<Option<u128>> {
+fn duration(start: &Value, end: &Value) -> Result<Option<u128>> {
     let parse = |value: &Value| -> Result<Option<chrono::DateTime<chrono::FixedOffset>>> {
         if value.is_null() {
             return Ok(None);

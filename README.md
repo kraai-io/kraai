@@ -98,19 +98,22 @@ Run `just check` before pushing.
 
 ### Evals
 
-`kraai-eval` runs an agent on a task and grades the result. Local tasks in
-`evals/tasks` are Git repos with hidden tests the agent never sees, and
-`benchmark` runs public suites like Terminal-Bench 4 through
-[Harbor](https://harborframework.com). Every model request goes through a local
-proxy that records tokens and estimated cost. Interrupted runs resume where
-they stopped. It needs Linux, plus Docker for public suites.
+`kraai-eval` runs an agent on a benchmark and grades the result. The in-house
+benchmark's tasks in `evals/tasks` are Git repos with hidden tests the agent
+never sees. Terminal-Bench 4 runs through [Harbor](https://harborframework.com).
+Every model request goes through a local proxy that records tokens and
+estimated cost. It needs Linux, plus Docker for Terminal-Bench.
 
 ```sh
-just eval list
-just eval run event-stream --model gpt-6-astra-low
-just eval benchmark terminal-bench --model gpt-6-astra-low --task-count 20
-just eval-view    # results in the browser, next to published Codex runs
+just eval run in-house --model gpt-6-astra --reasoning low --tasks 3 --attempts 5
+just eval run terminal-bench --model gpt-6-astra --reasoning low --tasks 20
+just eval check in-house
+just eval-view
 ```
+
+Results go to `~/.kraai/eval/<benchmark>/<model>-<reasoning>/<first run date>-<harness>-<binary sha256>/`.
+Rerunning a command resumes it, and raising `--tasks` or `--attempts` only runs
+the new attempts. A new harness binary starts a new folder.
 
 ### Performance
 

@@ -6,12 +6,12 @@ mod benchmark;
 mod cache;
 mod cargo_dependencies;
 mod command;
-mod comparison;
 mod containers;
 mod event_log;
 mod execution;
-mod harbor;
+mod harbor_metrics;
 mod harness;
+mod layout;
 mod manifest;
 mod metrics;
 mod progress;
@@ -26,20 +26,14 @@ pub mod viewer;
 mod workspace;
 
 pub use accounting::{
-    AccountingSummary, ContextMetrics, PairedRequestMetrics, PricingOptions, RequestAccounting,
-    analyze_requests, load_accounting,
+    AccountingSummary, ContextMetrics, PricingOptions, RequestAccounting, analyze_requests,
+    load_accounting,
 };
 pub use benchmark::{BenchmarkSpec, prepare_benchmark_spec, runner_store_root};
-pub use cache::{
-    ExperimentIdentity, ResultStore, RunCoordinates, hash_file, load_run_result, path_segment,
-};
-pub use comparison::{
-    ComparedRun, ComparisonResult, ComparisonSuite, EfficiencyMetrics, PairOutcome, PairedMetric,
-    PairedUsageMetrics, compare, compare_with_cache_roots,
-};
+pub use cache::{ExperimentIdentity, ResultStore, hash_file, load_run_result, path_segment};
 pub use containers::{benchmark_environment, docker_proxy_host};
-pub use harbor::{HarborComparisonResult, compare_harbor_jobs, format_harbor_comparison};
 pub use harness::{HarnessProfile, ProxyKind, ResolvedHarness};
+pub use layout::{EvalRoot, HarnessDir, model_dir};
 pub use manifest::{CommandSpec, NetworkPolicy, TaskManifest};
 pub use metrics::{EvaluationMetrics, HarnessMetrics, ProxyMetrics, UsageMetrics};
 pub use provider_config::KraaiProviderConfigRequest;

@@ -1,7 +1,5 @@
-mod comparison;
 mod measurement;
 mod pricing;
-pub use comparison::PairedRequestMetrics;
 pub use measurement::RequestMeasurement;
 
 use std::fs;

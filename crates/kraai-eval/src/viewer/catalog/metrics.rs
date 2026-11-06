@@ -120,7 +120,7 @@ impl Catalog {
             .as_ref()
             .is_none_or(|proxy| proxy.accounting_error.is_none() && proxy.unrecorded_requests == 0);
         let allow_harbor = !adapter && !proxy_path.exists() && proxy.is_none();
-        let normalized = crate::harbor::metrics::trial_metrics(result, proxy, allow_harbor);
+        let normalized = crate::harbor_metrics::trial_metrics(result, proxy, allow_harbor);
         let mut metrics = match normalized {
             Ok(normalized) => Metrics {
                 input_tokens: normalized.input_tokens,

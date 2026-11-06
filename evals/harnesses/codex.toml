@@ -6,9 +6,7 @@ args = [
   "--json",
   "--dangerously-bypass-approvals-and-sandbox",
   "--model",
-  "gpt-6-astra",
-  "--config",
-  'model_reasoning_effort="low"',
+  "{model}",
   "--config",
   'model_provider="eval"',
   "--config",
@@ -33,4 +31,5 @@ max_requests = 64
 name = "codex"
 program = "codex"
 proxy = "codex_subscription"
+reasoning_args = ["--config", 'model_reasoning_effort="{reasoning}"']
 schema_version = 1

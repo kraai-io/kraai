@@ -21,11 +21,59 @@ pub struct BenchmarkSpec {
 }
 
 pub fn prepare_benchmark_spec(
-    harness: ResolvedHarness,
+    harness: &ResolvedHarness,
     proxy_command: Vec<String>,
-    artifact_dir: &Path,
+    bundles: &Path,
+    spec_dir: &Path,
 ) -> Result<PathBuf> {
-    let store_root = runner_store_root(&harness.program)?;
+    let (runner_bundle, bundle_sha256) = runner_bundle(&harness.program, bundles)?;
+    let spec = BenchmarkSpec {
+        schema_version: 1,
+        harness: harness.name.clone(),
+        bundle_sha256,
+        runner_bundle,
+        runner_path: harness.program.clone(),
+        runner_args: harness.args.clone(),
+        model: harness.model.clone(),
+        proxy_command,
+    };
+    fs::create_dir_all(spec_dir)?;
+    let path = spec_dir.join("kraai-eval-spec.json");
+    fs::write(&path, serde_json::to_vec_pretty(&spec)?)?;
+    Ok(path)
+}
+
+fn runner_bundle(program: &Path, bundles: &Path) -> Result<(PathBuf, String)> {
+    let store_root = runner_store_root(program)?;
+    let name = store_root
+        .file_name()
+        .ok_or_else(|| color_eyre::eyre::eyre!("runner has no Nix store name"))?;
+    let directory = bundles.join(name);
+    let bundle = directory.join("runner.tar");
+    let checksum = directory.join("runner.tar.sha256");
+    if let Ok(saved) = fs::read_to_string(&checksum) {
+        return Ok((bundle, saved.trim().to_owned()));
+    }
+    fs::create_dir_all(bundles)?;
+    let staging = bundles.join(format!(".{}", ulid::Ulid::generate()));
+    let built = build_runner_bundle(&store_root, &staging).and_then(|digest| {
+        fs::write(staging.join("runner.tar.sha256"), format!("{digest}\n"))?;
+        match fs::rename(&staging, &directory) {
+            Ok(()) => Ok(digest),
+            Err(_) if checksum.is_file() => {
+                fs::remove_dir_all(&staging)?;
+                Ok(fs::read_to_string(&checksum)?.trim().to_owned())
+            }
+            Err(error) => Err(error.into()),
+        }
+    });
+    if built.is_err() && staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    Ok((bundle, built?))
+}
+
+fn build_runner_bundle(store_root: &Path, artifact_dir: &Path) -> Result<String> {
     fs::create_dir_all(artifact_dir)?;
     let artifact_dir = artifact_dir.canonicalize()?;
     let closure = run_trusted(
@@ -96,19 +144,7 @@ pub fn prepare_benchmark_spec(
         "failed to bundle runner's Nix closure: {}",
         String::from_utf8_lossy(&archive.stderr)
     );
-    let spec = BenchmarkSpec {
-        schema_version: 1,
-        harness: harness.name,
-        bundle_sha256: crate::cache::sha256_file(&runner_bundle)?,
-        runner_bundle,
-        runner_path: harness.program,
-        runner_args: harness.args,
-        model: harness.model_label,
-        proxy_command,
-    };
-    let path = artifact_dir.join("kraai-eval-spec.json");
-    fs::write(&path, serde_json::to_vec_pretty(&spec)?)?;
-    Ok(path)
+    crate::cache::sha256_file(&runner_bundle)
 }
 
 pub fn runner_store_root(program: &Path) -> Result<PathBuf> {

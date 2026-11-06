@@ -1,6 +1,5 @@
 target/
 target
-.kraai-eval-cache/
 *.profraw
 crate-sources*
 .codex

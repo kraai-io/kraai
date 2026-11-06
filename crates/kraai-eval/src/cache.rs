@@ -34,36 +34,17 @@ impl ExperimentIdentity {
 }
 
 pub struct ResultStore {
-    root: PathBuf,
+    staging_root: PathBuf,
     relative_dir: PathBuf,
     final_dir: PathBuf,
 }
 
-pub struct RunCoordinates<'a> {
-    pub task_id: &'a str,
-    pub harness_name: &'a str,
-    pub runner_version: &'a str,
-    pub model_label: Option<&'a str>,
-    pub attempt: u64,
-    pub experiment_id: &'a str,
-}
-
 impl ResultStore {
-    pub fn new(root: &Path, coordinates: &RunCoordinates<'_>) -> Self {
-        let relative_dir = PathBuf::from("runs")
-            .join(path_segment(coordinates.task_id, "unnamed-task"))
-            .join(path_segment(coordinates.harness_name, "unnamed-harness"))
-            .join(path_segment(coordinates.runner_version, "unversioned"))
-            .join(path_segment(
-                coordinates.model_label.unwrap_or("unlabeled-model"),
-                "unlabeled-model",
-            ))
-            .join(format!("attempt-{}", coordinates.attempt))
-            .join(coordinates.experiment_id);
+    pub fn new(root: &Path, staging_root: &Path, relative_dir: &Path) -> Self {
         Self {
-            root: root.to_path_buf(),
-            final_dir: root.join(&relative_dir),
-            relative_dir,
+            staging_root: staging_root.to_path_buf(),
+            final_dir: root.join(relative_dir),
+            relative_dir: relative_dir.to_path_buf(),
         }
     }
 
@@ -102,12 +83,14 @@ impl ResultStore {
         Ok(Some(result))
     }
 
+    pub fn discard(&self) -> Result<()> {
+        fs::remove_dir_all(&self.final_dir)
+            .wrap_err_with(|| format!("remove {}", self.final_dir.display()))
+    }
+
     pub fn begin(&self) -> Result<PathBuf> {
-        fs::create_dir_all(self.root.join("tmp"))?;
-        let path = self
-            .root
-            .join("tmp")
-            .join(ulid::Ulid::generate().to_string());
+        fs::create_dir_all(&self.staging_root)?;
+        let path = self.staging_root.join(ulid::Ulid::generate().to_string());
         fs::create_dir(&path)?;
         Ok(path)
     }
@@ -128,7 +111,7 @@ impl ResultStore {
         )?;
         if self.final_dir.exists() {
             bail!(
-                "evaluation result cache collision at {}",
+                "evaluation result already exists at {}",
                 self.final_dir.display()
             );
         }
@@ -388,14 +371,8 @@ mod tests {
                 .join(format!("kraai-cache-accounting-{}", ulid::Ulid::generate()));
             let store = ResultStore::new(
                 &root,
-                &RunCoordinates {
-                    task_id: "task",
-                    harness_name: "harness",
-                    runner_version: "version",
-                    model_label: Some("model"),
-                    attempt: 0,
-                    experiment_id: "experiment",
-                },
+                &root.join(".cache/staging"),
+                Path::new("task/attempt-1"),
             );
             fs::create_dir_all(&store.final_dir)?;
             let pricing = price_per_million(2);
@@ -501,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_resume_prices_saved_requests_without_changing_run_or_proxy_events() -> Result<()> {
+    fn resumed_runs_reprice_saved_requests_without_changing_run_or_proxy_events() -> Result<()> {
         let mut fixture = AccountingFixture::new()?;
         let path = fixture.store.final_dir.join("result.json");
         let mut failed_accounting = read_run_result(&path)?;
@@ -541,24 +518,5 @@ mod tests {
         );
         ensure!(repriced.status == crate::RunStatus::Passed && repriced.duration_ms == 1);
         Ok(())
-    }
-
-    #[test]
-    fn result_path_exposes_run_coordinates_and_sanitizes_separators() {
-        let store = ResultStore::new(
-            Path::new("/cache"),
-            &RunCoordinates {
-                task_id: "plural-files",
-                harness_name: "kraai/ci",
-                runner_version: "git:abc123",
-                model_label: Some("gpt-5.6-sol-low"),
-                attempt: 2,
-                experiment_id: "deadbeef",
-            },
-        );
-        assert_eq!(
-            store.relative_dir(),
-            Path::new("runs/plural-files/kraai-ci/git-abc123/gpt-5.6-sol-low/attempt-2/deadbeef")
-        );
     }
 }

@@ -9,7 +9,7 @@ use kraai_eval::{KraaiProviderConfigRequest, ModelProxyRequest, ProxyServiceRequ
 #[derive(Debug, Args)]
 pub(super) struct ProxyArgs {
     #[command(flatten)]
-    pricing: super::accounting::PricingArgs,
+    pricing: super::pricing::PricingArgs,
     #[arg(long)]
     state_dir: PathBuf,
     #[arg(long, default_value_t = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))]
