@@ -6,18 +6,19 @@ mod tasks;
 mod terminal_bench;
 mod viewer;
 
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::{Result, ensure};
-use kraai_eval::{EvalRoot, HarnessDir, HarnessProfile, ResolvedHarness};
+use kraai_eval::{EvalRoot, HarnessDir, HarnessProfile, ModelPrice, Prices, ResolvedHarness};
 use serde::Serialize;
 
 #[derive(Debug, Parser)]
 #[command(
     about = "Run agent benchmarks and keep every attempt under ~/.kraai/eval",
-    after_help = "Examples:\n  kraai-eval run in-house --model MODEL --reasoning high --tasks 3 --attempts 5\n  kraai-eval run terminal-bench --model MODEL --tasks 20 --harness evals/harnesses/codex.toml\n  kraai-eval check in-house repository-repair\n  kraai-eval view\n\nRerunning the same command resumes it. Raising --tasks or --attempts only runs the new attempts."
+    after_help = "Examples:\n  kraai-eval run in-house --model MODEL --reasoning high --tasks 3 --attempts 5 --price-input 10 --price-output 50\n  kraai-eval run terminal-bench --model MODEL --tasks 20 --harness evals/harnesses/codex.toml\n  kraai-eval check in-house repository-repair\n  kraai-eval view\n\nRerunning the same command resumes it. Raising --tasks or --attempts only runs the new attempts. A model needs a saved price before it runs; --price-* flags save it in prices.json for every later run."
 )]
 struct Cli {
     #[arg(
@@ -133,6 +134,8 @@ struct Prepared {
     profile: HarnessProfile,
     harness: ResolvedHarness,
     directory: HarnessDir,
+    price: ModelPrice,
+    prices: Prices,
 }
 
 pub(super) fn run() -> Result<ExitCode> {
@@ -174,6 +177,13 @@ fn prepare(args: &RunArgs, eval_dir: &std::path::Path) -> Result<Prepared> {
         args.benchmark == Benchmark::TerminalBench || args.proxy_host.is_none(),
         "--proxy-host only applies to terminal-bench"
     );
+    if args.benchmark == Benchmark::TerminalBench {
+        ensure!(
+            profile.has_model_proxy(),
+            "terminal-bench needs a harness with a model proxy for usage accounting"
+        );
+        ensure!(args.tasks.is_some(), "terminal-bench needs --tasks N");
+    }
     let harness = profile.resolve(
         &args.model,
         args.reasoning.as_deref(),
@@ -186,12 +196,39 @@ fn prepare(args: &RunArgs, eval_dir: &std::path::Path) -> Result<Prepared> {
         &harness.name,
         &harness.version,
     )?;
+    let price = model_price(&root, &harness.model, args)?;
     Ok(Prepared {
+        prices: Prices::load(root.path())?,
         root,
         profile,
         harness,
         directory,
+        price,
     })
+}
+
+fn model_price(root: &EvalRoot, model: &str, args: &RunArgs) -> Result<ModelPrice> {
+    let saved = root.model_price(model)?;
+    let Some(price) = args.pricing.price() else {
+        return saved.ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "{model} has no saved price; pass --price-input and --price-output in USD per million tokens to save one"
+            )
+        });
+    };
+    price.rates()?;
+    if saved != Some(price) && !args.dry_run {
+        root.save_model_price(model, price)?;
+        let mut stderr = std::io::stderr().lock();
+        match saved {
+            Some(saved) => writeln!(
+                stderr,
+                "Replaced the price for {model}, was {saved}, now {price}"
+            )?,
+            None => writeln!(stderr, "Saved the price for {model}: {price}")?,
+        }
+    }
+    Ok(price)
 }
 
 fn provider_config_path(args: &RunArgs) -> Result<PathBuf> {
@@ -233,7 +270,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn flat_prices_need_input_and_output() -> Result<()> {
+    fn prices_need_input_and_output() -> Result<()> {
         let run = |extra: &[&str]| {
             let mut args = vec!["kraai-eval", "run", "in-house", "--model", "test"];
             args.extend_from_slice(extra);
@@ -253,9 +290,9 @@ mod tests {
         };
         let rates = args
             .pricing
-            .options()?
-            .rates
-            .ok_or_else(|| color_eyre::eyre::eyre!("missing flat rates"))?;
+            .price()
+            .ok_or_else(|| color_eyre::eyre::eyre!("missing price"))?
+            .rates()?;
         ensure!(rates.input == kraai_types::Usd(1_250_000_000));
         ensure!(rates.cache_read == Some(kraai_types::Usd(125_000_000)));
         ensure!(rates.reasoning.is_none());

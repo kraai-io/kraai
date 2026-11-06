@@ -74,9 +74,23 @@ fn accounting(directory: &Path) -> Result<()> {
             "model_requests": 2, "unrecorded_requests": 0,
             "context": {"samples": 2, "total_input_tokens": 60, "min_input_tokens": 25,
                 "peak_input_tokens": 35, "last_input_tokens": 35, "mean_input_tokens": 30.0},
-            "known_estimated_cost": 1_250_000_000, "priced_requests": 2, "unpriced_requests": 0,
-            "cost_overflow": false, "requests": []
+            "requests": [request(0), request(1)]
         }))?,
+    )?;
+    Ok(())
+}
+
+fn request(index: usize) -> Value {
+    json!({"event_index": index, "model": "model",
+        "usage": {"total_tokens": 625, "input_tokens": 625, "output_tokens": 0,
+            "reasoning_tokens": 0, "cache_read_tokens": 0}})
+}
+
+fn prices(fixture: &Fixture) -> Result<()> {
+    fixture.write(
+        "prices.json",
+        &json!({"schema_version": 1, "models": {
+            "model": {"input": 1000.0, "output": 2000.0, "cache_read": 500.0}}}),
     )?;
     Ok(())
 }
@@ -99,7 +113,7 @@ fn suite() -> Value {
 fn harbor_result() -> Value {
     json!({"id": "trial", "task_name": "org/task", "trial_name": "task__trial",
         "agent_info": {"name": "codex", "version": "0.1"},
-        "config": {"agent": {"model_name": "model"}},
+        "config": {"agent": {"model_name": "provider/model"}},
         "agent_result": {"n_input_tokens": 100, "n_cache_tokens": 40,
             "n_output_tokens": 20, "cost_usd": 0.25},
         "verifier_result": {"rewards": {"reward": 1.0}},
@@ -116,6 +130,7 @@ fn discovers_saved_attempts_and_summary_launch_failures_once() -> Result<()> {
     )?;
     accounting(&fixture.0.join(NATIVE))?;
     fixture.write(&format!("{FOLDER}/summary.json"), &suite())?;
+    prices(&fixture)?;
     let catalog = Catalog::load(&fixture.0)?;
     ensure!(catalog.warnings.is_empty(), "{:?}", catalog.warnings);
     ensure!(catalog.versions.len() == 1 && catalog.attempts.len() == 2);
@@ -204,6 +219,7 @@ fn harbor_preserves_unknown_metrics_and_retains_unfinished_trials() -> Result<()
         &format!("{JOB}/task__trial/artifacts/work/result.json"),
         &harbor_result(),
     )?;
+    prices(&fixture)?;
     let catalog = Catalog::load(&fixture.0)?;
     ensure!(catalog.attempts.len() == 2);
     let attempt = catalog
@@ -216,7 +232,7 @@ fn harbor_preserves_unknown_metrics_and_retains_unfinished_trials() -> Result<()
     ensure!(attempt.metrics.uncached_input_tokens == Some(60));
     ensure!(attempt.metrics.output_tokens == Some(20));
     ensure!(attempt.metrics.reasoning_tokens.is_none() && attempt.metrics.turns.is_none());
-    ensure!(attempt.metrics.duration_ms == Some(2000) && attempt.metrics.cost_usd == Some(0.25));
+    ensure!(attempt.metrics.duration_ms == Some(2000) && attempt.metrics.cost_usd == Some(0.12));
     ensure!(
         catalog
             .attempts
@@ -247,6 +263,7 @@ fn harbor_controller_accounting_supplies_shared_token_and_context_definitions() 
         &proxy(),
     )?;
     accounting(&fixture.0.join(&trial).join("kraai-controller"))?;
+    prices(&fixture)?;
     let catalog = Catalog::load(&fixture.0)?;
     let attempt = catalog
         .attempts
@@ -265,6 +282,34 @@ fn harbor_controller_accounting_supplies_shared_token_and_context_definitions() 
 }
 
 #[test]
+fn costs_need_a_saved_price_and_ignore_costs_harbor_or_the_harness_report() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.write(
+        &format!("{NATIVE}/result.json"),
+        &native(json!({"proxy": proxy()})),
+    )?;
+    accounting(&fixture.0.join(NATIVE))?;
+    fixture.write(&format!("{JOB}/task__trial/result.json"), &harbor_result())?;
+    let catalog = Catalog::load(&fixture.0)?;
+    ensure!(catalog.attempts.len() == 2);
+    ensure!(catalog.attempts.iter().all(
+        |attempt| attempt.metrics.input_tokens.is_some() && attempt.metrics.cost_usd.is_none()
+    ));
+    fixture.write(
+        "prices.json",
+        &json!({"schema_version": 1, "models": {"other": {"input": 1.0, "output": 1.0}}}),
+    )?;
+    let catalog = Catalog::load(&fixture.0)?;
+    ensure!(
+        catalog
+            .attempts
+            .iter()
+            .all(|attempt| attempt.metrics.cost_usd.is_none())
+    );
+    Ok(())
+}
+
+#[test]
 fn stale_accounting_never_contributes_cost_or_complete_usage() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.write(
@@ -276,6 +321,7 @@ fn stale_accounting_never_contributes_cost_or_complete_usage() -> Result<()> {
         fixture.0.join(NATIVE).join("proxy.events.jsonl"),
         b"changed",
     )?;
+    prices(&fixture)?;
     let catalog = Catalog::load(&fixture.0)?;
     let metrics = &catalog
         .attempts

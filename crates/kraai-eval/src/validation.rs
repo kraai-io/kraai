@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -8,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::command::CommandOutcome;
 use crate::manifest::resolve_private_path;
 use crate::sandbox::{SandboxRequest, run_sandboxed, rust_environment};
+use crate::temporary_directory::TemporaryDirectory;
 use crate::workspace::{copy_tree, materialize_base};
 use crate::{NetworkPolicy, TaskManifest};
 
@@ -46,7 +46,7 @@ pub fn validate_task(path: &Path) -> Result<TaskValidation> {
         .as_ref()
         .map(|rust| {
             crate::cargo_dependencies::prepare(
-                &prepared.root.0,
+                prepared.root.path(),
                 &prepared.base,
                 &prepared.task.public_digest(&prepared.task_dir)?,
                 rust,
@@ -78,14 +78,6 @@ pub fn validate_task(path: &Path) -> Result<TaskValidation> {
     })
 }
 
-struct TemporaryDirectory(PathBuf);
-
-impl Drop for TemporaryDirectory {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
 struct PreparedValidation {
     task: TaskManifest,
     task_dir: PathBuf,
@@ -105,10 +97,10 @@ impl PreparedValidation {
         if task.grader.reference_patch.is_none() {
             bail!("task {} has no grader.reference_patch to validate", task.id);
         }
-        let root = TemporaryDirectory(
+        let root = TemporaryDirectory::new(
             std::env::temp_dir().join(format!("kraai-eval-validation-{}", ulid::Ulid::generate())),
         );
-        let base = root.0.join("base");
+        let base = root.path().join("base");
         materialize_base(&task, &task_dir, &base)?;
         Ok(Self {
             task,
@@ -119,7 +111,7 @@ impl PreparedValidation {
     }
 
     fn workspace(&self, name: &str, patches: &[&Path]) -> Result<PathBuf> {
-        let workspace = self.root.0.join(name);
+        let workspace = self.root.path().join(name);
         copy_tree(&self.base, &workspace)?;
         for patch in patches {
             crate::runner::apply_patch(&workspace, &resolve_private_path(&self.task_dir, patch)?)?;
@@ -185,6 +177,8 @@ impl PreparedValidation {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use color_eyre::eyre::ensure;
 
     use super::*;

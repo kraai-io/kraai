@@ -33,7 +33,7 @@ use forwarding::{forward_request, write_error};
 use recording::RequestRecord;
 use request::{ParsedRequest, read_request};
 use telemetry::{CacheState, write_event};
-use usage::usage_from_response_body;
+use usage::{ResponseUsage, usage_from_response_body};
 
 const PROXY_TRANSPORT_REVISION: u32 = 1;
 const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -42,7 +42,6 @@ const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone)]
 pub struct ModelProxyRequest {
     credentials: ProxyCredentialRequest,
-    pricing: crate::PricingOptions,
     max_requests: u64,
 }
 
@@ -61,7 +60,6 @@ impl ModelProxyRequest {
     pub fn openai(credential_env: String, max_requests: u64) -> Self {
         Self {
             credentials: ProxyCredentialRequest::OpenAiApiKey { credential_env },
-            pricing: crate::PricingOptions::default(),
             max_requests,
         }
     }
@@ -69,7 +67,6 @@ impl ModelProxyRequest {
     pub fn codex_subscription(max_requests: u64) -> Self {
         Self {
             credentials: ProxyCredentialRequest::CodexSubscription,
-            pricing: crate::PricingOptions::default(),
             max_requests,
         }
     }
@@ -82,19 +79,9 @@ impl ModelProxyRequest {
             crate::KraaiProviderKind::Codex => Self::codex_subscription(max_requests),
             crate::KraaiProviderKind::ChatCompletions => Self {
                 credentials: ProxyCredentialRequest::ChatCompletions { provider },
-                pricing: crate::PricingOptions::default(),
                 max_requests,
             },
         })
-    }
-
-    pub fn with_pricing(mut self, pricing: crate::PricingOptions) -> Self {
-        self.pricing = pricing;
-        self
-    }
-
-    pub(crate) fn pricing(&self) -> &crate::PricingOptions {
-        &self.pricing
     }
 
     pub(crate) fn kraai_provider_kind(&self) -> Option<crate::KraaiProviderKind> {
@@ -132,7 +119,7 @@ impl ModelProxyRequest {
             bail!("model proxy max_requests must be greater than zero");
         }
         let credentials = self.credentials.resolve()?;
-        let mut proxy = ModelProxy::start(ProxyServerConfig {
+        ModelProxy::start(ProxyServerConfig {
             listen_address,
             upstream: credentials.upstream().to_string(),
             allowed_paths: credentials.allowed_paths(),
@@ -142,9 +129,7 @@ impl ModelProxyRequest {
             log_path,
             max_requests: self.max_requests,
             shutdown_drain_timeout: SHUTDOWN_DRAIN_TIMEOUT,
-        })?;
-        proxy.pricing = self.pricing.clone();
-        Ok(proxy)
+        })
     }
 }
 
@@ -157,7 +142,6 @@ pub(crate) struct ModelProxy {
     base_path: String,
     metrics: Arc<Mutex<ProxyMetrics>>,
     log_path: PathBuf,
-    pricing: crate::PricingOptions,
 }
 
 impl ModelProxy {
@@ -201,7 +185,6 @@ impl ModelProxy {
         Ok(Self {
             address,
             log_path,
-            pricing: crate::PricingOptions::default(),
             token,
             shutdown: Some(shutdown_tx),
             thread: Some(thread),
@@ -274,7 +257,6 @@ impl ModelProxy {
         let accounting = crate::analyze_requests(
             &self.log_path,
             metrics.requests.saturating_add(metrics.unrecorded_requests),
-            &self.pricing,
         )?;
         let path = self.log_path.with_file_name("request-accounting.json");
         fs::write(&path, serde_json::to_vec_pretty(&accounting)?)
@@ -322,6 +304,7 @@ struct ForwardOutcome {
     status: Option<u16>,
     delivery: DownstreamDelivery,
     usage: Option<UsageMetrics>,
+    reported_cost: Option<kraai_types::Usd>,
     response_cache_state: CacheState,
     upstream_request_id: Option<String>,
     error: Option<String>,
@@ -335,6 +318,7 @@ impl ForwardOutcome {
             status: None,
             delivery: DownstreamDelivery::Incomplete,
             usage: None,
+            reported_cost: None,
             response_cache_state: CacheState::default(),
             upstream_request_id: None,
             error: None,
@@ -480,7 +464,7 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<ProxyState>) -> Res
     Ok(())
 }
 
-fn record_usage_metrics(state: &ProxyState, body: &[u8]) -> Result<Option<UsageMetrics>> {
+fn record_usage_metrics(state: &ProxyState, body: &[u8]) -> Result<Option<ResponseUsage>> {
     let Some(usage) = usage_from_response_body(body) else {
         return Ok(None);
     };
@@ -488,7 +472,7 @@ fn record_usage_metrics(state: &ProxyState, body: &[u8]) -> Result<Option<UsageM
         .metrics
         .lock()
         .map_err(|error| color_eyre::eyre::eyre!("proxy metrics mutex poisoned: {error}"))?;
-    metrics.usage.accumulate(&usage);
+    metrics.usage.accumulate(&usage.tokens);
     drop(metrics);
     Ok(Some(usage))
 }

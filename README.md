@@ -101,11 +101,11 @@ Run `just check` before pushing.
 `kraai-eval` runs an agent on a benchmark and grades the result. The in-house
 benchmark's tasks in `evals/tasks` are Git repos with hidden tests the agent
 never sees. Terminal-Bench 4 runs through [Harbor](https://harborframework.com).
-Every model request goes through a local proxy that records tokens and
-estimated cost. It needs Linux, plus Docker for Terminal-Bench.
+Every model request goes through a local proxy that records its tokens. It
+needs Linux, plus Docker for Terminal-Bench.
 
 ```sh
-just eval run in-house --model gpt-6-astra --reasoning low --tasks 3 --attempts 5
+just eval run in-house --model gpt-6-astra --reasoning low --tasks 3 --attempts 5 --price-input 10 --price-output 50 --price-cache-read 1
 just eval run terminal-bench --model gpt-6-astra --reasoning low --tasks 20
 just eval check in-house
 just eval-view

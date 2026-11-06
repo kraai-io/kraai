@@ -1,4 +1,6 @@
-use kraai_eval::{ProgressReporter, SuiteResult};
+use kraai_eval::{Prices, ProgressReporter, RunResult, SuiteResult};
+use kraai_types::Usd;
+use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -119,7 +121,73 @@ fn fit_progress_line(line: &str, columns: usize) -> String {
     output
 }
 
-pub(super) fn format_suite_summary(result: &SuiteResult, cache_dir: &std::path::Path) -> String {
+pub(super) type AttemptCosts = BTreeMap<(String, u64), Option<Usd>>;
+
+pub(super) fn attempt_costs(results: &[RunResult], prices: &Prices) -> AttemptCosts {
+    results
+        .iter()
+        .map(|result| {
+            let cost = result
+                .metrics
+                .proxy
+                .as_ref()
+                .and_then(|proxy| proxy.accounting.as_ref())
+                .and_then(|accounting| prices.accounting_cost(accounting));
+            ((result.task_id.clone(), result.attempt), cost)
+        })
+        .collect()
+}
+
+fn total_cost(costs: &AttemptCosts) -> Option<Usd> {
+    if costs.is_empty() {
+        return None;
+    }
+    costs
+        .values()
+        .try_fold(0_u64, |total, cost| total.checked_add((*cost)?.0))
+        .map(Usd)
+}
+
+fn dollars(cost: Usd) -> f64 {
+    cost.0 as f64 / 1_000_000_000.0
+}
+
+pub(super) fn priced_summary_json(
+    result: &SuiteResult,
+    costs: &AttemptCosts,
+) -> serde_json::Result<serde_json::Value> {
+    let mut value = serde_json::to_value(result)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            String::from("estimated_cost_usd"),
+            serde_json::json!(total_cost(costs).map(dollars)),
+        );
+    }
+    let runs = value
+        .get_mut("runs")
+        .and_then(serde_json::Value::as_array_mut)
+        .into_iter()
+        .flatten();
+    for (run, summary) in runs.zip(&result.runs) {
+        let cost = summary
+            .task_id
+            .clone()
+            .and_then(|task| costs.get(&(task, summary.attempt)).copied().flatten());
+        if let Some(run) = run.as_object_mut() {
+            run.insert(
+                String::from("estimated_cost_usd"),
+                serde_json::json!(cost.map(dollars)),
+            );
+        }
+    }
+    Ok(value)
+}
+
+pub(super) fn format_suite_summary(
+    result: &SuiteResult,
+    cache_dir: &std::path::Path,
+    costs: &AttemptCosts,
+) -> String {
     let success_rate = result.success_rate.map_or_else(
         || String::from("n/a"),
         |rate| format!("{:.1}%", rate * 100.0),
@@ -129,8 +197,18 @@ pub(super) fn format_suite_summary(result: &SuiteResult, cache_dir: &std::path::
         .distribution
         .mean
         .map_or_else(|| String::from("n/a"), |mean| format!("{mean:.0}"));
+    let unpriced = costs.values().filter(|cost| cost.is_none()).count();
+    let cost = total_cost(costs).map_or_else(
+        || {
+            format!(
+                "unknown, {unpriced} of {} attempts have no cost",
+                costs.len()
+            )
+        },
+        |cost| format!("~{cost} at the model's saved price"),
+    );
     let mut output = format!(
-        "Attempts: {} total, {} evaluated\nResults: {} passed, {} failed, {} controller failures, {} launch failures\nSuccess rate: {}\nElapsed: {}\nTokens: {} total, {} mean per measured run\nResults folder: {}",
+        "Attempts: {} total, {} evaluated\nResults: {} passed, {} failed, {} controller failures, {} launch failures\nSuccess rate: {}\nElapsed: {}\nTokens: {} total, {} mean per measured run\nEstimated cost: {}\nResults folder: {}",
         result.requested_runs,
         result.evaluated_runs,
         result.passed_runs,
@@ -141,15 +219,20 @@ pub(super) fn format_suite_summary(result: &SuiteResult, cache_dir: &std::path::
         format_duration_ms(result.duration_ms),
         result.total_tokens.total,
         token_mean,
+        cost,
         cache_dir.join(&result.artifact_path).display(),
     );
     for run in &result.runs {
         if let Some(accounting) = &run.accounting {
+            let task = run.task_id.as_deref().unwrap_or("unknown task");
+            let cost = costs
+                .get(&(task.to_owned(), run.attempt))
+                .copied()
+                .flatten();
             output.push_str(&format!(
-                "\n{} attempt {}:\n{}",
-                run.task_id.as_deref().unwrap_or("unknown task"),
+                "\n{task} attempt {}:\n{}",
                 run.attempt,
-                format_accounting(accounting)
+                format_accounting(accounting, cost)
             ));
         }
     }
@@ -174,21 +257,11 @@ fn format_duration_ms(milliseconds: u128) -> String {
     }
 }
 
-fn format_accounting(accounting: &kraai_eval::AccountingSummary) -> String {
+fn format_accounting(accounting: &kraai_eval::AccountingSummary, cost: Option<Usd>) -> String {
     let context = &accounting.context;
-    let cost = accounting.estimated_cost.map_or_else(
-        || {
-            format!(
-                "unknown; known portion ~{}, {} unpriced, {} unrecorded",
-                accounting.known_estimated_cost,
-                accounting.unpriced_requests,
-                accounting.unrecorded_requests
-            )
-        },
-        |cost| format!("~{cost}"),
-    );
+    let cost = cost.map_or_else(|| String::from("unknown"), |cost| format!("~{cost}"));
     format!(
-        "Estimated standard-tier API cost: {cost}\nInput context: {} mean, {} peak, {} last recorded; {} measured / {} model requests",
+        "Estimated cost: {cost}\nInput context: {} mean, {} peak, {} last recorded; {} measured / {} model requests",
         context
             .mean_input_tokens
             .map_or_else(|| String::from("unknown"), |value| format!("{value:.1}")),

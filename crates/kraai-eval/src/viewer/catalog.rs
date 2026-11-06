@@ -17,6 +17,8 @@ pub struct Catalog {
     #[serde(skip)]
     root: PathBuf,
     #[serde(skip)]
+    prices: crate::Prices,
+    #[serde(skip)]
     logs: BTreeMap<String, BTreeMap<String, PathBuf>>,
     #[serde(skip)]
     sources: BTreeSet<PathBuf>,
@@ -89,6 +91,13 @@ impl Catalog {
             root: root.canonicalize()?,
             ..Self::default()
         };
+        match crate::Prices::load(&catalog.root) {
+            Ok(prices) => catalog.prices = prices,
+            Err(error) => {
+                let root = catalog.root.clone();
+                catalog.warning(&root, format!("{error:#}"));
+            }
+        }
         catalog.harness_folders();
         for version in &mut catalog.versions {
             version.latest_at_ms = catalog

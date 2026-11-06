@@ -41,11 +41,8 @@ class AgentTests(Fixture, unittest.IsolatedAsyncioTestCase):
         }
         accounting = {
             "model_requests": 1,
-            "unpriced_requests": 0,
             "unrecorded_requests": 0,
             "context": {"samples": 1},
-            "cost_overflow": False,
-            "known_estimated_cost": 1_420_000,
         }
         controller = self.root / "controller.py"
         controller.write_text(
@@ -129,11 +126,7 @@ class AgentTests(Fixture, unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(context.n_input_tokens, 120)
         self.assertEqual(context.n_cache_tokens, 50)
-        self.assertEqual(context.cost_usd, 0.00142)
-        self.assertEqual(context.model_dump()["cost_usd"], 0.00142)
-        self.assertEqual(
-            context.metadata["kraai_eval"]["cost_source"], "estimated_api_equivalent"
-        )
+        self.assertIsNone(context.cost_usd)
         self.assertEqual(
             json.loads(
                 (agent.logs_dir.parent / "kraai-controller/request-accounting.json").read_text()

@@ -1,5 +1,5 @@
 use color_eyre::eyre::{Result, ensure};
-use kraai_types::RequestCost;
+use kraai_types::Usd;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -14,10 +14,8 @@ pub struct RequestMeasurement {
     pub service_tier: Option<String>,
     pub input_context_tokens: Option<u64>,
     pub usage: Option<UsageMetrics>,
-    pub estimated_cost: Option<RequestCost>,
     #[serde(default)]
-    pub pricing_basis: Option<String>,
-    pub unpriced_reason: Option<String>,
+    pub reported_cost: Option<Usd>,
 }
 
 impl RequestMeasurement {
@@ -70,9 +68,7 @@ impl RequestMeasurement {
             service_tier: take_string(&mut event, "service_tier"),
             input_context_tokens: input,
             usage,
-            estimated_cost: None,
-            pricing_basis: None,
-            unpriced_reason: None,
+            reported_cost: event.get("reported_cost").and_then(Value::as_u64).map(Usd),
         }))
     }
 }
@@ -94,6 +90,7 @@ mod tests {
         let event = json!({
             "method": "POST", "path": "/v1/chat/completions", "timestamp_ms": 42,
             "model": " model ", "reasoning_effort": "low", "service_tier": "default",
+            "reported_cost": 1200,
             "usage": {"total_tokens": 15, "input_tokens": 5, "cache_read_tokens": 2,
                 "cache_write_tokens": 3, "output_tokens": 4, "reasoning_tokens": 1},
         });
@@ -106,13 +103,14 @@ mod tests {
                     "input_context_tokens": 10,
                     "usage": {"total_tokens": 15, "input_tokens": 5, "cache_read_tokens": 2,
                         "cache_write_tokens": 3, "output_tokens": 4, "reasoning_tokens": 1},
-                    "estimated_cost": null, "pricing_basis": null, "unpriced_reason": null,
+                    "reported_cost": 1200,
                 }),
             "request metadata or context changed"
         );
         let event = json!({
             "method": "POST", "path": "/responses", "timestamp_ms": -1,
             "model": 17, "reasoning_effort": true, "service_tier": [], "usage": null,
+            "reported_cost": "free",
         });
         let measurement = RequestMeasurement::from_event(8, event)?;
         ensure!(
@@ -120,8 +118,7 @@ mod tests {
                 == json!({
                     "event_index": 8, "timestamp_ms": null, "model": null,
                     "reasoning_effort": null, "service_tier": null, "input_context_tokens": null,
-                    "usage": null, "estimated_cost": null, "pricing_basis": null,
-                    "unpriced_reason": null,
+                    "usage": null, "reported_cost": null,
                 }),
             "request fields were coerced"
         );

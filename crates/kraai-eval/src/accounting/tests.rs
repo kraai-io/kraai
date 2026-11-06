@@ -4,19 +4,10 @@ use super::*;
 use crate::UsageMetrics;
 use color_eyre::eyre::{Result, ensure};
 
-fn fixture() -> Result<(std::path::PathBuf, PricingOptions)> {
+fn fixture() -> Result<std::path::PathBuf> {
     let root = std::env::temp_dir().join(format!("kraai-accounting-{}", ulid::Ulid::generate()));
     fs::create_dir(&root)?;
-    Ok((
-        root,
-        PricingOptions::flat(kraai_types::TokenRates {
-            input: Usd(2_000_000_000),
-            output: Usd(8_000_000_000),
-            cache_read: Some(Usd(500_000_000)),
-            cache_write: Some(Usd(3_000_000_000)),
-            reasoning: None,
-        }),
-    ))
+    Ok(root)
 }
 
 fn event(input: u64, cached: u64, output: u64, reasoning: u64) -> serde_json::Value {
@@ -26,8 +17,8 @@ fn event(input: u64, cached: u64, output: u64, reasoning: u64) -> serde_json::Va
 }
 
 #[test]
-fn prices_cached_and_reasoning_tokens_once_and_measures_each_request_context() -> Result<()> {
-    let (root, options) = fixture()?;
+fn measures_each_request_context_and_keeps_its_usage() -> Result<()> {
+    let root = fixture()?;
     let path = root.join("proxy.events.jsonl");
     fs::write(
         &path,
@@ -38,25 +29,23 @@ fn prices_cached_and_reasoning_tokens_once_and_measures_each_request_context() -
             event(300, 200, 10, 0)
         ),
     )?;
-    let result = analyze_requests(&path, 3, &options)?;
+    let result = analyze_requests(&path, 3)?;
     ensure!(result.model_requests == 2 && result.context.samples == 2);
     ensure!(result.context.mean_input_tokens == Some(500.0));
     ensure!(result.context.peak_input_tokens == Some(500));
     ensure!(result.context.last_input_tokens == Some(500));
-    ensure!(result.complete_cost() == Some(Usd(1_420_000)));
-    ensure!(result.requests.iter().all(|request| {
-        request
-            .estimated_cost
-            .as_ref()
-            .is_some_and(|cost| cost.source == "configured" && cost.rates.is_some())
-    }));
+    ensure!(
+        result.requests.iter().all(|request| {
+            request.model.as_deref() == Some("model") && request.usage.is_some()
+        })
+    );
     fs::remove_dir_all(root)?;
     Ok(())
 }
 
 #[test]
 fn missing_usage_or_unrecorded_requests_never_look_like_complete_cheap_runs() -> Result<()> {
-    let (root, options) = fixture()?;
+    let root = fixture()?;
     let path = root.join("proxy.events.jsonl");
     let mut missing = event(1, 0, 1, 0);
     missing
@@ -64,9 +53,15 @@ fn missing_usage_or_unrecorded_requests_never_look_like_complete_cheap_runs() ->
         .ok_or_else(|| color_eyre::eyre::eyre!("missing object"))?
         .remove("usage");
     fs::write(&path, format!("{}\n{missing}\n", event(100, 0, 10, 0)))?;
-    let result = analyze_requests(&path, 3, &options)?;
-    ensure!(result.unrecorded_requests == 1 && result.unpriced_requests == 1);
-    ensure!(result.complete_cost().is_none() && result.complete_context().is_none());
+    let result = analyze_requests(&path, 3)?;
+    ensure!(result.unrecorded_requests == 1 && result.model_requests == 2);
+    ensure!(
+        result
+            .requests
+            .get(1)
+            .is_some_and(|request| request.usage.is_none())
+    );
+    ensure!(result.complete_context().is_none());
     ensure!(result.context.last_input_tokens.is_none());
     fs::remove_dir_all(root)?;
     Ok(())
@@ -74,7 +69,7 @@ fn missing_usage_or_unrecorded_requests_never_look_like_complete_cheap_runs() ->
 
 #[test]
 fn rejected_requests_without_usage_are_not_model_requests() -> Result<()> {
-    let (root, options) = fixture()?;
+    let root = fixture()?;
     let path = root.join("proxy.events.jsonl");
     let mut rejected = event(1, 0, 1, 0);
     let object = rejected
@@ -88,20 +83,18 @@ fn rejected_requests_without_usage_are_not_model_requests() -> Result<()> {
         .ok_or_else(|| color_eyre::eyre::eyre!("missing object"))?
         .insert("status".into(), serde_json::json!(200));
     fs::write(&path, format!("{rejected}\n{answered}\n"))?;
-    let result = analyze_requests(&path, 2, &options)?;
-    ensure!(result.model_requests == 1 && result.unpriced_requests == 0);
-    ensure!(result.complete_cost().is_some() && result.complete_context().is_some());
+    let result = analyze_requests(&path, 2)?;
+    ensure!(result.model_requests == 1 && result.complete_context().is_some());
     fs::remove_dir_all(root)?;
     Ok(())
 }
 
 #[test]
-fn service_tiers_use_standard_rates_and_stale_sidecars_are_rejected() -> Result<()> {
-    let (root, options) = fixture()?;
+fn service_tiers_are_recorded_and_stale_sidecars_are_rejected() -> Result<()> {
+    let root = fixture()?;
     let path = root.join("proxy.events.jsonl");
     let standard = event(100, 400, 20, 10);
     fs::write(&path, format!("{standard}\n"))?;
-    let baseline = analyze_requests(&path, 1, &options)?;
     for tier in ["default", "auto", "priority", "fast", "ultrafast", "flex"] {
         let mut request = standard.clone();
         request
@@ -109,10 +102,8 @@ fn service_tiers_use_standard_rates_and_stale_sidecars_are_rejected() -> Result<
             .ok_or_else(|| color_eyre::eyre::eyre!("missing object"))?
             .insert("service_tier".into(), serde_json::json!(tier));
         fs::write(&path, format!("{request}\n"))?;
-        let result = analyze_requests(&path, 1, &options)?;
+        let result = analyze_requests(&path, 1)?;
         ensure!(result.complete_context().is_some());
-        ensure!(result.complete_cost() == Some(Usd(640_000)));
-        ensure!(result.pricing_basis() == baseline.pricing_basis());
         ensure!(
             result
                 .requests
@@ -121,7 +112,7 @@ fn service_tiers_use_standard_rates_and_stale_sidecars_are_rejected() -> Result<
                 == Some(tier)
         );
     }
-    let result = analyze_requests(&path, 1, &options)?;
+    let result = analyze_requests(&path, 1)?;
     let sidecar = root.join("request-accounting.json");
     fs::write(&sidecar, serde_json::to_vec(&result)?)?;
     ensure!(load_accounting(&sidecar)?.is_some());
@@ -133,10 +124,10 @@ fn service_tiers_use_standard_rates_and_stale_sidecars_are_rejected() -> Result<
 
 #[test]
 fn incomplete_proxy_coverage_cannot_fall_back_to_harness_totals() -> Result<()> {
-    let (root, options) = fixture()?;
+    let root = fixture()?;
     let path = root.join("proxy.events.jsonl");
     fs::write(&path, format!("{}\n", event(100, 400, 20, 10)))?;
-    let accounting = analyze_requests(&path, 2, &options)?;
+    let accounting = analyze_requests(&path, 2)?;
     let usage = UsageMetrics {
         input_tokens: 100,
         cache_read_tokens: 400,

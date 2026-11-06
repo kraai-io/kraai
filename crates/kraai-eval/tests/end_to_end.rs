@@ -46,16 +46,20 @@ command = ["sh", "-c", "read -r actual < answer.txt; [ \"$actual\" = fixed ]"]
     };
     fs::write(&profile, toml::to_string(&harness)?)?;
     let eval = root.join("eval");
-    let invoke = |attempts: &str| -> Result<kraai_eval::SuiteResult> {
-        let output = Command::new(binary)
+    let command = |model: &str, attempts: &str, extra: &[&str]| -> Result<std::process::Output> {
+        Ok(Command::new(binary)
             .args(["run", "in-house", "--json", "--harness"])
             .arg(&profile)
             .arg("--eval-dir")
             .arg(&eval)
             .arg("--tasks-dir")
             .arg(root.join("tasks"))
-            .args(["--model", " fixture/model ", "--attempts", attempts])
-            .output()?;
+            .args(["--model", model, "--attempts", attempts])
+            .args(extra)
+            .output()?)
+    };
+    let invoke_with = |attempts: &str, extra: &[&str]| -> Result<kraai_eval::SuiteResult> {
+        let output = command(" fixture/model ", attempts, extra)?;
         ensure!(
             output.status.success(),
             "CLI run failed: {}",
@@ -63,7 +67,25 @@ command = ["sh", "-c", "read -r actual < answer.txt; [ \"$actual\" = fixed ]"]
         );
         Ok(serde_json::from_slice(&output.stdout)?)
     };
-    let first = invoke("2")?;
+    let invoke = |attempts: &str| invoke_with(attempts, &[]);
+    let unpriced = command("fixture/unpriced", "1", &[])?;
+    ensure!(
+        !unpriced.status.success()
+            && String::from_utf8_lossy(&unpriced.stderr).contains("has no saved price")
+            && !eval.join("in-house/fixture-unpriced").exists(),
+        "a model without a saved price was run"
+    );
+    let first = invoke_with("2", &["--price-input", "1", "--price-output", "2"])?;
+    ensure!(
+        kraai_eval::EvalRoot::open(&eval)?.model_price("fixture/model")?
+            == Some(kraai_eval::ModelPrice {
+                input: 1.0,
+                output: 2.0,
+                cache_read: None,
+                cache_write: None,
+            }),
+        "the price was not saved under the model id"
+    );
     ensure!(
         first.harness_name == "external-shell"
             && first.model_label.as_deref() == Some("fixture/model"),
@@ -105,6 +127,39 @@ command = ["sh", "-c", "read -r actual < answer.txt; [ \"$actual\" = fixed ]"]
         !eval.join(".cache/staging").join(&folder).exists()
             || fs::read_dir(eval.join(".cache/staging").join(&folder))?.count() == 0,
         "staging kept a committed attempt"
+    );
+    fs::write(
+        eval.join(&folder).join("cli-profile/attempt-3/result.json"),
+        "{}",
+    )?;
+    for attempts in ["2", "3"] {
+        let output = command(" fixture/model ", attempts, &[])?;
+        let summary: kraai_eval::SuiteResult = serde_json::from_slice(&output.stdout)?;
+        ensure!(
+            summary.requested_runs == 3 && summary.passed_runs == 2 && summary.launch_failures == 1,
+            "an unreadable attempt with {attempts} requested attempts was not counted once"
+        );
+    }
+    let summary_path = eval.join(&folder).join("summary.json");
+    let summary = fs::read(&summary_path)?;
+    let colliding = command(
+        "fixture-model",
+        "4",
+        &["--price-input", "1", "--price-output", "2"],
+    )?;
+    ensure!(
+        !colliding.status.success()
+            && String::from_utf8_lossy(&colliding.stderr).contains("same results folder"),
+        "a model that maps to the same folder was run in it"
+    );
+    ensure!(
+        !eval.join(&folder).join("cli-profile/attempt-4").exists()
+            && fs::read(&summary_path)? == summary,
+        "a model that maps to the same folder changed its results"
+    );
+    ensure!(
+        fs::read(&first_attempt)? == saved,
+        "a saved attempt was run again"
     );
     fs::remove_dir_all(root)?;
     Ok(())
@@ -356,7 +411,8 @@ timeout_seconds = {timeout}
         runs: vec![request.clone()],
         eval_root: eval.clone(),
         harness_dir: PathBuf::from("fixture"),
-    })?;
+    })?
+    .summary;
     ensure!(
         suite.requested_runs == 3
             && suite.evaluated_runs == 2

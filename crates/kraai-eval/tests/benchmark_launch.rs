@@ -18,6 +18,10 @@ fn dry_run(eval: &Path, runner: &Path, extra: &[&str]) -> Result<serde_json::Val
             "--model",
             "gpt-6-astra",
             "--dry-run",
+            "--price-input",
+            "10",
+            "--price-output",
+            "50",
         ])
         .arg("--eval-dir")
         .arg(eval)
@@ -75,6 +79,10 @@ fn more_tasks_and_attempts_reuse_the_same_results_folder() -> Result<()> {
         ensure!(plan.get("tasks").and_then(serde_json::Value::as_u64) == Some(count.parse()?));
         folders.push(plan.get("results").cloned());
     }
+    ensure!(
+        !root.join("prices.json").exists(),
+        "a dry run saved a price"
+    );
     ensure!(folders.iter().all(|folder| Some(folder) == folders.first()));
     let folder = folders
         .first()

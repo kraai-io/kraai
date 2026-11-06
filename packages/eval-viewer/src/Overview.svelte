@@ -33,7 +33,7 @@
       </article>
     {/each}
   </div>
-  <p class="footnote">Costs use standard-tier API rates in USD, including runs using faster service tiers. Averages use recorded values; cached input is weighted by input tokens.</p>
+  <p class="footnote">Costs apply each model's saved price in prices.json to the recorded tokens, so every run of a model uses the same rates. Averages use recorded values; cached input is weighted by input tokens.</p>
 </section>
 
 <style>

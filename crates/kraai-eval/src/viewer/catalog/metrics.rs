@@ -6,7 +6,7 @@ use color_eyre::eyre::{Result, ensure};
 use serde_json::Value;
 
 use super::{Catalog, Metrics, files};
-use crate::{EvaluationMetrics, HarnessMetrics, ProxyMetrics, RequestAccounting};
+use crate::{EvaluationMetrics, HarnessMetrics, ProxyMetrics, RequestAccounting, UsageMetrics};
 
 impl Catalog {
     pub(super) fn hydrate_proxy(&mut self, directory: &Path, proxy: &mut ProxyMetrics) {
@@ -74,20 +74,9 @@ impl Catalog {
             .and_then(|context| context.last_input_tokens)
             .map(u128::from);
         metrics.cost_usd = accounting
-            .and_then(RequestAccounting::complete_cost)
-            .map(|cost| cost.0 as f64 / 1_000_000_000.0);
+            .and_then(|accounting| self.prices.accounting_cost(accounting))
+            .map(dollars);
         metrics.harness(saved.harness.as_ref());
-        if saved
-            .proxy
-            .as_ref()
-            .is_none_or(|proxy| proxy.accounting_error.is_none() && proxy.unrecorded_requests == 0)
-            && saved
-                .proxy
-                .as_ref()
-                .is_none_or(|proxy| proxy.accounting.is_none())
-        {
-            metrics.cost_usd = saved.harness.as_ref().and_then(harness_cost);
-        }
         metrics
     }
 
@@ -140,22 +129,16 @@ impl Catalog {
                             .map(u128::from)
                     })
                     .flatten(),
-                cost_usd: normalized
-                    .accounting
-                    .as_ref()
-                    .filter(|_| accounting_usable)
-                    .and_then(RequestAccounting::complete_cost)
-                    .map(|cost| cost.0 as f64 / 1_000_000_000.0)
-                    .or_else(|| {
-                        allow_harbor
-                            .then(|| {
-                                result
-                                    .pointer("/agent_result/cost_usd")
-                                    .and_then(Value::as_f64)
-                                    .filter(|cost| cost.is_finite() && *cost >= 0.0)
-                            })
-                            .flatten()
-                    }),
+                cost_usd: (if allow_harbor {
+                    self.harbor_usage_cost(result, &normalized)
+                } else {
+                    normalized
+                        .accounting
+                        .as_ref()
+                        .filter(|_| accounting_usable)
+                        .and_then(|accounting| self.prices.accounting_cost(accounting))
+                })
+                .map(dollars),
                 ..Metrics::default()
             },
             Err(error) => {
@@ -193,18 +176,30 @@ fn requests(proxy: &ProxyMetrics) -> u128 {
     )
 }
 
-fn harness_cost(harness: &HarnessMetrics) -> Option<f64> {
-    if !harness.request_costs_complete || harness.request_costs.is_empty() {
-        return None;
-    }
-    harness
-        .request_costs
-        .values()
-        .try_fold(0_u64, |total, request| {
-            if request.unpriced_attempts != 0 {
-                return None;
-            }
-            total.checked_add(request.usage.as_ref()?.cost.as_ref()?.amount.0)
+impl Catalog {
+    fn harbor_usage_cost(
+        &self,
+        result: &Value,
+        metrics: &crate::harbor_metrics::HarborTrialMetrics,
+    ) -> Option<kraai_types::Usd> {
+        let model = result
+            .pointer("/config/agent/model_name")
+            .and_then(Value::as_str)?;
+        let count = |tokens: Option<u128>| tokens.and_then(|tokens| u64::try_from(tokens).ok());
+        let usage = UsageMetrics {
+            input_tokens: count(metrics.uncached_input_tokens)?,
+            cache_read_tokens: count(metrics.cache_read_tokens)?,
+            output_tokens: count(metrics.output_tokens)?,
+            total_tokens: count(metrics.total_tokens)?,
+            ..UsageMetrics::default()
+        };
+        self.prices.usage_cost(model, &usage).or_else(|| {
+            let (_, unprefixed) = model.split_once('/')?;
+            self.prices.usage_cost(unprefixed, &usage)
         })
-        .map(|cost| cost as f64 / 1_000_000_000.0)
+    }
+}
+
+fn dollars(cost: kraai_types::Usd) -> f64 {
+    cost.0 as f64 / 1_000_000_000.0
 }

@@ -7,7 +7,7 @@ use kraai_eval::{
     KraaiProviderConfigRequest, ProgressReporter, RunRequest, RunStatus, SuiteRequest,
 };
 
-use super::display::{ProgressDisplay, format_suite_summary};
+use super::display::{ProgressDisplay, attempt_costs, format_suite_summary, priced_summary_json};
 use super::{Prepared, RunArgs, exit_code, print_json, tasks};
 
 pub(super) fn run(
@@ -21,6 +21,8 @@ pub(super) fn run(
         profile,
         harness,
         directory,
+        price,
+        prices,
     } = prepared;
     let mut tasks = tasks::discover(tasks_dir)?
         .into_values()
@@ -48,6 +50,7 @@ pub(super) fn run(
             "version": harness.version,
             "model": harness.model,
             "reasoning": harness.reasoning,
+            "price": price,
             "results": directory.path,
         }))?;
         return Ok(ExitCode::SUCCESS);
@@ -64,10 +67,7 @@ pub(super) fn run(
                 .map(|path| KraaiProviderConfigRequest::new(path, args.provider.clone()))
         })
         .transpose()?;
-    let pricing = args.pricing.options()?;
-    let model_proxy = profile
-        .model_proxy(provider_config.as_ref())?
-        .map(|proxy| proxy.with_pricing(pricing));
+    let model_proxy = profile.model_proxy(provider_config.as_ref())?;
     let progress = ProgressReporter::new();
     let display = ProgressDisplay::start(progress.clone());
     let model_label = harness.model_label();
@@ -100,11 +100,13 @@ pub(super) fn run(
         harness_dir: directory.relative.clone(),
     });
     display.finish();
-    let result = result?;
+    let outcome = result?;
+    let costs = attempt_costs(&outcome.results, &prices);
+    let result = outcome.summary;
     if json {
-        print_json(&result)?;
+        print_json(&priced_summary_json(&result, &costs)?)?;
     } else {
-        println!("{}", format_suite_summary(&result, root.path()));
+        println!("{}", format_suite_summary(&result, root.path(), &costs));
         for run in &result.runs {
             println!(
                 "  {} attempt {}: {}",

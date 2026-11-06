@@ -80,41 +80,20 @@ class MetricsTests(Fixture):
         )
         self.assertEqual(context.metadata["kraai_eval"]["usage_source"], "proxy")
 
-    def test_only_fully_priced_accounting_populates_estimated_api_cost(self):
+    def test_harbor_never_reports_a_cost_so_kraai_eval_prices_tokens_itself(self):
         accounting = {
             "model_requests": 1,
-            "unpriced_requests": 0,
             "unrecorded_requests": 0,
-            "cost_overflow": False,
-            "known_estimated_cost": 1_420_000,
+            "context": {"samples": 1},
+            "requests": [],
         }
-        for changes, expected in (
-            ({}, 0.00142),
-            ({"known_estimated_cost": 0}, 0.0),
-            ({"unpriced_requests": 1}, None),
-            ({"unrecorded_requests": 1}, None),
-            ({"cost_overflow": True}, None),
-            ({"model_requests": 0}, None),
-        ):
-            with self.subTest(changes=changes):
-                (self.root / "proxy-metrics.json").write_text(
-                    json.dumps({"accounting": accounting | changes})
-                )
-                context = SimpleNamespace(cost_usd=999)
-                populate_context(self.root, context, self.root)
-                self.assertEqual(context.cost_usd, expected)
-                if expected is not None:
-                    self.assertEqual(
-                        context.metadata["kraai_eval"]["cost_source"],
-                        "estimated_api_equivalent",
-                    )
-        for failure in ({"unrecorded_requests": 1}, {"accounting_error": "failed"}):
-            (self.root / "proxy-metrics.json").write_text(
-                json.dumps(failure | {"accounting": accounting})
-            )
-            context = SimpleNamespace()
-            populate_context(self.root, context, self.root)
-            self.assertIsNone(context.cost_usd)
+        (self.root / "proxy-metrics.json").write_text(
+            json.dumps({"requests": 1, "accounting": accounting})
+        )
+        context = SimpleNamespace(cost_usd=999)
+        populate_context(self.root, context, self.root)
+        self.assertIsNone(context.cost_usd)
+        self.assertNotIn("cost_source", context.metadata["kraai_eval"])
 
     def test_partial_proxy_usage_stays_available_without_becoming_a_complete_total(self):
         usage = {
@@ -304,7 +283,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 "(state/'ready.json').write_text(json.dumps({'schema_version':1,'base_url':'http://proxy','environment':{'TOKEN':'private-proxy-token'}}))\n"
                 "sys.stdin.read()\n"
                 "(state/'metrics.json').write_text(json.dumps({'requests':3}))\n"
-                "(state/'request-accounting.json').write_text(json.dumps({'known_estimated_cost':1420000}))\n"
+                "(state/'request-accounting.json').write_text(json.dumps({'model_requests':3}))\n"
                 "(state/'identity.json').write_text(json.dumps({'kind':'codex_subscription'}))\n"
                 "(state/'proxy.events.jsonl').write_text('{}\\n')\n"
             )
@@ -319,7 +298,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((logs / "proxy-identity.json").is_file())
             self.assertEqual(
                 json.loads((logs / "request-accounting.json").read_text()),
-                {"known_estimated_cost": 1_420_000},
+                {"model_requests": 3},
             )
             self.assertFalse(proxy.directory.exists())
             self.assertNotIn(

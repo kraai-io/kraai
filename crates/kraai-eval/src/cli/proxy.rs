@@ -8,8 +8,6 @@ use kraai_eval::{KraaiProviderConfigRequest, ModelProxyRequest, ProxyServiceRequ
 
 #[derive(Debug, Args)]
 pub(super) struct ProxyArgs {
-    #[command(flatten)]
-    pricing: super::pricing::PricingArgs,
     #[arg(long)]
     state_dir: PathBuf,
     #[arg(long, default_value_t = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))]
@@ -45,7 +43,7 @@ pub(super) fn execute(args: ProxyArgs) -> Result<ExitCode> {
         (None, _) => ModelProxyRequest::codex_subscription(args.max_requests),
     };
     kraai_eval::serve_model_proxy(ProxyServiceRequest {
-        model_proxy: model_proxy.with_pricing(args.pricing.options()?),
+        model_proxy,
         state_dir: args.state_dir,
         listen_address: args.listen,
         advertise_host: args.advertise_host,

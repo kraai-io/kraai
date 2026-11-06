@@ -14,6 +14,7 @@ mod harness;
 mod layout;
 mod manifest;
 mod metrics;
+mod prices;
 mod progress;
 mod provider_config;
 mod proxy;
@@ -21,13 +22,13 @@ mod records;
 mod runner;
 mod sandbox;
 mod suite;
+mod temporary_directory;
 mod validation;
 pub mod viewer;
 mod workspace;
 
 pub use accounting::{
-    AccountingSummary, ContextMetrics, PricingOptions, RequestAccounting, analyze_requests,
-    load_accounting,
+    AccountingSummary, ContextMetrics, RequestAccounting, analyze_requests, load_accounting,
 };
 pub use benchmark::{BenchmarkSpec, prepare_benchmark_spec, runner_store_root};
 pub use cache::{ExperimentIdentity, ResultStore, hash_file, load_run_result, path_segment};
@@ -36,11 +37,12 @@ pub use harness::{HarnessProfile, ProxyKind, ResolvedHarness};
 pub use layout::{EvalRoot, HarnessDir, model_dir};
 pub use manifest::{CommandSpec, NetworkPolicy, TaskManifest};
 pub use metrics::{EvaluationMetrics, HarnessMetrics, ProxyMetrics, UsageMetrics};
+pub use prices::{ModelPrice, Prices};
 pub use provider_config::KraaiProviderConfigRequest;
 pub(crate) use provider_config::KraaiProviderKind;
 pub use proxy::ModelProxyRequest;
 pub use proxy::service::{ProxyServiceRequest, serve_model_proxy};
-pub use suite::{SuiteRequest, SuiteResult, run_suite};
+pub use suite::{SuiteOutcome, SuiteRequest, SuiteResult, run_suite};
 pub use validation::{MutationValidation, TaskValidation, validate_task};
 
 pub use progress::{ProgressReporter, ProgressSnapshot};

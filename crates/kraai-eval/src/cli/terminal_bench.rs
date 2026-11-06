@@ -14,11 +14,9 @@ pub(super) fn run(args: RunArgs, prepared: Prepared, json: bool) -> Result<ExitC
         profile,
         harness,
         directory,
+        price,
+        ..
     } = prepared;
-    ensure!(
-        profile.has_model_proxy(),
-        "terminal-bench needs a harness with a model proxy for usage accounting"
-    );
     let Some(tasks) = args.tasks else {
         color_eyre::eyre::bail!("terminal-bench needs --tasks N");
     };
@@ -36,6 +34,7 @@ pub(super) fn run(args: RunArgs, prepared: Prepared, json: bool) -> Result<ExitC
             "version": harness.version,
             "model": harness.model,
             "reasoning": harness.reasoning,
+            "price": price,
             "results": directory.path,
         }))?;
         return Ok(ExitCode::SUCCESS);
@@ -56,7 +55,6 @@ pub(super) fn run(args: RunArgs, prepared: Prepared, json: bool) -> Result<ExitC
         String::from("--max-requests"),
         profile.max_requests.to_string(),
     ];
-    args.pricing.append(&mut proxy_command);
     if profile.proxy == ProxyKind::Openai {
         proxy_command.extend([
             String::from("--proxy"),

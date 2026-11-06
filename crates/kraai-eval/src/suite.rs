@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -37,6 +38,12 @@ pub struct SuiteResult {
     pub runs: Vec<SuiteRunResult>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SuiteOutcome {
+    pub summary: SuiteResult,
+    pub results: Vec<RunResult>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Distribution {
     pub samples: u64,
@@ -67,7 +74,7 @@ pub struct SuiteRunResult {
     pub error: Option<String>,
 }
 
-pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
+pub fn run_suite(request: &SuiteRequest) -> Result<SuiteOutcome> {
     if request.runs.is_empty() {
         bail!("suite must contain at least one run");
     }
@@ -96,6 +103,19 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
     }
     let artifact_dir = request.eval_root.join(&request.harness_dir);
     fs::create_dir_all(&artifact_dir)?;
+    let (saved, _) = saved_results(&request.eval_root, &request.harness_dir)?;
+    if let Some(other) = saved
+        .iter()
+        .find(|result| result.harness_name != harness_name || result.model_label != model_label)
+    {
+        bail!(
+            "{} holds attempts by {} on {}, not {harness_name} on {}; their names map to the same results folder",
+            request.harness_dir.display(),
+            other.harness_name,
+            other.model_label.as_deref().unwrap_or("no model"),
+            model_label.as_deref().unwrap_or("no model"),
+        );
+    }
 
     let mut launch_failures = Vec::new();
     let mut failed_attempts = BTreeSet::new();
@@ -117,14 +137,31 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
             });
         }
     }
-    let mut runs = saved_results(&request.eval_root, &request.harness_dir)?
-        .into_iter()
+    let (results, unreadable) = saved_results(&request.eval_root, &request.harness_dir)?;
+    launch_failures.extend(
+        unreadable
+            .into_iter()
+            .filter(|attempt| !failed_attempts.contains(&attempt.artifact_path))
+            .map(|attempt| SuiteRunResult {
+                task_id: Some(attempt.task),
+                attempt: attempt.attempt,
+                status: None,
+                experiment_id: None,
+                artifact_path: Some(attempt.artifact_path),
+                duration_ms: None,
+                usage: None,
+                accounting: None,
+                error: Some(attempt.error),
+            }),
+    );
+    let mut runs = results
+        .iter()
         .map(|result| SuiteRunResult {
-            task_id: Some(result.task_id),
+            task_id: Some(result.task_id.clone()),
             attempt: result.attempt,
-            status: Some(result.status),
-            experiment_id: Some(result.experiment_id),
-            artifact_path: Some(result.artifact_path),
+            status: Some(result.status.clone()),
+            experiment_id: Some(result.experiment_id.clone()),
+            artifact_path: Some(result.artifact_path.clone()),
             duration_ms: Some(result.duration_ms),
             usage: result.metrics.usage().cloned(),
             accounting: result
@@ -133,7 +170,10 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
                 .as_ref()
                 .and_then(|proxy| proxy.accounting.as_ref())
                 .map(crate::RequestAccounting::summary),
-            error: result.controller_failure.map(|failure| failure.error),
+            error: result
+                .controller_failure
+                .as_ref()
+                .map(|failure| failure.error.clone()),
         })
         .chain(launch_failures)
         .collect::<Vec<_>>();
@@ -171,7 +211,7 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
             })
             .collect(),
     );
-    let result = SuiteResult {
+    let summary = SuiteResult {
         schema_version: 2,
         artifact_path: request.harness_dir.clone(),
         harness_name,
@@ -194,10 +234,10 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
     };
     fs::write(
         artifact_dir.join("summary.json"),
-        serde_json::to_vec_pretty(&result)?,
+        serde_json::to_vec_pretty(&summary)?,
     )
     .wrap_err("write suite summary")?;
-    Ok(result)
+    Ok(SuiteOutcome { summary, results })
 }
 
 struct UnreadableAttempt {

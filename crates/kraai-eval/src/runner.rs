@@ -7,6 +7,7 @@ use color_eyre::eyre::{Context, Result, bail};
 use crate::command::{CommandOutcome, run_trusted};
 use crate::event_log::{EventLog, unix_timestamp_ms};
 use crate::sandbox::{ResourceLimits, rust_environment};
+use crate::temporary_directory::TemporaryDirectory;
 use crate::{
     ControllerFailure, EvaluationMetrics, ExperimentIdentity, KraaiProviderConfigRequest,
     ModelProxyRequest, NetworkPolicy, ProcessRecord, ProgressReporter, ResultStore, RunResult,
@@ -143,12 +144,7 @@ pub fn run(request: &RunRequest) -> Result<RunResult> {
         &request.staging_dir,
         &request.artifact_path,
     );
-    let pricing = request
-        .model_proxy
-        .as_ref()
-        .map(ModelProxyRequest::pricing)
-        .filter(|pricing| pricing.rates.is_some());
-    if let Some(result) = store.load_result_with_pricing(pricing)? {
+    if let Some(result) = store.load_result()? {
         if result.status != RunStatus::ControllerFailed {
             return Ok(result);
         }
@@ -161,7 +157,9 @@ pub fn run(request: &RunRequest) -> Result<RunResult> {
         ulid::Ulid::generate()
     ));
     fs::create_dir_all(&run_root)?;
-    let artifact_dir = store.begin()?;
+    let workspace = TemporaryDirectory::new(run_root.clone());
+    let staging = store.begin()?;
+    let artifact_dir = staging.path();
     let started = Instant::now();
     let started_at_ms = unix_timestamp_ms()?;
     let result = execution::execute(execution::Execution {
@@ -175,7 +173,7 @@ pub fn run(request: &RunRequest) -> Result<RunResult> {
         provider_config: provider_config.as_ref(),
         rust_environment: rust_environment.as_ref(),
         artifact_path: store.relative_dir(),
-        artifact_dir: &artifact_dir,
+        artifact_dir,
         started,
         started_at_ms,
     });
@@ -239,12 +237,12 @@ pub fn run(request: &RunRequest) -> Result<RunResult> {
         }
     };
     store.commit(
-        &artifact_dir,
+        artifact_dir,
         &identity_json(request, &task, &result)?,
         &result,
     )?;
-    if result.status != RunStatus::ControllerFailed {
-        fs::remove_dir_all(&run_root).wrap_err("remove completed evaluation workspace")?;
+    if result.status == RunStatus::ControllerFailed {
+        workspace.keep();
     }
     Ok(result)
 }

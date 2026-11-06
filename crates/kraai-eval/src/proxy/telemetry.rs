@@ -80,6 +80,8 @@ struct ProxyEvent<'a> {
     response_bytes: usize,
     duration_ms: u128,
     usage: &'a Option<UsageMetrics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reported_cost: Option<kraai_types::Usd>,
     routing_hint_derived: bool,
     model: Option<&'a str>,
     reasoning_effort: Option<&'a str>,
@@ -120,6 +122,7 @@ pub(super) fn write_event(
         response_bytes: outcome.body.len(),
         duration_ms: duration.as_millis(),
         usage: &outcome.usage,
+        reported_cost: outcome.reported_cost,
         routing_hint_derived: derived_hint.is_some(),
         model: field("model"),
         reasoning_effort: body.as_ref().and_then(reasoning_effort),
