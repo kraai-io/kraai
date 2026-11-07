@@ -64,7 +64,7 @@ async fn restart_after_cancellation_failure(
                 name: "kraai_nushell".into(),
                 input: "echo text".into(),
                 arguments_error: None,
-                rewritten_from: None,
+                rewrite: None,
             },
         )
         .await;
@@ -208,7 +208,7 @@ async fn script_result_recovery_requires_a_matching_direct_parent_and_no_live_st
                     name: "kraai_nushell".into(),
                     input: "echo text".into(),
                     arguments_error: None,
-                    rewritten_from: None,
+                    rewrite: None,
                 },
             )
             .await;

@@ -42,7 +42,7 @@ async fn fragmented_arguments_preserve_script_and_drain_usage_after_call() -> Re
             matches!(events.get(2), Some(ProviderStreamEvent::Usage(usage)) if usage.total_tokens == 5)
         );
         assert!(
-            matches!(events.first(), Some(ProviderStreamEvent::ScriptCall(ScriptCall { call_id, name, input: script, arguments_error: None, rewritten_from: None })) if call_id.as_str() == "call-1" && name == "kraai_nushell" && script == input)
+            matches!(events.first(), Some(ProviderStreamEvent::ScriptCall(ScriptCall { call_id, name, input: script, arguments_error: None, rewrite: None })) if call_id.as_str() == "call-1" && name == "kraai_nushell" && script == input)
         );
         assert!(matches!(
             events.get(1),
@@ -71,7 +71,7 @@ async fn tool_fragments_without_indexes_preserve_the_single_call() -> Result<()>
     .collect::<Result<Vec<_>>>()?;
     assert_eq!(events.len(), 2);
     assert!(
-        matches!(events.first(), Some(ProviderStreamEvent::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None, rewritten_from: None })) if call_id.as_str() == "call-1" && name == "kraai_nushell" && input == "ls")
+        matches!(events.first(), Some(ProviderStreamEvent::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None, rewrite: None })) if call_id.as_str() == "call-1" && name == "kraai_nushell" && input == "ls")
     );
     Ok(())
 }
@@ -145,7 +145,7 @@ async fn invalid_calls_keep_raw_arguments_and_their_error() -> Result<()> {
                     name: name.into(),
                     input: arguments.into(),
                     arguments_error: Some(error.into()),
-                    rewritten_from: None,
+                    rewrite: None,
                 }),
                 ProviderStreamEvent::Finished {
                     stop_reason: StopReason::ToolCall
@@ -426,7 +426,7 @@ async fn structured_reasoning_fragments_survive_tool_continuation() -> Result<()
                         name: "kraai_nushell".into(),
                         input: "ls".into(),
                         arguments_error: None,
-                        rewritten_from: None,
+                        rewrite: None,
                     }),
                 ],
             },

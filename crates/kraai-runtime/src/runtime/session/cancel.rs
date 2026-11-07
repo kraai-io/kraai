@@ -95,6 +95,7 @@ impl SessionActor {
                 stdout_file: None,
                 stderr_file: None,
                 sandbox_blocked: None,
+                rewrites: &[],
             },
         );
         let cancelled = match self

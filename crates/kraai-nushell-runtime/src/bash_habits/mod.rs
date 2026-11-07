@@ -1,3 +1,4 @@
+mod heredoc;
 mod rules;
 #[cfg(test)]
 mod tests;
@@ -11,18 +12,28 @@ use crate::StartupFile;
 /// Each round re-parses the script, so later rounds only fix what earlier edits exposed.
 const MAX_ROUNDS: usize = 4;
 
-/// Rewrites bash syntax that Nushell rejects or silently misreads, such as `2>/dev/null` or
-/// `find . -name x`, into the Nushell form with the same meaning. The script is parsed with the
-/// same Kraai commands and startup files its shell will load, so user aliases and definitions
-/// are respected. Returns `None` when nothing changed, the rewritten script still fails to parse,
-/// or the startup files do not parse on their own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BashRewrite {
+    pub source: String,
+    /// What changed, once each, such as `` `2>&1 |` → `o+e>|` ``.
+    pub changes: Vec<String>,
+}
+
+/// Rewrites bash syntax that Nushell rejects or silently misreads, such as `2>/dev/null`,
+/// `find . -name x`, or a heredoc, into the Nushell form with the same meaning. The script is
+/// parsed with the same Kraai commands and startup files its shell will load, so user aliases
+/// and definitions are respected. Returns `None` when nothing changed, the rewritten script
+/// still fails to parse, or the startup files do not parse on their own.
 pub fn rewrite_bash_habits(
     source: &str,
     active_commands: &[String],
     startup_files: &[StartupFile],
-) -> Option<String> {
+) -> Option<BashRewrite> {
     let engine = parse_engine(active_commands, startup_files)?;
-    let mut current = source.to_owned();
+    let edit_file = StateWorkingSet::new(&engine)
+        .find_decl(kraai_commands::edit_file::METADATA.name.as_bytes())
+        .is_some();
+    let (mut current, mut changes) = heredoc::rewrite(source, edit_file)?;
     for _ in 0..MAX_ROUNDS {
         let edits = {
             let mut working_set = StateWorkingSet::new(&engine);
@@ -34,8 +45,21 @@ pub fn rewrite_bash_habits(
             break;
         }
         current = rules::apply(&current, &edits);
+        changes.extend(edits.into_iter().map(|edit| edit.change));
     }
-    (current != source && parses_cleanly(&engine, &current)).then_some(current)
+    if current == source || !parses_cleanly(&engine, &current) {
+        return None;
+    }
+    let mut unique = Vec::with_capacity(changes.len());
+    for change in changes {
+        if !unique.contains(&change) {
+            unique.push(change);
+        }
+    }
+    Some(BashRewrite {
+        source: current,
+        changes: unique,
+    })
 }
 
 fn parses_cleanly(engine: &EngineState, source: &str) -> bool {

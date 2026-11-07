@@ -1,13 +1,13 @@
 use kraai_execution_types::ScriptProfileSnapshot;
 use kraai_script_protocol::parse_script_input;
-use kraai_types::ScriptCall;
+use kraai_types::{ScriptCall, ScriptRewrite};
 
 use super::script_environment::script_environment;
 
 /// Rewrites bash syntax in a script call before anything records or runs it, so history, the
 /// approval prompt, and the execution all use the corrected script and the model never sees its
-/// mistake. The script is checked against the profile's commands and startup files, the same
-/// shell it will run in. The model's version stays in `rewritten_from`.
+/// mistake. The result tells the model what changed so it stops writing bash. The script is
+/// checked against the profile's commands and startup files, the same shell it will run in.
 pub(super) async fn rewrite_script_call(
     mut call: ScriptCall,
     profile: Option<ScriptProfileSnapshot>,
@@ -35,10 +35,13 @@ pub(super) async fn rewrite_script_call(
     })
     .await;
     match rewritten {
-        Ok(Some(source)) => {
+        Ok(Some(rewrite)) => {
             let header = call.input.get(..header_len).unwrap_or_default();
-            let input = format!("{header}{source}");
-            call.rewritten_from = Some(std::mem::replace(&mut call.input, input));
+            let input = format!("{header}{}", rewrite.source);
+            call.rewrite = Some(ScriptRewrite {
+                original: std::mem::replace(&mut call.input, input),
+                changes: rewrite.changes,
+            });
         }
         Ok(None) => {}
         Err(error) => tracing::warn!(%error, "Rewriting bash syntax failed"),

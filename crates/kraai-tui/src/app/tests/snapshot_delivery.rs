@@ -140,7 +140,7 @@ fn item_events_build_the_streaming_message_and_gaps_request_a_snapshot() {
 print '</tool_call>'"
                 .into(),
             arguments_error: None,
-            rewritten_from: None,
+            rewrite: None,
         }),
     };
     harness.app.handle_runtime_event(call.clone());

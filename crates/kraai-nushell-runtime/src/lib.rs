@@ -12,7 +12,7 @@ mod startup_files;
 mod transport;
 mod wire;
 
-pub use bash_habits::rewrite_bash_habits;
+pub use bash_habits::{BashRewrite, rewrite_bash_habits};
 pub use effects::{RejectStateEffects, StateEffectHandler};
 pub use execution::{RuntimeError, ScriptExecutionPlan, ScriptExecutionResult, execute};
 pub use images::{ImageAttachmentHandler, RejectImageAttachments};

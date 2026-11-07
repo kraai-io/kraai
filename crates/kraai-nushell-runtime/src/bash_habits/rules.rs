@@ -14,6 +14,8 @@ pub(super) struct Edit {
     start: usize,
     end: usize,
     text: String,
+    /// What the edit changed, such as `` `2>` → `e>` ``.
+    pub(super) change: String,
 }
 
 /// Collects the edits for one round. `offset` is where the parsed source starts in the working
@@ -89,11 +91,12 @@ impl Scan<'_> {
         self.source.get(span.start..span.end).unwrap_or_default()
     }
 
-    fn edit(&mut self, start: usize, end: usize, text: impl Into<String>) {
+    fn edit(&mut self, start: usize, end: usize, text: impl Into<String>, change: String) {
         self.edits.push(Edit {
             start,
             end,
             text: text.into(),
+            change,
         });
     }
 
@@ -228,35 +231,42 @@ impl Scan<'_> {
                 .is_some_and(|next| next.contents == TokenContents::Item);
             let bytes = self.bytes(token.span);
             let replacement = match token.contents {
-                TokenContents::ErrGreaterThan if bytes == b"2>" => Some(String::from("e>")),
+                TokenContents::ErrGreaterThan if bytes == b"2>" => {
+                    Some((String::from("e>"), change("2>", "e>")))
+                }
                 TokenContents::OutGreaterThan if merged => {
                     redirects_out = true;
-                    Some(String::from("o+e>"))
+                    Some((String::from("o+e>"), change("> … 2>&1", "o+e>")))
                 }
                 TokenContents::OutGreaterGreaterThan if merged => {
                     redirects_out = true;
-                    Some(String::from("o+e>>"))
+                    Some((String::from("o+e>>"), change(">> … 2>&1", "o+e>>")))
                 }
                 TokenContents::Item => {
-                    item_redirect(bytes, external, merged, has_target).map(|(text, out)| {
+                    item_redirect(bytes, external, merged, has_target).map(|(text, out, change)| {
                         redirects_out |= out;
-                        text
+                        (text, change)
                     })
                 }
                 _ => None,
             };
-            if let Some(text) = replacement {
-                self.edit(token.span.start, token.span.end, text);
+            if let Some((text, change)) = replacement {
+                self.edit(token.span.start, token.span.end, text, change);
             }
         }
 
         if let Some(merge) = merge {
-            let (end, text) = match merge.pipe {
-                _ if !external || redirects_out => (merge.span.end, ""),
-                Some(pipe) => (pipe.end, "o+e>|"),
-                None => (merge.span.end, "o+e>| collect"),
+            let (end, text, bash) = match merge.pipe {
+                _ if !external || redirects_out => (merge.span.end, "", "2>&1"),
+                Some(pipe) => (pipe.end, "o+e>|", "2>&1 |"),
+                None => (merge.span.end, "o+e>| collect", "2>&1"),
             };
-            self.edit(merge.span.start, end, text);
+            let label = if text.is_empty() {
+                String::from("removed `2>&1`")
+            } else {
+                change(bash, text)
+            };
+            self.edit(merge.span.start, end, text, label);
         }
     }
 
@@ -305,8 +315,8 @@ impl Scan<'_> {
         };
         if env_error {
             let end = self.word_end(end);
-            if let Some(replacement) = self.source.get(start..end).and_then(env_variable) {
-                self.edit(start, end, replacement);
+            if let Some((replacement, label)) = self.source.get(start..end).and_then(env_variable) {
+                self.edit(start, end, replacement, label);
             }
             return;
         }
@@ -332,42 +342,51 @@ impl Scan<'_> {
             .any(|program| program.as_bytes() == head);
         if shadowed && !command.subcommand && flag_owner.is_none_or(|owner| owner == head) {
             let at = command.head.start;
-            self.edit(at, at, "^");
+            let name = String::from_utf8_lossy(head).into_owned();
+            self.edit(at, at, "^", change(&name, &format!("^{name}")));
         }
     }
 }
 
-/// The Nushell form of a bash redirection argument, and whether it redirects stdout.
+fn change(bash: &str, nushell: &str) -> String {
+    format!("`{bash}` → `{nushell}`")
+}
+
+/// The Nushell form of a bash redirection argument, whether it redirects stdout, and its change
+/// label.
 fn item_redirect(
     bytes: &[u8],
     external: bool,
     merged: bool,
     has_target: bool,
-) -> Option<(String, bool)> {
+) -> Option<(String, bool, String)> {
     let text = std::str::from_utf8(bytes).ok()?;
-    if let Some(target) = text.strip_prefix("2>>") {
-        return redirect("e>>", target, has_target).map(|text| (text, false));
-    }
-    if let Some(target) = text.strip_prefix("2>") {
-        return redirect("e>", target, has_target).map(|text| (text, false));
+    for (bash, nushell) in [("2>>", "e>>"), ("2>", "e>")] {
+        if let Some(target) = text.strip_prefix(bash) {
+            return redirect(nushell, target, has_target)
+                .map(|text| (text, false, change(bash, nushell)));
+        }
     }
     if !external {
         return None;
     }
     let (append, write) = if merged {
-        ("o+e>>", "o+e>")
+        ((">> … 2>&1", "o+e>>"), ("> … 2>&1", "o+e>"))
     } else {
-        ("o>>", "o>")
+        ((">>", "o>>"), (">", "o>"))
     };
-    let (operator, target) = [
-        ("&>>", "o+e>>"),
-        ("&>", "o+e>"),
+    let (operator, label, target) = [
+        ("&>>", ("&>>", "o+e>>")),
+        ("&>", ("&>", "o+e>")),
         (">>", append),
         (">", write),
     ]
     .into_iter()
-    .find_map(|(bash, nushell)| text.strip_prefix(bash).map(|target| (nushell, target)))?;
-    redirect(operator, target, has_target).map(|text| (text, true))
+    .find_map(|(bash, (label, nushell))| {
+        text.strip_prefix(bash)
+            .map(|target| (nushell, change(label, nushell), target))
+    })?;
+    redirect(operator, target, has_target).map(|text| (text, true, label))
 }
 
 fn redirect(operator: &str, target: &str, has_target: bool) -> Option<String> {
@@ -381,7 +400,7 @@ fn redirect(operator: &str, target: &str, has_target: bool) -> Option<String> {
 }
 
 /// `$HOME` becomes `$env.HOME`, and `$HOME/path` becomes `$"($env.HOME)/path"`.
-fn env_variable(bytes: &[u8]) -> Option<String> {
+fn env_variable(bytes: &[u8]) -> Option<(String, String)> {
     let text = std::str::from_utf8(bytes).ok()?.strip_prefix('$')?;
     let (name, rest) = text.split_at(text.find('/').unwrap_or(text.len()));
     let is_env_name = name.bytes().any(|byte| byte.is_ascii_uppercase())
@@ -392,10 +411,11 @@ fn env_variable(bytes: &[u8]) -> Option<String> {
     if !is_env_name {
         return None;
     }
+    let label = change(&format!("${name}"), &format!("$env.{name}"));
     if rest.is_empty() {
-        return Some(format!("$env.{name}"));
+        return Some((format!("$env.{name}"), label));
     }
     rest.bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))
-        .then(|| format!("$\"($env.{name}){rest}\""))
+        .then(|| (format!("$\"($env.{name}){rest}\""), label))
 }

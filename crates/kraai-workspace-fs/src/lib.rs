@@ -96,6 +96,59 @@ pub fn create_text_file(
     requested: &Path,
     contents: &str,
 ) -> Result<PathBuf, WorkspaceFsError> {
+    let destination = file_destination(cwd, requested)?;
+    atomic_write(&destination, contents.as_bytes(), WriteMode::Create)?;
+    Ok(destination)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overwrite {
+    Created,
+    Replaced,
+}
+
+/// Makes `contents` the whole file, creating it or replacing an existing file while keeping its
+/// permissions.
+pub fn overwrite_text_file(
+    cwd: &Path,
+    requested: &Path,
+    contents: &str,
+) -> Result<(PathBuf, Overwrite), WorkspaceFsError> {
+    let destination = file_destination(cwd, requested)?;
+    let existing = match canonicalize(cwd, &destination) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            atomic_write(&destination, contents.as_bytes(), WriteMode::Create)?;
+            return Ok((destination, Overwrite::Created));
+        }
+        Err(source) => {
+            return Err(WorkspaceFsError::Canonicalize {
+                path: destination,
+                source,
+            });
+        }
+    };
+    let metadata = existing
+        .metadata()
+        .map_err(|source| WorkspaceFsError::Metadata {
+            path: existing.clone(),
+            source,
+        })?;
+    if !metadata.is_file() {
+        return Err(WorkspaceFsError::NotFile(existing));
+    }
+    atomic_write(
+        &existing,
+        contents.as_bytes(),
+        WriteMode::Replace {
+            permissions: metadata.permissions(),
+        },
+    )?;
+    Ok((existing, Overwrite::Replaced))
+}
+
+/// The requested file inside its canonical parent directory.
+fn file_destination(cwd: &Path, requested: &Path) -> Result<PathBuf, WorkspaceFsError> {
     let requested = resolve_path(cwd, requested);
     let name = requested
         .file_name()
@@ -110,9 +163,7 @@ pub fn create_text_file(
     if !parent.is_dir() {
         return Err(WorkspaceFsError::NotDirectory(parent));
     }
-    let destination = parent.join(name);
-    atomic_write(&destination, contents.as_bytes(), WriteMode::Create)?;
-    Ok(destination)
+    Ok(parent.join(name))
 }
 
 pub fn edit_text_file(
@@ -196,6 +247,33 @@ mod tests {
         let error = create_text_file(&directory, Path::new("file.txt"), "replacement").unwrap_err();
         assert!(matches!(error, WorkspaceFsError::Write { .. }));
         assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn overwrite_creates_or_replaces_and_keeps_permissions() {
+        let directory = temp_dir("overwrite");
+        let path = directory.join("file.txt");
+        let (created, outcome) =
+            overwrite_text_file(&directory, Path::new("file.txt"), "first\n").unwrap();
+        assert_eq!(outcome, Overwrite::Created);
+        assert_eq!(created, directory.canonicalize().unwrap().join("file.txt"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        let permissions = path.metadata().unwrap().permissions();
+
+        let (_, outcome) =
+            overwrite_text_file(&directory, Path::new("file.txt"), "second\n").unwrap();
+        assert_eq!(outcome, Overwrite::Replaced);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second\n");
+        assert_eq!(path.metadata().unwrap().permissions(), permissions);
+
+        fs::create_dir(directory.join("folder")).unwrap();
+        let error = overwrite_text_file(&directory, Path::new("folder"), "x").unwrap_err();
+        assert!(matches!(error, WorkspaceFsError::NotFile(_)));
         let _ = fs::remove_dir_all(directory);
     }
 

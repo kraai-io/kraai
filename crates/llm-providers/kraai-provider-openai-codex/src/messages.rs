@@ -309,7 +309,7 @@ mod tests {
                             name: "kraai_nushell".to_string(),
                             input: "# timeout=10sec\nls".to_string(),
                             arguments_error: None,
-                            rewritten_from: None,
+                            rewrite: None,
                         }),
                     ],
                 },

@@ -79,7 +79,7 @@ mod tests {
                 name: "tool".into(),
                 input: "inspect".into(),
                 arguments_error: None,
-                rewritten_from: None,
+                rewrite: None,
             })],
         };
         let mut request = ProviderRequest {

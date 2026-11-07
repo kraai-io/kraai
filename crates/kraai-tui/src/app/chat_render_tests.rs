@@ -30,7 +30,7 @@ fn call_item(id: &str, input: &str) -> AssistantItem {
         name: String::from("nushell"),
         input: input.to_string(),
         arguments_error: None,
-        rewritten_from: None,
+        rewrite: None,
     })
 }
 

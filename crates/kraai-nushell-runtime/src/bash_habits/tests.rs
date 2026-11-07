@@ -1,18 +1,21 @@
-use super::rewrite_bash_habits;
+use super::{BashRewrite, rewrite_bash_habits};
 use crate::StartupFile;
 
 fn rewrite(script: &str) -> Option<String> {
     rewrite_with_startup(script, "")
 }
 
+fn every_command() -> Vec<String> {
+    kraai_commands::command_ids().map(String::from).collect()
+}
+
 /// Rewrites `script` for a shell with every Kraai command and `config` as its `config.nu`.
 fn rewrite_with_startup(script: &str, config: &str) -> Option<String> {
-    let commands: Vec<String> = kraai_commands::command_ids().map(String::from).collect();
     let startup = (!config.is_empty()).then(|| StartupFile {
         path: "/home/user/.config/nushell/config.nu".into(),
         contents: config.as_bytes().to_vec(),
     });
-    rewrite_bash_habits(script, &commands, startup.as_slice())
+    rewrite_bash_habits(script, &every_command(), startup.as_slice()).map(|rewrite| rewrite.source)
 }
 
 const REWRITES: [(&str, &str); 19] = [
@@ -140,5 +143,111 @@ fn startup_files_that_do_not_parse_disable_rewrites() {
     assert_eq!(
         rewrite_with_startup("git diff > out.txt", "alias ll = ls -l").as_deref(),
         Some("git diff o> out.txt")
+    );
+}
+
+const HEREDOCS: [(&str, &str); 8] = [
+    (
+        "cat > src/lib.rs <<'RS'\n#[derive(Debug)]\nstruct A;\nRS",
+        "kraai-edit-file src/lib.rs --overwrite --contents r##'#[derive(Debug)]\nstruct A;\n'##",
+    ),
+    (
+        "cat > src/lib.rs <<'RS'\nfn main() {}\nRS\ncargo build",
+        "kraai-edit-file src/lib.rs --overwrite --contents r#'fn main() {}\n'#\ncargo build",
+    ),
+    (
+        "cat <<'EOF' > notes.txt\nit's 'quoted'#\nEOF",
+        "kraai-edit-file notes.txt --overwrite --contents r##'it's 'quoted'#\n'##",
+    ),
+    (
+        "cat > a.txt <<EOF\nplain text\nEOF\n",
+        "kraai-edit-file a.txt --overwrite --contents r#'plain text\n'#\n",
+    ),
+    (
+        "python3 - <<'PY'\nprint('hi')\nPY",
+        "r#'print('hi')\n'# | python3 -",
+    ),
+    (
+        "if true {\n  cat > a.txt <<'EOF'\nx\nEOF\n}",
+        "if true {\n  kraai-edit-file a.txt --overwrite --contents r#'x\n'#\n}",
+    ),
+    (
+        "cat > a.txt <<'EOF'\nx\nEOF\ncargo test 2>&1 | tail -n 5",
+        "kraai-edit-file a.txt --overwrite --contents r#'x\n'#\ncargo test o+e>| tail -n 5",
+    ),
+    (
+        "cat > a.rs <<'A'\nfn a() {}\nA\ncat > b.rs <<'B'\nlet c = 'c';\nB",
+        "kraai-edit-file a.rs --overwrite --contents r#'fn a() {}\n'#\nkraai-edit-file b.rs --overwrite --contents r#'let c = 'c';\n'#",
+    ),
+];
+
+#[test]
+fn heredocs_become_whole_file_writes_or_piped_text() {
+    for (input, expected) in HEREDOCS {
+        assert_eq!(rewrite(input).as_deref(), Some(expected), "{input}");
+    }
+}
+
+#[test]
+fn heredocs_save_files_when_the_shell_lacks_the_edit_command() {
+    let commands: Vec<String> = every_command()
+        .into_iter()
+        .filter(|command| command != kraai_commands::edit_file::METADATA.id)
+        .collect();
+    let rewrite = rewrite_bash_habits("cat > a.txt <<'EOF'\nx\nEOF", &commands, &[]);
+    assert_eq!(
+        rewrite.map(|rewrite| rewrite.source).as_deref(),
+        Some("r#'x\n'# | save -f a.txt")
+    );
+}
+
+#[test]
+fn heredocs_without_a_safe_rewrite_leave_the_script_alone() {
+    for input in [
+        "cat > a.txt <<EOF\n$HOME\nEOF\nls 2>/dev/null",
+        "cat >> a.txt <<'EOF'\nx\nEOF",
+        "git diff | cat > a.txt <<'EOF'\nx\nEOF",
+        "cat > a.txt <<'EOF'\nno terminator",
+        "print r#'\ncat > a.txt <<'EOF'\nx\nEOF\n'#",
+    ] {
+        assert_eq!(rewrite(input), None, "{input}");
+    }
+}
+
+#[test]
+fn rewrites_report_each_change_once() {
+    let rewrite = |script: &str| {
+        rewrite_bash_habits(script, &every_command(), &[]).map(|rewrite| rewrite.changes)
+    };
+    assert_eq!(
+        rewrite("rg a 2>/dev/null; rg b 2>/dev/null"),
+        Some(vec![String::from("`2>` → `e>`")])
+    );
+    assert_eq!(
+        rewrite("cat > a.txt <<'EOF'\nx\nEOF\ncargo test 2>&1 | tail -n 5; print $HOME"),
+        Some(vec![
+            String::from(
+                "`cat > a.txt <<'EOF'` → `kraai-edit-file a.txt --overwrite --contents r#'…'#`"
+            ),
+            String::from("`2>&1 |` → `o+e>|`"),
+            String::from("`$HOME` → `$env.HOME`"),
+        ])
+    );
+    assert_eq!(
+        rewrite("ls 2>&1 | length"),
+        Some(vec![String::from("removed `2>&1`")])
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn routed_programs_report_the_caret() {
+    let rewrite = rewrite_bash_habits("find . -name x", &every_command(), &[]);
+    assert_eq!(
+        rewrite,
+        Some(BashRewrite {
+            source: String::from("^find . -name x"),
+            changes: vec![String::from("`find` → `^find`")],
+        })
     );
 }

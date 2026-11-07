@@ -126,7 +126,7 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
     ));
     assert!(matches!(
         items.get(2),
-        Some(AssistantItem::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None, rewritten_from: None }))
+        Some(AssistantItem::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None, rewrite: None }))
             if call_id.as_str() == "openai-call-1"
                 && name == "kraai_nushell"
                 && input.starts_with("# timeout=30sec")
@@ -231,12 +231,33 @@ async fn bash_syntax_is_rewritten_before_approval_and_history() -> Result<()> {
         })
         .expect("script call");
     assert_eq!(call.input, rewritten);
-    assert_eq!(call.rewritten_from.as_deref(), Some(original));
+    let rewrite = call.rewrite.expect("rewrite");
+    assert_eq!(rewrite.original, original);
+    assert_eq!(rewrite.changes, ["`2>` → `e>`"]);
 
     harness
         .handle
         .deny_script(session_id.clone(), script.execution_id)
         .await?;
+    let events = harness
+        .events
+        .wait_for("denied rewritten script result", |events| {
+            events.iter().any(|event| matches!(event, Event::ScriptResultReady { session_id: id, .. } if id == &session_id))
+        })
+        .await;
+    let output = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ScriptResultReady { output, .. } => output.as_text().map(str::to_string),
+            _ => None,
+        })
+        .expect("script result");
+    assert!(
+        output.contains(
+            "<notice>Note: Kraai rewrote Bash syntax to Nushell before running: `2>` → `e>`. This shell is Nushell.</notice>"
+        ),
+        "{output}"
+    );
     harness.shutdown().await;
     Ok(())
 }
@@ -668,7 +689,7 @@ async fn invalid_tool_call_fails_without_running_and_replays_raw_call() -> Resul
                     name: String::from("bash"),
                     input: String::from(arguments),
                     arguments_error: Some(String::from(error)),
-                    rewritten_from: None,
+                    rewrite: None,
                 }))
             })
         })

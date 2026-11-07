@@ -31,6 +31,7 @@ fn execution(id: &ScriptExecutionId) -> NewScriptExecution {
             path: kraai_execution_types::PathPolicy::Inherit,
         },
         source: b"1 + 1".to_vec(),
+        rewrites: Vec::new(),
         requested_capabilities: SandboxCapabilities::default(),
         effective_capabilities: SandboxCapabilities::new([SandboxCapability::WorkspaceRead]),
         timeout: Some(Duration::from_secs(10)),

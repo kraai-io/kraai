@@ -2,8 +2,8 @@ use crate::CommandMetadata;
 
 pub const METADATA: CommandMetadata = command_metadata! {
     id: "kraai-edit-file";
-    description: "Atomically replace complete line ranges using an array of edits. Ranges are 1-based, inclusive, nonoverlapping, and refer to the original file. old_text must match exactly, including line endings but excluding line-number prefixes. new_text is verbatim: supply every newline (\\n or \\r\\n in double-quoted strings); empty text deletes the range. --create requires a new path.";
-    signature_help: "kraai-edit-file <path> <edits?> [--create --contents <text>] -> record<success: bool, path: string, operation: string>";
+    description: "Atomically replace complete line ranges using an array of edits. Ranges are 1-based, inclusive, nonoverlapping, and refer to the original file. old_text must match exactly, including line endings but excluding line-number prefixes. new_text is verbatim: supply every newline (\\n or \\r\\n in double-quoted strings); empty text deletes the range. --create requires a new path. --overwrite writes the whole file, creating or replacing it; prefer it to edits when most of a file changes.";
+    signature_help: "kraai-edit-file <path> <edits?> [--create | --overwrite] [--contents <text>] -> record<success: bool, path: string, operation: string>";
     services: [];
     examples: [
         {
@@ -12,6 +12,13 @@ pub const METADATA: CommandMetadata = command_metadata! {
             script: "kraai-edit-file settings.conf [\n    {start_line: 1, end_line: 1, old_text: \"enabled = false\\n\", new_text: r###'enabled = true\n'###}\n    {start_line: 3, end_line: 3, old_text: \"obsolete = true\\n\", new_text: ''}\n]",
             setup: "settings.conf: \"enabled = false\\nretries = 1\\nobsolete = true\\n\"",
             outcome: "settings.conf: \"enabled = true\\nretries = 1\\n\"",
+        },
+        {
+            description: "Write a whole file",
+            header: "# timeout=10sec",
+            script: "kraai-edit-file notes.md --overwrite --contents r###'# Notes\nfresh start\n'###",
+            setup: "notes.md: \"old draft\\n\"",
+            outcome: "notes.md: \"# Notes\\nfresh start\\n\"",
         },
     ];
 };
@@ -23,7 +30,9 @@ pub use command::EditFileCommand;
 mod command {
     use std::path::Path;
 
-    use kraai_workspace_fs::{ExactTextEdit, create_text_file, edit_text_file};
+    use kraai_workspace_fs::{
+        ExactTextEdit, Overwrite, create_text_file, edit_text_file, overwrite_text_file,
+    };
     use nu_engine::CallExt;
     use nu_protocol::{
         Category, IntoPipelineData, ShellError, Signature, Span, SyntaxShape, Type, Value, record,
@@ -43,10 +52,15 @@ mod command {
                 "Exact edit records with start_line, end_line, old_text, and new_text fields.",
             )
             .switch("create", "Create a new file instead of editing an existing file.", None)
+            .switch(
+                "overwrite",
+                "Write the whole file, creating it or replacing its contents.",
+                None,
+            )
             .named(
                 "contents",
                 SyntaxShape::String,
-                "Complete contents for --create; invalid for normal edits.",
+                "Complete contents for --create or --overwrite; invalid for normal edits.",
                 None,
             )
             .input_output_types(vec![(Type::Nothing, Type::Record(Default::default()))])
@@ -55,46 +69,69 @@ mod command {
             let path: String = call.req(engine_state, stack, 0)?;
             let edits: Option<Value> = call.opt(engine_state, stack, 1)?;
             let create = call.has_flag(engine_state, stack, "create")?;
+            let overwrite = call.has_flag(engine_state, stack, "overwrite")?;
             let contents: Option<String> = call.get_flag(engine_state, stack, "contents")?;
             let cwd = engine_state.cwd(Some(stack))?;
+            let path = Path::new(&path);
 
-            let (path, operation) = if create {
-                if edits.is_some() {
+            let (path, operation) = match (create, overwrite) {
+                (true, true) => {
                     return Err(command_error(
-                        "Invalid create arguments",
-                        "--create requires the edits argument to be omitted",
+                        "Invalid write arguments",
+                        "use either --create or --overwrite, not both",
                         call.head,
                     ));
                 }
-                let contents = contents.ok_or_else(|| {
-                    command_error(
-                        "Missing file contents",
-                        "--create requires --contents",
-                        call.head,
-                    )
-                })?;
-                let path = create_text_file(cwd.as_ref(), Path::new(&path), &contents)
-                    .map_err(|error| command_error("Unable to create file", error.to_string(), call.head))?;
-                (path, "created")
-            } else {
-                if contents.is_some() {
-                    return Err(command_error(
-                        "Invalid edit arguments",
-                        "--contents may only be used with --create",
-                        call.head,
-                    ));
+                (false, false) => {
+                    if contents.is_some() {
+                        return Err(command_error(
+                            "Invalid edit arguments",
+                            "--contents may only be used with --create or --overwrite",
+                            call.head,
+                        ));
+                    }
+                    let edits = edits.ok_or_else(|| {
+                        command_error(
+                            "Missing edits",
+                            "normal edits require a list of exact edit records",
+                            call.head,
+                        )
+                    })?;
+                    let edits = parse_edits(&edits, call.head)?;
+                    let path = edit_text_file(cwd.as_ref(), path, &edits)
+                        .map_err(|error| command_error("Unable to edit file", error.to_string(), call.head))?;
+                    (path, "edited")
                 }
-                let edits = edits.ok_or_else(|| {
-                    command_error(
-                        "Missing edits",
-                        "normal edits require a list of exact edit records",
-                        call.head,
-                    )
-                })?;
-                let edits = parse_edits(&edits, call.head)?;
-                let path = edit_text_file(cwd.as_ref(), Path::new(&path), &edits)
-                    .map_err(|error| command_error("Unable to edit file", error.to_string(), call.head))?;
-                (path, "edited")
+                (create, _) => {
+                    let flag = if create { "--create" } else { "--overwrite" };
+                    if edits.is_some() {
+                        return Err(command_error(
+                            "Invalid write arguments",
+                            format!("{flag} requires the edits argument to be omitted"),
+                            call.head,
+                        ));
+                    }
+                    let contents = contents.ok_or_else(|| {
+                        command_error(
+                            "Missing file contents",
+                            format!("{flag} requires --contents"),
+                            call.head,
+                        )
+                    })?;
+                    if create {
+                        let path = create_text_file(cwd.as_ref(), path, &contents)
+                            .map_err(|error| command_error("Unable to create file", error.to_string(), call.head))?;
+                        (path, "created")
+                    } else {
+                        let (path, outcome) = overwrite_text_file(cwd.as_ref(), path, &contents)
+                            .map_err(|error| command_error("Unable to write file", error.to_string(), call.head))?;
+                        let operation = match outcome {
+                            Overwrite::Created => "created",
+                            Overwrite::Replaced => "replaced",
+                        };
+                        (path, operation)
+                    }
+                }
             };
 
             Ok(Value::record(

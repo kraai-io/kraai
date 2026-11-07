@@ -197,7 +197,7 @@ fn fixture(
                         name: "kraai_nushell".into(),
                         input: "inspect".into(),
                         arguments_error: None,
-                        rewritten_from: None,
+                        rewrite: None,
                     }),
                 ],
             },
@@ -558,7 +558,7 @@ async fn invalid_fallback_response_preserves_existing_context() -> Result<()> {
             name: "kraai_nushell".into(),
             input: "# timeout=1sec\nls".into(),
             arguments_error: None,
-            rewritten_from: None,
+            rewrite: None,
         })],
     ] {
         let (context, providers, _, root) = fixture(false, events, false);

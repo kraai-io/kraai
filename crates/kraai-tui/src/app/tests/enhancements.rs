@@ -211,7 +211,7 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
                 name: String::from("nushell"),
                 input: String::from("echo secret-source"),
                 arguments_error: None,
-                rewritten_from: None,
+                rewrite: None,
             })],
         },
         status: MessageStatus::Complete,

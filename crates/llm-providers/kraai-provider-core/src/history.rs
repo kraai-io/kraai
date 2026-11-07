@@ -66,7 +66,7 @@ mod tests {
             name: "kraai_nushell".into(),
             input: "ls".into(),
             arguments_error: None,
-            rewritten_from: None,
+            rewrite: None,
         });
         let result = ConversationItem::ScriptResult {
             outcome: kraai_execution_types::ScriptExecutionOutcome {
