@@ -384,9 +384,9 @@ rec {
       };
       "agent-client-protocol" = rec {
         crateName = "agent-client-protocol";
-        version = "3.5.0";
+        version = "3.6.0";
         edition = "2024";
-        sha256 = "0nnpbcpvp7g62cryymcfxbr1pnxcfmp2a7h4j8ylmxmfg346kglv";
+        sha256 = "1xn4ix1jlvww5zia6vk1gpmcsqn51j4cp55rcfjd39mlmqc1zd49";
         libName = "agent_client_protocol";
         license = "Apache-2.0";
         authors = [
@@ -464,9 +464,9 @@ rec {
       };
       "agent-client-protocol-derive" = rec {
         crateName = "agent-client-protocol-derive";
-        version = "3.5.0";
+        version = "3.6.0";
         edition = "2024";
-        sha256 = "1clzsnlxah5ic8fam0xp038pgs2qjx53vq77c754dfniy29axdr5";
+        sha256 = "0s73ys56lwyqfzbnqm18ccqls8bxgkwcmyw401va9byknmf2abax";
         procMacro = true;
         libName = "agent_client_protocol_derive";
         license = "Apache-2.0";
@@ -487,9 +487,9 @@ rec {
       };
       "agent-client-protocol-schema" = rec {
         crateName = "agent-client-protocol-schema";
-        version = "1.12.0";
+        version = "1.13.0";
         edition = "2024";
-        sha256 = "0gvcnahac7awl64hifgqk5kdk1g46h8mpn70lg0i3a20vc7r03j3";
+        sha256 = "1zhq9mnqmai8j842qsj13frjlm0w8y975snm2yk65l8n7giwxiy7";
         libName = "agent_client_protocol_schema";
         license = "Apache-2.0";
         authors = [
@@ -714,7 +714,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
         ];
         features = {
@@ -1018,7 +1018,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_DataExchange" "Win32_System_Memory" "Win32_System_Ole" "Win32_UI_Shell" ];
           }
@@ -3293,7 +3293,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
             optional = true;
           }
           {
@@ -3976,7 +3976,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (target."unix" or false);
             features = [ "std" "stdio" "termios" ];
@@ -5008,7 +5008,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_UI_Shell" "Win32_Foundation" "Win32_Globalization" "Win32_System_Com" ];
           }
@@ -5368,7 +5368,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Diagnostics_Debug" ];
           }
@@ -5717,7 +5717,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             target = { target, features }: (target."unix" or false);
             features = [ "fs" ];
           }
@@ -5792,7 +5792,7 @@ rec {
           }
           {
             name = "notify";
-            packageId = "notify 9.0.0-rc.6";
+            packageId = "notify 9.0.0-rc.7";
           }
           {
             name = "notify-types";
@@ -5926,7 +5926,7 @@ rec {
           }
           {
             name = "notify";
-            packageId = "notify 9.0.0-rc.6";
+            packageId = "notify 9.0.0-rc.7";
           }
           {
             name = "parking_lot";
@@ -6853,7 +6853,7 @@ rec {
         dependencies = [
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (!(target."windows" or false));
             features = [ "system" ];
@@ -8958,7 +8958,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
             optional = true;
           }
           {
@@ -9266,7 +9266,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: ("windows" == target."os" or null);
             features = [ "Win32_Storage_FileSystem" ];
           }
@@ -10334,7 +10334,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
           {
             name = "webbrowser";
@@ -10491,7 +10491,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             target = { target, features }: (target."unix" or false);
             features = [ "fs" "net" "pipe" ];
           }
@@ -10606,7 +10606,7 @@ rec {
           }
           {
             name = "sse-stream";
-            packageId = "sse-stream";
+            packageId = "sse-stream 0.3.0";
           }
           {
             name = "tokio";
@@ -10754,7 +10754,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             target = { target, features }: (target."unix" or false);
             features = [ "fs" "net" "pipe" ];
           }
@@ -10884,7 +10884,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             features = [ "fs" "net" "pipe" ];
           }
           {
@@ -11566,7 +11566,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             target = { target, features }: (target."unix" or false);
             features = [ "fs" "net" "pipe" ];
           }
@@ -11721,7 +11721,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             target = { target, features }: (target."unix" or false);
             features = [ "fs" "net" "pipe" "process" "stdio" ];
           }
@@ -11752,7 +11752,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
           {
             name = "webbrowser";
@@ -11767,7 +11767,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             target = { target, features }: (target."unix" or false);
             features = [ "fs" "net" "pipe" "pty" ];
           }
@@ -13160,7 +13160,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
         ];
         features = {
@@ -13838,11 +13838,11 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "fsevent-sys" "macos_fsevent" ];
       };
-      "notify 9.0.0-rc.6" = rec {
+      "notify 9.0.0-rc.7" = rec {
         crateName = "notify";
-        version = "9.0.0-rc.6";
+        version = "9.0.0-rc.7";
         edition = "2024";
-        sha256 = "0pimjdlsjllci9ljfdrykcqdgs5karymyymlrqikqj71hcswz55v";
+        sha256 = "0rkrnha2w6ijg2f4h9jj97kdlmbh0qg8zsn28wiarr5s3rby3iwx";
         license = "CC0-1.0";
         authors = [
           "Félix Saparelli <me@passcod.name>"
@@ -14014,9 +14014,9 @@ rec {
       };
       "notify-types" = rec {
         crateName = "notify-types";
-        version = "2.1.0";
-        edition = "2021";
-        sha256 = "0yj710mxd4lsaz4hq7601mh6xb02awb8hg4z6lvh76ik1vpczf22";
+        version = "2.2.0";
+        edition = "2024";
+        sha256 = "027ip1l8ak1vq502cjbk7ky7x8wfsd0gbzg7n6affb13129plhqa";
         libName = "notify_types";
         license = "MIT OR Apache-2.0";
         authors = [
@@ -14071,7 +14071,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             rename = "windows";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Console" "Win32_Storage_FileSystem" "Win32_Security" ];
@@ -14866,7 +14866,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
           {
             name = "update-informer";
@@ -15807,7 +15807,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
         ];
 
@@ -17306,7 +17306,7 @@ rec {
         dependencies = [
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
             usesDefaultFeatures = false;
           }
         ];
@@ -17334,7 +17334,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.48.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Pipes" "Win32_Security" ];
           }
@@ -17499,7 +17499,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
         ];
         features = {
@@ -18547,7 +18547,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             features = [ "fs" "process" "param" "system" "thread" ];
           }
         ];
@@ -18981,7 +18981,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_IO" "Win32_Networking_WinSock" ];
           }
@@ -19474,7 +19474,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
         ];
         devDependencies = [
@@ -19730,7 +19730,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
         ];
         features = {
@@ -19939,7 +19939,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
         ];
         features = {
@@ -20861,7 +20861,7 @@ rec {
           }
           {
             name = "sse-stream";
-            packageId = "sse-stream";
+            packageId = "sse-stream 0.2.6";
             optional = true;
           }
           {
@@ -21369,11 +21369,11 @@ rec {
         };
         resolvedDefaultFeatures = [ "alloc" "libc-extra-traits" "std" "stdio" "termios" ];
       };
-      "rustix 1.1.5" = rec {
+      "rustix 1.1.6" = rec {
         crateName = "rustix";
-        version = "1.1.5";
+        version = "1.1.6";
         edition = "2021";
-        sha256 = "17b2srw7rcqmrs1shj89g8i3r1447lihv7qrbxvp11j1psxgl7l9";
+        sha256 = "1ajqv2zxmfms30hhvp5bdzpixn5xqnz7s871vpa56h99wm16grz5";
         license = "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT";
         authors = [
           "Dan Gohman <dev@sunfishcode.online>"
@@ -21436,7 +21436,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Networking_WinSock" ];
           }
@@ -21467,7 +21467,7 @@ rec {
           "process" = [ "linux-raw-sys/prctl" ];
           "pty" = [ "fs" ];
           "runtime" = [ "linux-raw-sys/prctl" ];
-          "rustc-dep-of-std" = [ "core" "rustc-std-workspace-alloc" "linux-raw-sys/rustc-dep-of-std" "bitflags/rustc-dep-of-std" ];
+          "rustc-dep-of-std" = [ "core" "rustc-std-workspace-alloc" "linux-raw-sys/rustc-dep-of-std" ];
           "rustc-std-workspace-alloc" = [ "dep:rustc-std-workspace-alloc" ];
           "shm" = [ "fs" ];
           "std" = [ "bitflags/std" "alloc" "libc?/std" "libc_errno?/std" ];
@@ -21712,7 +21712,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             usesDefaultFeatures = false;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Security_Cryptography" ];
@@ -22377,9 +22377,9 @@ rec {
       };
       "serde_spanned" = rec {
         crateName = "serde_spanned";
-        version = "1.1.1";
+        version = "1.1.3";
         edition = "2024";
-        sha256 = "09jzk7i6wihn3d8i3wi4j4n98ghi93c3b8m8k64nxq0ijn3vaqk6";
+        sha256 = "10mpm2i41lx4jnp530fjk942myplsibbm302mx8cawcl6q57w64w";
         license = "MIT OR Apache-2.0";
         dependencies = [
           {
@@ -23005,7 +23005,7 @@ rec {
         features = {
           "default" = [ "std" ];
         };
-        resolvedDefaultFeatures = [ "std" ];
+        resolvedDefaultFeatures = [ "default" "std" ];
       };
       "siphasher" = rec {
         crateName = "siphasher";
@@ -23186,7 +23186,7 @@ rec {
           "bindgen" = [ "dep:bindgen" ];
         };
       };
-      "sse-stream" = rec {
+      "sse-stream 0.2.6" = rec {
         crateName = "sse-stream";
         version = "0.2.6";
         edition = "2021";
@@ -23222,6 +23222,60 @@ rec {
           "tracing" = [ "dep:tracing" ];
         };
         resolvedDefaultFeatures = [ "default" ];
+      };
+      "sse-stream 0.3.0" = rec {
+        crateName = "sse-stream";
+        version = "0.3.0";
+        edition = "2021";
+        sha256 = "1939rrd18cyzaq9pz4mlgb5f7l0hwiik5vy8kixlza7vq07id1fk";
+        libName = "sse_stream";
+        license = "MIT OR Apache-2.0";
+        authors = [
+          "4t145 <u4t145@163.com>"
+        ];
+        dependencies = [
+          {
+            name = "bytes";
+            packageId = "bytes";
+          }
+          {
+            name = "futures-util";
+            packageId = "futures-util";
+          }
+          {
+            name = "http-body";
+            packageId = "http-body";
+          }
+          {
+            name = "http-body-util";
+            packageId = "http-body-util";
+          }
+          {
+            name = "memchr";
+            packageId = "memchr";
+            optional = true;
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+          }
+          {
+            name = "simdutf8";
+            packageId = "simdutf8";
+            optional = true;
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+        ];
+        features = {
+          "default" = [ "memchr" "simdutf8" ];
+          "memchr" = [ "dep:memchr" ];
+          "simdutf8" = [ "dep:simdutf8" ];
+          "tracing" = [ "dep:tracing" ];
+        };
+        resolvedDefaultFeatures = [ "default" "memchr" "simdutf8" ];
       };
       "stable_deref_trait" = rec {
         crateName = "stable_deref_trait";
@@ -23787,7 +23841,7 @@ rec {
           }
           {
             name = "getrandom";
-            packageId = "getrandom 0.3.4";
+            packageId = "getrandom 0.4.3";
             optional = true;
             usesDefaultFeatures = false;
             target = { target, features }: ((target."unix" or false) || (target."windows" or false) || ("wasi" == target."os" or null));
@@ -23800,13 +23854,13 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             target = { target, features }: ((target."unix" or false) || ("wasi" == target."os" or null));
             features = [ "fs" ];
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Storage_FileSystem" "Win32_Foundation" ];
           }
@@ -23855,7 +23909,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (target."unix" or false);
             features = [ "std" "stdio" "termios" "event" ];
@@ -23891,13 +23945,13 @@ rec {
         dependencies = [
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             target = { target, features }: (target."unix" or false);
             features = [ "termios" ];
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Console" ];
           }
@@ -24175,7 +24229,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
         ];
         features = {
@@ -24201,7 +24255,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
             optional = true;
           }
         ];
@@ -24927,9 +24981,9 @@ rec {
       };
       "toml" = rec {
         crateName = "toml";
-        version = "1.1.6+spec-1.1.0";
+        version = "1.1.8+spec-1.1.0";
         edition = "2024";
-        sha256 = "0sj0g89pyrkm9g5zaaqsdlclr98xf1chvi8jv9qsn4897xa041lj";
+        sha256 = "13b7kqvw7aa4x08i03d2fpima1i75v0lqxl0wrmisx6qwh09wj10";
         license = "MIT OR Apache-2.0";
         dependencies = [
           {
@@ -24992,9 +25046,9 @@ rec {
       };
       "toml_datetime" = rec {
         crateName = "toml_datetime";
-        version = "1.1.1+spec-1.1.0";
+        version = "1.1.3+spec-1.1.0";
         edition = "2024";
-        sha256 = "1mws2mkkf46l7inn77azhm0vdwxngv9vsbhbl0ah33p2c9gzcr9i";
+        sha256 = "0jbfdgsl0vw6f394cifqm62d8q0aiiima891v2i7c8fdhg42agqp";
         license = "MIT OR Apache-2.0";
         dependencies = [
           {
@@ -25055,9 +25109,9 @@ rec {
       };
       "toml_parser" = rec {
         crateName = "toml_parser";
-        version = "1.1.3+spec-1.1.0";
+        version = "1.1.5+spec-1.1.0";
         edition = "2024";
-        sha256 = "0mjdvihdkmjd4ykh574xgii71hpxw7ns7h4n4bisqpxrz4faqf0x";
+        sha256 = "0k3lljyi4zxchdklaqghkwbl7wkd2ab1w16hlyniqzid0fl979ms";
         license = "MIT OR Apache-2.0";
         dependencies = [
           {
@@ -25076,9 +25130,9 @@ rec {
       };
       "toml_writer" = rec {
         crateName = "toml_writer";
-        version = "1.1.2+spec-1.1.0";
+        version = "1.2.0+spec-1.1.0";
         edition = "2024";
-        sha256 = "1lk6pqf9mac3v1x6282n6a66qx5b18c8f4a23bsd0nk658x3amkx";
+        sha256 = "0fp14qh313y31pqddn2bhk01l7ygx70f9fxfhgpma77i01vvp780";
         license = "MIT OR Apache-2.0";
         features = {
           "default" = [ "std" ];
@@ -26108,7 +26162,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
         ];
         features = {
@@ -26136,11 +26190,11 @@ rec {
         };
         resolvedDefaultFeatures = [ "cjk" "default" ];
       };
-      "unicode-width 0.2.2" = rec {
+      "unicode-width 0.2.3" = rec {
         crateName = "unicode-width";
-        version = "0.2.2";
+        version = "0.2.3";
         edition = "2021";
-        sha256 = "0m7jjzlcccw716dy9423xxh0clys8pfpllc5smvfxrzdf66h9b5l";
+        sha256 = "0mymrsdklcgys4fndds2h2hasij36gyalcqy4nghb4k9hxqq8wfa";
         libName = "unicode_width";
         license = "MIT OR Apache-2.0";
         authors = [
@@ -26586,7 +26640,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (("linux" == target."os" or null) || ("android" == target."os" or null) || ("wasi" == target."os" or null));
             features = [ "fs" ];
@@ -26643,7 +26697,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (target."unix" or false);
             features = [ "process" "fs" ];
@@ -26741,7 +26795,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (target."unix" or false);
             features = [ "fs" ];
@@ -26811,7 +26865,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: ((target."unix" or false) || ("wasi" == target."os" or null));
             features = [ "fs" ];
@@ -26884,7 +26938,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (target."unix" or false);
             features = [ "process" ];
@@ -26978,7 +27032,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             optional = true;
             usesDefaultFeatures = false;
           }
@@ -26992,7 +27046,7 @@ rec {
           }
           {
             name = "unicode-width";
-            packageId = "unicode-width 0.2.2";
+            packageId = "unicode-width 0.2.3";
           }
           {
             name = "uucore_procs";
@@ -27695,7 +27749,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             features = [ "event" "fs" "net" "process" ];
           }
           {
@@ -27743,7 +27797,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             features = [ "event" ];
           }
           {
@@ -28857,7 +28911,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.48.0";
+            packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_Console" "Win32_System_SystemInformation" ];
           }
@@ -30121,7 +30175,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Pipes" "Win32_System_SystemInformation" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_System" "Win32_System_Com" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.52.0" = rec {
         crateName = "windows-sys";
@@ -30630,7 +30684,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Cryptography" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Registry" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.60.2" = rec {
         crateName = "windows-sys";
@@ -31159,7 +31213,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Wdk_System_SystemInformation" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_NetManagement" "Win32_NetworkManagement_WNet" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Authorization" "Win32_Security_Credentials" "Win32_Security_Cryptography" "Win32_Security_Isolation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_Environment" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_JobObjects" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_RemoteDesktop" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Wdk_System_SystemInformation" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_NetManagement" "Win32_NetworkManagement_WNet" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Authorization" "Win32_Security_Credentials" "Win32_Security_Cryptography" "Win32_Security_Isolation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_Environment" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_JobObjects" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Pipes" "Win32_System_Registry" "Win32_System_RemoteDesktop" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "default" ];
       };
       "windows-targets 0.48.5" = rec {
         crateName = "windows-targets";
@@ -31631,7 +31685,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.59.0";
+            packageId = "windows-sys 0.61.2";
             features = [ "Win32_Foundation" "Win32_System_Time" "Win32_System_Registry" "Win32_Security" "Win32_Storage_FileSystem" "Win32_System_Diagnostics_Debug" ];
           }
         ];
@@ -31688,7 +31742,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             features = [ "fs" "event" ];
           }
           {
@@ -31767,7 +31821,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             features = [ "std" "event" "fs" "net" "system" ];
           }
@@ -31868,7 +31922,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix 1.1.5";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (("android" == target."os" or null) || ("linux" == target."os" or null) || ("macos" == target."os" or null) || ("hurd" == target."os" or null));
             features = [ "fs" "std" ];
