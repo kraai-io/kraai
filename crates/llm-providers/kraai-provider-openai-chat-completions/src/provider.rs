@@ -14,6 +14,7 @@ use kraai_types::{ModelId, ProviderId};
 use reqwest::{Client, Response};
 
 use crate::auth::ApiKeyAuth;
+use crate::cache::{CacheHints, mark_breakpoints};
 use crate::messages::normalize_chat_messages;
 use crate::models::ModelResolver;
 use crate::profile::{
@@ -31,6 +32,7 @@ pub struct ChatCompletionsProvider<P> {
     base_url: String,
     auth: ApiKeyAuth,
     only_listed_models: bool,
+    cache_hints: CacheHints,
     cached_models: ModelMetadataCache<Vec<ListModelEntry>>,
     model_configs: BTreeMap<ModelId, ConfiguredModelMetadata>,
     model_catalog: Option<std::sync::Arc<kraai_provider_core::ModelCatalog>>,
@@ -88,28 +90,7 @@ where
     }
 
     fn options_protocol(&self) -> kraai_provider_core::ModelOptionsProtocol {
-        match self.catalog_provider.as_deref() {
-            Some("openrouter") => {
-                return kraai_provider_core::ModelOptionsProtocol::OpenRouterChatCompletions;
-            }
-            Some("deepseek") => {
-                return kraai_provider_core::ModelOptionsProtocol::DeepSeekChatCompletions;
-            }
-            _ => {}
-        }
-        match reqwest::Url::parse(&self.base_url)
-            .ok()
-            .and_then(|url| url.host_str().map(ToString::to_string))
-            .as_deref()
-        {
-            Some("openrouter.ai") => {
-                kraai_provider_core::ModelOptionsProtocol::OpenRouterChatCompletions
-            }
-            Some("api.deepseek.com") => {
-                kraai_provider_core::ModelOptionsProtocol::DeepSeekChatCompletions
-            }
-            _ => kraai_provider_core::ModelOptionsProtocol::OpenAiChatCompletions,
-        }
+        options_protocol(self.catalog_provider.as_deref(), &self.base_url)
     }
 }
 
@@ -227,7 +208,10 @@ where
         let max_completion_tokens = model
             .as_ref()
             .and_then(|model| model.output_limit(&provider_request.messages));
-        let messages = normalize_chat_messages(provider_request.messages, &images, &self.id)?;
+        let mut messages = normalize_chat_messages(provider_request.messages, &images, &self.id)?;
+        if self.cache_hints.breakpoints {
+            mark_breakpoints(&mut messages);
+        }
         let has_tool_history = messages.iter().any(|message| match message {
             RequestMessage::Assistant { tool_calls, .. } => !tool_calls.is_empty(),
             RequestMessage::Tool { .. } => true,
@@ -248,6 +232,10 @@ where
             stream_options: Some(ChatCompletionStreamOptions {
                 include_usage: true,
             }),
+            prompt_cache_key: request_context
+                .prompt_cache_key()
+                .filter(|_| self.cache_hints.prompt_cache_key)
+                .map(ToString::to_string),
         };
 
         let mut body = serde_json::to_value(request)?;
@@ -296,6 +284,11 @@ where
         .unwrap_or(true);
 
     let catalog_provider = P::pricing_catalog(&config).provider;
+    let cache_hints = CacheHints::resolve(
+        &config,
+        options_protocol(catalog_provider.as_deref(), &base_url),
+        &base_url,
+    );
     Ok(ChatCompletionsProvider::<P> {
         model_catalog: None,
         catalog_provider,
@@ -304,10 +297,39 @@ where
         base_url,
         auth,
         only_listed_models,
+        cache_hints,
         cached_models: ModelMetadataCache::default(),
         model_configs: BTreeMap::new(),
         _profile: PhantomData,
     })
+}
+
+fn options_protocol(
+    catalog_provider: Option<&str>,
+    base_url: &str,
+) -> kraai_provider_core::ModelOptionsProtocol {
+    match catalog_provider {
+        Some("openrouter") => {
+            return kraai_provider_core::ModelOptionsProtocol::OpenRouterChatCompletions;
+        }
+        Some("deepseek") => {
+            return kraai_provider_core::ModelOptionsProtocol::DeepSeekChatCompletions;
+        }
+        _ => {}
+    }
+    match reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(ToString::to_string))
+        .as_deref()
+    {
+        Some("openrouter.ai") => {
+            kraai_provider_core::ModelOptionsProtocol::OpenRouterChatCompletions
+        }
+        Some("api.deepseek.com") => {
+            kraai_provider_core::ModelOptionsProtocol::DeepSeekChatCompletions
+        }
+        _ => kraai_provider_core::ModelOptionsProtocol::OpenAiChatCompletions,
+    }
 }
 
 pub struct OpenAiChatCompletionsFactory;

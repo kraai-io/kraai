@@ -15,6 +15,8 @@ pub struct ChatCompletionRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<ChatCompletionStreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -26,7 +28,7 @@ pub struct ChatCompletionStreamOptions {
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum RequestMessage {
     System {
-        content: String,
+        content: RequestContent,
     },
     User {
         content: RequestContent,
@@ -40,7 +42,7 @@ pub enum RequestMessage {
     },
     Tool {
         tool_call_id: kraai_types::ToolCallId,
-        content: String,
+        content: RequestContent,
     },
 }
 
@@ -106,8 +108,24 @@ pub enum RequestContent {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RequestContentPart {
-    Text { text: String },
-    ImageUrl { image_url: ImageUrl },
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
+    ImageUrl {
+        image_url: ImageUrl,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub struct CacheControl {
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+impl CacheControl {
+    pub const EPHEMERAL: Self = Self { kind: "ephemeral" };
 }
 
 #[derive(Debug, Serialize)]
@@ -275,6 +293,7 @@ mod tests {
                 parallel_tool_calls: None,
                 stream: true,
                 stream_options: None,
+                prompt_cache_key: None,
             };
             let encoded = serde_json::to_value(request)?;
             assert_eq!(encoded.get("tools"), expected.as_ref());

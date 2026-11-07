@@ -19,6 +19,7 @@ struct Summarizer {
     fail: bool,
     large_input: Option<Overflow>,
     interruptions: usize,
+    calls_tool: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -61,7 +62,6 @@ impl Provider for Summarizer {
             !self.native,
             "Native compaction must not use text summarization"
         );
-        ensure!(request.script_tool.is_none());
         kraai_provider_core::ResolvedImages::resolve(&request.messages, context).await?;
         self.respond(request)
     }
@@ -73,6 +73,7 @@ impl Summarizer {
         request: ProviderRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
         let too_large = request.messages.iter().any(|item| matches!(item, ConversationItem::ScriptResult { output, .. } if output.display_text().len() > 1000));
+        let tool_call = self.calls_tool && request.script_tool.is_some();
         let attempt = {
             let mut requests = self.requests.lock().map_err(|e| eyre!("{e}"))?;
             requests.push(request);
@@ -98,6 +99,16 @@ impl Summarizer {
                 ])));
             }
             None => {}
+        }
+        if tool_call {
+            return Ok(Box::pin(stream::iter([Ok(
+                ProviderStreamEvent::ScriptCall(ScriptCall {
+                    call_id: ToolCallId::new("unexpected"),
+                    name: "kraai_nushell".into(),
+                    input: "ls".into(),
+                    arguments_error: None,
+                }),
+            )])));
         }
         let mut events: Vec<_> = self.events.iter().cloned().map(Ok).collect();
         if attempt <= self.interruptions {
@@ -253,6 +264,7 @@ fn fixture(
             fail,
             large_input: None,
             interruptions: 0,
+            calls_tool: false,
         }),
     );
     (context, manager, requests, root)
@@ -287,16 +299,7 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
         let requests = requests.lock().map_err(|e| eyre!("{e}"))?;
         ensure!(requests.len() == 1);
         let sent = requests.first().ok_or_else(|| eyre!("missing request"))?;
-        ensure!(
-            sent.messages
-                == context
-                    .original
-                    .messages
-                    .iter()
-                    .filter(|item| !matches!(item, ConversationItem::FileContext { .. }))
-                    .cloned()
-                    .collect::<Vec<_>>()
-        );
+        ensure!(sent.messages == context.original.messages);
         ensure!(sent.script_tool == context.original.script_tool);
         drop(requests);
     }
@@ -371,14 +374,10 @@ async fn fallback_uses_one_conversation_request_and_accepts_large_summary() -> R
         let requests = requests.lock().map_err(|e| eyre!("{e}"))?;
         ensure!(requests.len() == 1);
         let sent = requests.first().ok_or_else(|| eyre!("missing request"))?;
-        let expected: Vec<_> = context
-            .original
-            .messages
-            .iter()
-            .filter(|item| !matches!(item, ConversationItem::FileContext { .. }))
-            .cloned()
-            .collect();
+        let expected = &context.original.messages;
         ensure!(sent.messages.get(..expected.len()) == Some(expected.as_slice()));
+        ensure!(sent.messages.len() == expected.len() + 1);
+        ensure!(sent.script_tool == context.original.script_tool);
         ensure!(
             matches!(sent.messages.last(), Some(ConversationItem::User { content: text }) if text.display_text().contains("CONTEXT CHECKPOINT"))
         );
@@ -484,6 +483,7 @@ async fn trims_complete_exchanges_after(overflow: Overflow) -> Result<()> {
             fail: false,
             large_input: Some(overflow),
             interruptions: 0,
+            calls_tool: false,
             events: vec![ProviderStreamEvent::TextDelta {
                 item_id: "summary".into(),
                 phase: AssistantPhase::FinalAnswer,
@@ -522,6 +522,7 @@ async fn native_stream_retries_are_bounded_and_each_attempt_is_accounted() -> Re
             fail: false,
             large_input: None,
             interruptions: usize::MAX,
+            calls_tool: false,
             events: vec![ProviderStreamEvent::Usage(TokenUsage {
                 input_tokens: 10,
                 ..Default::default()
@@ -578,6 +579,52 @@ async fn invalid_fallback_response_preserves_existing_context() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn fallback_retries_without_the_tool_after_an_unexpected_tool_call() -> Result<()> {
+    let (context, mut providers, requests, root) = fixture(false, vec![], false);
+    providers.register_provider(
+        ProviderId::new("test"),
+        Box::new(Summarizer {
+            requests: requests.clone(),
+            native: false,
+            fail: false,
+            large_input: None,
+            interruptions: 0,
+            calls_tool: true,
+            events: vec![ProviderStreamEvent::TextDelta {
+                item_id: "summary".into(),
+                phase: AssistantPhase::FinalAnswer,
+                delta: "continue investigation".into(),
+            }],
+        }),
+    );
+    let outcome = context
+        .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
+        .await?;
+    {
+        let requests = requests.lock().map_err(|e| eyre!("{e}"))?;
+        ensure!(requests.len() == 2);
+        ensure!(requests.first().is_some_and(|r| r.script_tool.is_some()));
+        ensure!(requests.last().is_some_and(|r| {
+            r.script_tool.is_none()
+                && requests
+                    .first()
+                    .is_some_and(|first| first.messages == r.messages)
+        }));
+        drop(requests);
+    }
+    ensure!(
+        outcome
+            .request
+            .messages
+            .iter()
+            .any(|item| item.display_text().contains("continue investigation"))
+    );
+    ensure!(outcome.request.script_tool == context.original.script_tool);
+    tokio::fs::remove_dir_all(root).await?;
+    Ok(())
+}
+
 #[tokio::test(start_paused = true)]
 async fn native_compaction_recovers_after_interruption_without_duplicate_checkpoint_items()
 -> Result<()> {
@@ -591,6 +638,7 @@ async fn native_compaction_recovers_after_interruption_without_duplicate_checkpo
             fail: false,
             large_input: None,
             interruptions: 1,
+            calls_tool: false,
             events: vec![
                 ProviderStreamEvent::Compaction {
                     payload: payload.clone(),
@@ -609,14 +657,11 @@ async fn native_compaction_recovers_after_interruption_without_duplicate_checkpo
     {
         let requests = requests.lock().map_err(|e| eyre!("{e}"))?.clone();
         ensure!(requests.len() == 2);
-        let expected: Vec<_> = context
-            .original
-            .messages
-            .iter()
-            .filter(|item| !matches!(item, ConversationItem::FileContext { .. }))
-            .cloned()
-            .collect();
-        ensure!(requests.iter().all(|request| request.messages == expected));
+        ensure!(
+            requests
+                .iter()
+                .all(|request| request.messages == context.original.messages)
+        );
     }
     let saved = context
         .store

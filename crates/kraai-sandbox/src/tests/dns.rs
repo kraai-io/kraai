@@ -62,8 +62,14 @@ async fn assert_read_only_network_file(path: &Path) {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim_end(),
-        expected.trim_end()
-    );
+    let expected = expected.trim_end().as_bytes();
+    let head = expected
+        .len()
+        .min(crate::output_capture::CAPTURE_HEAD_BYTES / 2);
+    let tail = expected
+        .len()
+        .min(crate::output_capture::CAPTURE_TAIL_BYTES / 2);
+    let stdout = output.stdout.trim_ascii_end();
+    assert!(stdout.starts_with(&expected[..head]));
+    assert!(stdout.ends_with(&expected[expected.len() - tail..]));
 }
