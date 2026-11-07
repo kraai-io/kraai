@@ -30,6 +30,13 @@ impl crate::Model {
             .min()
             .filter(|tokens| *tokens > 0)
     }
+
+    /// Whether the context left before compaction, rather than the model's own output limit,
+    /// limits a response to `messages`, so compacting first would give it more room.
+    pub fn output_limited_by_context(&self, messages: &[ConversationItem]) -> bool {
+        self.output_limit(messages)
+            .is_some_and(|limit| self.max_output.is_none_or(|max| limit < max))
+    }
 }
 
 #[cfg(test)]
@@ -90,5 +97,15 @@ mod tests {
             model(Some(16_000), Some(8_192)).output_limit(&input(16_000)),
             None
         );
+    }
+
+    #[test]
+    fn only_a_limit_set_by_the_context_left_counts_as_context_bound() {
+        let messages = input(5_000);
+        assert!(model(Some(16_000), None).output_limited_by_context(&messages));
+        assert!(model(Some(16_000), Some(8_192)).output_limited_by_context(&messages));
+        assert!(!model(Some(16_000), Some(4_096)).output_limited_by_context(&messages));
+        assert!(!model(None, Some(4_096)).output_limited_by_context(&messages));
+        assert!(!model(None, None).output_limited_by_context(&messages));
     }
 }

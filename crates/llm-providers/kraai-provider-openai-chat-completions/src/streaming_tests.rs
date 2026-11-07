@@ -466,7 +466,7 @@ async fn structured_reasoning_limits_include_opaque_payloads() {
 }
 
 #[tokio::test]
-async fn length_finish_keeps_text_and_drops_the_truncated_call() -> Result<()> {
+async fn length_finish_keeps_text_and_reports_the_truncated_call() -> Result<()> {
     let events = collect(
         vec![
             data(json!({"choices":[{"delta":{"content":"partial"}}]})),
@@ -484,11 +484,16 @@ async fn length_finish_keeps_text_and_drops_the_truncated_call() -> Result<()> {
     );
     assert!(matches!(
         events.get(1),
+        Some(ProviderStreamEvent::ScriptCall(kraai_types::ScriptCall { input, arguments_error: Some(error), .. }))
+            if input == r#"{"input":"ls"# && error.contains("output token limit")
+    ));
+    assert!(matches!(
+        events.get(2),
         Some(ProviderStreamEvent::Finished {
             stop_reason: StopReason::MaxOutputTokens
         })
     ));
-    assert_eq!(events.len(), 2);
+    assert_eq!(events.len(), 3);
     Ok(())
 }
 

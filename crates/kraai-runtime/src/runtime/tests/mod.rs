@@ -19,6 +19,7 @@ mod mcp_sessions;
 mod model_catalog;
 mod model_lists;
 mod model_options;
+mod output_limit;
 
 mod lease_expiry;
 mod shared_sessions;

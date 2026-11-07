@@ -12,6 +12,7 @@ use crate::wire::{ChatCompletionChunk, ScriptArguments, ToolCallDelta};
 
 const MAX_TOOL_BYTES: usize = 1024 * 1024;
 const MAX_TOOL_CALLS: usize = 16;
+const TRUNCATED_CALL: &str = "the response reached the output token limit before these arguments were complete, so the script did not run. Keep each call smaller, for example by splitting a large file edit into several edits";
 
 #[derive(Default)]
 struct PendingCall {
@@ -162,15 +163,16 @@ impl Completion {
                         ));
                     }
                 };
-                if stop_reason == StopReason::MaxOutputTokens {
-                    self.calls.clear();
+                let truncated = stop_reason == StopReason::MaxOutputTokens;
+                if truncated {
+                    self.calls.retain(|call| call.id.is_some());
                 }
                 ensure!(
-                    (stop_reason == StopReason::ToolCall) == !self.calls.is_empty(),
+                    truncated || (stop_reason == StopReason::ToolCall) == !self.calls.is_empty(),
                     "Completion finish reason does not match its tool calls"
                 );
                 self.finish_reason = Some(reason);
-                let calls = self.finish_calls(tool_name)?;
+                let calls = self.finish_calls(tool_name, truncated)?;
                 let reasoning = std::mem::take(&mut self.reasoning);
                 if !reasoning.is_empty() {
                     pending.push_back(ProviderStreamEvent::Reasoning {
@@ -190,10 +192,15 @@ impl Completion {
         Ok(())
     }
 
-    fn finish_calls(&mut self, tool_name: Option<&str>) -> Result<Vec<ProviderStreamEvent>> {
+    /// Calls cut off by the output limit become invalid calls whose error tells the model why.
+    fn finish_calls(
+        &mut self,
+        tool_name: Option<&str>,
+        truncated: bool,
+    ) -> Result<Vec<ProviderStreamEvent>> {
         let calls: Vec<_> = std::mem::take(&mut self.calls)
             .into_iter()
-            .map(|call| finish_call(call, tool_name))
+            .map(|call| finish_call(call, tool_name, truncated))
             .collect::<Result<_>>()?;
         let mut ids: Vec<_> = calls
             .iter()
@@ -209,12 +216,18 @@ impl Completion {
     }
 }
 
-fn finish_call(call: PendingCall, tool_name: Option<&str>) -> Result<ProviderStreamEvent> {
+fn finish_call(
+    call: PendingCall,
+    tool_name: Option<&str>,
+    truncated: bool,
+) -> Result<ProviderStreamEvent> {
     let tool_name =
         tool_name.ok_or_else(|| eyre!("Provider called a tool when tools were disabled"))?;
     let id = call.id.ok_or_else(|| eyre!("Tool call omitted ID"))?;
     let call_id = ToolCallId::try_new(id).map_err(|error| eyre!(error))?;
-    let arguments_error = if call.name == tool_name {
+    let arguments_error = if truncated {
+        String::from(TRUNCATED_CALL)
+    } else if call.name == tool_name {
         match serde_json::from_str::<ScriptArguments>(&call.arguments) {
             Ok(arguments) => {
                 return Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
