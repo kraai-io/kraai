@@ -28,7 +28,12 @@ pub(super) fn model_option(
         ModelOptionKind::Choice { choices: values } => {
             choices.extend(values.iter().map(|choice| {
                 acp::SessionConfigSelectOption::new(choice.id.clone(), &choice.label)
-            }))
+            }));
+            if let Some(ModelOptionValue::Choice(value)) = value
+                && values.iter().all(|choice| &choice.id != value)
+            {
+                choices.push(acp::SessionConfigSelectOption::new(value.clone(), value));
+            }
         }
         ModelOptionKind::Boolean { .. } => choices.extend([
             acp::SessionConfigSelectOption::new("false", "false"),

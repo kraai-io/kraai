@@ -131,33 +131,19 @@ def main() -> None:
     parser.add_argument("--oracle", action="store_true")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--job-dir", required=True, type=Path)
+    parser.add_argument("--lock-file", required=True, type=Path)
     parser.add_argument("--task-name", action="append", default=[])
     parser.add_argument("--full-dataset", action="store_true")
     parser.add_argument("--attempts", type=int, default=1)
     parser.add_argument("--model")
     parser.add_argument("--task-count", type=int)
     parser.add_argument("--registry-path", type=Path)
-    parser.add_argument("--status", action="store_true")
     parser.add_argument("--docker-compose", action="append", type=Path, default=[])
     parser.add_argument("--allow-agent-host", action="append", default=[])
     parser.add_argument("--print-command", "--dry-run", action="store_true")
     args = parser.parse_args()
     if args.registry_path is None:
         args.registry_path = default_registry(args.dataset)
-    if args.status:
-        try:
-            manifest = json.loads((args.job_dir / "kraai-run.json").read_text())
-            print(
-                json.dumps(
-                    progress(
-                        args.job_dir, manifest["selected_tasks"], manifest["attempts"]
-                    ),
-                    indent=2,
-                )
-            )
-        except (ValueError, OSError) as error:
-            parser.error(str(error))
-        return
     try:
         command = build_command(args)
     except (ValueError, OSError) as error:
@@ -178,13 +164,14 @@ def main() -> None:
         print(json.dumps(command, indent=2))
         return
     try:
-        with run_lock(args.job_dir.resolve()) as lock:
+        with run_lock(args.lock_file.resolve()) as lock:
             tasks = asyncio.run(
                 preflight_tasks(args.dataset, args.task_name, args.registry_path)
             )
             if args.task_count is not None:
                 tasks = select_tasks(args.dataset, tasks, args.task_count)
             summary = prepare_run(args, tasks)
+            write_json(args.job_dir.parent / "summary.json", summary)
             selected = copy.copy(args)
             selected.task_count = None
             selected.full_dataset = False
@@ -222,7 +209,7 @@ def main() -> None:
                 for event, handler in previous.items():
                     signal.signal(event, handler)
                 summary = progress(args.job_dir, tasks, args.attempts)
-                write_json(args.job_dir / "progress.json", summary)
+                write_json(args.job_dir.parent / "summary.json", summary)
             raise SystemExit(code)
     except (ValueError, OSError) as error:
         parser.error(str(error))

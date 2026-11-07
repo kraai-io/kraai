@@ -175,11 +175,7 @@ async fn partial_picker_selection_cannot_generate_or_mutate_history() -> Result<
     manager.set_session_model(&session, partial.clone()).await?;
     let mut conflicting = values("low");
     conflicting.insert("force_high".into(), ModelOptionValue::Boolean(true));
-    for options in [
-        Default::default(),
-        values("unsupported"),
-        conflicting.clone(),
-    ] {
+    for options in [Default::default(), values(""), conflicting.clone()] {
         let error = manager
             .prepare_start_stream(
                 &session,
@@ -204,7 +200,7 @@ async fn partial_picker_selection_cannot_generate_or_mutate_history() -> Result<
     }
     assert!(
         manager
-            .set_session_model(&session, selection(values("unsupported")))
+            .set_session_model(&session, selection(values("")))
             .await
             .is_err()
     );

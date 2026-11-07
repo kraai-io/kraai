@@ -14,6 +14,6 @@ args = [
 max_requests = 64
 name = "kraai"
 program = "kraai-headless"
-proxy = "codex_subscription"
+reasoning_args = ["--option", "reasoning_effort={reasoning}"]
 sanitize_kraai_provider = true
 schema_version = 1

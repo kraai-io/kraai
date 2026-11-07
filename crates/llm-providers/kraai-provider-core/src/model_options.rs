@@ -9,8 +9,8 @@ use serde_json::Value;
 
 mod protocol;
 pub use protocol::{
-    ModelOptionsProtocol, reasoning_budget_option, reasoning_effort_option,
-    reasoning_toggle_option, service_tier_options,
+    ModelOptionsProtocol, optional_reasoning_options, reasoning_budget_option,
+    reasoning_effort_option, reasoning_toggle_option, service_tier_options,
 };
 
 pub fn apply_model_options(
@@ -210,3 +210,15 @@ fn escape_pointer(value: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn only_optional_reasoning(
+    options: &[ModelOptionDefinition],
+    protocol: ModelOptionsProtocol,
+) -> bool {
+    let mut expected = optional_reasoning_options(protocol).collect::<Vec<_>>();
+    let mut actual = options.to_vec();
+    expected.sort_by(|left, right| left.id.cmp(&right.id));
+    actual.sort_by(|left, right| left.id.cmp(&right.id));
+    actual == expected
+}

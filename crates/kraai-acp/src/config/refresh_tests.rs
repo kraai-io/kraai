@@ -118,7 +118,7 @@ fn selection(options: ModelOptionValues) -> ModelSelection {
 fn changing_definitions(effort: &str, maximum: i64) -> Result<Vec<ModelOptionDefinition>> {
     Ok(serde_json::from_value(json!([
         {"id":"effort","label":"Effort","required":true,"type":"choice",
-            "choices":[{"id":effort,"label":effort}],"binding":{"type":"body","path":"/reasoning_effort"}},
+            "choices":[{"id":effort,"label":effort,"patch":{"body":{"reasoning_effort":effort}}}]},
         {"id":"budget","label":"Budget","type":"integer","min":0,"max":maximum,
             "binding":{"type":"body","path":"/budget"}},
         {"id":"retained","label":"Retained","type":"boolean","binding":{"type":"body","path":"/retained"}}

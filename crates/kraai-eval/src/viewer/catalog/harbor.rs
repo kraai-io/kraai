@@ -3,22 +3,10 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{Attempt, Catalog, Version};
+use super::{Attempt, Catalog};
 
 impl Catalog {
-    pub(super) fn harbor_jobs(&mut self) {
-        for directory in self.directories(&self.root.join("public"), 5) {
-            if directory
-                .extension()
-                .is_some_and(|extension| extension == "inputs")
-            {
-                continue;
-            }
-            self.harbor_job(&directory);
-        }
-    }
-
-    fn harbor_job(&mut self, directory: &Path) {
+    pub(super) fn harbor_job(&mut self, directory: &Path, version_id: &str) {
         let run: Value = self
             .optional_json(&directory.join("kraai-run.json"))
             .unwrap_or(Value::Null);
@@ -28,24 +16,6 @@ impl Catalog {
         let job: Value = self
             .optional_json(&directory.join("result.json"))
             .unwrap_or(Value::Null);
-        if run.is_null() && lock.is_null() && job.is_null() {
-            return;
-        }
-        let parts = directory
-            .strip_prefix(self.root.join("public"))
-            .ok()
-            .map(|path| {
-                path.iter()
-                    .map(|part| part.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let benchmark = string(&run, "/identity/dataset")
-            .or_else(|| parts.first().cloned())
-            .unwrap_or_else(|| String::from("Harbor"));
-        let harness = string(&run, "/identity/spec/harness").or_else(|| parts.get(1).cloned());
-        let label = parts.get(2).cloned();
-        let model = string(&run, "/identity/model").or_else(|| parts.get(3).cloned());
         let mut trials = self
             .directories(directory, 1)
             .into_iter()
@@ -98,30 +68,10 @@ impl Catalog {
                         .into_owned()
                 });
             let started_at_ms = timestamp(&result, "/started_at");
-            let settings = settings(&run, &lock, &trial_lock, &config, &result);
-            let version_id = self.version(
-                Version {
-                    id: String::new(),
-                    benchmark: benchmark.clone(),
-                    harness: harness
-                        .clone()
-                        .or_else(|| string(&result, "/agent_info/name"))
-                        .unwrap_or_else(|| String::from("unknown")),
-                    model: model
-                        .clone()
-                        .or_else(|| string(&result, "/config/agent/model_name")),
-                    label: label
-                        .clone()
-                        .or_else(|| string(&result, "/agent_info/version"))
-                        .unwrap_or_else(|| String::from("unversioned")),
-                    latest_at_ms: started_at_ms,
-                },
-                &settings.to_string(),
-            );
             if let Some(revision) =
                 string(&trial_lock, "/task/digest").or_else(|| string(&result, "/task_checksum"))
             {
-                self.task_revision(&version_id, &task, revision, &trial);
+                self.task_revision(version_id, &task, revision, &trial);
             }
             let adapter = run.pointer("/identity/spec").is_some_and(Value::is_object)
                 || result
@@ -170,7 +120,7 @@ impl Catalog {
                 &trial,
                 Attempt {
                     id: self.source_id(&trial),
-                    version_id,
+                    version_id: version_id.to_owned(),
                     task,
                     attempt: 0,
                     status: status.to_owned(),
@@ -189,43 +139,11 @@ impl Catalog {
             });
             for attempt in attempts {
                 let count = counts.entry(attempt.task.clone()).or_default();
-                attempt.attempt = *count;
                 *count += 1;
+                attempt.attempt = *count;
             }
         }
     }
-}
-
-fn settings(run: &Value, lock: &Value, trial: &Value, config: &Value, result: &Value) -> Value {
-    let mut trial = if trial.is_null() {
-        config.clone()
-    } else {
-        trial.clone()
-    };
-    if let Some(trial) = trial.as_object_mut() {
-        for key in ["task", "trial_name", "trials_dir", "job_id"] {
-            trial.remove(key);
-        }
-    }
-    if let Some(kwargs) = trial
-        .pointer_mut("/agent/kwargs")
-        .and_then(Value::as_object_mut)
-    {
-        kwargs.remove("spec_path");
-    }
-    serde_json::json!({
-        "trial": trial,
-        "harbor": lock.get("harbor"),
-        "concurrency": lock.get("n_concurrent_trials"),
-        "retry": lock.get("retry"),
-        "runner_args": run.pointer("/identity/spec/runner_args"),
-        "proxy_command": run.pointer("/identity/spec/proxy_command").and_then(Value::as_array)
-            .map(|command| command.iter().skip(1).collect::<Vec<_>>()),
-        "oracle": run.pointer("/identity/oracle"),
-        "docker_compose": run.pointer("/identity/docker_compose"),
-        "allow_agent_host": run.pointer("/identity/allow_agent_host"),
-        "agent_version": result.pointer("/agent_info/version"),
-    })
 }
 
 fn string(value: &Value, pointer: &str) -> Option<String> {

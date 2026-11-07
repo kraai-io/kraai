@@ -697,7 +697,16 @@ async fn configured_custom_models_absent_from_discovery_apply_custom_settings() 
         .unwrap();
     provider.refresh_model_list().await.unwrap();
     assert_eq!(provider.list_models().await.len(), 1);
-    assert_eq!(provider.get_model(&id).await.unwrap().options.len(), 1);
+    let mut ids = provider
+        .get_model(&id)
+        .await
+        .unwrap()
+        .options
+        .into_iter()
+        .map(|option| option.id)
+        .collect::<Vec<_>>();
+    ids.sort();
+    assert_eq!(ids, ["custom-budget", "reasoning_effort"]);
     let request = ProviderRequest {
         messages: Vec::new(),
         script_tool: None,

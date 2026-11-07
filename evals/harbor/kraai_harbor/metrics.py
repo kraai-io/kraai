@@ -43,18 +43,6 @@ def _complete_proxy_usage(proxy: dict) -> bool:
     return accounting.get("context", {}).get("samples") == model_requests
 
 
-def _estimated_cost(accounting: dict | None) -> float | None:
-    if (
-        accounting is None
-        or accounting.get("model_requests", 0) == 0
-        or accounting.get("unpriced_requests") != 0
-        or accounting.get("unrecorded_requests") != 0
-        or accounting.get("cost_overflow")
-    ):
-        return None
-    return _count(accounting.get("known_estimated_cost"), "estimated cost") / 1_000_000_000
-
-
 def codex_usage(path: Path) -> dict[str, int] | None:
     result = None
     if not path.is_file():
@@ -137,13 +125,5 @@ def populate_context(logs_dir: Path, context: AgentContext, controller_dir: Path
         context.n_cache_tokens = None
         context.n_output_tokens = None
     metadata["wall_clock_reliable"] = False
-    context.cost_usd = (
-        _estimated_cost(proxy.get("accounting"))
-        if proxy is not None
-        and proxy.get("unrecorded_requests", 0) == 0
-        and proxy.get("accounting_error") is None
-        else None
-    )
-    if context.cost_usd is not None:
-        metadata["cost_source"] = "estimated_api_equivalent"
+    context.cost_usd = None
     context.metadata = {"kraai_eval": metadata}

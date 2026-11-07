@@ -17,6 +17,8 @@ pub struct Catalog {
     #[serde(skip)]
     root: PathBuf,
     #[serde(skip)]
+    prices: crate::Prices,
+    #[serde(skip)]
     logs: BTreeMap<String, BTreeMap<String, PathBuf>>,
     #[serde(skip)]
     sources: BTreeSet<PathBuf>,
@@ -89,9 +91,22 @@ impl Catalog {
             root: root.canonicalize()?,
             ..Self::default()
         };
-        catalog.native_runs();
-        catalog.harbor_jobs();
-        catalog.native_suites();
+        match crate::Prices::load(&catalog.root) {
+            Ok(prices) => catalog.prices = prices,
+            Err(error) => {
+                let root = catalog.root.clone();
+                catalog.warning(&root, format!("{error:#}"));
+            }
+        }
+        catalog.harness_folders();
+        for version in &mut catalog.versions {
+            version.latest_at_ms = catalog
+                .attempts
+                .iter()
+                .filter(|attempt| attempt.version_id == version.id)
+                .filter_map(|attempt| attempt.started_at_ms)
+                .max();
+        }
         catalog.versions.sort_by(|left, right| {
             right
                 .latest_at_ms
@@ -136,25 +151,37 @@ impl Catalog {
         }
     }
 
-    fn version(&mut self, mut version: Version, identity: &str) -> String {
-        version.id = crate::cache::hash_chunks(&[
-            version.benchmark.as_bytes(),
-            version.harness.as_bytes(),
-            version.model.as_deref().unwrap_or_default().as_bytes(),
-            version.label.as_bytes(),
-            identity.as_bytes(),
-        ]);
-        if let Some(existing) = self
-            .versions
-            .iter_mut()
-            .find(|existing| existing.id == version.id)
-        {
-            existing.latest_at_ms = existing.latest_at_ms.max(version.latest_at_ms);
-            return existing.id.clone();
+    fn harness_folders(&mut self) {
+        let root = self.root.clone();
+        for directory in self.directories(&root, 3) {
+            let parts = directory
+                .strip_prefix(&root)
+                .map(|relative| {
+                    relative
+                        .iter()
+                        .map(|part| part.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let [benchmark, model, folder] = parts.as_slice() else {
+                continue;
+            };
+            let (harness, label) = harness_and_label(folder);
+            let id = self.source_id(&directory);
+            self.versions.push(Version {
+                id: id.clone(),
+                benchmark: benchmark.clone(),
+                harness,
+                model: Some(model.clone()),
+                label,
+                latest_at_ms: None,
+            });
+            if directory.join("harbor").is_dir() {
+                self.harbor_job(&directory.join("harbor"), &id);
+            } else {
+                self.native_folder(&directory, &id);
+            }
         }
-        let id = version.id.clone();
-        self.versions.push(version);
-        id
     }
 
     fn task_revision(&mut self, version_id: &str, task: &str, revision: String, path: &Path) {
@@ -185,6 +212,19 @@ impl Catalog {
         attempt.logs = logs.keys().cloned().collect();
         self.logs.insert(attempt.id.clone(), logs);
         self.attempts.push(attempt);
+    }
+}
+
+fn harness_and_label(folder: &str) -> (String, String) {
+    let parsed = folder
+        .get(..10)
+        .filter(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok())
+        .and_then(|_| folder.get(11..))
+        .and_then(|rest| rest.rsplit_once('-'))
+        .filter(|(harness, label)| !harness.is_empty() && !label.is_empty());
+    match parsed {
+        Some((harness, hash)) => (harness.to_owned(), hash.to_owned()),
+        None => (folder.to_owned(), folder.to_owned()),
     }
 }
 

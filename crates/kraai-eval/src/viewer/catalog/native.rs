@@ -1,77 +1,62 @@
-use std::collections::BTreeSet;
-use std::path::{Component, Path};
+use std::path::Path;
 
-use super::{Attempt, Catalog, Metrics, Version};
+use super::{Attempt, Catalog, Metrics};
 use crate::{RunResult, RunStatus, SuiteResult};
 
 impl Catalog {
-    pub(super) fn native_runs(&mut self) {
-        let root = self.root.clone();
-        let mut experiments = BTreeSet::new();
-        let directories = self.directories(&root.join("runs"), 6);
-        for directory in directories {
-            let Some(result) = self.json::<RunResult>(&directory.join("result.json")) else {
-                self.incomplete_native(&directory);
+    pub(super) fn native_folder(&mut self, folder: &Path, version_id: &str) {
+        for directory in self.directories(folder, 2) {
+            let is_attempt = directory
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("attempt-"));
+            if !is_attempt {
                 continue;
-            };
-            if experiments.insert(result.experiment_id.clone()) {
-                self.native_run(&directory, result);
+            }
+            match self.json::<RunResult>(&directory.join("result.json")) {
+                Some(result) => self.native_run(&directory, result, version_id),
+                None => self.incomplete_native(&directory, version_id),
             }
         }
-        let mut archived = Vec::new();
-        for directory in self.directories(&root.join("failures"), 1) {
-            if directory.join("result.json").exists()
-                && let Some(result) = self.json::<RunResult>(&directory.join("result.json"))
-            {
-                archived.push((directory, result));
+        let Some(suite) = self.optional_json::<SuiteResult>(&folder.join("summary.json")) else {
+            return;
+        };
+        for (index, run) in suite.runs.into_iter().enumerate() {
+            if run.artifact_path.is_some() {
+                continue;
             }
-        }
-        archived.sort_by(|(left_path, left), (right_path, right)| {
-            right
-                .completed_at_ms
-                .cmp(&left.completed_at_ms)
-                .then_with(|| right.started_at_ms.cmp(&left.started_at_ms))
-                .then_with(|| left_path.cmp(right_path))
-        });
-        for (directory, result) in archived {
-            if experiments.insert(result.experiment_id.clone()) {
-                self.native_run(&directory, result);
-            }
+            let source = folder.join(format!("launch-{index}"));
+            self.insert(
+                &source,
+                Attempt {
+                    id: self.source_id(&source),
+                    version_id: version_id.to_owned(),
+                    task: run.task_id.unwrap_or_else(|| String::from("unknown task")),
+                    attempt: run.attempt,
+                    status: run
+                        .status
+                        .as_ref()
+                        .map(status)
+                        .unwrap_or("error")
+                        .to_owned(),
+                    started_at_ms: Some(suite.started_at_ms),
+                    metrics: Metrics {
+                        duration_ms: run.duration_ms,
+                        ..Metrics::default()
+                    },
+                    error: run.error,
+                    logs: Vec::new(),
+                },
+            );
         }
     }
 
-    fn native_run(&mut self, directory: &Path, mut result: RunResult) {
+    fn native_run(&mut self, directory: &Path, mut result: RunResult, version_id: &str) {
         let error = failure(&result);
         if let Some(proxy) = result.metrics.proxy.as_mut() {
             self.hydrate_proxy(directory, proxy);
         }
-        let manifest: serde_json::Value = self
-            .optional_json(&directory.join("manifest.json"))
-            .unwrap_or_default();
-        let identity = serde_json::json!({
-            "runner": result.runner_artifact_sha256,
-            "runner_args": manifest.get("runner_args"),
-            "provider_config": result.provider_config_sha256,
-            "rust_environment_programs": result.rust_environment_programs,
-            "sandbox": result.sandbox,
-            "proxy": result.model_proxy.as_ref().map(|proxy| serde_json::json!({
-                "transport_revision": proxy.transport_revision, "kind": proxy.kind,
-                "upstream": proxy.upstream, "allowed_paths": proxy.allowed_paths, "max_requests": proxy.max_requests,
-            })),
-        }).to_string();
-        let version_id = self.version(
-            Version {
-                id: String::new(),
-                benchmark: String::from("custom"),
-                harness: result.harness_name,
-                model: result.model_label,
-                label: result.runner_version,
-                latest_at_ms: Some(result.started_at_ms),
-            },
-            &identity,
-        );
         self.task_revision(
-            &version_id,
+            version_id,
             &result.task_id,
             format!("{}:{}", result.task_sha256, result.grader_sha256),
             directory,
@@ -82,7 +67,7 @@ impl Catalog {
             directory,
             Attempt {
                 id: self.source_id(directory),
-                version_id,
+                version_id: version_id.to_owned(),
                 task: result.task_id,
                 attempt: result.attempt,
                 status: status(&result.status).to_owned(),
@@ -94,43 +79,22 @@ impl Catalog {
         );
     }
 
-    fn incomplete_native(&mut self, directory: &Path) {
-        let Ok(relative) = directory.strip_prefix(self.root.join("runs")) else {
-            return;
+    fn incomplete_native(&mut self, directory: &Path, version_id: &str) {
+        let name = |path: Option<&Path>| {
+            path.and_then(Path::file_name)
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
         };
-        let parts = relative
-            .iter()
-            .map(|part| part.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        let Some(task) = parts.first() else { return };
-        let Some(harness) = parts.get(1) else { return };
-        let Some(label) = parts.get(2) else { return };
-        let model = parts
-            .get(3)
-            .filter(|model| model.as_str() != "unlabeled-model")
-            .cloned();
-        let attempt = parts
-            .get(4)
-            .and_then(|part| part.strip_prefix("attempt-"))
-            .and_then(|part| part.parse().ok())
+        let attempt = name(Some(directory))
+            .strip_prefix("attempt-")
+            .and_then(|number| number.parse().ok())
             .unwrap_or_default();
-        let version_id = self.version(
-            Version {
-                id: String::new(),
-                benchmark: String::from("custom"),
-                harness: harness.clone(),
-                model,
-                label: label.clone(),
-                latest_at_ms: None,
-            },
-            "incomplete",
-        );
         self.insert(
             directory,
             Attempt {
                 id: self.source_id(directory),
-                version_id,
-                task: task.clone(),
+                version_id: version_id.to_owned(),
+                task: name(directory.parent()),
                 attempt,
                 status: String::from("interrupted"),
                 started_at_ms: None,
@@ -139,69 +103,6 @@ impl Catalog {
                 logs: Vec::new(),
             },
         );
-    }
-
-    pub(super) fn native_suites(&mut self) {
-        for directory in self.directories(&self.root.join("suites"), 4) {
-            let Some(suite) = self.json::<SuiteResult>(&directory.join("summary.json")) else {
-                continue;
-            };
-            for (index, run) in suite.runs.into_iter().enumerate() {
-                if let Some(artifact) = run.artifact_path.as_ref() {
-                    if artifact
-                        .components()
-                        .any(|component| !matches!(component, Component::Normal(_)))
-                    {
-                        self.warning(
-                            &directory,
-                            "Suite contains an invalid attempt artifact path",
-                        );
-                        continue;
-                    }
-                    if !self.root.join(artifact).join("result.json").exists() {
-                        self.warning(
-                            &directory,
-                            format!("Saved attempt result is missing: {}", artifact.display()),
-                        );
-                    }
-                    continue;
-                }
-                let source = directory.join(format!("launch-{index}"));
-                let version_id = self.version(
-                    Version {
-                        id: String::new(),
-                        benchmark: String::from("custom"),
-                        harness: suite.harness_name.clone(),
-                        model: suite.model_label.clone(),
-                        label: suite.runner_version.clone(),
-                        latest_at_ms: Some(suite.started_at_ms),
-                    },
-                    "launch-failed",
-                );
-                self.insert(
-                    &source,
-                    Attempt {
-                        id: self.source_id(&source),
-                        version_id,
-                        task: run.task_id.unwrap_or_else(|| String::from("unknown task")),
-                        attempt: run.attempt,
-                        status: run
-                            .status
-                            .as_ref()
-                            .map(status)
-                            .unwrap_or("error")
-                            .to_owned(),
-                        started_at_ms: Some(suite.started_at_ms),
-                        metrics: Metrics {
-                            duration_ms: run.duration_ms,
-                            ..Metrics::default()
-                        },
-                        error: run.error,
-                        logs: Vec::new(),
-                    },
-                );
-            }
-        }
     }
 }
 

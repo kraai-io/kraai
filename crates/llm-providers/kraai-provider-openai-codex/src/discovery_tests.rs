@@ -808,7 +808,7 @@ async fn discovered_processing_tiers_preserve_model_and_reasoning_for_generation
         );
         options.insert(
             "service_tier".into(),
-            kraai_types::ModelOptionValue::Choice("unsupported".into()),
+            kraai_types::ModelOptionValue::Choice(String::new()),
         );
         options
     }] {

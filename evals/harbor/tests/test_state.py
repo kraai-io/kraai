@@ -59,7 +59,7 @@ class StateTests(Fixture):
         self.assertEqual(summary["tasks"]["two"]["errors"], 1)
         archive_interrupted(self.args.job_dir)
         self.assertFalse(cancelled.exists())
-        self.assertEqual(len(list(self.root.glob("job.interrupted/*"))), 1)
+        self.assertEqual(len(list(self.root.glob("interrupted/*"))), 1)
         self.assertTrue((self.args.job_dir / "one-fail/result.json").exists())
 
     def test_additional_attempts_preserve_completed_trial_bytes(self):
@@ -86,20 +86,15 @@ class StateTests(Fixture):
         manifest = json.loads((self.args.job_dir / "kraai-run.json").read_text())
         self.assertEqual(manifest["tasks"], ["one", "two", "three"])
 
-    def test_modified_configuration_is_rejected_before_altering_results(self):
+    def test_changed_configuration_resumes_the_same_job(self):
         prepare_run(self.args, self.tasks)
-        for field, value in [
-            ("model", "different"),
-            ("dataset", "test@2"),
-        ]:
-            old = getattr(self.args, field)
-            setattr(self.args, field, value)
-            with (
-                self.subTest(field=field),
-                self.assertRaisesRegex(ValueError, "differs"),
-            ):
-                prepare_run(self.args, self.tasks)
-            setattr(self.args, field, old)
+        saved = self.trial("one-pass", "one") / "result.json"
+        self.args.allow_agent_host = ["10.0.0.1"]
+        summary = prepare_run(self.args, self.tasks)
+        self.assertEqual(summary["completed"], 1)
+        manifest = json.loads((self.args.job_dir / "kraai-run.json").read_text())
+        self.assertEqual(manifest["identity"]["allow_agent_host"], ["10.0.0.1"])
+        self.assertTrue(saved.exists())
 
     def test_corrupt_results_are_not_silently_rerun(self):
         prepare_run(self.args, self.tasks)
@@ -136,7 +131,7 @@ class StateTests(Fixture):
                     self.assertIn(str(path), str(caught.exception))
                     self.assertIn("refusing to rerun", str(caught.exception))
                     self.assertEqual(path.read_bytes(), before)
-                self.assertFalse(self.root.joinpath("job.interrupted").exists())
+                self.assertFalse(self.root.joinpath("interrupted").exists())
 
     def test_adapter_initialization_failure_is_archived_without_counting_an_attempt(self):
         prepare_run(self.args, self.tasks)
@@ -146,19 +141,20 @@ class StateTests(Fixture):
         (trial / "trial.log").write_text("adapter initialization failed")
         archive_interrupted(self.args.job_dir)
         self.assertFalse(trial.exists())
-        archived = list(self.root.glob("job.interrupted/*/trial.log"))
+        archived = list(self.root.glob("interrupted/*/trial.log"))
         self.assertEqual(len(archived), 1)
         self.assertEqual(archived[0].read_text(), "adapter initialization failed")
         self.assertEqual(progress(self.args.job_dir, self.tasks, 2)["completed"], 0)
 
     def test_lock_prevents_concurrent_run_and_releases_after_error(self):
+        path = self.root / "locks/job.lock"
         with self.assertRaisesRegex(RuntimeError, "interrupted"):
-            with run_lock(self.args.job_dir):
+            with run_lock(path):
                 with self.assertRaisesRegex(ValueError, "already running"):
-                    with run_lock(self.args.job_dir):
+                    with run_lock(path):
                         self.fail("second lock acquired")
                 raise RuntimeError("interrupted")
-        with run_lock(self.args.job_dir):
+        with run_lock(path):
             pass
 
     def test_completed_run_has_no_remaining_work(self):

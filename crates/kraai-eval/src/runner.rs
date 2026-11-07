@@ -7,10 +7,11 @@ use color_eyre::eyre::{Context, Result, bail};
 use crate::command::{CommandOutcome, run_trusted};
 use crate::event_log::{EventLog, unix_timestamp_ms};
 use crate::sandbox::{ResourceLimits, rust_environment};
+use crate::temporary_directory::TemporaryDirectory;
 use crate::{
     ControllerFailure, EvaluationMetrics, ExperimentIdentity, KraaiProviderConfigRequest,
-    ModelProxyRequest, NetworkPolicy, ProcessRecord, ProgressReporter, ResultStore, RunCoordinates,
-    RunResult, RunStatus, SandboxRecord, TaskManifest, cache, execution, provider_config, sandbox,
+    ModelProxyRequest, NetworkPolicy, ProcessRecord, ProgressReporter, ResultStore, RunResult,
+    RunStatus, SandboxRecord, TaskManifest, cache, execution, provider_config, sandbox,
 };
 
 #[derive(Debug, Clone)]
@@ -22,8 +23,9 @@ pub struct RunRequest {
     pub harness_name: Option<String>,
     pub model_label: Option<String>,
     pub attempt: u64,
-    pub cache_dir: PathBuf,
-    pub reuse_result: bool,
+    pub eval_root: PathBuf,
+    pub artifact_path: PathBuf,
+    pub staging_dir: PathBuf,
     pub model_proxy: Option<ModelProxyRequest>,
     pub kraai_provider_config: Option<KraaiProviderConfigRequest>,
     pub progress: Option<ProgressReporter>,
@@ -54,23 +56,16 @@ impl RunRequest {
 }
 
 pub fn run(request: &RunRequest) -> Result<RunResult> {
-    match run_resolved(request) {
-        Ok(result) => Ok(result),
-        Err(error) => match persist_launch_failure(request, &error) {
-            Ok(path) => Err(error).wrap_err(format!(
-                "evaluation launch failure recorded at {}",
-                path.display()
-            )),
-            Err(logging_error) => Err(error).wrap_err(format!(
-                "also failed to record evaluation launch failure: {logging_error:#}"
-            )),
-        },
-    }
-}
-
-fn run_resolved(request: &RunRequest) -> Result<RunResult> {
     if request.runner_version.trim().is_empty() {
         bail!("runner version must not be empty");
+    }
+    if request.artifact_path.as_os_str().is_empty()
+        || !request
+            .artifact_path
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        bail!("attempt artifact path must be relative to the eval directory");
     }
     let mut task = TaskManifest::load(&request.task_path)?;
     let task_dir = request.task_path.parent().unwrap_or_else(|| Path::new("."));
@@ -92,13 +87,14 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
     let runner_artifact_sha256 = cache::hash_file(&request.runner_program)?;
     let task_sha256 = task.public_digest(task_dir)?;
     let grader_sha256 = task.grader_digest(task_dir)?;
-    if request.kraai_provider_config.is_some()
-        && !request
+    if let Some(config) = &request.kraai_provider_config
+        && request
             .model_proxy
             .as_ref()
-            .is_some_and(ModelProxyRequest::is_codex_subscription)
+            .and_then(ModelProxyRequest::kraai_provider_kind)
+            != Some(config.kind()?)
     {
-        bail!("Kraai provider config sanitization requires the Codex subscription proxy");
+        bail!("Kraai provider config sanitization requires a proxy for the same provider type");
     }
     let provider_config = request
         .kraai_provider_config
@@ -142,39 +138,28 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
         rust_environment_programs: rust_environment_programs.clone(),
     };
     let experiment_id = identity.digest()?;
-    fs::create_dir_all(&request.cache_dir).wrap_err("create evaluation cache directory")?;
-    let cache_dir = request
-        .cache_dir
-        .canonicalize()
-        .wrap_err("canonicalize evaluation cache directory")?;
+    let cache_dir = request.eval_root.join(".cache");
     let store = ResultStore::new(
-        &cache_dir,
-        &RunCoordinates {
-            task_id: &task.id,
-            harness_name: &harness_name,
-            runner_version: &request.runner_version,
-            model_label: model_label.as_deref(),
-            attempt: request.attempt,
-            experiment_id: &experiment_id,
-        },
+        &request.eval_root,
+        &request.staging_dir,
+        &request.artifact_path,
     );
-    let pricing = request
-        .model_proxy
-        .as_ref()
-        .map(ModelProxyRequest::pricing)
-        .filter(|pricing| request.reuse_result && pricing.config.is_some());
-    if let Some(result) = store.load_result_with_pricing(pricing)? {
-        if request.reuse_result {
+    if let Some(result) = store.load_result()? {
+        if result.status != RunStatus::ControllerFailed {
             return Ok(result);
         }
-        bail!("experiment result already exists; use --resume or select another --start-attempt");
+        store.discard()?;
     }
 
-    let run_root = cache_dir
-        .join("work")
-        .join(format!("{}-{}", task.id, ulid::Ulid::generate()));
+    let run_root = std::env::temp_dir().join("kraai-eval").join(format!(
+        "{}-{}",
+        task.id,
+        ulid::Ulid::generate()
+    ));
     fs::create_dir_all(&run_root)?;
-    let artifact_dir = store.begin()?;
+    let workspace = TemporaryDirectory::new(run_root.clone());
+    let staging = store.begin()?;
+    let artifact_dir = staging.path();
     let started = Instant::now();
     let started_at_ms = unix_timestamp_ms()?;
     let result = execution::execute(execution::Execution {
@@ -188,7 +173,7 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
         provider_config: provider_config.as_ref(),
         rust_environment: rust_environment.as_ref(),
         artifact_path: store.relative_dir(),
-        artifact_dir: &artifact_dir,
+        artifact_dir,
         started,
         started_at_ms,
     });
@@ -252,40 +237,14 @@ fn run_resolved(request: &RunRequest) -> Result<RunResult> {
         }
     };
     store.commit(
-        &artifact_dir,
+        artifact_dir,
         &identity_json(request, &task, &result)?,
         &result,
     )?;
-    if result.status != RunStatus::ControllerFailed {
-        fs::remove_dir_all(&run_root).wrap_err("remove completed evaluation workspace")?;
+    if result.status == RunStatus::ControllerFailed {
+        workspace.keep();
     }
     Ok(result)
-}
-
-fn persist_launch_failure(request: &RunRequest, error: &color_eyre::Report) -> Result<PathBuf> {
-    let directory = request
-        .cache_dir
-        .join("failures")
-        .join(ulid::Ulid::generate().to_string());
-    fs::create_dir_all(&directory)?;
-    let path = directory.join("failure.json");
-    fs::write(
-        &path,
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": 1,
-            "timestamp_ms": unix_timestamp_ms()?,
-            "phase": request.progress.as_ref().map(|progress| progress.snapshot().phase),
-            "task_path": request.task_path,
-            "runner_program": request.runner_program,
-            "runner_args": request.runner_args,
-            "runner_version": request.runner_version,
-            "harness_name": request.harness_name,
-            "model_label": request.model_label,
-            "attempt": request.attempt,
-            "error": format!("{error:#}"),
-        }))?,
-    )?;
-    Ok(path)
 }
 
 pub(crate) fn set_progress(request: &RunRequest, phase: impl Into<String>) {

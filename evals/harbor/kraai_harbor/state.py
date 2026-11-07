@@ -18,13 +18,13 @@ def write_json(path: Path, value: object) -> None:
 
 
 @contextmanager
-def run_lock(job: Path):
-    job.parent.mkdir(parents=True, exist_ok=True)
-    with job.with_name(job.name + ".lock").open("a") as lock:
+def run_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise ValueError(f"Benchmark is already running: {job}") from error
+            raise ValueError(f"Benchmark is already running: {path}") from error
         yield lock
 
 
@@ -144,7 +144,7 @@ def archive_interrupted(job: Path) -> None:
             and exception.get("exception_type") != "CancelledError"
         ):
             continue
-        archive = job.with_name(job.name + ".interrupted")
+        archive = job.parent / "interrupted"
         archive.mkdir(exist_ok=True)
         trial.rename(archive / f"{trial.name}-{uuid.uuid4().hex}")
 
@@ -155,10 +155,7 @@ def prepare_run(args, tasks: list[str]) -> dict:
     manifest_path = job / "kraai-run.json"
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text())
-        if manifest["identity"] != identity:
-            raise ValueError(
-                "Saved benchmark configuration differs; use a new --output-dir"
-            )
+        manifest["identity"] = identity
     else:
         if job.exists() and any(job.iterdir()):
             raise ValueError(
@@ -170,21 +167,12 @@ def prepare_run(args, tasks: list[str]) -> dict:
     manifest["selected_tasks"] = tasks
     manifest["attempts"] = args.attempts
     if args.spec:
-        frozen = job / "kraai-eval-spec.json"
-        if frozen.exists() and json.loads(frozen.read_text()) != identity["spec"]:
-            raise ValueError("Saved runner spec was changed; refusing to resume")
-        write_json(frozen, identity["spec"])
+        write_json(job / "kraai-eval-spec.json", identity["spec"])
     if getattr(args, "registry_path", None):
         frozen_registry = job / "kraai-registry.json"
-        if (
-            frozen_registry.exists()
-            and registry_digest(frozen_registry) != identity["registry_sha256"]
-        ):
-            raise ValueError("Saved dataset registry was changed; refusing to resume")
-        if not frozen_registry.exists():
-            temporary = frozen_registry.with_suffix(".tmp")
-            temporary.write_bytes(args.registry_path.read_bytes())
-            temporary.replace(frozen_registry)
+        temporary = frozen_registry.with_suffix(".tmp")
+        temporary.write_bytes(args.registry_path.read_bytes())
+        temporary.replace(frozen_registry)
     summary = progress(job, tasks, args.attempts)
     write_json(manifest_path, manifest)
     return summary

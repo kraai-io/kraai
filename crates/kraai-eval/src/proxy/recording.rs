@@ -40,7 +40,9 @@ impl<'a> RequestRecord<'a> {
         } else {
             self.outcome.stage = "complete";
         }
-        self.outcome.usage = record_usage_metrics(self.state, &self.outcome.body)?;
+        let usage = record_usage_metrics(self.state, &self.outcome.body)?;
+        self.outcome.reported_cost = usage.as_ref().and_then(|usage| usage.reported_cost);
+        self.outcome.usage = usage.map(|usage| usage.tokens);
         let elapsed = self.started.elapsed();
         record_request_metrics(self.state, &self.outcome, elapsed)?;
         write_event(

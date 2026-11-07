@@ -6,7 +6,7 @@ use color_eyre::eyre::{Result, bail, ensure};
 use kraai_eval::{RunRequest, RunStatus, SuiteRequest};
 
 #[test]
-fn cli_runs_an_external_profile_resumes_and_compares_attempts() -> Result<()> {
+fn cli_runs_resume_and_only_add_new_attempts() -> Result<()> {
     let Some(binary) = option_env!("CARGO_BIN_EXE_kraai-eval") else {
         return Ok(());
     };
@@ -17,11 +17,11 @@ fn cli_runs_an_external_profile_resumes_and_compares_attempts() -> Result<()> {
         return Ok(());
     }
     let root = temporary_directory("cli-profile")?;
-    fs::create_dir(root.join("fixture"))?;
-    fs::write(root.join("fixture/answer.txt"), "broken\n")?;
-    let task = root.join("task.toml");
+    let task_dir = root.join("tasks/cli-profile");
+    fs::create_dir_all(task_dir.join("fixture"))?;
+    fs::write(task_dir.join("fixture/answer.txt"), "broken\n")?;
     fs::write(
-        &task,
+        task_dir.join("task.toml"),
         r#"schema_version = 1
 id = "cli-profile"
 prompt = "Repair answer.txt."
@@ -34,78 +34,132 @@ command = ["sh", "-c", "read -r actual < answer.txt; [ \"$actual\" = fixed ]"]
     let profile = root.join("agent.toml");
     let harness = kraai_eval::HarnessProfile {
         name: String::from(" external-shell "),
-        program: shell,
+        program: shell.clone(),
         args: vec![
             String::from("-c"),
             String::from("printf 'fixed\\n' > answer.txt"),
         ],
-        version: Some(String::from("fixture-v1")),
+        reasoning_args: Vec::new(),
         proxy: kraai_eval::ProxyKind::None,
         sanitize_kraai_provider: false,
         ..kraai_eval::HarnessProfile::kraai()
     };
     fs::write(&profile, toml::to_string(&harness)?)?;
-    let cache = root.join("cache");
-    let invoke = |extra: &[&str]| {
-        Command::new(binary)
-            .arg("run")
-            .arg(&task)
-            .args(["--harness"])
+    let eval = root.join("eval");
+    let command = |model: &str, attempts: &str, extra: &[&str]| -> Result<std::process::Output> {
+        Ok(Command::new(binary)
+            .args(["run", "in-house", "--json", "--harness"])
             .arg(&profile)
-            .args(["--cache-dir"])
-            .arg(&cache)
-            .args(["--model", " fixture-model ", "--attempts", "2", "--json"])
+            .arg("--eval-dir")
+            .arg(&eval)
+            .arg("--tasks-dir")
+            .arg(root.join("tasks"))
+            .args(["--model", model, "--attempts", attempts])
             .args(extra)
-            .output()
+            .output()?)
     };
-    let first = invoke(&[])?;
+    let invoke_with = |attempts: &str, extra: &[&str]| -> Result<kraai_eval::SuiteResult> {
+        let output = command(" fixture/model ", attempts, extra)?;
+        ensure!(
+            output.status.success(),
+            "CLI run failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(serde_json::from_slice(&output.stdout)?)
+    };
+    let invoke = |attempts: &str| invoke_with(attempts, &[]);
+    let unpriced = command("fixture/unpriced", "1", &[])?;
     ensure!(
-        first.status.success(),
-        "CLI run failed: {}",
-        String::from_utf8_lossy(&first.stderr)
+        !unpriced.status.success()
+            && String::from_utf8_lossy(&unpriced.stderr).contains("has no saved price")
+            && !eval.join("in-house/fixture-unpriced").exists(),
+        "a model without a saved price was run"
     );
-    let first: kraai_eval::SuiteResult = serde_json::from_slice(&first.stdout)?;
+    let first = invoke_with("2", &["--price-input", "1", "--price-output", "2"])?;
+    ensure!(
+        kraai_eval::EvalRoot::open(&eval)?.model_price("fixture/model")?
+            == Some(kraai_eval::ModelPrice {
+                input: 1.0,
+                output: 2.0,
+                cache_read: None,
+                cache_write: None,
+            }),
+        "the price was not saved under the model id"
+    );
     ensure!(
         first.harness_name == "external-shell"
-            && first.model_label.as_deref() == Some("fixture-model"),
+            && first.model_label.as_deref() == Some("fixture/model"),
         "suite labels were not normalized"
     );
     ensure!(
         first.passed_runs == 2,
         "external profile did not pass both attempts"
     );
-    let duplicate = invoke(&[])?;
+    let version = kraai_eval::HarnessProfile::load(&profile)?
+        .resolve("fixture/model", None, None)?
+        .version;
+    let date = chrono::Local::now().format("%Y-%m-%d");
+    let folder = Path::new("in-house/fixture-model").join(format!(
+        "{date}-external-shell-{}",
+        version.get(..8).unwrap_or_default()
+    ));
     ensure!(
-        !duplicate.status.success(),
-        "duplicate attempts unexpectedly succeeded"
+        first.artifact_path == folder,
+        "{}",
+        first.artifact_path.display()
     );
-    let duplicate: kraai_eval::SuiteResult = serde_json::from_slice(&duplicate.stdout)?;
+    let first_attempt = eval.join(&folder).join("cli-profile/attempt-1/result.json");
+    let saved = fs::read(&first_attempt)?;
+    let resumed = invoke("2")?;
+    ensure!(resumed.requested_runs == 2 && resumed.passed_runs == 2);
     ensure!(
-        duplicate.launch_failures == 2,
-        "duplicate results were silently reused"
+        fs::read(&first_attempt)? == saved,
+        "a saved attempt was run again"
     );
-    let resumed = invoke(&["--resume"])?;
+    let grown = invoke("3")?;
+    ensure!(grown.requested_runs == 3 && grown.passed_runs == 3);
     ensure!(
-        resumed.status.success(),
-        "CLI resume failed: {}",
-        String::from_utf8_lossy(&resumed.stderr)
+        fs::read(&first_attempt)? == saved,
+        "a saved attempt was run again"
     );
-    let resumed: kraai_eval::SuiteResult = serde_json::from_slice(&resumed.stdout)?;
-    let comparison = Command::new(binary)
-        .arg("compare")
-        .arg(cache.join(first.artifact_path).join("summary.json"))
-        .arg(cache.join(resumed.artifact_path).join("summary.json"))
-        .arg("--json")
-        .output()?;
+    ensure!(eval.join(&folder).join("summary.json").is_file());
     ensure!(
-        comparison.status.success(),
-        "CLI comparison failed: {}",
-        String::from_utf8_lossy(&comparison.stderr)
+        !eval.join(".cache/staging").join(&folder).exists()
+            || fs::read_dir(eval.join(".cache/staging").join(&folder))?.count() == 0,
+        "staging kept a committed attempt"
     );
-    let comparison: kraai_eval::ComparisonResult = serde_json::from_slice(&comparison.stdout)?;
+    fs::write(
+        eval.join(&folder).join("cli-profile/attempt-3/result.json"),
+        "{}",
+    )?;
+    for attempts in ["2", "3"] {
+        let output = command(" fixture/model ", attempts, &[])?;
+        let summary: kraai_eval::SuiteResult = serde_json::from_slice(&output.stdout)?;
+        ensure!(
+            summary.requested_runs == 3 && summary.passed_runs == 2 && summary.launch_failures == 1,
+            "an unreadable attempt with {attempts} requested attempts was not counted once"
+        );
+    }
+    let summary_path = eval.join(&folder).join("summary.json");
+    let summary = fs::read(&summary_path)?;
+    let colliding = command(
+        "fixture-model",
+        "4",
+        &["--price-input", "1", "--price-output", "2"],
+    )?;
     ensure!(
-        comparison.evaluated_pairs == 2 && comparison.ties == 2,
-        "cached attempts did not pair correctly"
+        !colliding.status.success()
+            && String::from_utf8_lossy(&colliding.stderr).contains("same results folder"),
+        "a model that maps to the same folder was run in it"
+    );
+    ensure!(
+        !eval.join(&folder).join("cli-profile/attempt-4").exists()
+            && fs::read(&summary_path)? == summary,
+        "a model that maps to the same folder changed its results"
+    );
+    ensure!(
+        fs::read(&first_attempt)? == saved,
+        "a saved attempt was run again"
     );
     fs::remove_dir_all(root)?;
     Ok(())
@@ -184,7 +238,12 @@ timeout_seconds = {timeout}
         ),
     )?;
 
-    let cache = root.join("cache");
+    let eval = root.join("eval");
+    fs::create_dir_all(&eval)?;
+    let eval = eval.canonicalize()?;
+    let staging = eval.join(".cache/staging/fixture");
+    let attempt =
+        |number: u64| PathBuf::from("fixture/hidden-grader").join(format!("attempt-{number}"));
     let request = RunRequest {
         task_path: task_dir.join("task.toml"),
         runner_program: shell.clone(),
@@ -197,15 +256,16 @@ timeout_seconds = {timeout}
         runner_version: String::from("test-shell"),
         harness_name: Some(String::from("fixture-shell")),
         model_label: Some(String::from("deterministic-fixture")),
-        attempt: 0,
-        cache_dir: cache.clone(),
-        reuse_result: false,
+        attempt: 1,
+        eval_root: eval.clone(),
+        artifact_path: attempt(1),
+        staging_dir: staging.clone(),
         model_proxy: None,
         kraai_provider_config: None,
         progress: None,
     };
     let result = kraai_eval::run(&request)?;
-    let result_artifacts = cache.join(&result.artifact_path);
+    let result_artifacts = eval.join(&result.artifact_path);
     let runner_stderr = fs::read_to_string(result_artifacts.join("runner.stderr.log"))
         .unwrap_or_else(|error| format!("<unavailable: {error}>"));
     ensure!(
@@ -237,17 +297,11 @@ timeout_seconds = {timeout}
         "harness metrics were not captured"
     );
 
-    let expected_prefix = PathBuf::from("runs")
-        .join("hidden-grader")
-        .join("fixture-shell")
-        .join("test-shell")
-        .join("deterministic-fixture")
-        .join("attempt-0");
     ensure!(
-        result.artifact_path.starts_with(&expected_prefix),
-        "result path is not grouped by useful run coordinates"
+        result.artifact_path == attempt(1),
+        "result was not saved at the requested attempt path"
     );
-    let object = cache.join(&result.artifact_path);
+    let object = eval.join(&result.artifact_path);
     for artifact in [
         "submission.patch",
         "events.jsonl",
@@ -264,13 +318,11 @@ timeout_seconds = {timeout}
         "missing script execution artifact directory"
     );
 
-    let reused = kraai_eval::run(&RunRequest {
-        reuse_result: true,
-        ..request
-    })?;
+    let reused = kraai_eval::run(&request)?;
     ensure!(
-        reused.experiment_id == result.experiment_id,
-        "cached experiment identity changed"
+        reused.experiment_id == result.experiment_id
+            && reused.started_at_ms == result.started_at_ms,
+        "a saved attempt was run again"
     );
 
     let failed = kraai_eval::run(&RunRequest {
@@ -280,9 +332,10 @@ timeout_seconds = {timeout}
         runner_version: String::from("test-shell"),
         harness_name: Some(String::from("fixture-shell")),
         model_label: Some(String::from("deterministic-fixture")),
-        attempt: 0,
-        cache_dir: cache.clone(),
-        reuse_result: false,
+        attempt: 2,
+        eval_root: eval.clone(),
+        artifact_path: attempt(2),
+        staging_dir: staging.clone(),
         model_proxy: None,
         kraai_provider_config: None,
         progress: None,
@@ -306,9 +359,10 @@ timeout_seconds = {timeout}
         runner_version: String::from("controller-failure-test-shell"),
         harness_name: Some(String::from("fixture-shell")),
         model_label: Some(String::from("deterministic-fixture")),
-        attempt: 0,
-        cache_dir: cache.clone(),
-        reuse_result: false,
+        attempt: 3,
+        eval_root: eval.clone(),
+        artifact_path: attempt(3),
+        staging_dir: staging.clone(),
         model_proxy: None,
         kraai_provider_config: None,
         progress: None,
@@ -317,63 +371,58 @@ timeout_seconds = {timeout}
         controller_failed.status == RunStatus::ControllerFailed,
         "controller error was not preserved as a result"
     );
-    let controller_artifact = cache.join(&controller_failed.artifact_path);
+    let controller_artifact = eval.join(&controller_failed.artifact_path);
     ensure!(
         controller_artifact.join("result.json").is_file()
             && controller_artifact.join("controller-error.log").is_file(),
         "controller failure artifacts were not committed"
     );
-    if let Some(failure) = controller_failed.controller_failure {
-        fs::remove_dir_all(failure.retained_work_path)?;
+    let retried = kraai_eval::run(&RunRequest {
+        task_path: task_dir.join("task.toml"),
+        runner_program: shell.clone(),
+        runner_args: vec![String::from("{proxy_url}")],
+        runner_version: String::from("controller-failure-test-shell"),
+        harness_name: Some(String::from("fixture-shell")),
+        model_label: Some(String::from("deterministic-fixture")),
+        attempt: 3,
+        eval_root: eval.clone(),
+        artifact_path: attempt(3),
+        staging_dir: staging.clone(),
+        model_proxy: None,
+        kraai_provider_config: None,
+        progress: None,
+    })?;
+    let work = |result: &kraai_eval::RunResult| {
+        result
+            .controller_failure
+            .as_ref()
+            .map(|failure| failure.retained_work_path.clone())
+    };
+    ensure!(
+        retried.status == RunStatus::ControllerFailed
+            && work(&retried).is_some()
+            && work(&retried) != work(&controller_failed),
+        "a controller failure was reused instead of retried"
+    );
+    for failure in [&controller_failed, &retried].into_iter().filter_map(work) {
+        fs::remove_dir_all(failure)?;
     }
     let suite = kraai_eval::run_suite(&SuiteRequest {
-        runs: vec![
-            RunRequest {
-                task_path: task_dir.join("task.toml"),
-                runner_program: shell.clone(),
-                runner_args: vec![
-                    String::from("-c"),
-                    String::from(
-                        "test ! -e hidden.expected; printf 'fixed\\n' > answer.txt; printf '%s' '{\"schema_version\":1,\"turns\":1,\"script_executions\":2,\"final_context_tokens\":30,\"usage\":{\"total_tokens\":30,\"input_tokens\":20,\"output_tokens\":10,\"reasoning_tokens\":0,\"cache_read_tokens\":0}}' > \"$KRAAI_EVAL_METRICS_PATH\"",
-                    ),
-                ],
-                runner_version: String::from("test-shell"),
-                harness_name: Some(String::from("fixture-shell")),
-                model_label: Some(String::from("deterministic-fixture")),
-                attempt: 0,
-                cache_dir: cache.clone(),
-                reuse_result: true,
-                model_proxy: None,
-                kraai_provider_config: None,
-                progress: None,
-            },
-            RunRequest {
-                task_path: task_dir.join("task.toml"),
-                runner_program: shell,
-                runner_args: vec![String::from("-c"), String::from("exit 7")],
-                runner_version: String::from("test-shell"),
-                harness_name: Some(String::from("fixture-shell")),
-                model_label: Some(String::from("deterministic-fixture")),
-                attempt: 0,
-                cache_dir: cache.clone(),
-                reuse_result: true,
-                model_proxy: None,
-                kraai_provider_config: None,
-                progress: None,
-            },
-        ],
-        output_root: cache.clone(),
-    })?;
+        runs: vec![request.clone()],
+        eval_root: eval.clone(),
+        harness_dir: PathBuf::from("fixture"),
+    })?
+    .summary;
     ensure!(
-        suite.evaluated_runs == 2 && suite.passed_runs == 1 && suite.success_rate == Some(0.5),
-        "suite did not aggregate cached outcomes"
+        suite.requested_runs == 3
+            && suite.evaluated_runs == 2
+            && suite.passed_runs == 1
+            && suite.controller_failures == 1
+            && suite.success_rate == Some(0.5),
+        "suite did not summarize every saved attempt"
     );
     ensure!(
-        suite.total_tokens.total == 30
-            && cache
-                .join(&suite.artifact_path)
-                .join("summary.json")
-                .is_file(),
+        suite.total_tokens.total == 30 && eval.join("fixture/summary.json").is_file(),
         "suite metrics or summary artifact is missing"
     );
     let launch_error = kraai_eval::run(&RunRequest {
@@ -383,17 +432,18 @@ timeout_seconds = {timeout}
         runner_version: String::from("launch-failure"),
         harness_name: Some(String::from("fixture-shell")),
         model_label: None,
-        attempt: 0,
-        cache_dir: cache.clone(),
-        reuse_result: false,
+        attempt: 4,
+        eval_root: eval.clone(),
+        artifact_path: attempt(4),
+        staging_dir: staging,
         model_proxy: None,
         kraai_provider_config: None,
         progress: None,
     });
     ensure!(launch_error.is_err(), "invalid task unexpectedly launched");
     ensure!(
-        fs::read_dir(cache.join("failures"))?.count() == 1,
-        "launch failure artifact was not recorded"
+        !eval.join(attempt(4)).exists(),
+        "a launch failure saved an attempt"
     );
     fs::remove_dir_all(root)?;
     Ok(())

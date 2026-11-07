@@ -86,10 +86,13 @@ impl DiscoveredModelOptions {
             explicit.insert(definition.id.as_str());
             options.insert(definition.id.clone(), definition.clone());
         }
-        if options
+        let discovered_toggle = options
             .get("reasoning_enabled")
-            .is_some_and(|definition| matches!(definition.kind, ModelOptionKind::Boolean { .. }))
-        {
+            .is_some_and(|definition| matches!(definition.kind, ModelOptionKind::Boolean { .. }));
+        for option in crate::optional_reasoning_options(protocol) {
+            options.entry(option.id.clone()).or_insert(option);
+        }
+        if discovered_toggle {
             for id in ["reasoning_effort", "reasoning_budget"] {
                 if !explicit.contains(id)
                     && let Some(definition) = options.get_mut(id)

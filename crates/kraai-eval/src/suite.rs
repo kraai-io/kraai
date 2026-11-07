@@ -1,22 +1,23 @@
+use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::{RunRequest, RunStatus, UsageMetrics};
+use crate::{RunRequest, RunResult, RunStatus, UsageMetrics};
 
 #[derive(Debug, Clone)]
 pub struct SuiteRequest {
     pub runs: Vec<RunRequest>,
-    pub output_root: PathBuf,
+    pub eval_root: PathBuf,
+    pub harness_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SuiteResult {
     pub schema_version: u32,
-    pub suite_id: String,
     pub artifact_path: PathBuf,
     pub harness_name: String,
     pub runner_version: String,
@@ -35,6 +36,12 @@ pub struct SuiteResult {
     pub total_tokens: TokenSummary,
     pub used_context_tokens: TokenSummary,
     pub runs: Vec<SuiteRunResult>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SuiteOutcome {
+    pub summary: SuiteResult,
+    pub results: Vec<RunResult>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -67,13 +74,12 @@ pub struct SuiteRunResult {
     pub error: Option<String>,
 }
 
-pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
+pub fn run_suite(request: &SuiteRequest) -> Result<SuiteOutcome> {
     if request.runs.is_empty() {
         bail!("suite must contain at least one run");
     }
     let started = Instant::now();
     let started_at_ms = unix_timestamp_ms()?;
-    let suite_id = ulid::Ulid::generate().to_string();
     let first_run = request.runs.first();
     let harness_name = first_run
         .map(RunRequest::resolved_harness_name)
@@ -90,37 +96,33 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
     }) {
         bail!("suite runs must use one harness, runner version, and model label");
     }
-    let artifact_path = PathBuf::from("suites")
-        .join(crate::cache::path_segment(&harness_name, "unnamed-harness"))
-        .join(crate::cache::path_segment(&runner_version, "unversioned"))
-        .join(crate::cache::path_segment(
-            model_label.as_deref().unwrap_or("unlabeled-model"),
-            "unlabeled-model",
-        ))
-        .join(&suite_id);
-    let artifact_dir = request.output_root.join(&artifact_path);
+    if request.runs.iter().any(|run| {
+        run.eval_root != request.eval_root || !run.artifact_path.starts_with(&request.harness_dir)
+    }) {
+        bail!("suite runs must save their attempts inside the suite's harness folder");
+    }
+    let artifact_dir = request.eval_root.join(&request.harness_dir);
     fs::create_dir_all(&artifact_dir)?;
+    let (saved, _) = saved_results(&request.eval_root, &request.harness_dir)?;
+    if let Some(other) = saved
+        .iter()
+        .find(|result| result.harness_name != harness_name || result.model_label != model_label)
+    {
+        bail!(
+            "{} holds attempts by {} on {}, not {harness_name} on {}; their names map to the same results folder",
+            request.harness_dir.display(),
+            other.harness_name,
+            other.model_label.as_deref().unwrap_or("no model"),
+            model_label.as_deref().unwrap_or("no model"),
+        );
+    }
 
-    let mut runs = Vec::with_capacity(request.runs.len());
+    let mut launch_failures = Vec::new();
+    let mut failed_attempts = BTreeSet::new();
     for run_request in &request.runs {
-        match crate::run(run_request) {
-            Ok(result) => runs.push(SuiteRunResult {
-                task_id: Some(result.task_id),
-                attempt: result.attempt,
-                status: Some(result.status),
-                experiment_id: Some(result.experiment_id),
-                artifact_path: Some(result.artifact_path),
-                duration_ms: Some(result.duration_ms),
-                usage: result.metrics.usage().cloned(),
-                accounting: result
-                    .metrics
-                    .proxy
-                    .as_ref()
-                    .and_then(|proxy| proxy.accounting.as_ref())
-                    .map(crate::RequestAccounting::summary),
-                error: result.controller_failure.map(|failure| failure.error),
-            }),
-            Err(error) => runs.push(SuiteRunResult {
+        if let Err(error) = crate::run(run_request) {
+            failed_attempts.insert(run_request.artifact_path.clone());
+            launch_failures.push(SuiteRunResult {
                 task_id: crate::TaskManifest::load(&run_request.task_path)
                     .ok()
                     .map(|task| task.id),
@@ -132,9 +134,54 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
                 usage: None,
                 accounting: None,
                 error: Some(format!("{error:#}")),
-            }),
+            });
         }
     }
+    let (results, unreadable) = saved_results(&request.eval_root, &request.harness_dir)?;
+    launch_failures.extend(
+        unreadable
+            .into_iter()
+            .filter(|attempt| !failed_attempts.contains(&attempt.artifact_path))
+            .map(|attempt| SuiteRunResult {
+                task_id: Some(attempt.task),
+                attempt: attempt.attempt,
+                status: None,
+                experiment_id: None,
+                artifact_path: Some(attempt.artifact_path),
+                duration_ms: None,
+                usage: None,
+                accounting: None,
+                error: Some(attempt.error),
+            }),
+    );
+    let mut runs = results
+        .iter()
+        .map(|result| SuiteRunResult {
+            task_id: Some(result.task_id.clone()),
+            attempt: result.attempt,
+            status: Some(result.status.clone()),
+            experiment_id: Some(result.experiment_id.clone()),
+            artifact_path: Some(result.artifact_path.clone()),
+            duration_ms: Some(result.duration_ms),
+            usage: result.metrics.usage().cloned(),
+            accounting: result
+                .metrics
+                .proxy
+                .as_ref()
+                .and_then(|proxy| proxy.accounting.as_ref())
+                .map(crate::RequestAccounting::summary),
+            error: result
+                .controller_failure
+                .as_ref()
+                .map(|failure| failure.error.clone()),
+        })
+        .chain(launch_failures)
+        .collect::<Vec<_>>();
+    runs.sort_by(|left, right| {
+        left.task_id
+            .cmp(&right.task_id)
+            .then(left.attempt.cmp(&right.attempt))
+    });
 
     let evaluated_runs = count_statuses(&runs, |status| status != &RunStatus::ControllerFailed);
     let passed_runs = count_statuses(&runs, |status| status == &RunStatus::Passed);
@@ -164,17 +211,16 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
             })
             .collect(),
     );
-    let result = SuiteResult {
-        schema_version: 1,
-        suite_id,
-        artifact_path,
+    let summary = SuiteResult {
+        schema_version: 2,
+        artifact_path: request.harness_dir.clone(),
         harness_name,
         runner_version,
         model_label,
         started_at_ms,
         completed_at_ms: unix_timestamp_ms()?,
         duration_ms: started.elapsed().as_millis(),
-        requested_runs: request.runs.len() as u64,
+        requested_runs: runs.len() as u64,
         evaluated_runs,
         passed_runs,
         failed_runs,
@@ -188,10 +234,52 @@ pub fn run_suite(request: &SuiteRequest) -> Result<SuiteResult> {
     };
     fs::write(
         artifact_dir.join("summary.json"),
-        serde_json::to_vec_pretty(&result)?,
+        serde_json::to_vec_pretty(&summary)?,
     )
     .wrap_err("write suite summary")?;
-    Ok(result)
+    Ok(SuiteOutcome { summary, results })
+}
+
+struct UnreadableAttempt {
+    task: String,
+    attempt: u64,
+    artifact_path: PathBuf,
+    error: String,
+}
+
+fn saved_results(
+    root: &Path,
+    harness_dir: &Path,
+) -> Result<(Vec<RunResult>, Vec<UnreadableAttempt>)> {
+    let mut results = Vec::new();
+    let mut unreadable = Vec::new();
+    for task in fs::read_dir(root.join(harness_dir))? {
+        let task = task?;
+        if !task.file_type()?.is_dir() {
+            continue;
+        }
+        for attempt in fs::read_dir(task.path())? {
+            let attempt = attempt?;
+            let name = attempt.file_name().to_string_lossy().into_owned();
+            let path = attempt.path().join("result.json");
+            let Some(number) = name.strip_prefix("attempt-") else {
+                continue;
+            };
+            if !path.is_file() {
+                continue;
+            }
+            match crate::load_run_result(&path) {
+                Ok(result) => results.push(result),
+                Err(error) => unreadable.push(UnreadableAttempt {
+                    task: task.file_name().to_string_lossy().into_owned(),
+                    attempt: number.parse().unwrap_or_default(),
+                    artifact_path: harness_dir.join(task.file_name()).join(&name),
+                    error: format!("{error:#}"),
+                }),
+            }
+        }
+    }
+    Ok((results, unreadable))
 }
 
 fn count_statuses(runs: &[SuiteRunResult], predicate: impl Fn(&RunStatus) -> bool) -> u64 {

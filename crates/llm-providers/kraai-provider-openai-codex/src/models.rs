@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use color_eyre::eyre::{Result, ensure};
 use kraai_provider_core::{ConfiguredModelMetadata, Model, ModelOptionsProtocol};
-use kraai_types::{ModelId, ModelOptionChoice, ModelRequestPatch};
+use kraai_types::{ModelId, ModelOptionChoice, ModelOptionDefinition, ModelRequestPatch};
 
 use crate::wire::{ListModelEntry, ModelVisibility};
 
@@ -70,7 +70,7 @@ impl DiscoveredModels {
             configs
                 .iter()
                 .filter(|(id, _)| !self.entries.contains_key(id.as_str()))
-                .map(|(id, config)| config.resolve(id.clone(), None)),
+                .map(|(id, config)| Self::configured_model(id, config)),
         );
         models.sort_unstable_by(|left, right| left.id.cmp(&right.id));
         models
@@ -86,7 +86,16 @@ impl DiscoveredModels {
                 .then(|| Self::listed_model(entry, configs)),
             None => configs
                 .get(id)
-                .map(|config| config.resolve(id.clone(), None)),
+                .map(|config| Self::configured_model(id, config)),
+        }
+    }
+
+    fn configured_model(id: &ModelId, config: &ConfiguredModelMetadata) -> Model {
+        let mut options = Vec::new();
+        with_reasoning_fallback(&mut options);
+        Model {
+            options: config.merge_options(options),
+            ..config.resolve(id.clone(), None)
         }
     }
 
@@ -119,6 +128,7 @@ impl DiscoveredModels {
                     .collect(),
             ));
         }
+        with_reasoning_fallback(&mut options);
         let max_context = config.max_context.or(entry.context_window);
         Model {
             id,
@@ -140,4 +150,12 @@ impl DiscoveredModels {
             options: config.merge_options(options),
         }
     }
+}
+
+fn with_reasoning_fallback(options: &mut Vec<ModelOptionDefinition>) {
+    let missing =
+        kraai_provider_core::optional_reasoning_options(ModelOptionsProtocol::OpenAiResponses)
+            .filter(|fallback| options.iter().all(|option| option.id != fallback.id))
+            .collect::<Vec<_>>();
+    options.extend(missing);
 }

@@ -226,7 +226,7 @@ test('session model options persist before a prompt and survive restart', { time
     assert.deepEqual(unwrap(await runtime.getSessionModel(session)), selection);
   }
   const invalid = await runtime.setSessionModel(full, {
-    ...selections[0][1], options: { effort: 'unsupported', fast: true },
+    ...selections[0][1], options: { effort: '', fast: true },
   });
   assert.equal(invalid.Err.kind, 'invalid_argument');
   unwrap(await runtime.shutdown());

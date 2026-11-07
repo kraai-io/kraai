@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Context, Result, bail};
+
+use crate::temporary_directory::TemporaryDirectory;
 
 const MAX_CAPTURED_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -117,6 +119,8 @@ fn run_trusted_with_environment_inheritance(
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::path::PathBuf;
+
     use color_eyre::eyre::ensure;
 
     use super::*;
@@ -207,34 +211,11 @@ fn file_size(path: &Path) -> u64 {
     fs::metadata(path).map_or(0, |metadata| metadata.len())
 }
 
-struct TemporaryLogRoot {
-    path: PathBuf,
-    cleanup: bool,
-}
-
-impl TemporaryLogRoot {
-    fn remove(mut self) -> std::io::Result<()> {
-        self.cleanup = false;
-        fs::remove_dir_all(&self.path)
-    }
-}
-
-impl Drop for TemporaryLogRoot {
-    fn drop(&mut self) {
-        if self.cleanup {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
 fn with_temporary_log_root<T>(action: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
     let path = std::env::temp_dir().join(format!("kraai-eval-command-{}", ulid::Ulid::generate()));
     fs::create_dir(&path)?;
-    let root = TemporaryLogRoot {
-        path,
-        cleanup: true,
-    };
-    let result = action(&root.path)?;
+    let root = TemporaryDirectory::new(path);
+    let result = action(root.path())?;
     root.remove()?;
     Ok(result)
 }

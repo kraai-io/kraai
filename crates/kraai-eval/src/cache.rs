@@ -8,7 +8,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::proxy::ModelProxyIdentity;
-use crate::{NetworkPolicy, PricingOptions, RunResult};
+use crate::temporary_directory::TemporaryDirectory;
+use crate::{NetworkPolicy, RunResult};
 
 #[derive(Debug, Serialize)]
 pub struct ExperimentIdentity {
@@ -34,36 +35,17 @@ impl ExperimentIdentity {
 }
 
 pub struct ResultStore {
-    root: PathBuf,
+    staging_root: PathBuf,
     relative_dir: PathBuf,
     final_dir: PathBuf,
 }
 
-pub struct RunCoordinates<'a> {
-    pub task_id: &'a str,
-    pub harness_name: &'a str,
-    pub runner_version: &'a str,
-    pub model_label: Option<&'a str>,
-    pub attempt: u64,
-    pub experiment_id: &'a str,
-}
-
 impl ResultStore {
-    pub fn new(root: &Path, coordinates: &RunCoordinates<'_>) -> Self {
-        let relative_dir = PathBuf::from("runs")
-            .join(path_segment(coordinates.task_id, "unnamed-task"))
-            .join(path_segment(coordinates.harness_name, "unnamed-harness"))
-            .join(path_segment(coordinates.runner_version, "unversioned"))
-            .join(path_segment(
-                coordinates.model_label.unwrap_or("unlabeled-model"),
-                "unlabeled-model",
-            ))
-            .join(format!("attempt-{}", coordinates.attempt))
-            .join(coordinates.experiment_id);
+    pub fn new(root: &Path, staging_root: &Path, relative_dir: &Path) -> Self {
         Self {
-            root: root.to_path_buf(),
-            final_dir: root.join(&relative_dir),
-            relative_dir,
+            staging_root: staging_root.to_path_buf(),
+            final_dir: root.join(relative_dir),
+            relative_dir: relative_dir.to_path_buf(),
         }
     }
 
@@ -72,44 +54,23 @@ impl ResultStore {
     }
 
     pub fn load_result(&self) -> Result<Option<RunResult>> {
-        self.load_result_with_pricing(None)
-    }
-
-    pub(crate) fn load_result_with_pricing(
-        &self,
-        pricing: Option<&PricingOptions>,
-    ) -> Result<Option<RunResult>> {
         let path = self.final_dir.join("result.json");
         if !path.exists() {
             return Ok(None);
         }
-        let mut result = read_run_result(&path)?;
-        if let Some(pricing) = pricing
-            && let Some(proxy) = result.metrics.proxy.as_mut()
-        {
-            let accounting = crate::analyze_requests(
-                &path.with_file_name("proxy.events.jsonl"),
-                proxy.requests.saturating_add(proxy.unrecorded_requests),
-                pricing,
-            )?;
-            let output = path.with_file_name("request-accounting.json");
-            replace_cached_accounting(&output, &serde_json::to_vec_pretty(&accounting)?)?;
-            proxy.accounting = Some(accounting);
-            proxy.accounting_error = None;
-        } else {
-            hydrate_accounting(&path, &mut result)?;
-        }
-        Ok(Some(result))
+        load_run_result(&path).map(Some)
     }
 
-    pub fn begin(&self) -> Result<PathBuf> {
-        fs::create_dir_all(self.root.join("tmp"))?;
-        let path = self
-            .root
-            .join("tmp")
-            .join(ulid::Ulid::generate().to_string());
+    pub fn discard(&self) -> Result<()> {
+        fs::remove_dir_all(&self.final_dir)
+            .wrap_err_with(|| format!("remove {}", self.final_dir.display()))
+    }
+
+    pub(crate) fn begin(&self) -> Result<TemporaryDirectory> {
+        fs::create_dir_all(&self.staging_root)?;
+        let path = self.staging_root.join(ulid::Ulid::generate().to_string());
         fs::create_dir(&path)?;
-        Ok(path)
+        Ok(TemporaryDirectory::new(path))
     }
 
     pub fn commit(
@@ -128,7 +89,7 @@ impl ResultStore {
         )?;
         if self.final_dir.exists() {
             bail!(
-                "evaluation result cache collision at {}",
+                "evaluation result already exists at {}",
                 self.final_dir.display()
             );
         }
@@ -140,11 +101,6 @@ impl ResultStore {
         fs::rename(staging, &self.final_dir).wrap_err("atomically commit evaluation result")?;
         Ok(())
     }
-}
-
-fn replace_cached_accounting(output: &Path, contents: &[u8]) -> Result<()> {
-    kraai_io::fs::atomic_replace_unsynced(output, contents)
-        .wrap_err("replace cached request accounting")
 }
 
 pub fn load_run_result(path: &Path) -> Result<RunResult> {
@@ -276,51 +232,6 @@ mod tests {
     use color_eyre::eyre::ensure;
 
     #[test]
-    fn cached_accounting_leaves_unrelated_temporary_files_untouched() -> Result<()> {
-        let root = std::env::temp_dir().join(format!(
-            "kraai-accounting-collision-{}",
-            ulid::Ulid::generate()
-        ));
-        fs::create_dir(&root)?;
-        let temporary = root.join("accounting.tmp");
-        let output = root.join("accounting.json");
-        fs::write(&temporary, b"another writer")?;
-        fs::write(&output, b"original")?;
-        replace_cached_accounting(&output, b"replacement")?;
-        ensure!(fs::read(&temporary)? == b"another writer");
-        ensure!(fs::read(&output)? == b"replacement");
-        fs::remove_dir_all(root)?;
-        Ok(())
-    }
-
-    #[test]
-    fn cached_accounting_cleans_failed_publication_and_replaces_successfully() -> Result<()> {
-        let root = std::env::temp_dir().join(format!(
-            "kraai-accounting-replace-{}",
-            ulid::Ulid::generate()
-        ));
-        fs::create_dir(&root)?;
-        let output = root.join("accounting.json");
-        fs::create_dir(&output)?;
-        fs::write(output.join("retained"), b"original")?;
-        let result = replace_cached_accounting(&output, b"replacement");
-        ensure!(
-            result.err().map(|error| error.to_string()).as_deref()
-                == Some("replace cached request accounting"),
-            "publication error lost its context"
-        );
-        ensure!(fs::read_dir(&root)?.count() == 1);
-        ensure!(fs::read(output.join("retained"))? == b"original");
-        fs::remove_dir_all(&output)?;
-        fs::write(&output, b"original")?;
-        replace_cached_accounting(&output, b"replacement")?;
-        ensure!(fs::read_dir(&root)?.count() == 1);
-        ensure!(fs::read(&output)? == b"replacement");
-        fs::remove_dir_all(root)?;
-        Ok(())
-    }
-
-    #[test]
     fn bundle_checksum_uses_standard_sha256() -> Result<()> {
         let path = std::env::temp_dir().join(format!("kraai-sha256-{}", ulid::Ulid::generate()));
         fs::write(&path, b"abc")?;
@@ -379,7 +290,6 @@ mod tests {
     struct AccountingFixture {
         root: PathBuf,
         store: ResultStore,
-        pricing: PricingOptions,
     }
 
     impl AccountingFixture {
@@ -388,23 +298,11 @@ mod tests {
                 .join(format!("kraai-cache-accounting-{}", ulid::Ulid::generate()));
             let store = ResultStore::new(
                 &root,
-                &RunCoordinates {
-                    task_id: "task",
-                    harness_name: "harness",
-                    runner_version: "version",
-                    model_label: Some("model"),
-                    attempt: 0,
-                    experiment_id: "experiment",
-                },
+                &root.join(".cache/staging"),
+                Path::new("task/attempt-1"),
             );
             fs::create_dir_all(&store.final_dir)?;
-            let pricing = PricingOptions::new(Some(root.join("prices.toml")), None);
-            let fixture = Self {
-                root,
-                store,
-                pricing,
-            };
-            fixture.set_price(2)?;
+            let fixture = Self { root, store };
             fs::write(
                 fixture.store.final_dir.join("proxy.events.jsonl"),
                 serde_json::to_vec(&serde_json::json!({
@@ -413,14 +311,8 @@ mod tests {
                     "output_tokens": 0, "reasoning_tokens": 0, "cache_read_tokens": 0}
                 }))?,
             )?;
-            let accounting = crate::analyze_requests(
-                &fixture.store.final_dir.join("proxy.events.jsonl"),
-                1,
-                &fixture.pricing,
-            )?;
             let proxy = crate::ProxyMetrics {
                 requests: 1,
-                accounting: Some(accounting),
                 ..Default::default()
             };
             let result: RunResult = serde_json::from_value(serde_json::json!({
@@ -441,16 +333,6 @@ mod tests {
             )?;
             Ok(fixture)
         }
-
-        fn set_price(&self, price: u64) -> Result<()> {
-            fs::write(
-                self.root.join("prices.toml"),
-                format!(
-                    "[[provider]]\nid = \"test\"\ntype = \"custom\"\n[[model]]\nid = \"model\"\nprovider_id = \"test\"\nprice_input = \"{price}\"\nprice_output = \"0\"\n"
-                ),
-            )?;
-            Ok(())
-        }
     }
 
     impl Drop for AccountingFixture {
@@ -459,103 +341,33 @@ mod tests {
         }
     }
 
-    fn estimated_cost(result: &RunResult) -> Option<kraai_types::Usd> {
-        result
-            .metrics
-            .proxy
-            .as_ref()?
-            .accounting
-            .as_ref()?
-            .complete_cost()
-    }
-
     #[test]
-    fn cached_and_direct_loads_use_repriced_sidecars_and_reject_changed_events() -> Result<()> {
+    fn cached_and_direct_loads_use_saved_accounting_and_reject_changed_events() -> Result<()> {
         let fixture = AccountingFixture::new()?;
         let path = fixture.store.final_dir.join("result.json");
         let original = fs::read(&path)?;
-        fixture.set_price(20)?;
-        let accounting = crate::analyze_requests(
-            &path.with_file_name("proxy.events.jsonl"),
-            1,
-            &fixture.pricing,
-        )?;
+        let accounting = crate::analyze_requests(&path.with_file_name("proxy.events.jsonl"), 1)?;
         fs::write(
             path.with_file_name("request-accounting.json"),
             serde_json::to_vec(&accounting)?,
         )?;
+        let requests = |result: &RunResult| {
+            result
+                .metrics
+                .proxy
+                .as_ref()
+                .and_then(|proxy| proxy.accounting.as_ref())
+                .map(|accounting| accounting.model_requests)
+        };
         let cached = fixture
             .store
             .load_result()?
             .ok_or_else(|| color_eyre::eyre::eyre!("missing cached run"))?;
-        let direct = load_run_result(&path)?;
-        ensure!(estimated_cost(&cached) == Some(kraai_types::Usd(20_000_000_000)));
-        ensure!(estimated_cost(&direct) == estimated_cost(&cached));
+        ensure!(requests(&cached) == Some(1));
+        ensure!(requests(&load_run_result(&path)?) == Some(1));
         ensure!(fs::read(&path)? == original);
         fs::write(path.with_file_name("proxy.events.jsonl"), "")?;
         ensure!(fixture.store.load_result().is_err() && load_run_result(&path).is_err());
         Ok(())
-    }
-
-    #[test]
-    fn explicit_resume_prices_saved_requests_without_changing_run_or_proxy_events() -> Result<()> {
-        let fixture = AccountingFixture::new()?;
-        let path = fixture.store.final_dir.join("result.json");
-        let mut failed_accounting = read_run_result(&path)?;
-        let proxy = failed_accounting
-            .metrics
-            .proxy
-            .as_mut()
-            .ok_or_else(|| color_eyre::eyre::eyre!("missing proxy"))?;
-        proxy.accounting = None;
-        proxy.accounting_error = Some(String::from("previous accounting failed"));
-        fs::write(&path, serde_json::to_vec(&failed_accounting)?)?;
-        let original = fs::read(&path)?;
-        let events = fs::read(path.with_file_name("proxy.events.jsonl"))?;
-        fixture.set_price(20)?;
-        let repriced = fixture
-            .store
-            .load_result_with_pricing(Some(&fixture.pricing))?
-            .ok_or_else(|| color_eyre::eyre::eyre!("missing cached run"))?;
-        ensure!(estimated_cost(&repriced) == Some(kraai_types::Usd(20_000_000_000)));
-        ensure!(estimated_cost(&load_run_result(&path)?) == estimated_cost(&repriced));
-        ensure!(
-            repriced
-                .metrics
-                .proxy
-                .as_ref()
-                .is_some_and(|proxy| proxy.accounting_error.is_none())
-        );
-        ensure!(
-            load_run_result(&path)?
-                .metrics
-                .proxy
-                .is_some_and(|proxy| proxy.accounting_error.is_none())
-        );
-        ensure!(
-            fs::read(&path)? == original
-                && fs::read(path.with_file_name("proxy.events.jsonl"))? == events
-        );
-        ensure!(repriced.status == crate::RunStatus::Passed && repriced.duration_ms == 1);
-        Ok(())
-    }
-
-    #[test]
-    fn result_path_exposes_run_coordinates_and_sanitizes_separators() {
-        let store = ResultStore::new(
-            Path::new("/cache"),
-            &RunCoordinates {
-                task_id: "plural-files",
-                harness_name: "kraai/ci",
-                runner_version: "git:abc123",
-                model_label: Some("gpt-5.6-sol-low"),
-                attempt: 2,
-                experiment_id: "deadbeef",
-            },
-        );
-        assert_eq!(
-            store.relative_dir(),
-            Path::new("runs/plural-files/kraai-ci/git-abc123/gpt-5.6-sol-low/attempt-2/deadbeef")
-        );
     }
 }

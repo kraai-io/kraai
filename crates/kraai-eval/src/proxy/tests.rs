@@ -436,21 +436,7 @@ async fn rejected_requests_cannot_hide_model_calls_aborted_during_shutdown() -> 
         ulid::Ulid::generate()
     ));
     fs::create_dir(&root)?;
-    let pricing_config = root.join("prices.toml");
-    fs::write(
-        &pricing_config,
-        r#"
-[[provider]]
-id = "test"
-type = "custom"
-[[model]]
-id = "model"
-provider_id = "test"
-price_input = "2"
-price_output = "8"
-"#,
-    )?;
-    let mut proxy = ModelProxy::start(ProxyServerConfig {
+    let proxy = ModelProxy::start(ProxyServerConfig {
         listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         upstream: format!("http://{upstream_address}"),
         credentials: UpstreamCredentials::OpenAiApiKey {
@@ -464,7 +450,6 @@ price_output = "8"
         max_requests: 2,
         shutdown_drain_timeout: Duration::from_millis(50),
     })?;
-    proxy.pricing.config = Some(pricing_config);
     let client = Client::new();
     let rejected = client
         .get(format!("http://{}/v1/models", proxy.address))
@@ -509,9 +494,8 @@ price_output = "8"
     let accounting = metrics
         .accounting
         .ok_or_else(|| color_eyre::eyre::eyre!("missing request accounting"))?;
-    ensure!(accounting.priced_requests == 1 && accounting.context.samples == 1);
-    ensure!(accounting.unrecorded_requests == 0 && accounting.unpriced_requests == 1);
-    ensure!(accounting.complete_cost().is_none() && accounting.complete_context().is_none());
+    ensure!(accounting.model_requests == 2 && accounting.context.samples == 1);
+    ensure!(accounting.unrecorded_requests == 0 && accounting.complete_context().is_none());
     fs::remove_dir_all(root)?;
     Ok(())
 }
@@ -615,7 +599,7 @@ async fn client_disconnect_still_records_usage_metrics_and_event() -> Result<()>
 
     let mut outcome = ForwardOutcome::rejected(200);
     relay_response(&mut downstream, &mut outcome, body).await?;
-    outcome.usage = record_usage_metrics(&state, &outcome.body)?;
+    outcome.usage = record_usage_metrics(&state, &outcome.body)?.map(|usage| usage.tokens);
     ensure!(
         outcome.delivery == DownstreamDelivery::ClientDisconnected,
         "closed downstream was not detected"
@@ -650,8 +634,14 @@ fn extracts_and_normalizes_responses_usage() {
 data: [DONE]
 
 "#;
+    let usage = usage_from_response_body(body);
+    assert!(
+        usage
+            .as_ref()
+            .is_some_and(|usage| usage.reported_cost.is_none())
+    );
     assert_eq!(
-        usage_from_response_body(body),
+        usage.map(|usage| usage.tokens),
         Some(UsageMetrics {
             total_tokens: 165,
             input_tokens: 100,
@@ -665,9 +655,14 @@ data: [DONE]
 
 #[test]
 fn extracts_and_normalizes_chat_completions_usage() {
-    let body = br#"{"usage":{"total_tokens":75,"prompt_tokens":50,"completion_tokens":25,"prompt_tokens_details":{"cached_tokens":10},"completion_tokens_details":{"reasoning_tokens":4}}}"#;
+    let body = br#"{"usage":{"total_tokens":75,"prompt_tokens":50,"completion_tokens":25,"cost":0.0123,"prompt_tokens_details":{"cached_tokens":10},"completion_tokens_details":{"reasoning_tokens":4}}}"#;
+    let usage = usage_from_response_body(body);
     assert_eq!(
-        usage_from_response_body(body),
+        usage.as_ref().and_then(|usage| usage.reported_cost),
+        Some(kraai_types::Usd(12_300_000))
+    );
+    assert_eq!(
+        usage.map(|usage| usage.tokens),
         Some(UsageMetrics {
             total_tokens: 75,
             input_tokens: 40,

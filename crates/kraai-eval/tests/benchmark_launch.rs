@@ -1,153 +1,118 @@
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use color_eyre::eyre::{Result, ensure};
 
-#[test]
-fn missing_uv_emits_json_launch_failure() -> Result<()> {
-    let root =
-        std::env::temp_dir().join(format!("kraai-benchmark-launch-{}", ulid::Ulid::generate()));
+fn temporary(name: &str) -> Result<PathBuf> {
+    let root = std::env::temp_dir().join(format!("kraai-{name}-{}", ulid::Ulid::generate()));
     fs::create_dir(&root)?;
-    let job = root.join("job");
+    Ok(root)
+}
+
+fn dry_run(eval: &Path, runner: &Path, extra: &[&str]) -> Result<serde_json::Value> {
     let output = Command::new(env!("CARGO_BIN_EXE_kraai-eval"))
         .args([
-            "--json",
-            "benchmark",
+            "run",
             "terminal-bench",
-            "--oracle",
-            "--task-name",
-            "test",
-            "--output-dir",
+            "--model",
+            "gpt-6-astra",
+            "--dry-run",
+            "--price-input",
+            "10",
+            "--price-output",
+            "50",
         ])
-        .arg(&job)
+        .arg("--eval-dir")
+        .arg(eval)
+        .arg("--runner")
+        .arg(runner)
+        .args(extra)
+        .env("KRAAI_EVAL_HARBOR", std::env::temp_dir())
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+#[test]
+fn missing_uv_reports_a_harbor_launch_failure() -> Result<()> {
+    let root = temporary("benchmark-launch")?;
+    let output = Command::new(env!("CARGO_BIN_EXE_kraai-eval"))
+        .args(["check", "terminal-bench", "test", "--eval-dir"])
+        .arg(root.join("eval"))
         .env("PATH", &root)
         .env("KRAAI_EVAL_HARBOR", &root)
         .current_dir(&root)
         .output()?;
     ensure!(!output.status.success());
-    let result: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    ensure!(result.get("job_dir") == Some(&serde_json::to_value(&job)?));
-    ensure!(
-        result
-            .get("exit_code")
-            .is_some_and(serde_json::Value::is_null)
-    );
-    ensure!(result.get("stdout_log") == Some(&serde_json::to_value(root.join("job.stdout.log"))?));
-    ensure!(
-        result
-            .get("error")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|error| error.contains("launch Harbor"))
-    );
     ensure!(String::from_utf8_lossy(&output.stderr).contains("launch Harbor"));
     fs::remove_dir_all(root)?;
     Ok(())
 }
 
 #[test]
-fn terminal_bench_selection_is_pinned_and_attempts_reuse_the_same_directory() -> Result<()> {
-    let mut directories = Vec::new();
+fn more_tasks_and_attempts_reuse_the_same_results_folder() -> Result<()> {
+    let root = temporary("benchmark-folder")?;
+    let runner = std::env::current_exe()?;
+    let mut folders = Vec::new();
     for (count, attempts) in [("5", "1"), ("10", "1"), ("10", "2")] {
-        let output = Command::new(env!("CARGO_BIN_EXE_kraai-eval"))
-            .args([
-                "benchmark",
-                "terminal-bench",
-                "--model",
-                "gpt-6-astra-low",
-                "--task-count",
+        let plan = dry_run(
+            &root,
+            &runner,
+            &[
+                "--reasoning",
+                "low",
+                "--tasks",
                 count,
                 "--attempts",
                 attempts,
-                "--dry-run",
-            ])
-            .arg("--runner")
-            .arg(std::env::current_exe()?)
-            .env("KRAAI_EVAL_HARBOR", std::env::temp_dir())
-            .output()?;
-        ensure!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+            ],
+        )?;
         ensure!(
             plan.get("dataset").and_then(serde_json::Value::as_str)
                 == Some("terminal-bench/terminal-bench@4.0.0")
         );
-        ensure!(plan.get("task_count").and_then(serde_json::Value::as_u64) == Some(count.parse()?));
-        directories.push(plan.get("job_dir").cloned());
+        ensure!(plan.get("tasks").and_then(serde_json::Value::as_u64) == Some(count.parse()?));
+        folders.push(plan.get("results").cloned());
     }
     ensure!(
-        directories
-            .iter()
-            .all(|directory| Some(directory) == directories.first())
+        !root.join("prices.json").exists(),
+        "a dry run saved a price"
     );
+    ensure!(folders.iter().all(|folder| Some(folder) == folders.first()));
+    let folder = folders
+        .first()
+        .and_then(|folder| folder.as_ref())
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    ensure!(
+        folder.starts_with(
+            root.canonicalize()?
+                .join("terminal-bench-4.0.0/gpt-6-astra-low")
+        )
+    );
+    fs::remove_dir_all(root)?;
     Ok(())
 }
 
 #[test]
-fn task_count_cannot_be_combined_with_a_different_selection_mode() -> Result<()> {
-    for selection in [vec!["--full-dataset"], vec!["--task-name", "one"]] {
-        let output = Command::new(env!("CARGO_BIN_EXE_kraai-eval"))
-            .args([
-                "benchmark",
-                "terminal-bench",
-                "--oracle",
-                "--task-count",
-                "2",
-                "--dry-run",
-            ])
-            .args(selection)
-            .output()?;
-        ensure!(!output.status.success());
-    }
+fn terminal_bench_requires_a_task_count() -> Result<()> {
+    let root = temporary("benchmark-count")?;
+    ensure!(dry_run(&root, &std::env::current_exe()?, &[]).is_err());
+    fs::remove_dir_all(root)?;
     Ok(())
 }
 
 #[test]
-fn status_requires_a_model_or_directory_except_for_oracle() -> Result<()> {
-    for selection in [
-        vec![],
-        vec!["--oracle"],
-        vec!["--output-dir", "saved-job"],
-        vec!["--model", "test-model"],
-    ] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_kraai-eval"));
-        command
-            .args(["benchmark", "terminal-bench", "--status", "--dry-run"])
-            .args(&selection);
-        if selection.contains(&"--model") {
-            command.arg("--runner").arg(std::env::current_exe()?);
-        }
-        let output = command
-            .env("KRAAI_EVAL_HARBOR", std::env::temp_dir())
-            .output()?;
-        if selection.is_empty() {
-            ensure!(!output.status.success());
-            ensure!(
-                String::from_utf8_lossy(&output.stderr)
-                    .contains("--status requires --output-dir or --model")
-            );
-        } else {
-            ensure!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn runner_changes_separate_cached_benchmark_versions() -> Result<()> {
-    let root = std::env::temp_dir().join(format!(
-        "kraai-benchmark-version-{}",
-        ulid::Ulid::generate()
-    ));
-    fs::create_dir(&root)?;
+fn runner_changes_get_their_own_results_folder() -> Result<()> {
+    let root = temporary("benchmark-version")?;
     let runner = root.join("runner");
-    let mut directories = Vec::new();
+    let mut folders = Vec::new();
     for contents in ["first version", "second version"] {
         fs::write(&runner, contents)?;
         #[cfg(unix)]
@@ -155,80 +120,60 @@ fn runner_changes_separate_cached_benchmark_versions() -> Result<()> {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&runner, fs::Permissions::from_mode(0o755))?;
         }
-        let output = Command::new(env!("CARGO_BIN_EXE_kraai-eval"))
-            .args([
-                "benchmark",
-                "terminal-bench",
-                "--model",
-                "gpt-6-astra-low",
-                "--task-count",
-                "5",
-                "--dry-run",
-                "--runner",
-            ])
-            .arg(&runner)
-            .env("KRAAI_EVAL_HARBOR", &root)
-            .output()?;
-        ensure!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        directories.push(plan.get("job_dir").cloned());
+        let plan = dry_run(&root.join("eval"), &runner, &["--tasks", "5"])?;
+        folders.push(plan.get("results").cloned());
     }
-    ensure!(directories.first() != directories.last());
+    ensure!(folders.first() != folders.last());
     fs::remove_dir_all(root)?;
     Ok(())
 }
 
 #[test]
-fn status_skips_execution_profile_checks_but_runs_preserve_them() -> Result<()> {
-    let root =
-        std::env::temp_dir().join(format!("kraai-status-profile-{}", ulid::Ulid::generate()));
-    fs::create_dir(&root)?;
+fn terminal_bench_needs_a_proxy_and_provider_flags_need_a_kraai_profile() -> Result<()> {
+    let root = temporary("benchmark-profile")?;
     let profile_path = root.join("harness.toml");
     let mut profile = kraai_eval::HarnessProfile::kraai();
     profile.sanitize_kraai_provider = false;
     profile.args.clear();
     for (proxy, provider_args, expected_error) in [
-        (kraai_eval::ProxyKind::None, vec![], "require a model proxy"),
+        (
+            kraai_eval::ProxyKind::None,
+            vec![],
+            "needs a harness with a model proxy",
+        ),
         (
             kraai_eval::ProxyKind::Openai,
             vec!["--provider", "test"],
-            "provider flags require a Kraai profile",
+            "require a harness profile with sanitize_kraai_provider",
         ),
         (
             kraai_eval::ProxyKind::Openai,
             vec!["--provider-config", "missing.toml"],
-            "provider flags require a Kraai profile",
+            "require a harness profile with sanitize_kraai_provider",
         ),
     ] {
         profile.proxy = proxy;
         fs::write(&profile_path, toml::to_string(&profile)?)?;
-        for status in [true, false] {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_kraai-eval"));
-            command
-                .args(["benchmark", "terminal-bench", "--dry-run", "--harness"])
-                .arg(&profile_path)
-                .arg("--output-dir")
-                .arg(root.join("saved-job"))
-                .args(&provider_args)
-                .env("KRAAI_EVAL_HARBOR", &root);
-            if status {
-                command.arg("--status");
-            } else {
-                command.args(["--model", "test-model", "--task-count", "1"]);
-            }
-            let output = command.output()?;
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if status {
-                ensure!(output.status.success(), "{stderr}");
-            } else {
-                ensure!(!output.status.success());
-                ensure!(stderr.contains(expected_error), "{stderr}");
-            }
-        }
+        let output = Command::new(env!("CARGO_BIN_EXE_kraai-eval"))
+            .args([
+                "run",
+                "terminal-bench",
+                "--dry-run",
+                "--model",
+                "test-model",
+            ])
+            .arg("--harness")
+            .arg(&profile_path)
+            .arg("--runner")
+            .arg(std::env::current_exe()?)
+            .arg("--eval-dir")
+            .arg(root.join("eval"))
+            .args(&provider_args)
+            .env("KRAAI_EVAL_HARBOR", &root)
+            .output()?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        ensure!(!output.status.success());
+        ensure!(stderr.contains(expected_error), "{stderr}");
     }
     fs::remove_dir_all(root)?;
     Ok(())

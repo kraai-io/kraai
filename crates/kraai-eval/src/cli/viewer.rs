@@ -6,8 +6,6 @@ use color_eyre::eyre::{Result, ensure};
 
 #[derive(Debug, Args)]
 pub(super) struct ViewerArgs {
-    #[arg(long, default_value = ".kraai-eval-cache")]
-    cache_dir: PathBuf,
     #[arg(
         long,
         default_value_t = 0,
@@ -18,13 +16,13 @@ pub(super) struct ViewerArgs {
     no_open: bool,
 }
 
-pub(super) fn execute(args: ViewerArgs, json: bool) -> Result<ExitCode> {
+pub(super) fn execute(args: ViewerArgs, eval_dir: PathBuf, json: bool) -> Result<ExitCode> {
     ensure!(!json, "view does not support --json");
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
         .block_on(kraai_eval::viewer::serve(
-            args.cache_dir,
+            eval_dir,
             args.port,
             !args.no_open,
         ))?;

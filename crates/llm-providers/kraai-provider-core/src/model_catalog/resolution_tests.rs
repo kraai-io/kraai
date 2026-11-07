@@ -193,11 +193,16 @@ async fn native_effort_overrides_catalog_values_and_inherits_the_merged_toggle_g
         ),
     ]);
     assert!(kraai_types::validate_model_options(&model.options, &selected).is_err());
-    selected.insert(
-        "reasoning_effort".into(),
-        kraai_types::ModelOptionValue::Choice("catalog-effort".into()),
-    );
-    assert!(kraai_types::validate_model_options(&model.options, &selected).is_err());
+    let effort = model
+        .options
+        .iter()
+        .find(|option| option.id == "reasoning_effort")
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing effort"))?;
+    assert!(matches!(
+        &effort.kind,
+        kraai_types::ModelOptionKind::Choice { choices }
+            if choices.iter().map(|choice| choice.id.as_str()).eq(["native-effort"])
+    ));
     selected.insert(
         "reasoning_effort".into(),
         kraai_types::ModelOptionValue::Choice("native-effort".into()),
@@ -241,7 +246,10 @@ async fn reasoning_options_and_modes_follow_the_serving_provider_without_manufac
         .await
         .ok_or_else(|| color_eyre::eyre::eyre!("missing canonical metadata"))?;
     assert_eq!(unknown.name.as_deref(), Some("Canonical"));
-    assert!(unknown.options.is_empty());
+    assert!(crate::model_options::only_optional_reasoning(
+        &unknown.options,
+        crate::ModelOptionsProtocol::OpenAiChatCompletions
+    ));
     let host = catalog
         .metadata_for_protocol(
             None,
