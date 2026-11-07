@@ -28,11 +28,7 @@ impl ConfiguredModelMetadata {
                 .unwrap_or_else(|| id.to_string()),
             id,
             max_context,
-            max_output: crate::context_budget::max_output(
-                self.max_output,
-                catalog.max_output,
-                max_context,
-            ),
+            max_output: self.max_output.or(catalog.max_output),
             supports_images: self
                 .supports_images
                 .or(catalog.supports_images)
@@ -127,7 +123,7 @@ impl ConfiguredModelMetadata {
                 required: false,
                 secret: false,
                 help_text: Some(String::from(
-                    "Optional response limit in tokens, replacing the default of the catalog limit within the context left after compaction",
+                    "Optional response limit in tokens, replacing the catalog limit. Each response is also limited to the context left before the compaction point",
                 )),
                 default_value: None,
             },
@@ -221,7 +217,7 @@ mod tests {
             ConfiguredModelMetadata::default().resolve(id.clone(), Some(catalog.clone()));
         assert!(discovered.supports_images);
         assert_eq!(discovered.max_context, Some(65536));
-        assert_eq!(discovered.max_output, Some(13108));
+        assert_eq!(discovered.max_output, Some(32768));
         let configured = ConfiguredModelMetadata {
             name: Some("Override".into()),
             max_context: Some(4096),

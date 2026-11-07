@@ -263,7 +263,7 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
         assert_eq!(body.get("tools"), Some(&json!([])));
         assert_eq!(body.get("tool_choice"), Some(&json!("none")));
         assert!(body.get("parallel_tool_calls").is_none());
-        assert_eq!(body.get("max_output_tokens"), Some(&json!(2000)));
+        assert_eq!(body.get("max_output_tokens"), Some(&json!(7963)));
         assert_eq!(body.get("stream"), Some(&json!(true)));
         assert_eq!(body.get("store"), Some(&json!(false)));
         assert_eq!(
@@ -699,7 +699,7 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() -> R
     assert_eq!(compact["instructions"], "system instructions");
     assert!(compact.get("max_output_tokens").is_none());
     let replay = bodies.get(1).ok_or_else(|| eyre!("missing replay"))?;
-    assert_eq!(replay.get("max_output_tokens"), Some(&json!(54_400)));
+    assert_eq!(replay.get("max_output_tokens"), Some(&json!(217_564)));
     assert!(
         replay["input"]
             .as_array()

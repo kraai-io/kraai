@@ -19,7 +19,7 @@ pub use http_body::read_error_body;
 mod http_retry;
 pub use history::prepare_history;
 mod context_budget;
-pub use context_budget::{compaction_point, max_output};
+pub use context_budget::compaction_point;
 mod images;
 mod manager;
 pub use images::{ImageResolver, ResolvedImages, validate_image_support};
