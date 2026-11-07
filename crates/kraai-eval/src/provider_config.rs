@@ -2,10 +2,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result, bail, eyre};
-use kraai_provider_core::{DynamicValue, ModelConfig, ProviderConfig, ProviderManagerConfig};
+use kraai_provider_core::{
+    DynamicConfig, DynamicValue, ModelConfig, ProviderConfig, ProviderManagerConfig,
+};
 use kraai_provider_openai_chat_completions::OpenAiChatCompletionsFactory;
+use kraai_types::ModelId;
 
 const CODEX_PROXY_TOKEN_ENV: &str = "KRAAI_EVAL_CODEX_PROXY_TOKEN";
+const MAX_CONTEXT_KEY: &str = "max_context";
 const OPENAI_PROXY_TOKEN_ENV: &str = "OPENAI_API_KEY";
 const EVAL_AGENT_PROFILES: &str = include_str!("eval-agents.toml");
 
@@ -29,11 +33,13 @@ impl KraaiProviderKind {
 pub struct KraaiProviderConfigRequest {
     source: PathBuf,
     provider_id: Option<String>,
+    model_id: Option<String>,
 }
 
 pub(crate) struct PreparedKraaiProviderConfig {
     provider: ProviderConfig,
     models: Vec<ModelConfig>,
+    model_id: Option<String>,
 }
 
 pub(crate) struct ChatCompletionsUpstream {
@@ -53,7 +59,19 @@ impl KraaiProviderConfigRequest {
         Self {
             source,
             provider_id,
+            model_id: None,
         }
+    }
+
+    pub(crate) fn has_model(&self) -> bool {
+        self.model_id.is_some()
+    }
+
+    /// The model the harness evaluates, which a task context limit applies to.
+    #[must_use]
+    pub fn with_model(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
+        self
     }
 
     pub(crate) fn kind(&self) -> Result<KraaiProviderKind> {
@@ -93,7 +111,11 @@ impl KraaiProviderConfigRequest {
                 );
             }
         }
-        Ok(PreparedKraaiProviderConfig { provider, models })
+        Ok(PreparedKraaiProviderConfig {
+            provider,
+            models,
+            model_id: self.model_id.clone(),
+        })
     }
 
     pub(crate) fn chat_completions_upstream(&self) -> Result<ChatCompletionsUpstream> {
@@ -180,7 +202,7 @@ impl KraaiProviderConfigRequest {
 
 impl PreparedKraaiProviderConfig {
     pub(crate) fn digest(&self) -> Result<String> {
-        let config = self.config_for_url("http://eval-proxy.invalid/backend-api");
+        let config = self.config_for_url("http://eval-proxy.invalid/backend-api", None)?;
         Ok(crate::cache::hash_chunks(&[
             toml::to_string(&config)?.into_bytes(),
             EVAL_AGENT_PROFILES.as_bytes().to_vec(),
@@ -191,8 +213,15 @@ impl PreparedKraaiProviderConfig {
         self.provider.id.as_str()
     }
 
-    pub(crate) fn materialize(&self, workspace: &Path, proxy_url: &str) -> Result<PathBuf> {
-        let config = self.config_for_url(proxy_url);
+    /// Writes the config for one attempt. `max_context` lowers the evaluated model's context
+    /// limit, so a task can make the harness compact.
+    pub(crate) fn materialize(
+        &self,
+        workspace: &Path,
+        proxy_url: &str,
+        max_context: Option<u64>,
+    ) -> Result<PathBuf> {
+        let config = self.config_for_url(proxy_url, max_context)?;
         let directory = workspace.join(".kraai-eval");
         fs::create_dir_all(&directory)?;
         let path = directory.join("providers.toml");
@@ -201,16 +230,57 @@ impl PreparedKraaiProviderConfig {
         Ok(path)
     }
 
-    fn config_for_url(&self, proxy_url: &str) -> ProviderManagerConfig {
+    fn config_for_url(
+        &self,
+        proxy_url: &str,
+        max_context: Option<u64>,
+    ) -> Result<ProviderManagerConfig> {
         let mut provider = self.provider.clone();
         provider.config.insert(
             String::from("base_url"),
             DynamicValue::String(proxy_url.to_owned()),
         );
-        ProviderManagerConfig {
-            providers: vec![provider],
-            models: self.models.clone(),
+        let mut models = self.models.clone();
+        if let Some(max_context) = max_context {
+            self.cap_context(&mut models, max_context)?;
         }
+        Ok(ProviderManagerConfig {
+            providers: vec![provider],
+            models,
+        })
+    }
+
+    fn cap_context(&self, models: &mut Vec<ModelConfig>, max_context: u64) -> Result<()> {
+        let model_id = self
+            .model_id
+            .as_deref()
+            .ok_or_else(|| eyre!("a task context limit needs the evaluated model"))?;
+        if !models.iter().any(|model| model.id.as_str() == model_id) {
+            models.push(ModelConfig {
+                id: ModelId::new(model_id),
+                provider_id: self.provider.id.clone(),
+                options: Vec::new(),
+                remove_options: Vec::new(),
+                config: DynamicConfig::new(),
+            });
+        }
+        let max_context = i64::try_from(max_context)?;
+        for model in models
+            .iter_mut()
+            .filter(|model| model.id.as_str() == model_id)
+        {
+            let configured = model
+                .config
+                .get(MAX_CONTEXT_KEY)
+                .and_then(DynamicValue::as_integer);
+            model.config.insert(
+                String::from(MAX_CONTEXT_KEY),
+                DynamicValue::Integer(
+                    configured.map_or(max_context, |limit| limit.min(max_context)),
+                ),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -249,7 +319,7 @@ mod tests {
             &source,
             "[[provider]]\nid = 'replacement'\ntype = 'openai-codex'\n",
         )?;
-        let path = prepared.materialize(&root, "http://127.0.0.1:1234/backend-api")?;
+        let path = prepared.materialize(&root, "http://127.0.0.1:1234/backend-api", None)?;
         let materialized: ProviderManagerConfig = toml::from_slice(&fs::read(path)?)?;
         ensure!(prepared.selected_provider_id() == "original");
         ensure!(prepared.digest()? == digest);
@@ -302,7 +372,7 @@ provider_id = "api-key-provider"
         ensure!(request.selected_provider_id() == "codex-main");
         let workspace = root.join("workspace");
         fs::create_dir(&workspace)?;
-        let output = request.materialize(&workspace, "http://127.0.0.1:1234/backend-api")?;
+        let output = request.materialize(&workspace, "http://127.0.0.1:1234/backend-api", None)?;
         let rendered = fs::read_to_string(output)?;
         ensure!(
             rendered.contains("codex-main"),
@@ -371,7 +441,7 @@ provider_id = "local"
 
         let path = request
             .prepare()?
-            .materialize(&root, "http://127.0.0.1:1234/v1")?;
+            .materialize(&root, "http://127.0.0.1:1234/v1", None)?;
         let materialized: ProviderManagerConfig = toml::from_slice(&fs::read(path)?)?;
         let expected: ProviderManagerConfig = toml::from_str(
             "[[provider]]\nid = 'local'\ntype = 'openai-chat-completions'\nbase_url = 'http://127.0.0.1:1234/v1'\ncache_breakpoints = false\nenv_var_api_key = 'OPENAI_API_KEY'\nonly_listed_models = false\nprompt_cache_key = false\n[[model]]\nid = 'local-model'\nprovider_id = 'local'\n",
@@ -402,7 +472,7 @@ prompt_cache_key = true
         )?;
         let path = KraaiProviderConfigRequest::new(source, None)
             .prepare()?
-            .materialize(&root, "http://127.0.0.1:1234/v1")?;
+            .materialize(&root, "http://127.0.0.1:1234/v1", None)?;
         let materialized: ProviderManagerConfig = toml::from_slice(&fs::read(path)?)?;
         let provider = materialized
             .providers
@@ -414,6 +484,44 @@ prompt_cache_key = true
                 "{key} was not kept"
             );
         }
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn task_context_limit_caps_the_evaluated_model() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-context-limit-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&root)?;
+        let source = root.join("providers.toml");
+        fs::write(
+            &source,
+            "[[provider]]\nid = 'local'\ntype = 'openai-chat-completions'\napi_key = 'key'\nbase_url = 'http://127.0.0.1:10014/v1'\n[[model]]\nid = 'small'\nprovider_id = 'local'\nmax_context = 8000\n",
+        )?;
+        let limit = |model: &str, max_context| -> Result<Option<i64>> {
+            let path = KraaiProviderConfigRequest::new(source.clone(), None)
+                .with_model(model)
+                .prepare()?
+                .materialize(&root, "http://127.0.0.1:1234/v1", Some(max_context))?;
+            let config: ProviderManagerConfig = toml::from_slice(&fs::read(path)?)?;
+            Ok(config
+                .models
+                .iter()
+                .find(|entry| entry.id.as_str() == model)
+                .and_then(|entry| entry.config.get(MAX_CONTEXT_KEY))
+                .and_then(DynamicValue::as_integer))
+        };
+        ensure!(limit("small", 4000)? == Some(4000));
+        ensure!(limit("small", 16000)? == Some(8000));
+        ensure!(limit("discovered", 24000)? == Some(24000));
+        ensure!(
+            KraaiProviderConfigRequest::new(source, None)
+                .prepare()?
+                .materialize(&root, "http://127.0.0.1:1234/v1", Some(4000))
+                .is_err()
+        );
         fs::remove_dir_all(root)?;
         Ok(())
     }
