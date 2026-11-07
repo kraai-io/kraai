@@ -108,6 +108,7 @@ impl Provider for WarmingProvider {
                 name: "kraai_nushell".into(),
                 input: "# timeout=10sec\nerror make {msg: 'must never execute'}".into(),
                 arguments_error: None,
+                rewrite: None,
             })));
         }
         events.push(Ok(ProviderStreamEvent::Usage(TokenUsage {

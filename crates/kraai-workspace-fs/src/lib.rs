@@ -91,11 +91,100 @@ fn read_validated_text_file(
     Ok((canonical, contents))
 }
 
+/// A write that took effect. `unsynced` is set when the parent directory could not be synced
+/// afterwards, so the change might not survive a crash.
+#[derive(Debug)]
+pub struct Written {
+    pub path: PathBuf,
+    pub unsynced: Option<std::io::Error>,
+}
+
 pub fn create_text_file(
     cwd: &Path,
     requested: &Path,
     contents: &str,
-) -> Result<PathBuf, WorkspaceFsError> {
+) -> Result<Written, WorkspaceFsError> {
+    let path = file_destination(cwd, requested)?;
+    let unsynced = atomic_write(&path, contents.as_bytes(), WriteMode::Create)?;
+    Ok(Written { path, unsynced })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overwrite {
+    Created,
+    Replaced,
+}
+
+/// Makes `contents` the whole file, creating it or replacing an existing file while keeping its
+/// permissions. If another writer creates the file between the check and the write, its file is
+/// replaced.
+pub fn overwrite_text_file(
+    cwd: &Path,
+    requested: &Path,
+    contents: &str,
+) -> Result<(Written, Overwrite), WorkspaceFsError> {
+    let destination = file_destination(cwd, requested)?;
+    let canonical = |destination: &Path| {
+        canonicalize(cwd, destination).map_err(|source| WorkspaceFsError::Canonicalize {
+            path: destination.to_path_buf(),
+            source,
+        })
+    };
+    match canonicalize(cwd, &destination) {
+        Ok(existing) => replace_whole_file(existing, contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match atomic_write(&destination, contents.as_bytes(), WriteMode::Create) {
+                Ok(unsynced) => {
+                    let written = Written {
+                        path: destination,
+                        unsynced,
+                    };
+                    Ok((written, Overwrite::Created))
+                }
+                Err(WorkspaceFsError::Write { source, .. })
+                    if source.kind() == std::io::ErrorKind::AlreadyExists =>
+                {
+                    replace_whole_file(canonical(&destination)?, contents)
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Err(source) => Err(WorkspaceFsError::Canonicalize {
+            path: destination,
+            source,
+        }),
+    }
+}
+
+fn replace_whole_file(
+    existing: PathBuf,
+    contents: &str,
+) -> Result<(Written, Overwrite), WorkspaceFsError> {
+    let metadata = existing
+        .metadata()
+        .map_err(|source| WorkspaceFsError::Metadata {
+            path: existing.clone(),
+            source,
+        })?;
+    if !metadata.is_file() {
+        return Err(WorkspaceFsError::NotFile(existing));
+    }
+    let unsynced = atomic_write(
+        &existing,
+        contents.as_bytes(),
+        WriteMode::Replace {
+            permissions: metadata.permissions(),
+        },
+    )?;
+    let written = Written {
+        path: existing,
+        unsynced,
+    };
+    Ok((written, Overwrite::Replaced))
+}
+
+/// The requested file inside its canonical parent directory.
+fn file_destination(cwd: &Path, requested: &Path) -> Result<PathBuf, WorkspaceFsError> {
     let requested = resolve_path(cwd, requested);
     let name = requested
         .file_name()
@@ -110,16 +199,14 @@ pub fn create_text_file(
     if !parent.is_dir() {
         return Err(WorkspaceFsError::NotDirectory(parent));
     }
-    let destination = parent.join(name);
-    atomic_write(&destination, contents.as_bytes(), WriteMode::Create)?;
-    Ok(destination)
+    Ok(parent.join(name))
 }
 
 pub fn edit_text_file(
     cwd: &Path,
     requested: &Path,
     edits: &[ExactTextEdit],
-) -> Result<PathBuf, WorkspaceFsError> {
+) -> Result<Written, WorkspaceFsError> {
     if edits.is_empty() {
         return Err(WorkspaceFsError::NoEdits);
     }
@@ -132,12 +219,12 @@ pub fn edit_text_file(
             source,
         })?
         .permissions();
-    atomic_write(
+    let unsynced = atomic_write(
         &path,
         updated.as_bytes(),
         WriteMode::Replace { permissions },
     )?;
-    Ok(path)
+    Ok(Written { path, unsynced })
 }
 
 #[cfg(test)]
@@ -194,8 +281,42 @@ mod tests {
         let path = directory.join("file.txt");
         fs::write(&path, "original").unwrap();
         let error = create_text_file(&directory, Path::new("file.txt"), "replacement").unwrap_err();
-        assert!(matches!(error, WorkspaceFsError::Write { .. }));
+        assert!(matches!(
+            error,
+            WorkspaceFsError::Write { ref source, .. }
+                if source.kind() == std::io::ErrorKind::AlreadyExists
+        ));
         assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn overwrite_creates_or_replaces_and_keeps_permissions() {
+        let directory = temp_dir("overwrite");
+        let path = directory.join("file.txt");
+        let (created, outcome) =
+            overwrite_text_file(&directory, Path::new("file.txt"), "first\n").unwrap();
+        assert_eq!(outcome, Overwrite::Created);
+        assert_eq!(
+            created.path,
+            directory.canonicalize().unwrap().join("file.txt")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        let permissions = path.metadata().unwrap().permissions();
+
+        let (_, outcome) =
+            overwrite_text_file(&directory, Path::new("file.txt"), "second\n").unwrap();
+        assert_eq!(outcome, Overwrite::Replaced);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second\n");
+        assert_eq!(path.metadata().unwrap().permissions(), permissions);
+
+        fs::create_dir(directory.join("folder")).unwrap();
+        let error = overwrite_text_file(&directory, Path::new("folder"), "x").unwrap_err();
+        assert!(matches!(error, WorkspaceFsError::NotFile(_)));
         let _ = fs::remove_dir_all(directory);
     }
 

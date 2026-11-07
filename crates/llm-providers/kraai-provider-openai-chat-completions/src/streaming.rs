@@ -222,6 +222,7 @@ fn finish_call(call: PendingCall, tool_name: Option<&str>) -> Result<ProviderStr
                     name: call.name,
                     input: arguments.input,
                     arguments_error: None,
+                    rewrite: None,
                 }));
             }
             Err(error) => {
@@ -239,6 +240,7 @@ fn finish_call(call: PendingCall, tool_name: Option<&str>) -> Result<ProviderStr
         name: call.name,
         input: call.arguments,
         arguments_error: Some(arguments_error),
+        rewrite: None,
     }))
 }
 

@@ -32,6 +32,8 @@ pub(crate) struct EffectiveScriptRequest {
     pub(crate) call_id: ToolCallId,
     pub(crate) profile: ScriptProfileSnapshot,
     pub(crate) source: Vec<u8>,
+    /// What Kraai changed in the model's script before it ran.
+    pub(crate) rewrites: Vec<String>,
     pub(crate) workspace_root: PathBuf,
     pub(crate) requested_capabilities: SandboxCapabilities,
     pub(crate) effective_capabilities: SandboxCapabilities,
@@ -71,6 +73,7 @@ impl CompletedScriptExecution {
                 .record
                 .sandbox_denied
                 .then_some(&self.record.effective_capabilities),
+            rewrites: &self.record.rewrites,
         });
         let mut content = kraai_types::MessageContent::from(text);
         content.0.extend(
@@ -112,6 +115,7 @@ impl RuntimeCore {
                 call_id: request.call_id.clone(),
                 profile: request.profile.clone(),
                 source: request.source.clone(),
+                rewrites: request.rewrites.clone(),
                 requested_capabilities: request.requested_capabilities.clone(),
                 effective_capabilities: request.effective_capabilities.clone(),
                 timeout: Some(request.timeout),
@@ -336,7 +340,8 @@ fn completion_from_runtime_error(
         RuntimeError::Transport(_) | RuntimeError::Sandbox(SandboxError::Spawn { .. }) => {
             ScriptExecutionStatus::HostUnavailable
         }
-        RuntimeError::Sandbox(
+        RuntimeError::Startup(_)
+        | RuntimeError::Sandbox(
             SandboxError::ExecutableMustBeAbsolute
             | SandboxError::ExecutableNotVisible(_)
             | SandboxError::InvalidTimeout

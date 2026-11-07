@@ -18,6 +18,7 @@ pub struct NewScriptExecution {
     pub call_id: ToolCallId,
     pub profile: ScriptProfileSnapshot,
     pub source: Vec<u8>,
+    pub rewrites: Vec<String>,
     pub requested_capabilities: SandboxCapabilities,
     pub effective_capabilities: SandboxCapabilities,
     pub timeout: Option<Duration>,
@@ -32,6 +33,9 @@ pub struct ScriptExecutionRecord {
     pub source_message_id: MessageId,
     pub call_id: ToolCallId,
     pub profile: ScriptProfileSnapshot,
+    /// What Kraai changed in the model's script before it ran, such as `` `2>` → `e>` ``.
+    #[serde(default)]
+    pub rewrites: Vec<String>,
     pub requested_capabilities: SandboxCapabilities,
     pub effective_capabilities: SandboxCapabilities,
     pub timeout: Option<Duration>,
@@ -215,6 +219,7 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
                     source_message_id: execution.source_message_id,
                     call_id: execution.call_id,
                     profile: execution.profile,
+                    rewrites: execution.rewrites,
                     requested_capabilities: execution.requested_capabilities,
                     effective_capabilities: execution.effective_capabilities,
                     timeout: execution.timeout,

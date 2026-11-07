@@ -303,6 +303,7 @@ mod tests {
                 name: "kraai_nushell".into(),
                 input: "ls".into(),
                 arguments_error: None,
+                rewrite: None,
             }),
         )?;
         transcript.item(&mut output, "n", 0, &text("Done."))?;

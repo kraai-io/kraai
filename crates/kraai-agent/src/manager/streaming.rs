@@ -342,6 +342,7 @@ impl AgentManager {
                 stdout_file: None,
                 stderr_file: None,
                 sandbox_blocked: None,
+                rewrites: &[],
             },
         );
         for (index, item) in items.iter().enumerate() {

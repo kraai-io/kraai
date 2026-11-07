@@ -53,6 +53,7 @@ async fn failed_script_images_recover_and_reopen_without_source_or_pins() -> Res
             call_id: record.call_id.clone(),
             profile: record.profile.clone(),
             source: Vec::new(),
+            rewrites: Vec::new(),
             requested_capabilities: record.requested_capabilities.clone(),
             effective_capabilities: record.effective_capabilities.clone(),
             timeout: record.timeout,

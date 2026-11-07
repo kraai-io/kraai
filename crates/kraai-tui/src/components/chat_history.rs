@@ -623,6 +623,7 @@ mod tests {
                     name: "kraai_nushell".into(),
                     input: input.into(),
                     arguments_error: None,
+                    rewrite: None,
                 }),
                 AssistantItem::Text {
                     phase: AssistantPhase::FinalAnswer,

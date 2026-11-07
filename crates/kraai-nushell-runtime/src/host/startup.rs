@@ -1,6 +1,5 @@
 use std::sync::atomic::Ordering;
 
-use kraai_execution_types::NushellStartup;
 use nu_protocol::debugger::WithoutDebug;
 use nu_protocol::engine::{EngineState, Stack, StateWorkingSet};
 use nu_protocol::report_error::{SUPPRESS_REPORTING, format_cli_error};
@@ -28,31 +27,23 @@ pub(super) fn load_startup_files(
     engine_state: &mut EngineState,
     stack: &mut Stack,
 ) -> Result<(), HostError> {
-    if request.nushell_startup != NushellStartup::Inherit || !engine_state.config_dirs.is_resolved()
-    {
+    if request.startup_files.is_empty() {
         return Ok(());
     }
     let _reporting = StartupReporting::silence();
-    for path in [
-        engine_state.config_dirs.env_file.to_path_buf(),
-        engine_state.config_dirs.config_file.to_path_buf(),
-    ] {
-        let Some(contents) = kraai_io::fs::read_optional(&path).map_err(|error| {
-            HostError::Initialization(format!(
-                "unable to read startup file '{}': {error}",
-                path.display()
-            ))
-        })?
-        else {
-            continue;
-        };
-        let previous_file = engine_state.file.replace(path.clone());
-        let result = evaluate_startup(engine_state, stack, &contents, &path.to_string_lossy());
+    for file in &request.startup_files {
+        let previous_file = engine_state.file.replace(file.path.clone());
+        let result = evaluate_startup(
+            engine_state,
+            stack,
+            &file.contents,
+            &file.path.to_string_lossy(),
+        );
         engine_state.file = previous_file;
         result.map_err(|diagnostic| {
             HostError::Initialization(format!(
                 "startup file '{}' failed; script was not executed\n{diagnostic}",
-                path.display()
+                file.path.display()
             ))
         })?;
     }

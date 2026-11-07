@@ -126,7 +126,7 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
     ));
     assert!(matches!(
         items.get(2),
-        Some(AssistantItem::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None }))
+        Some(AssistantItem::ScriptCall(ScriptCall { call_id, name, input, arguments_error: None, rewrite: None }))
             if call_id.as_str() == "openai-call-1"
                 && name == "kraai_nushell"
                 && input.starts_with("# timeout=30sec")
@@ -172,6 +172,92 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
         )
     }));
 
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn bash_syntax_is_rewritten_before_approval_and_history() -> Result<()> {
+    let original = "# timeout=30sec permissions=workspace-write\nrg -n todo src 2>/dev/null";
+    let rewritten = "# timeout=30sec permissions=workspace-write\nrg -n todo src e> /dev/null";
+    let Some(harness) = RuntimeTestHarness::new(vec![
+        vec![ScriptedChunk::native_call("call-1", original)],
+        vec![ScriptedChunk::plain("Denied.")],
+    ])
+    .await
+    else {
+        return Ok(());
+    };
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("find todos"),
+            String::from("mock-model"),
+            String::from("mock"),
+            Default::default(),
+        )
+        .await?;
+
+    let events = harness
+        .events
+        .wait_for("rewritten script approval", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::ScriptApprovalRequested { session_id: event_session, .. } if event_session == &session_id)
+            })
+        })
+        .await;
+    let script = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ScriptApprovalRequested {
+                session_id: event_session,
+                script,
+            } if event_session == &session_id => Some(script.clone()),
+            _ => None,
+        })
+        .expect("approval event");
+    assert_eq!(script.source, "rg -n todo src e> /dev/null");
+
+    let history = harness.handle.get_chat_history(session_id.clone()).await?;
+    let call = history
+        .values()
+        .filter_map(|message| message.content.assistant_items())
+        .flatten()
+        .find_map(|item| match item {
+            AssistantItem::ScriptCall(call) => Some(call.clone()),
+            _ => None,
+        })
+        .expect("script call");
+    assert_eq!(call.input, rewritten);
+    let rewrite = call.rewrite.expect("rewrite");
+    assert_eq!(rewrite.original, original);
+    assert_eq!(rewrite.changes, ["`2>` → `e>`"]);
+
+    harness
+        .handle
+        .deny_script(session_id.clone(), script.execution_id)
+        .await?;
+    let events = harness
+        .events
+        .wait_for("denied rewritten script result", |events| {
+            events.iter().any(|event| matches!(event, Event::ScriptResultReady { session_id: id, .. } if id == &session_id))
+        })
+        .await;
+    let output = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ScriptResultReady { output, .. } => output.as_text().map(str::to_string),
+            _ => None,
+        })
+        .expect("script result");
+    assert!(
+        output.contains(
+            "<notice>Note: Kraai rewrote Bash syntax to Nushell before running: `2>` → `e>`. This shell is Nushell.</notice>"
+        ),
+        "{output}"
+    );
     harness.shutdown().await;
     Ok(())
 }
@@ -603,6 +689,7 @@ async fn invalid_tool_call_fails_without_running_and_replays_raw_call() -> Resul
                     name: String::from("bash"),
                     input: String::from(arguments),
                     arguments_error: Some(String::from(error)),
+                    rewrite: None,
                 }))
             })
         })

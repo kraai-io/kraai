@@ -28,8 +28,6 @@ pub enum WorkspaceFsError {
         #[source]
         source: std::io::Error,
     },
-    #[error("file already exists: {0}")]
-    AlreadyExists(PathBuf),
     #[error("at least one edit is required")]
     NoEdits,
     #[error("invalid line range {start_line}-{end_line} for edit {edit_number} in {path}")]

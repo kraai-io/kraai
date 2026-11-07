@@ -161,8 +161,8 @@ impl SessionActor {
             script,
             invalid_script,
             protocol_error,
+            rewrites,
             reached_output_limit,
-            ..
         } = completed;
         match self
             .runtime
@@ -196,6 +196,7 @@ impl SessionActor {
             script,
             invalid_script,
             protocol_error,
+            rewrites,
         )
         .await;
     }

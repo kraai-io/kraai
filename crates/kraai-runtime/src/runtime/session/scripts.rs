@@ -43,6 +43,7 @@ impl SessionActor {
         script: Option<ScriptBlock>,
         invalid_script: Option<InvalidScriptBlock>,
         protocol_error: Option<ProtocolError>,
+        rewrites: Vec<String>,
     ) {
         let call_id = match call_id {
             Some(call_id) => call_id,
@@ -74,7 +75,7 @@ impl SessionActor {
                     .await
             }
             (None, Some(script)) => {
-                self.prepare_or_execute_script(source_message_id, call_id, script)
+                self.prepare_or_execute_script(source_message_id, call_id, script, rewrites)
                     .await
             }
             (None, None) => Ok(()),
@@ -89,6 +90,7 @@ impl SessionActor {
         source_message_id: MessageId,
         call_id: ToolCallId,
         script: ScriptBlock,
+        rewrites: Vec<String>,
     ) -> Result<()> {
         let turn = self
             .runtime
@@ -136,6 +138,7 @@ impl SessionActor {
             source_message_id,
             call_id,
             source: script.source,
+            rewrites,
             workspace_root: turn.workspace_dir,
             requested_capabilities: script.requested_capabilities,
             effective_capabilities,
@@ -207,6 +210,7 @@ impl SessionActor {
                 call_id: call_id.clone(),
                 profile: turn.profile,
                 source: invalid.source,
+                rewrites: Vec::new(),
                 requested_capabilities: invalid.requested_capabilities,
                 effective_capabilities,
                 timeout: invalid.timeout,

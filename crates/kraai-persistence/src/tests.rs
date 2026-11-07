@@ -57,6 +57,7 @@ fn execution(session: &str) -> NewScriptExecution {
             path: kraai_execution_types::PathPolicy::Inherit,
         },
         source: b"print hello".to_vec(),
+        rewrites: Vec::new(),
         requested_capabilities: SandboxCapabilities::default(),
         effective_capabilities: SandboxCapabilities::default(),
         timeout: Some(Duration::from_secs(30)),

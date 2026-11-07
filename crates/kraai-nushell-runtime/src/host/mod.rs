@@ -70,9 +70,7 @@ fn build_engine(
     sink: &Arc<OutputSink>,
 ) -> Result<EngineState, HostError> {
     nu_command::tls::CRYPTO_PROVIDER.default();
-    let mut engine_state = nu_cli::add_cli_context(nu_command::add_shell_command_context(
-        nu_cmd_lang::create_default_context(),
-    ));
+    let mut engine_state = default_engine();
     configure_startup_paths(
         &mut engine_state,
         request.nushell_startup,
@@ -96,6 +94,13 @@ fn build_engine(
         .merge_delta(delta)
         .map_err(|error| HostError::Initialization(error.to_string()))?;
     Ok(engine_state)
+}
+
+/// Nushell's built-in commands, before Kraai's commands, environment, and startup files.
+pub(crate) fn default_engine() -> EngineState {
+    nu_cli::add_cli_context(nu_command::add_shell_command_context(
+        nu_cmd_lang::create_default_context(),
+    ))
 }
 
 fn apply_variable_deletions(engine_state: &mut EngineState, stack: &mut Stack) {

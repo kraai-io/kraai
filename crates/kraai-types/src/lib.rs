@@ -38,6 +38,7 @@ pub enum ChatRole {
 
 pub use conversation::{
     AssistantItem, AssistantPhase, ContentPart, ConversationItem, MessageContent, ScriptCall,
+    ScriptRewrite,
 };
 mod conversation;
 mod token_estimate;
@@ -197,6 +198,7 @@ mod tests {
                 name: String::from("kraai_nushell"),
                 input: input.to_string(),
                 arguments_error: None,
+                rewrite: None,
             })
         };
         for (items, expected) in [

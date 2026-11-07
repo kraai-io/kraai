@@ -282,6 +282,7 @@ async fn failed_intercepted_continuation_releases_ownership_and_preserves_input(
         name: "kraai_nushell".into(),
         input: "# timeout=30sec permissions=workspace-write\nprint hello".into(),
         arguments_error: None,
+        rewrite: None,
     })))?;
     drop(sender);
     owner.events.wait_for("approval", |events| events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id, .. } if session_id == &session))).await;

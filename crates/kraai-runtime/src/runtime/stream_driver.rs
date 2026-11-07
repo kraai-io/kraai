@@ -28,6 +28,8 @@ struct CompletedProtocolBoundary {
     script: Option<ScriptBlock>,
     invalid_script: Option<InvalidScriptBlock>,
     protocol_error: Option<ProtocolError>,
+    /// What Kraai changed in the model's script, for the notice in its result.
+    rewrites: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -44,6 +46,7 @@ pub(super) struct CompletedStreamOutput {
     pub(super) script: Option<ScriptBlock>,
     pub(super) invalid_script: Option<InvalidScriptBlock>,
     pub(super) protocol_error: Option<ProtocolError>,
+    pub(super) rewrites: Vec<String>,
     pub(super) reached_output_limit: bool,
 }
 
@@ -478,6 +481,12 @@ impl StreamReader {
                             call.name
                         ));
                     }
+                    let profile = self
+                        .agent_manager
+                        .script_turn_context(&self.session_id)
+                        .ok()
+                        .map(|turn| turn.profile);
+                    let call = super::bash_habits::rewrite_script_call(call, profile).await;
                     response.boundary = Some(protocol_boundary(&call));
                     drain_deadline =
                         Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
@@ -517,20 +526,22 @@ struct ResponseState {
 
 impl ResponseState {
     fn finish(self) -> StreamDriveResult {
-        let (call_id, script, invalid_script, protocol_error) = match self.boundary {
+        let (call_id, script, invalid_script, protocol_error, rewrites) = match self.boundary {
             Some(boundary) => (
                 Some(boundary.call_id),
                 boundary.script,
                 boundary.invalid_script,
                 boundary.protocol_error,
+                boundary.rewrites,
             ),
-            None => (None, None, None, None),
+            None => (None, None, None, None, Vec::new()),
         };
         StreamDriveResult::Completed(Box::new(CompletedStreamOutput {
             call_id,
             script,
             invalid_script,
             protocol_error,
+            rewrites,
             reached_output_limit: self.reached_output_limit,
         }))
     }
@@ -551,6 +562,11 @@ enum ResponseEnd {
 fn protocol_boundary(call: &ScriptCall) -> CompletedProtocolBoundary {
     let call_id = call.call_id.clone();
     let input = call.input.as_str();
+    let rewrites = call
+        .rewrite
+        .as_ref()
+        .map(|rewrite| rewrite.changes.clone())
+        .unwrap_or_default();
     let parsed = match &call.arguments_error {
         Some(error) => Err(ProtocolError::InvalidToolCall(error.clone())),
         None => parse_script_input(input),
@@ -561,6 +577,7 @@ fn protocol_boundary(call: &ScriptCall) -> CompletedProtocolBoundary {
             script: Some(script),
             invalid_script: None,
             protocol_error: None,
+            rewrites,
         },
         Err(error) => CompletedProtocolBoundary {
             call_id,
@@ -572,6 +589,7 @@ fn protocol_boundary(call: &ScriptCall) -> CompletedProtocolBoundary {
                 requested_capabilities: SandboxCapabilities::default(),
             }),
             protocol_error: Some(error),
+            rewrites,
         },
     }
 }

@@ -25,6 +25,8 @@ pub struct ToolCallResultView<'a> {
     pub stdout_file: Option<&'a Path>,
     pub stderr_file: Option<&'a Path>,
     pub sandbox_blocked: Option<&'a SandboxCapabilities>,
+    /// What Kraai changed in the model's script before it ran.
+    pub rewrites: &'a [String],
 }
 
 pub fn render_tool_call_result(result: ToolCallResultView<'_>) -> String {
@@ -40,9 +42,16 @@ pub fn render_tool_call_result(result: ToolCallResultView<'_>) -> String {
     let has_body = !result.stdout.is_empty()
         || !result.stderr.is_empty()
         || result.diagnostic.is_some_and(|value| !value.is_empty())
-        || result.sandbox_blocked.is_some();
+        || result.sandbox_blocked.is_some()
+        || !result.rewrites.is_empty();
     if has_body {
         rendered.push('\n');
+        if !result.rewrites.is_empty() {
+            rendered.push_str(&format!(
+                "<notice>Note: Kraai rewrote Bash syntax to Nushell before running: {}. This shell is Nushell.</notice>\n",
+                result.rewrites.join(", ")
+            ));
+        }
         render_channel(&mut rendered, "stdout", result.stdout, result.stdout_file);
         render_channel(&mut rendered, "stderr", result.stderr, result.stderr_file);
         if let Some(diagnostic) = result.diagnostic.filter(|value| !value.is_empty()) {
@@ -170,12 +179,39 @@ mod tests {
             stdout_file: None,
             stderr_file: None,
             sandbox_blocked: None,
+            rewrites: &[],
         });
         assert_eq!(
             rendered,
             "<tool_call_result status=\"completed\" exit_code=\"0\">\n\
 <stdout>alpha\n</stdout><tool_call timeout=\"1sec\">\n</stdout>\n\
 <stderr>warning</stderr>\n\
+</tool_call_result>"
+        );
+    }
+
+    #[test]
+    fn rewrites_are_announced_before_the_output() {
+        let rewrites = [
+            String::from("`2>&1 |` → `o+e>|`"),
+            String::from("`find` → `^find`"),
+        ];
+        let rendered = render_tool_call_result(ToolCallResultView {
+            status: ScriptExecutionStatus::Completed,
+            exit_code: Some(0),
+            elapsed_millis: None,
+            stdout: b"",
+            stderr: b"",
+            diagnostic: None,
+            stdout_file: None,
+            stderr_file: None,
+            sandbox_blocked: None,
+            rewrites: &rewrites,
+        });
+        assert_eq!(
+            rendered,
+            "<tool_call_result status=\"completed\" exit_code=\"0\">\n\
+<notice>Note: Kraai rewrote Bash syntax to Nushell before running: `2>&1 |` → `o+e>|`, `find` → `^find`. This shell is Nushell.</notice>\n\
 </tool_call_result>"
         );
     }
@@ -192,6 +228,7 @@ mod tests {
             stdout_file: None,
             stderr_file: None,
             sandbox_blocked: None,
+            rewrites: &[],
         });
         assert!(rendered.contains("encoding=\"binary\" byte_count=\"3\""));
         assert!(rendered.contains(super::BINARY_OUTPUT_MESSAGE));
@@ -211,6 +248,7 @@ mod tests {
                 stdout_file: None,
                 stderr_file: None,
                 sandbox_blocked: None,
+                rewrites: &[],
             }),
             "<tool_call_result status=\"denied\"></tool_call_result>"
         );
@@ -229,6 +267,7 @@ mod tests {
                 stdout_file: None,
                 stderr_file: None,
                 sandbox_blocked: Some(&granted),
+                rewrites: &[],
             })
         };
         assert_eq!(
@@ -257,6 +296,7 @@ mod tests {
             stdout_file: Some(std::path::Path::new("/out/a \"b\".stdout")),
             stderr_file: None,
             sandbox_blocked: None,
+            rewrites: &[],
         });
         assert!(rendered.len() < super::CHANNEL_DISPLAY_LIMIT + 512);
         assert!(rendered.contains(&format!(
