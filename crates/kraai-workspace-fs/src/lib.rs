@@ -116,30 +116,50 @@ pub enum Overwrite {
 }
 
 /// Makes `contents` the whole file, creating it or replacing an existing file while keeping its
-/// permissions.
+/// permissions. If another writer creates the file between the check and the write, its file is
+/// replaced.
 pub fn overwrite_text_file(
     cwd: &Path,
     requested: &Path,
     contents: &str,
 ) -> Result<(Written, Overwrite), WorkspaceFsError> {
     let destination = file_destination(cwd, requested)?;
-    let existing = match canonicalize(cwd, &destination) {
-        Ok(path) => path,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let unsynced = atomic_write(&destination, contents.as_bytes(), WriteMode::Create)?;
-            let written = Written {
-                path: destination,
-                unsynced,
-            };
-            return Ok((written, Overwrite::Created));
-        }
-        Err(source) => {
-            return Err(WorkspaceFsError::Canonicalize {
-                path: destination,
-                source,
-            });
-        }
+    let canonical = |destination: &Path| {
+        canonicalize(cwd, destination).map_err(|source| WorkspaceFsError::Canonicalize {
+            path: destination.to_path_buf(),
+            source,
+        })
     };
+    match canonicalize(cwd, &destination) {
+        Ok(existing) => replace_whole_file(existing, contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match atomic_write(&destination, contents.as_bytes(), WriteMode::Create) {
+                Ok(unsynced) => {
+                    let written = Written {
+                        path: destination,
+                        unsynced,
+                    };
+                    Ok((written, Overwrite::Created))
+                }
+                Err(WorkspaceFsError::Write { source, .. })
+                    if source.kind() == std::io::ErrorKind::AlreadyExists =>
+                {
+                    replace_whole_file(canonical(&destination)?, contents)
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Err(source) => Err(WorkspaceFsError::Canonicalize {
+            path: destination,
+            source,
+        }),
+    }
+}
+
+fn replace_whole_file(
+    existing: PathBuf,
+    contents: &str,
+) -> Result<(Written, Overwrite), WorkspaceFsError> {
     let metadata = existing
         .metadata()
         .map_err(|source| WorkspaceFsError::Metadata {
@@ -261,7 +281,11 @@ mod tests {
         let path = directory.join("file.txt");
         fs::write(&path, "original").unwrap();
         let error = create_text_file(&directory, Path::new("file.txt"), "replacement").unwrap_err();
-        assert!(matches!(error, WorkspaceFsError::Write { .. }));
+        assert!(matches!(
+            error,
+            WorkspaceFsError::Write { ref source, .. }
+                if source.kind() == std::io::ErrorKind::AlreadyExists
+        ));
         assert_eq!(fs::read_to_string(&path).unwrap(), "original");
         let _ = fs::remove_dir_all(directory);
     }
