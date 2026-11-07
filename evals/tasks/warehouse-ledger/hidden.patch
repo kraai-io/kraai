@@ -1,0 +1,166 @@
+diff --git a/tests/hidden.rs b/tests/hidden.rs
+new file mode 100644
+index 0000000..47856ff
+--- /dev/null
++++ b/tests/hidden.rs
+@@ -0,0 +1,160 @@
++use warehouse_ledger::{Ledger, LedgerError};
++
++fn ledger(script: &str) -> Ledger {
++    let mut ledger = Ledger::new();
++    ledger.apply(script).unwrap();
++    ledger
++}
++
++#[test]
++fn ships_the_oldest_lots_first() {
++    let ledger = ledger(
++        "receive bolt 5 dock @100\nreceive bolt 5 dock @300\nreceive bolt 5 dock @700\nship bolt 7 dock\n",
++    );
++    assert_eq!(ledger.shipped_cost_cents(), 5 * 100 + 2 * 300);
++    assert_eq!(ledger.quantity("bolt", "dock"), 8);
++    assert_eq!(ledger.value_cents("bolt", "dock"), 3 * 300 + 5 * 700);
++}
++
++#[test]
++fn moves_keep_costs_and_queue_behind_destination_stock() {
++    let ledger = ledger(concat!(
++        "receive nut 4 dock @10\n",
++        "receive nut 4 dock @20\n",
++        "receive nut 3 shelf @50\n",
++        "move nut 6 dock shelf\n",
++        "ship nut 5 shelf\n",
++    ));
++    assert_eq!(ledger.shipped_cost_cents(), 3 * 50 + 2 * 10);
++    assert_eq!(ledger.quantity("nut", "dock"), 2);
++    assert_eq!(ledger.value_cents("nut", "dock"), 2 * 20);
++    assert_eq!(ledger.quantity("nut", "shelf"), 4);
++    assert_eq!(ledger.value_cents("nut", "shelf"), 2 * 10 + 2 * 20);
++}
++
++#[test]
++fn failed_scripts_change_nothing() {
++    let mut ledger = ledger("receive gear 3 dock @100\n");
++    assert_eq!(
++        ledger.apply("receive gear 10 dock @1\nship gear 2 dock\nship gear 20 dock\n"),
++        Err(LedgerError::Insufficient {
++            line: 3,
++            sku: String::from("gear"),
++            location: String::from("dock"),
++            available: 11,
++        })
++    );
++    assert_eq!(ledger.quantity("gear", "dock"), 3);
++    assert_eq!(ledger.shipped_cost_cents(), 0);
++    assert_eq!(
++        ledger.apply("ship gear 1 dock\nundo\nundo\nundo\n"),
++        Err(LedgerError::NothingToUndo { line: 4 })
++    );
++    assert_eq!(ledger.quantity("gear", "dock"), 3);
++    ledger.apply("undo\n").unwrap();
++    assert_eq!(ledger.quantity("gear", "dock"), 0);
++    assert_eq!(
++        ledger.apply("undo\n"),
++        Err(LedgerError::NothingToUndo { line: 1 })
++    );
++}
++
++#[test]
++fn moving_more_than_the_source_holds_reports_the_source() {
++    let mut ledger = ledger("receive gear 3 dock @100\nreceive gear 9 shelf @100\n");
++    assert_eq!(
++        ledger.apply("move gear 4 dock shelf\n"),
++        Err(LedgerError::Insufficient {
++            line: 1,
++            sku: String::from("gear"),
++            location: String::from("dock"),
++            available: 3,
++        })
++    );
++    assert_eq!(
++        ledger.apply("ship widget 1 dock\n"),
++        Err(LedgerError::Insufficient {
++            line: 1,
++            sku: String::from("widget"),
++            location: String::from("dock"),
++            available: 0,
++        })
++    );
++}
++
++#[test]
++fn undo_reverts_one_command_at_a_time_across_scripts() {
++    let mut ledger = ledger(concat!(
++        "receive cog 4 dock @100\n",
++        "receive cog 4 dock @200\n",
++        "move cog 5 dock shelf\n",
++    ));
++    ledger.apply("ship cog 2 shelf\n").unwrap();
++    assert_eq!(ledger.shipped_cost_cents(), 200);
++    ledger.apply("undo\n").unwrap();
++    assert_eq!(ledger.shipped_cost_cents(), 0);
++    assert_eq!(ledger.quantity("cog", "shelf"), 5);
++    ledger.apply("undo\nship cog 3 dock\n").unwrap();
++    assert_eq!(ledger.quantity("cog", "shelf"), 0);
++    assert_eq!(ledger.shipped_cost_cents(), 300);
++    ledger.apply("undo\nundo\n").unwrap();
++    assert_eq!(ledger.quantity("cog", "dock"), 4);
++    assert_eq!(ledger.value_cents("cog", "dock"), 400);
++}
++
++#[test]
++fn parses_whitespace_comments_and_strict_numbers() {
++    let ledger = ledger(
++        "  # opening stock\n\n\treceive  pin\t2 dock   @5  \r\nreceive pin 1 dock @0\n   \nship pin 1 dock\n",
++    );
++    assert_eq!(ledger.quantity("pin", "dock"), 2);
++    assert_eq!(ledger.value_cents("pin", "dock"), 5);
++    let largest = self::ledger("receive pin 1000000 dock @1000000\nship pin 1000000 dock\n");
++    assert_eq!(largest.shipped_cost_cents(), 1_000_000 * 1_000_000);
++    for (script, line) in [
++        ("ship pin 0 dock", 1),
++        ("receive pin +1 dock @5", 1),
++        ("receive pin 1 dock 5", 1),
++        ("receive pin 1 dock @-5", 1),
++        ("receive pin 1000001 dock @5", 1),
++        ("receive pin 1 dock @1000001", 1),
++        ("\nmove pin 1 dock dock", 2),
++        ("Receive pin 1 dock @5", 1),
++        ("undo now", 1),
++        ("ship pin 1", 1),
++        ("# fine\nship pin 1 dock extra", 2),
++    ] {
++        let mut copy = Ledger::new();
++        copy.apply("receive pin 5 dock @1\n").unwrap();
++        assert_eq!(
++            copy.apply(script),
++            Err(LedgerError::Parse { line }),
++            "{script:?}"
++        );
++        assert_eq!(copy.quantity("pin", "dock"), 5, "{script:?}");
++    }
++}
++
++#[test]
++fn reports_sort_by_sku_then_location_and_skip_empty_stock() {
++    let ledger = ledger(concat!(
++        "receive washer 3 shelf @105\n",
++        "receive axle 1 yard @99999\n",
++        "receive washer 2 attic @7\n",
++        "receive bearing 4 dock @3\n",
++        "ship bearing 4 dock\n",
++        "move washer 1 shelf bin\n",
++    ));
++    assert_eq!(
++        ledger.report(),
++        concat!(
++            "axle yard 1 999.99\n",
++            "washer attic 2 0.14\n",
++            "washer bin 1 1.05\n",
++            "washer shelf 2 2.10\n",
++            "total 1003.28\n",
++            "shipped 0.12\n",
++        )
++    );
++    assert_eq!(Ledger::new().report(), "total 0.00\nshipped 0.00\n");
++}

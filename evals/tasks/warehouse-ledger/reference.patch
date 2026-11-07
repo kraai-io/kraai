@@ -1,0 +1,141 @@
+diff --git a/src/ledger.rs b/src/ledger.rs
+index 022d16a..9ab4607 100644
+--- a/src/ledger.rs
++++ b/src/ledger.rs
+@@ -34,24 +34,25 @@ impl Ledger {
+         Self::default()
+     }
+ 
+-    /// Applies the lines of `script` in order.
++    /// Applies every line of `script`, or none of them if any line fails.
+     pub fn apply(&mut self, script: &str) -> Result<(), LedgerError> {
++        let mut state = self.state.clone();
++        let mut history = self.history.clone();
+         for (index, text) in script.lines().enumerate() {
+             let line = index + 1;
+             let Some(command) = parse_line(text).map_err(|()| LedgerError::Parse { line })? else {
+                 continue;
+             };
+             if command == Command::Undo {
+-                self.state = self
+-                    .history
+-                    .pop()
+-                    .ok_or(LedgerError::NothingToUndo { line })?;
++                state = history.pop().ok_or(LedgerError::NothingToUndo { line })?;
+                 continue;
+             }
+-            let before = self.state.clone();
+-            execute(&mut self.state, command, line)?;
+-            self.history.push(before);
++            let before = state.clone();
++            execute(&mut state, command, line)?;
++            history.push(before);
+         }
++        self.state = state;
++        self.history = history;
+         Ok(())
+     }
+ 
+diff --git a/src/parse.rs b/src/parse.rs
+index 73a0abd..3f5dc4b 100644
+--- a/src/parse.rs
++++ b/src/parse.rs
+@@ -26,7 +26,7 @@ pub(crate) fn parse_line(line: &str) -> Result<Option<Command>, ()> {
+     if line.is_empty() || line.starts_with('#') {
+         return Ok(None);
+     }
+-    let words: Vec<&str> = line.split(' ').collect();
++    let words: Vec<&str> = line.split_whitespace().collect();
+     let command = match words.as_slice() {
+         ["receive", sku, quantity, location, cost] => Command::Receive {
+             sku: (*sku).to_owned(),
+@@ -39,7 +39,7 @@ pub(crate) fn parse_line(line: &str) -> Result<Option<Command>, ()> {
+             quantity: parse_quantity(quantity)?,
+             location: (*location).to_owned(),
+         },
+-        ["move", sku, quantity, from, to] => Command::Move {
++        ["move", sku, quantity, from, to] if from != to => Command::Move {
+             sku: (*sku).to_owned(),
+             quantity: parse_quantity(quantity)?,
+             from: (*from).to_owned(),
+@@ -52,9 +52,22 @@ pub(crate) fn parse_line(line: &str) -> Result<Option<Command>, ()> {
+ }
+ 
+ fn parse_quantity(text: &str) -> Result<u64, ()> {
+-    text.parse().map_err(|_| ())
++    match parse_digits(text)? {
++        quantity @ 1..=1_000_000 => Ok(quantity),
++        _ => Err(()),
++    }
+ }
+ 
+ fn parse_cost(text: &str) -> Result<u64, ()> {
+-    text.trim_start_matches('@').parse().map_err(|_| ())
++    match parse_digits(text.strip_prefix('@').ok_or(())?)? {
++        cost @ 0..=1_000_000 => Ok(cost),
++        _ => Err(()),
++    }
++}
++
++fn parse_digits(text: &str) -> Result<u64, ()> {
++    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
++        return Err(());
++    }
++    text.parse().map_err(|_| ())
+ }
+diff --git a/src/report.rs b/src/report.rs
+index de1a9f0..42cb810 100644
+--- a/src/report.rs
++++ b/src/report.rs
+@@ -17,5 +17,5 @@ pub(crate) fn render(state: &State) -> String {
+ }
+ 
+ fn dollars(cents: u64) -> String {
+-    format!("{}.{}", cents / 100, cents % 100)
++    format!("{}.{:02}", cents / 100, cents % 100)
+ }
+diff --git a/src/stock.rs b/src/stock.rs
+index d14a16d..177c931 100644
+--- a/src/stock.rs
++++ b/src/stock.rs
+@@ -12,7 +12,7 @@ impl Lot {
+     }
+ }
+ 
+-/// Lots of each SKU at each location, in the order they arrived.
++/// Lots of each SKU at each location, oldest first.
+ #[derive(Debug, Clone, Default)]
+ pub(crate) struct Stock {
+     lots: BTreeMap<(String, String), VecDeque<Lot>>,
+@@ -34,7 +34,7 @@ impl Stock {
+         self.lots_at(sku, location).map(Lot::value).sum()
+     }
+ 
+-    /// Removes `quantity` units and returns the lots it removed.
++    /// Removes `quantity` units, oldest lots first, and returns what it removed in that order.
+     /// Fails with the available quantity when there is not enough.
+     pub fn take(&mut self, sku: &str, location: &str, quantity: u64) -> Result<Vec<Lot>, u64> {
+         let available = self.quantity(sku, location);
+@@ -48,7 +48,7 @@ impl Stock {
+         let mut taken = Vec::new();
+         let mut remaining = quantity;
+         while remaining > 0 {
+-            let Some(oldest) = lots.back_mut() else {
++            let Some(oldest) = lots.front_mut() else {
+                 break;
+             };
+             let used = oldest.quantity.min(remaining);
+@@ -59,9 +59,12 @@ impl Stock {
+             oldest.quantity -= used;
+             remaining -= used;
+             if oldest.quantity == 0 {
+-                lots.pop_back();
++                lots.pop_front();
+             }
+         }
++        if lots.is_empty() {
++            self.lots.remove(&key);
++        }
+         Ok(taken)
+     }
+ 

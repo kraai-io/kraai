@@ -1,0 +1,32 @@
+id = "window-reassembly"
+prompt = """
+The long_reordered_stream test in tests/public.rs fails. Find out why and fix the packet reassembler so it meets the contract below. Keep the public Reassembler and ReassemblyError API and the existing public tests. You may change internals and add modules or tests. The crate has no dependencies and must work offline.
+
+Reassembler::new(first, window) starts a stream whose next expected sequence number is first. window must be from 1 through 32768 inclusive; anything else returns InvalidWindow with that value. A packet's position is its distance ahead of the expected sequence number, counted modulo 65536.
+
+push(seq, payload) handles one packet. A packet at distance 0 is delivered immediately, followed by every buffered packet that is now consecutive, in sequence order; the expected number advances past all of them. A packet at distance 1 through window - 1 is buffered and push returns no payloads. If that sequence number is already buffered, keep the first payload and ignore the new one. A packet at distance window through 32767 returns OutsideWindow with its sequence number. A packet at distance 32768 or more is behind the stream, an already delivered or long-lost duplicate, and is ignored with no payloads. Ignored and rejected packets change nothing. expected returns the next expected sequence number and buffered returns how many distinct packets are waiting. Only observable behavior is graded; no internal representation is required.
+"""
+schema_version = 1
+[source]
+directory = "fixture"
+
+[runner]
+rust_toolchain = true
+timeout_seconds = 600
+
+[grader]
+hidden_patch = "hidden.patch"
+mutation_patches = [
+  "mutations/inclusive-window-edge.patch",
+  "mutations/reject-late-packets.patch",
+  "mutations/last-copy-wins.patch",
+]
+reference_patch = "reference.patch"
+
+[[grader.commands]]
+command = [
+  "sh",
+  "-c",
+  "grade_dir=$(mktemp -d); trap 'rm -rf \"$grade_dir\"' EXIT; cargo build --offline --lib --target-dir \"$grade_dir/target\" && rustc --edition=2024 --test tests/hidden.rs --extern window_reassembly=\"$grade_dir/target/debug/libwindow_reassembly.rlib\" -L dependency=\"$grade_dir/target/debug/deps\" -o \"$grade_dir/tests\" && \"$grade_dir/tests\"",
+]
+timeout_seconds = 120

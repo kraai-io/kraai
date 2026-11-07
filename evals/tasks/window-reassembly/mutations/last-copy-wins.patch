@@ -1,0 +1,13 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 7f6db9c..1af1517 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -45,7 +45,7 @@ impl Reassembler {
+             return Err(ReassemblyError::OutsideWindow(seq));
+         }
+         if ahead != 0 {
+-            self.pending.entry(seq).or_insert(payload);
++            self.pending.insert(seq, payload);
+             return Ok(Vec::new());
+         }
+         let mut delivered = vec![payload];

@@ -1,0 +1,22 @@
+diff --git a/src/stock.rs b/src/stock.rs
+index 177c931..1eecfb8 100644
+--- a/src/stock.rs
++++ b/src/stock.rs
+@@ -48,7 +48,7 @@ impl Stock {
+         let mut taken = Vec::new();
+         let mut remaining = quantity;
+         while remaining > 0 {
+-            let Some(oldest) = lots.front_mut() else {
++            let Some(oldest) = lots.back_mut() else {
+                 break;
+             };
+             let used = oldest.quantity.min(remaining);
+@@ -59,7 +59,7 @@ impl Stock {
+             oldest.quantity -= used;
+             remaining -= used;
+             if oldest.quantity == 0 {
+-                lots.pop_front();
++                lots.pop_back();
+             }
+         }
+         if lots.is_empty() {

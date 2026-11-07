@@ -1,0 +1,41 @@
+id = "warehouse-ledger"
+prompt = """
+Fix the warehouse ledger in this crate. Stock valuation, moves, undo, script parsing, and the report all have bugs, spread across the modules in src. Keep the public Ledger and LedgerError API and the existing public tests. You may change internals and add modules or tests. The crate has no dependencies and must work offline.
+
+Ledger::apply runs a script of commands, one per line, with 1-based line numbers. Words are separated by any run of spaces or tabs, and leading and trailing whitespace is ignored. Blank lines and lines whose first non-whitespace character is # are skipped. Commands are case-sensitive:
+- receive SKU QTY LOCATION @COST adds one lot of QTY units at COST cents per unit.
+- ship SKU QTY LOCATION removes QTY units from that location and adds their cost to the shipped cost.
+- move SKU QTY FROM TO removes QTY units from FROM and adds them to TO. FROM and TO must differ.
+- undo restores the ledger to how it was before the most recent command that has not been undone. Undo history spans every apply call, and each undo goes one command further back.
+QTY is 1 through 1000000 and COST is 0 through 1000000, both written as plain ASCII digits with no sign. Any other line, including a wrong word count, is Parse with its line number.
+
+Stock is kept as lots per SKU and location, oldest first. Ship and move always take the oldest units first, splitting a lot when needed. Moved units keep their unit cost and their relative order, and join the destination behind the lots already there. Taking more units than a location holds returns Insufficient with the line, SKU, that location, and the quantity available there. undo with nothing left to undo returns NothingToUndo with its line. A script that returns any error changes nothing, as if it was never applied; earlier lines of that script are discarded too.
+
+quantity and value_cents report one SKU at one location, and shipped_cost_cents is the cost of every shipped unit so far. report returns one line per SKU and location that still holds stock, sorted by SKU then location as Rust strings compare: "SKU LOCATION QTY VALUE". Then a "total VALUE" line for all stock and a "shipped VALUE" line. VALUE is dollars with exactly two decimal places, like 0.05 or 12.30, and every line ends with a newline. Only observable behavior is graded; no internal representation is required.
+"""
+schema_version = 1
+[source]
+directory = "fixture"
+
+[runner]
+max_context = 16000
+rust_toolchain = true
+timeout_seconds = 600
+
+[grader]
+hidden_patch = "hidden.patch"
+mutation_patches = [
+  "mutations/ship-newest-first.patch",
+  "mutations/keep-earlier-lines.patch",
+  "mutations/list-empty-stock.patch",
+  "mutations/forget-history-between-scripts.patch",
+]
+reference_patch = "reference.patch"
+
+[[grader.commands]]
+command = [
+  "sh",
+  "-c",
+  "grade_dir=$(mktemp -d); trap 'rm -rf \"$grade_dir\"' EXIT; cargo build --offline --lib --target-dir \"$grade_dir/target\" && rustc --edition=2024 --test tests/hidden.rs --extern warehouse_ledger=\"$grade_dir/target/debug/libwarehouse_ledger.rlib\" -L dependency=\"$grade_dir/target/debug/deps\" -o \"$grade_dir/tests\" && \"$grade_dir/tests\"",
+]
+timeout_seconds = 120

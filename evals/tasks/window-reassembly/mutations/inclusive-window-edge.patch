@@ -1,0 +1,13 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 7f6db9c..cb62738 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -41,7 +41,7 @@ impl Reassembler {
+         if ahead >= HALF_RANGE {
+             return Ok(Vec::new());
+         }
+-        if ahead >= self.window {
++        if ahead > self.window {
+             return Err(ReassemblyError::OutsideWindow(seq));
+         }
+         if ahead != 0 {

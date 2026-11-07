@@ -1,0 +1,32 @@
+diff --git a/src/ledger.rs b/src/ledger.rs
+index 9ab4607..1bc44d4 100644
+--- a/src/ledger.rs
++++ b/src/ledger.rs
+@@ -36,23 +36,21 @@ impl Ledger {
+ 
+     /// Applies every line of `script`, or none of them if any line fails.
+     pub fn apply(&mut self, script: &str) -> Result<(), LedgerError> {
+-        let mut state = self.state.clone();
+-        let mut history = self.history.clone();
++        let state = &mut self.state;
++        let history = &mut self.history;
+         for (index, text) in script.lines().enumerate() {
+             let line = index + 1;
+             let Some(command) = parse_line(text).map_err(|()| LedgerError::Parse { line })? else {
+                 continue;
+             };
+             if command == Command::Undo {
+-                state = history.pop().ok_or(LedgerError::NothingToUndo { line })?;
++                *state = history.pop().ok_or(LedgerError::NothingToUndo { line })?;
+                 continue;
+             }
+             let before = state.clone();
+-            execute(&mut state, command, line)?;
++            execute(state, command, line)?;
+             history.push(before);
+         }
+-        self.state = state;
+-        self.history = history;
+         Ok(())
+     }
+ 
