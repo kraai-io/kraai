@@ -3,7 +3,7 @@ use crate::CommandMetadata;
 pub const METADATA: CommandMetadata = command_metadata! {
     id: "kraai-edit-file";
     description: "Atomically replace complete line ranges using an array of edits. Ranges are 1-based, inclusive, nonoverlapping, and refer to the original file. old_text must match exactly, including line endings but excluding line-number prefixes. new_text is verbatim: supply every newline (\\n or \\r\\n in double-quoted strings); empty text deletes the range. --create requires a new path. --overwrite writes the whole file, creating or replacing it; prefer it to edits when most of a file changes.";
-    signature_help: "kraai-edit-file <path> <edits?> [--create | --overwrite] [--contents <text>] -> record<success: bool, path: string, operation: string>";
+    signature_help: "kraai-edit-file <path> <edits?> [--create | --overwrite] [--contents <text>] -> record<success: bool, path: string, operation: string, warning?: string>";
     services: [];
     examples: [
         {
@@ -74,7 +74,7 @@ mod command {
             let cwd = engine_state.cwd(Some(stack))?;
             let path = Path::new(&path);
 
-            let (path, operation) = match (create, overwrite) {
+            let (written, operation) = match (create, overwrite) {
                 (true, true) => {
                     return Err(command_error(
                         "Invalid write arguments",
@@ -98,9 +98,9 @@ mod command {
                         )
                     })?;
                     let edits = parse_edits(&edits, call.head)?;
-                    let path = edit_text_file(cwd.as_ref(), path, &edits)
+                    let written = edit_text_file(cwd.as_ref(), path, &edits)
                         .map_err(|error| command_error("Unable to edit file", error.to_string(), call.head))?;
-                    (path, "edited")
+                    (written, "edited")
                 }
                 (create, _) => {
                     let flag = if create { "--create" } else { "--overwrite" };
@@ -119,30 +119,36 @@ mod command {
                         )
                     })?;
                     if create {
-                        let path = create_text_file(cwd.as_ref(), path, &contents)
+                        let written = create_text_file(cwd.as_ref(), path, &contents)
                             .map_err(|error| command_error("Unable to create file", error.to_string(), call.head))?;
-                        (path, "created")
+                        (written, "created")
                     } else {
-                        let (path, outcome) = overwrite_text_file(cwd.as_ref(), path, &contents)
+                        let (written, outcome) = overwrite_text_file(cwd.as_ref(), path, &contents)
                             .map_err(|error| command_error("Unable to write file", error.to_string(), call.head))?;
                         let operation = match outcome {
                             Overwrite::Created => "created",
                             Overwrite::Replaced => "replaced",
                         };
-                        (path, operation)
+                        (written, operation)
                     }
                 }
             };
 
-            Ok(Value::record(
-                record! {
-                    "success" => Value::bool(true, call.head),
-                    "path" => Value::string(path.to_string_lossy(), call.head),
-                    "operation" => Value::string(operation, call.head),
-                },
-                call.head,
-            )
-            .into_pipeline_data())
+            let mut result = record! {
+                "success" => Value::bool(true, call.head),
+                "path" => Value::string(written.path.to_string_lossy(), call.head),
+                "operation" => Value::string(operation, call.head),
+            };
+            if let Some(error) = written.unsynced {
+                result.push(
+                    "warning",
+                    Value::string(
+                        format!("the file was written, but syncing its directory failed, so the change may not survive a crash: {error}"),
+                        call.head,
+                    ),
+                );
+            }
+            Ok(Value::record(result, call.head).into_pipeline_data())
         }
     }
 

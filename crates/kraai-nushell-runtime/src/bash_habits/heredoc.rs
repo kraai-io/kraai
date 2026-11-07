@@ -126,7 +126,8 @@ struct Heredoc<'a> {
     operator_at: usize,
     tag: &'a str,
     quoted: bool,
-    /// Where the text goes, or `None` for a heredoc this rewrite does not understand.
+    /// Where the text goes, or `None` for a heredoc this rewrite does not understand. `<<-`
+    /// strips leading tabs, which a verbatim copy would not, so it has none.
     destination: Option<Destination<'a>>,
 }
 
@@ -143,9 +144,12 @@ impl<'a> Heredoc<'a> {
         let indent = content.get(..indent_length)?;
         let operator_at = content.find("<<")?;
         let after = content.get(operator_at.saturating_add(2)..)?;
-        if after.contains("<<") || after.starts_with(['<', '-']) {
+        if after.starts_with('<') {
             return None;
         }
+        let (strips_tabs, after) = after
+            .strip_prefix('-')
+            .map_or((false, after), |rest| (true, rest));
         let after = after.trim_start();
         let (tag, quoted, rest) = match after.chars().next()? {
             quote @ ('\'' | '"') => {
@@ -157,11 +161,13 @@ impl<'a> Heredoc<'a> {
                     inner.get(close.saturating_add(1)..)?,
                 )
             }
+            '\\' => {
+                let (tag, rest) = split_tag(after.get(1..)?)?;
+                (tag, true, rest)
+            }
             _ => {
-                let length = after
-                    .find(|character: char| !is_tag_character(character))
-                    .unwrap_or(after.len());
-                (after.get(..length)?, false, after.get(length..)?)
+                let (tag, rest) = split_tag(after)?;
+                (tag, false, rest)
             }
         };
         if tag.is_empty() || !tag.chars().all(is_tag_character) {
@@ -178,7 +184,9 @@ impl<'a> Heredoc<'a> {
             operator_at,
             tag,
             quoted,
-            destination: destination(command, rest.trim(), &words),
+            destination: (!strips_tabs && !rest.contains("<<"))
+                .then(|| destination(command, rest.trim(), &words))
+                .flatten(),
         })
     }
 
@@ -233,6 +241,14 @@ fn is_plain_path(path: &str) -> bool {
         && path
             .chars()
             .all(|character| character.is_alphanumeric() || "/._-+@,:".contains(character))
+}
+
+/// A bare delimiter word and the text after it.
+fn split_tag(text: &str) -> Option<(&str, &str)> {
+    let length = text
+        .find(|character: char| !is_tag_character(character))
+        .unwrap_or(text.len());
+    Some((text.get(..length)?, text.get(length..)?))
 }
 
 fn is_tag_character(character: char) -> bool {

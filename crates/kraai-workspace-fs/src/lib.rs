@@ -91,14 +91,22 @@ fn read_validated_text_file(
     Ok((canonical, contents))
 }
 
+/// A write that took effect. `unsynced` is set when the parent directory could not be synced
+/// afterwards, so the change might not survive a crash.
+#[derive(Debug)]
+pub struct Written {
+    pub path: PathBuf,
+    pub unsynced: Option<std::io::Error>,
+}
+
 pub fn create_text_file(
     cwd: &Path,
     requested: &Path,
     contents: &str,
-) -> Result<PathBuf, WorkspaceFsError> {
-    let destination = file_destination(cwd, requested)?;
-    atomic_write(&destination, contents.as_bytes(), WriteMode::Create)?;
-    Ok(destination)
+) -> Result<Written, WorkspaceFsError> {
+    let path = file_destination(cwd, requested)?;
+    let unsynced = atomic_write(&path, contents.as_bytes(), WriteMode::Create)?;
+    Ok(Written { path, unsynced })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,13 +121,17 @@ pub fn overwrite_text_file(
     cwd: &Path,
     requested: &Path,
     contents: &str,
-) -> Result<(PathBuf, Overwrite), WorkspaceFsError> {
+) -> Result<(Written, Overwrite), WorkspaceFsError> {
     let destination = file_destination(cwd, requested)?;
     let existing = match canonicalize(cwd, &destination) {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            atomic_write(&destination, contents.as_bytes(), WriteMode::Create)?;
-            return Ok((destination, Overwrite::Created));
+            let unsynced = atomic_write(&destination, contents.as_bytes(), WriteMode::Create)?;
+            let written = Written {
+                path: destination,
+                unsynced,
+            };
+            return Ok((written, Overwrite::Created));
         }
         Err(source) => {
             return Err(WorkspaceFsError::Canonicalize {
@@ -137,14 +149,18 @@ pub fn overwrite_text_file(
     if !metadata.is_file() {
         return Err(WorkspaceFsError::NotFile(existing));
     }
-    atomic_write(
+    let unsynced = atomic_write(
         &existing,
         contents.as_bytes(),
         WriteMode::Replace {
             permissions: metadata.permissions(),
         },
     )?;
-    Ok((existing, Overwrite::Replaced))
+    let written = Written {
+        path: existing,
+        unsynced,
+    };
+    Ok((written, Overwrite::Replaced))
 }
 
 /// The requested file inside its canonical parent directory.
@@ -170,7 +186,7 @@ pub fn edit_text_file(
     cwd: &Path,
     requested: &Path,
     edits: &[ExactTextEdit],
-) -> Result<PathBuf, WorkspaceFsError> {
+) -> Result<Written, WorkspaceFsError> {
     if edits.is_empty() {
         return Err(WorkspaceFsError::NoEdits);
     }
@@ -183,12 +199,12 @@ pub fn edit_text_file(
             source,
         })?
         .permissions();
-    atomic_write(
+    let unsynced = atomic_write(
         &path,
         updated.as_bytes(),
         WriteMode::Replace { permissions },
     )?;
-    Ok(path)
+    Ok(Written { path, unsynced })
 }
 
 #[cfg(test)]
@@ -257,7 +273,10 @@ mod tests {
         let (created, outcome) =
             overwrite_text_file(&directory, Path::new("file.txt"), "first\n").unwrap();
         assert_eq!(outcome, Overwrite::Created);
-        assert_eq!(created, directory.canonicalize().unwrap().join("file.txt"));
+        assert_eq!(
+            created.path,
+            directory.canonicalize().unwrap().join("file.txt")
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

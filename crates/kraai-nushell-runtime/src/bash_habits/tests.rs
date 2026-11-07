@@ -146,7 +146,11 @@ fn startup_files_that_do_not_parse_disable_rewrites() {
     );
 }
 
-const HEREDOCS: [(&str, &str); 8] = [
+const HEREDOCS: [(&str, &str); 9] = [
+    (
+        "cat > a.txt <<\\EOF\n$HOME\nEOF",
+        "kraai-edit-file a.txt --overwrite --contents r#'$HOME\n'#",
+    ),
     (
         "cat > src/lib.rs <<'RS'\n#[derive(Debug)]\nstruct A;\nRS",
         "kraai-edit-file src/lib.rs --overwrite --contents r##'#[derive(Debug)]\nstruct A;\n'##",
@@ -206,6 +210,8 @@ fn heredocs_without_a_safe_rewrite_leave_the_script_alone() {
     for input in [
         "cat > a.txt <<EOF\n$HOME\nEOF\nls 2>/dev/null",
         "cat >> a.txt <<'EOF'\nx\nEOF",
+        "cat > a.txt <<-EOF\n\tx\nEOF\nls 2>/dev/null",
+        "cat <<A <<B\na\nA\nb\nB",
         "git diff | cat > a.txt <<'EOF'\nx\nEOF",
         "cat > a.txt <<'EOF'\nno terminator",
         "print r#'\ncat > a.txt <<'EOF'\nx\nEOF\n'#",
