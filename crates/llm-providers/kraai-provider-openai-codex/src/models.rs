@@ -140,7 +140,7 @@ impl DiscoveredModels {
                 }
             }),
             max_context,
-            max_output: kraai_provider_core::max_output(config.max_output, None, max_context),
+            max_output: config.max_output,
             supports_images: config.supports_images.unwrap_or_else(|| {
                 entry
                     .input_modalities

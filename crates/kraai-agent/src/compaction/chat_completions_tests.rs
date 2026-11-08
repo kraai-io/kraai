@@ -129,8 +129,9 @@ async fn chat_completions_compaction_replays_tools_and_resumes_with_native_calls
         .first()
         .ok_or_else(|| eyre!("missing summary request"))?;
     ensure!(first.pointer("/tools/0/function/name") == Some(&json!("kraai_nushell")));
-    ensure!(first.get("tool_choice") == Some(&json!("none")));
-    ensure!(first.get("parallel_tool_calls").is_none());
+    ensure!(first.get("tool_choice") == Some(&json!("auto")));
+    ensure!(first.get("parallel_tool_calls") == Some(&json!(false)));
+    ensure!(first.to_string().contains("pinned files"));
     let messages = first
         .get("messages")
         .and_then(Value::as_array)

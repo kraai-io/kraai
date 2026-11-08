@@ -71,6 +71,17 @@ pub fn run(request: &RunRequest) -> Result<RunResult> {
     let task_dir = request.task_path.parent().unwrap_or_else(|| Path::new("."));
     task.validate(task_dir)?;
     task.resolve_source_revision(task_dir)?;
+    if task.runner.max_context.is_some()
+        && !request
+            .kraai_provider_config
+            .as_ref()
+            .is_some_and(KraaiProviderConfigRequest::has_model)
+    {
+        bail!(
+            "task {} limits the model context, which needs a Kraai provider config and the evaluated model",
+            task.id
+        );
+    }
 
     let harness_name = request.resolved_harness_name();
     let model_label = request.resolved_model_label();

@@ -102,7 +102,7 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
         let proxy_url = proxy_url.as_deref().ok_or_else(|| {
             color_eyre::eyre::eyre!("provider config requires an active model proxy")
         })?;
-        let path = config.materialize(&base, proxy_url)?;
+        let path = config.materialize(&base, proxy_url, task.runner.max_context)?;
         commit_fixture(&base, "sanitized evaluation provider config")?;
         Some(path.strip_prefix(&base)?.to_path_buf())
     } else {

@@ -67,7 +67,7 @@ pub fn serve_model_proxy(request: ProxyServiceRequest) -> Result<()> {
             let config = config.prepare()?;
             Ok::<_, color_eyre::Report>((
                 Some(config.selected_provider_id().to_owned()),
-                Some(config.materialize(&state_dir, &base_url)?),
+                Some(config.materialize(&state_dir, &base_url, None)?),
             ))
         })
         .transpose()?

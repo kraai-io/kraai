@@ -6,32 +6,36 @@ pub fn compaction_point(max_context: usize) -> usize {
     max_context.saturating_mul(COMPACTION_PERCENT) / 100
 }
 
-pub fn max_output(
-    configured: Option<usize>,
-    catalog: Option<usize>,
-    max_context: Option<usize>,
-) -> Option<usize> {
-    configured.or_else(|| {
-        let reserve = max_context.map(|limit| limit - compaction_point(limit));
-        catalog.into_iter().chain(reserve).min()
-    })
-}
-
 impl crate::Model {
+    /// The most tokens a response to `messages` may use. A response may fill the context up to
+    /// the compaction point, which leaves room for the compaction request that follows it.
+    /// Input already past that point, such as the compaction request itself, may use the rest of
+    /// the window.
     pub fn output_limit(&self, messages: &[ConversationItem]) -> Option<usize> {
-        let remaining = self.max_context.map(|limit| {
-            limit.saturating_sub(
-                messages
-                    .iter()
-                    .map(ConversationItem::estimated_tokens)
-                    .sum(),
-            )
+        let input: usize = messages
+            .iter()
+            .map(ConversationItem::estimated_tokens)
+            .sum();
+        let room = self.max_context.map(|limit| {
+            let point = compaction_point(limit);
+            if input < point {
+                point - input
+            } else {
+                limit.saturating_sub(input)
+            }
         });
         self.max_output
             .into_iter()
-            .chain(remaining)
+            .chain(room)
             .min()
             .filter(|tokens| *tokens > 0)
+    }
+
+    /// Whether the context left before compaction, rather than the model's own output limit,
+    /// limits a response to `messages`, so compacting first would give it more room.
+    pub fn output_limited_by_context(&self, messages: &[ConversationItem]) -> bool {
+        self.output_limit(messages)
+            .is_some_and(|limit| self.max_output.is_none_or(|max| limit < max))
     }
 }
 
@@ -50,41 +54,58 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_default_output_limit_keeps_input_and_output_inside_the_window() {
-        assert_eq!(compaction_point(262_144), 209_715);
-        assert_eq!(max_output(None, Some(235_929), Some(262_144)), Some(52_429));
-        assert_eq!(max_output(None, Some(32_000), Some(262_144)), Some(32_000));
-        assert_eq!(max_output(None, None, Some(16_384)), Some(3_277));
-        assert_eq!(max_output(None, Some(8_192), None), Some(8_192));
-        assert_eq!(max_output(None, None, None), None);
+    fn input(tokens: usize) -> Vec<ConversationItem> {
+        let item = |text: String| ConversationItem::User {
+            content: text.into(),
+        };
+        let overhead = item(String::new()).estimated_tokens();
+        vec![item(
+            "a".repeat((tokens - overhead) * kraai_types::BYTES_PER_TOKEN),
+        )]
     }
 
     #[test]
-    fn a_configured_output_limit_replaces_the_default() {
-        assert_eq!(max_output(Some(8_192), None, Some(16_384)), Some(8_192));
+    fn responses_fill_the_context_up_to_the_compaction_point() {
+        let messages = input(5_000);
+        assert_eq!(compaction_point(16_000), 12_800);
         assert_eq!(
-            max_output(Some(100), Some(32_000), Some(262_144)),
-            Some(100)
+            model(Some(16_000), None).output_limit(&messages),
+            Some(7_800)
+        );
+        assert_eq!(
+            model(Some(16_000), Some(4_096)).output_limit(&messages),
+            Some(4_096)
+        );
+        assert_eq!(
+            model(None, Some(4_096)).output_limit(&messages),
+            Some(4_096)
+        );
+        assert_eq!(model(None, None).output_limit(&messages), None);
+    }
+
+    #[test]
+    fn input_past_the_compaction_point_may_use_the_rest_of_the_window() {
+        assert_eq!(
+            model(Some(16_000), None).output_limit(&input(13_000)),
+            Some(3_000)
+        );
+        assert_eq!(
+            model(Some(16_000), None).output_limit(&input(12_800)),
+            Some(3_200)
+        );
+        assert_eq!(
+            model(Some(16_000), Some(8_192)).output_limit(&input(16_000)),
+            None
         );
     }
 
     #[test]
-    fn a_response_never_requests_more_than_the_window_left_after_its_input() {
-        let input = vec![ConversationItem::User {
-            content: "a".repeat(4_000 * kraai_types::BYTES_PER_TOKEN).into(),
-        }];
-        let input_tokens: usize = input.iter().map(ConversationItem::estimated_tokens).sum();
-        assert_eq!(
-            model(Some(16_384), Some(8_192)).output_limit(&input),
-            Some(8_192)
-        );
-        assert_eq!(
-            model(Some(10_000), Some(8_192)).output_limit(&input),
-            Some(10_000 - input_tokens)
-        );
-        assert_eq!(model(Some(1_000), Some(8_192)).output_limit(&input), None);
-        assert_eq!(model(None, Some(8_192)).output_limit(&input), Some(8_192));
-        assert_eq!(model(None, None).output_limit(&input), None);
+    fn only_a_limit_set_by_the_context_left_counts_as_context_bound() {
+        let messages = input(5_000);
+        assert!(model(Some(16_000), None).output_limited_by_context(&messages));
+        assert!(model(Some(16_000), Some(8_192)).output_limited_by_context(&messages));
+        assert!(!model(Some(16_000), Some(4_096)).output_limited_by_context(&messages));
+        assert!(!model(None, Some(4_096)).output_limited_by_context(&messages));
+        assert!(!model(None, None).output_limited_by_context(&messages));
     }
 }

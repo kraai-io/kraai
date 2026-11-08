@@ -1,0 +1,14 @@
+diff --git a/src/stock.rs b/src/stock.rs
+index 177c931..b6d37dd 100644
+--- a/src/stock.rs
++++ b/src/stock.rs
+@@ -62,9 +62,6 @@ impl Stock {
+                 lots.pop_front();
+             }
+         }
+-        if lots.is_empty() {
+-            self.lots.remove(&key);
+-        }
+         Ok(taken)
+     }
+ 

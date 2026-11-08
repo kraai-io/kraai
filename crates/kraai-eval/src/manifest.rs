@@ -76,6 +76,10 @@ pub struct RunnerPolicy {
     pub max_processes: u64,
     #[serde(default = "default_cpu_quota_percent")]
     pub cpu_quota_percent: u64,
+    /// Lowers the evaluated model's context limit so the harness compacts. Only Kraai provider
+    /// configs can apply it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context: Option<u64>,
 }
 
 impl Default for RunnerPolicy {
@@ -87,6 +91,7 @@ impl Default for RunnerPolicy {
             max_memory_bytes: default_max_memory_bytes(),
             max_processes: default_max_processes(),
             cpu_quota_percent: default_cpu_quota_percent(),
+            max_context: None,
         }
     }
 }
@@ -148,6 +153,11 @@ impl TaskManifest {
             || self.max_submission_bytes == 0
         {
             bail!("timeouts, resource limits, and max_submission_bytes must be greater than zero");
+        }
+        if let Some(limit) = self.runner.max_context
+            && (limit == 0 || i64::try_from(limit).is_err())
+        {
+            bail!("runner.max_context must be between 1 and {}", i64::MAX);
         }
         if self.grader.commands.is_empty() {
             bail!("task must define at least one grader command");

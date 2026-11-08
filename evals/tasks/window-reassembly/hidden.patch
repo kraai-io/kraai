@@ -1,0 +1,209 @@
+diff --git a/tests/hidden.rs b/tests/hidden.rs
+new file mode 100644
+index 0000000..805aee5
+--- /dev/null
++++ b/tests/hidden.rs
+@@ -0,0 +1,203 @@
++use window_reassembly::{Reassembler, ReassemblyError};
++
++fn bytes(text: &str) -> Vec<u8> {
++    text.as_bytes().to_vec()
++}
++
++fn delivered(texts: &[&str]) -> Result<Vec<Vec<u8>>, ReassemblyError> {
++    Ok(texts.iter().map(|text| bytes(text)).collect())
++}
++
++#[test]
++fn windows_must_fit_half_the_sequence_space() {
++    assert_eq!(
++        Reassembler::new(0, 0).err(),
++        Some(ReassemblyError::InvalidWindow(0))
++    );
++    assert_eq!(
++        Reassembler::new(0, 32_769).err(),
++        Some(ReassemblyError::InvalidWindow(32_769))
++    );
++    assert_eq!(
++        Reassembler::new(0, u16::MAX).err(),
++        Some(ReassemblyError::InvalidWindow(u16::MAX))
++    );
++    assert!(Reassembler::new(7, 32_768).is_ok());
++    assert!(Reassembler::new(7, 1).is_ok());
++}
++
++#[test]
++fn early_packets_buffer_across_the_wrap() {
++    let mut reassembler = Reassembler::new(65_533, 8).unwrap();
++    assert_eq!(reassembler.push(1, bytes("e")), Ok(vec![]));
++    assert_eq!(reassembler.push(65_535, bytes("c")), Ok(vec![]));
++    assert_eq!(reassembler.push(0, bytes("d")), Ok(vec![]));
++    assert_eq!(reassembler.push(65_534, bytes("b")), Ok(vec![]));
++    assert_eq!(reassembler.buffered(), 4);
++    assert_eq!(
++        reassembler.push(65_533, bytes("a")),
++        delivered(&["a", "b", "c", "d", "e"])
++    );
++    assert_eq!(reassembler.expected(), 2);
++    assert_eq!(reassembler.buffered(), 0);
++}
++
++#[test]
++fn the_window_excludes_its_far_edge() {
++    let mut reassembler = Reassembler::new(65_530, 10).unwrap();
++    assert_eq!(reassembler.push(3, bytes("last")), Ok(vec![]));
++    assert_eq!(
++        reassembler.push(4, bytes("edge")),
++        Err(ReassemblyError::OutsideWindow(4))
++    );
++    assert_eq!(
++        reassembler.push(30_000, bytes("far")),
++        Err(ReassemblyError::OutsideWindow(30_000))
++    );
++    assert_eq!(reassembler.buffered(), 1);
++    assert_eq!(reassembler.expected(), 65_530);
++
++    let mut single = Reassembler::new(65_535, 1).unwrap();
++    assert_eq!(
++        single.push(0, bytes("next")),
++        Err(ReassemblyError::OutsideWindow(0))
++    );
++    assert_eq!(single.push(65_535, bytes("now")), delivered(&["now"]));
++    assert_eq!(single.push(0, bytes("next")), delivered(&["next"]));
++    assert_eq!(single.expected(), 1);
++}
++
++#[test]
++fn packets_behind_the_stream_are_ignored_after_wrapping() {
++    let mut reassembler = Reassembler::new(65_534, 4).unwrap();
++    assert_eq!(reassembler.push(65_534, bytes("a")), delivered(&["a"]));
++    assert_eq!(reassembler.push(65_535, bytes("b")), delivered(&["b"]));
++    assert_eq!(reassembler.push(0, bytes("c")), delivered(&["c"]));
++    for seq in [65_535, 65_534, 0, 40_000, 32_769] {
++        assert_eq!(
++            reassembler.push(seq, bytes("late")),
++            Ok(vec![]),
++            "seq {seq}"
++        );
++    }
++    assert_eq!(reassembler.expected(), 1);
++    assert_eq!(reassembler.buffered(), 0);
++    assert_eq!(reassembler.push(1, bytes("d")), delivered(&["d"]));
++}
++
++#[test]
++fn half_the_sequence_space_ahead_counts_as_behind() {
++    let mut reassembler = Reassembler::new(100, 32_768).unwrap();
++    assert_eq!(reassembler.push(100 + 32_767, bytes("far")), Ok(vec![]));
++    assert_eq!(reassembler.buffered(), 1);
++    assert_eq!(
++        reassembler.push(100u16.wrapping_add(32_768), bytes("behind")),
++        Ok(vec![])
++    );
++    assert_eq!(reassembler.buffered(), 1);
++
++    let mut wrapped = Reassembler::new(40_000, 32_768).unwrap();
++    assert_eq!(
++        wrapped.push(40_000u16.wrapping_add(32_767), bytes("far")),
++        Ok(vec![])
++    );
++    assert_eq!(
++        wrapped.push(40_000u16.wrapping_add(32_768), bytes("behind")),
++        Ok(vec![])
++    );
++    assert_eq!(wrapped.buffered(), 1);
++}
++
++#[test]
++fn the_first_buffered_copy_wins() {
++    let mut reassembler = Reassembler::new(65_535, 4).unwrap();
++    assert_eq!(reassembler.push(1, bytes("first")), Ok(vec![]));
++    assert_eq!(reassembler.push(1, bytes("second")), Ok(vec![]));
++    assert_eq!(reassembler.buffered(), 1);
++    assert_eq!(reassembler.push(0, bytes("zero")), Ok(vec![]));
++    assert_eq!(
++        reassembler.push(65_535, bytes("start")),
++        delivered(&["start", "zero", "first"])
++    );
++}
++
++#[test]
++fn rejected_packets_leave_no_trace() {
++    let mut reassembler = Reassembler::new(65_000, 16).unwrap();
++    assert_eq!(reassembler.push(65_005, bytes("kept")), Ok(vec![]));
++    assert_eq!(
++        reassembler.push(65_016, bytes("rejected")),
++        Err(ReassemblyError::OutsideWindow(65_016))
++    );
++    assert_eq!(reassembler.buffered(), 1);
++    assert_eq!(reassembler.expected(), 65_000);
++}
++
++/// Shuffles every window-sized block of a stream that wraps several times and checks that
++/// delivery stays in order with nothing lost or repeated.
++#[test]
++fn shuffled_streams_deliver_every_packet_once_in_order() {
++    let mut state = 0x9e37_79b9_7f4a_7c15u64;
++    let mut random = move |bound: usize| {
++        state ^= state << 13;
++        state ^= state >> 7;
++        state ^= state << 17;
++        (state % bound as u64) as usize
++    };
++    for (first, window) in [
++        (65_500u16, 7u16),
++        (0, 32),
++        (12_345, 3),
++        (65_535, 128),
++        (32_768, 1),
++    ] {
++        let packets = 200_000usize;
++        let mut reassembler = Reassembler::new(first, window).unwrap();
++        let mut next = 0usize;
++        for block in (0..packets).step_by(usize::from(window)) {
++            let mut order: Vec<usize> =
++                (block..(block + usize::from(window)).min(packets)).collect();
++            for index in (1..order.len()).rev() {
++                order.swap(index, random(index + 1));
++            }
++            for index in order {
++                let seq = first.wrapping_add(index as u16);
++                let output = reassembler
++                    .push(seq, (index as u64).to_le_bytes().to_vec())
++                    .unwrap_or_else(|error| panic!("window {window} packet {index}: {error:?}"));
++                for payload in output {
++                    let packet = u64::from_le_bytes(payload.try_into().unwrap()) as usize;
++                    assert_eq!(packet, next, "window {window} from {first}");
++                    next += 1;
++                }
++                if random(4) == 0 && index > 0 {
++                    let late = first.wrapping_add((index - 1) as u16);
++                    if next > index - 1 {
++                        assert_eq!(reassembler.push(late, b"dup".to_vec()), Ok(vec![]));
++                    }
++                }
++            }
++        }
++        assert_eq!(next, packets, "window {window} from {first}");
++        assert_eq!(reassembler.buffered(), 0);
++    }
++}
++
++#[test]
++fn reversed_blocks_with_a_window_of_64_survive_several_wraps() {
++    let mut reassembler = Reassembler::new(0, 64).unwrap();
++    let mut next = 0u64;
++    for block in (0..200_000u64).step_by(5) {
++        for index in (block..block + 5).rev() {
++            for payload in reassembler
++                .push(index as u16, index.to_le_bytes().to_vec())
++                .unwrap()
++            {
++                assert_eq!(u64::from_le_bytes(payload.try_into().unwrap()), next);
++                next += 1;
++            }
++        }
++    }
++    assert_eq!(next, 200_000);
++    assert_eq!(reassembler.buffered(), 0);
++}

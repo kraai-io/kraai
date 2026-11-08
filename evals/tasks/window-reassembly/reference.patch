@@ -1,0 +1,40 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 50bf660..7f6db9c 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,5 +1,8 @@
+ use std::collections::HashMap;
+ 
++/// Sequence numbers at least this far ahead of the expected one are behind it instead.
++const HALF_RANGE: u16 = 1 << 15;
++
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum ReassemblyError {
+     InvalidWindow(u16),
+@@ -15,7 +18,7 @@ pub struct Reassembler {
+ 
+ impl Reassembler {
+     pub fn new(first: u16, window: u16) -> Result<Self, ReassemblyError> {
+-        if window == 0 {
++        if window == 0 || window > HALF_RANGE {
+             return Err(ReassemblyError::InvalidWindow(window));
+         }
+         Ok(Self {
+@@ -34,13 +37,14 @@ impl Reassembler {
+     }
+ 
+     pub fn push(&mut self, seq: u16, payload: Vec<u8>) -> Result<Vec<Vec<u8>>, ReassemblyError> {
+-        if seq < self.expected {
++        let ahead = seq.wrapping_sub(self.expected);
++        if ahead >= HALF_RANGE {
+             return Ok(Vec::new());
+         }
+-        if seq >= self.expected.wrapping_add(self.window) {
++        if ahead >= self.window {
+             return Err(ReassemblyError::OutsideWindow(seq));
+         }
+-        if seq != self.expected {
++        if ahead != 0 {
+             self.pending.entry(seq).or_insert(payload);
+             return Ok(Vec::new());
+         }

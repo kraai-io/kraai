@@ -13,9 +13,9 @@ pub fn normalize_chat_messages(
     for message in kraai_provider_core::prepare_history(messages, provider_id) {
         match message {
             ConversationItem::Compaction { .. } => {}
-            ConversationItem::System { text } => {
-                normalized.push(RequestMessage::System { content: text })
-            }
+            ConversationItem::System { text } => normalized.push(RequestMessage::System {
+                content: RequestContent::Text(text),
+            }),
             ConversationItem::FileContext { text } => normalized.push(RequestMessage::User {
                 content: RequestContent::Text(text),
             }),
@@ -39,11 +39,18 @@ pub fn normalize_chat_messages(
                             arguments_error,
                             ..
                         }) => {
-                            let arguments = match arguments_error {
-                                Some(_) => input,
-                                None => {
-                                    serde_json::to_string(&crate::wire::ScriptArguments { input })?
-                                }
+                            // Providers reject a request whose call arguments are not a JSON
+                            // object, so a cut off or malformed call keeps its text as the input.
+                            let replays_as_sent =
+                                arguments_error.is_some()
+                                    && serde_json::from_str::<
+                                        serde_json::Map<String, serde_json::Value>,
+                                    >(&input)
+                                    .is_ok();
+                            let arguments = if replays_as_sent {
+                                input
+                            } else {
+                                serde_json::to_string(&crate::wire::ScriptArguments { input })?
                             };
                             tool_calls.push(crate::wire::FunctionCall {
                                 id: call_id,
@@ -66,7 +73,7 @@ pub fn normalize_chat_messages(
             } => {
                 normalized.push(RequestMessage::Tool {
                     tool_call_id: call_id,
-                    content: output.display_text().into_owned(),
+                    content: RequestContent::Text(output.display_text().into_owned()),
                 });
             }
         }
@@ -83,7 +90,10 @@ fn content_parts(content: MessageContent, images: &ResolvedImages) -> Result<Req
             .parts()
             .iter()
             .map(|part| match part {
-                ContentPart::Text { text } => Ok(RequestContentPart::Text { text: text.clone() }),
+                ContentPart::Text { text } => Ok(RequestContentPart::Text {
+                    text: text.clone(),
+                    cache_control: None,
+                }),
                 ContentPart::Image { image } => Ok(RequestContentPart::ImageUrl {
                     image_url: ImageUrl {
                         url: images.data_url(image)?.to_string(),
@@ -236,6 +246,36 @@ mod tests {
                 {"role":"assistant", "content":null, "tool_calls":[{
                     "id":"call-1", "type":"function", "function":{
                         "name":"bash", "arguments":r#"{"command": "ls"}"#
+                    }
+                }]}
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cut_off_call_replays_as_a_json_object() -> Result<()> {
+        let sent = r#"{"input":"cat src/ledger.rs\nfn ma"#;
+        let normalized = normalize_chat_messages(
+            vec![ConversationItem::Assistant {
+                items: vec![AssistantItem::ScriptCall(ScriptCall {
+                    call_id: ToolCallId::new("call-1"),
+                    name: "kraai_nushell".to_string(),
+                    input: sent.to_string(),
+                    arguments_error: Some("cut off".to_string()),
+                    rewrite: None,
+                })],
+            }],
+            &ResolvedImages::default(),
+            &kraai_types::ProviderId::new("fixture"),
+        )?;
+        assert_eq!(
+            serde_json::to_value(normalized)?,
+            serde_json::json!([
+                {"role":"assistant", "content":null, "tool_calls":[{
+                    "id":"call-1", "type":"function", "function":{
+                        "name":"kraai_nushell",
+                        "arguments":serde_json::to_string(&crate::wire::ScriptArguments { input: sent.into() })?
                     }
                 }]}
             ])

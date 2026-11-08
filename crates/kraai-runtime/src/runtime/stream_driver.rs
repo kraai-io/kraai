@@ -10,7 +10,9 @@ use kraai_provider_core::{
     ScriptToolDefinition,
 };
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock, parse_script_input};
-use kraai_types::{MessageId, ModelId, ProviderId, ScriptCall, SessionId, ToolCallId};
+use kraai_types::{
+    ConversationItem, MessageId, ModelId, ProviderId, ScriptCall, SessionId, ToolCallId,
+};
 use tokio::sync::{RwLock, mpsc};
 
 use super::core::emit_event;
@@ -277,6 +279,7 @@ impl StreamReader {
         } = request;
         let mut response = ResponseState::default();
         let mut reissues = 0_u32;
+        let mut warned_about_output_limit = false;
         loop {
             let started = Instant::now();
             let stream = match self
@@ -322,6 +325,64 @@ impl StreamReader {
                 .read_response(stream, &provider_id, &mut response)
                 .await
             {
+                // A response cut off before it ran a script would leave the turn with nothing done.
+                // When the context left before compaction set the limit, compacting makes room for
+                // a retry. A response with neither a call nor text means the provider dropped the
+                // cut off call, so it is retried once with a notice. Otherwise the model sees the cut
+                // off call as an invalid call, or the cut off text stands.
+                ResponseEnd::Finished
+                    if response.reached_output_limit && !response.ran_script() =>
+                {
+                    let model = match self.providers.get_provider(&provider_id) {
+                        Some(provider) => provider.get_model(&model_id).await,
+                        None => None,
+                    };
+                    let context_bound = model.as_ref().is_some_and(|model| {
+                        model.output_limited_by_context(&provider_request.messages)
+                    });
+                    let recovery =
+                        match compaction.take_if(|_| context_bound) {
+                            Some(compaction) => OutputLimitRecovery::Compact(Box::new(compaction)),
+                            None if !warned_about_output_limit
+                                && response.boundary.is_none()
+                                && !response.answered =>
+                            {
+                                OutputLimitRecovery::Warn(model.and_then(|model| {
+                                    model.output_limit(&provider_request.messages)
+                                }))
+                            }
+                            None => return response.finish(),
+                        };
+                    if let Err(error) = self.ensure_turn_owned().await {
+                        return StreamDriveResult::FailedDuringStream { error };
+                    }
+                    match recovery {
+                        OutputLimitRecovery::Compact(compaction) => match self
+                            .compact(&compaction, &provider_request, &provider_id, &model_id)
+                            .await
+                        {
+                            Ok(compacted) => provider_request = compacted,
+                            Err(error) => {
+                                tracing::warn!(%error, "Compaction after a cut off response failed; keeping the response");
+                                return response.finish();
+                            }
+                        },
+                        OutputLimitRecovery::Warn(limit) => {
+                            warned_about_output_limit = true;
+                            provider_request
+                                .messages
+                                .push(ConversationItem::FileContext {
+                                    text: output_limit_notice(limit),
+                                });
+                        }
+                    }
+                    if !self.forward(StreamEvent::Restart {
+                        reason: String::from("The response reached the output token limit"),
+                    }) {
+                        return StreamDriveResult::Stopped;
+                    }
+                    response = ResponseState::default();
+                }
                 ResponseEnd::Finished => return response.finish(),
                 ResponseEnd::Stopped => return StreamDriveResult::Stopped,
                 ResponseEnd::Failed(error) => {
@@ -459,6 +520,7 @@ impl StreamReader {
                         );
                         continue;
                     }
+                    response.answered = true;
                     self.forward(StreamEvent::Text {
                         item_id,
                         phase,
@@ -522,9 +584,17 @@ impl StreamReader {
 struct ResponseState {
     boundary: Option<CompletedProtocolBoundary>,
     reached_output_limit: bool,
+    /// The response streamed text, so a cut off answer is visible to the user.
+    answered: bool,
 }
 
 impl ResponseState {
+    fn ran_script(&self) -> bool {
+        self.boundary
+            .as_ref()
+            .is_some_and(|boundary| boundary.protocol_error.is_none())
+    }
+
     fn finish(self) -> StreamDriveResult {
         let (call_id, script, invalid_script, protocol_error, rewrites) = match self.boundary {
             Some(boundary) => (
@@ -557,6 +627,19 @@ enum ResponseEnd {
         /// The request did not fit the model's context window.
         overflow: bool,
     },
+}
+
+enum OutputLimitRecovery {
+    Compact(Box<ContextCompaction>),
+    /// Retry once, telling the model its last response was cut off at this many tokens.
+    Warn(Option<usize>),
+}
+
+fn output_limit_notice(limit: Option<usize>) -> String {
+    let limit = limit.map_or_else(String::new, |tokens| format!(" of {tokens} tokens"));
+    format!(
+        "Your previous response reached the output limit{limit} before its script call finished, so it was discarded. Respond again within that limit, and split a large file edit into several smaller kraai-edit-file calls."
+    )
 }
 
 fn protocol_boundary(call: &ScriptCall) -> CompletedProtocolBoundary {

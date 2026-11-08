@@ -1,0 +1,13 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 7f6db9c..a1e704b 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -39,7 +39,7 @@ impl Reassembler {
+     pub fn push(&mut self, seq: u16, payload: Vec<u8>) -> Result<Vec<Vec<u8>>, ReassemblyError> {
+         let ahead = seq.wrapping_sub(self.expected);
+         if ahead >= HALF_RANGE {
+-            return Ok(Vec::new());
++            return Err(ReassemblyError::OutsideWindow(seq));
+         }
+         if ahead >= self.window {
+             return Err(ReassemblyError::OutsideWindow(seq));

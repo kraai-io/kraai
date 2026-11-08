@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod cache;
 mod messages;
 mod models;
 mod profile;

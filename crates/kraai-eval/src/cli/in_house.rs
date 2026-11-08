@@ -63,8 +63,10 @@ pub(super) fn run(
     let provider_config = profile
         .sanitize_kraai_provider
         .then(|| {
-            super::provider_config_path(&args)
-                .map(|path| KraaiProviderConfigRequest::new(path, args.provider.clone()))
+            super::provider_config_path(&args).map(|path| {
+                KraaiProviderConfigRequest::new(path, args.provider.clone())
+                    .with_model(harness.model.clone())
+            })
         })
         .transpose()?;
     let model_proxy = profile.model_proxy(provider_config.as_ref())?;
