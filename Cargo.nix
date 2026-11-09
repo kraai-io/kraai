@@ -12195,10 +12195,10 @@ rec {
       };
       "libz-sys" = rec {
         crateName = "libz-sys";
-        version = "1.1.29";
+        version = "1.1.31";
         edition = "2018";
         links = "z";
-        sha256 = "1n98kqya7a7a0cxf5n5z3g13rj7a1vqxynk2xc7bja1qfxbrdg45";
+        sha256 = "1cjw8nisxy5iv8yms7dsxwhclb26djl38n6xq4nmlqxxra73087z";
         libName = "libz_sys";
         license = "MIT OR Apache-2.0";
         authors = [
