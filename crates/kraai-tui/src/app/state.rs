@@ -25,7 +25,6 @@ pub(super) struct AppState {
     pub(super) cost_recovery_list_pending: bool,
     pub(super) cost_recovery_sessions: std::collections::BTreeSet<SessionId>,
     pub(super) exit: bool,
-    pub(super) editor_requested: bool,
     pub(super) menu_search: String,
     pub(super) help_scroll: Cell<u16>,
     pub(super) approval_scroll: Cell<usize>,
@@ -142,7 +141,6 @@ impl Default for AppState {
                 .try_into()
                 .unwrap_or(u64::MAX),
             exit: false,
-            editor_requested: false,
             menu_search: String::new(),
             help_scroll: Cell::new(0),
             approval_scroll: Cell::new(0),

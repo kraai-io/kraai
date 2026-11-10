@@ -216,7 +216,7 @@ pub(super) fn render_help_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
         Line::raw("/ for commands"),
         Line::raw(""),
         Line::raw("Enter        Send       Shift+Enter  Newline"),
-        Line::raw("↑/↓          History    Ctrl+E       Editor"),
+        Line::raw("↑/↓          History"),
         Line::raw("Ctrl+←/→     Move word  Ctrl+W       Delete word"),
         Line::raw("PgUp/PgDn    Scroll     Home/End     First/last"),
         Line::raw("Ctrl+V       Paste image"),

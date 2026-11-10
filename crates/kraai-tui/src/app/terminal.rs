@@ -12,10 +12,7 @@ impl App {
         }
         let mut changed = false;
         let batch_started = Instant::now();
-        while !self.state.editor_requested
-            && !self.state.exit
-            && batch_started.elapsed() < TERMINAL_EVENT_BATCH_BUDGET
-        {
+        while !self.state.exit && batch_started.elapsed() < TERMINAL_EVENT_BATCH_BUDGET {
             let Ok(event) = self.input.receiver().try_recv() else {
                 break;
             };
@@ -69,7 +66,7 @@ impl App {
     }
 
     fn handle_input_event(&mut self, event: CrosstermEvent) -> bool {
-        if self.state.editor_requested || self.state.exit {
+        if self.state.exit {
             return false;
         }
         match event {

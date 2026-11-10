@@ -118,19 +118,6 @@ impl App {
             needs_redraw |= prior_style != self.state.cursor_preferences.style;
             needs_redraw |= prior_muted != self.state.palette.muted;
             cursor_override.apply(self.state.cursor_preferences.style)?;
-            if self.state.editor_requested {
-                self.input.stop();
-                let edited = self.open_composer_editor(terminal, cursor_override);
-                self.input.start()?;
-                if let Err(error) = edited {
-                    if self.state.exit {
-                        return Err(error);
-                    }
-                    self.set_error(format!("Editor error: {error}"));
-                }
-                cursor.update(Instant::now(), true);
-                needs_redraw = true;
-            }
             let blink_changed = cursor.update(Instant::now(), input_changed)
                 && self.state.composer_cursor_enabled()
                 && self.state.cursor_preferences.custom_blink();

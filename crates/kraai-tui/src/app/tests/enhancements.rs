@@ -176,7 +176,7 @@ fn clearing_multiline_input_restores_three_row_background() -> color_eyre::Resul
 }
 
 #[test]
-fn word_editing_preserves_unicode_and_editor_shortcut_does_not_insert_text() {
+fn word_editing_preserves_unicode() {
     let mut harness = test_harness();
     harness.app.set_input_text(String::from("hello 你好 world"));
     harness
@@ -190,11 +190,6 @@ fn word_editing_preserves_unicode_and_editor_shortcut_does_not_insert_text() {
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL));
-    assert_eq!(harness.app.state.input, "hello ");
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
-    assert!(harness.app.state.editor_requested);
     assert_eq!(harness.app.state.input, "hello ");
 }
 

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::Result;

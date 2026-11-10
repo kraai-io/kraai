@@ -34,7 +34,6 @@ ratatui = { workspace = true }
 regex = { workspace = true }
 serde_json = { workspace = true }
 signal-hook = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true }
 tracing.workspace = true
 unicode-segmentation = { workspace = true }
@@ -42,6 +41,7 @@ unicode-width = { workspace = true }
 
 [dev-dependencies]
 kraai-test-support = { workspace = true }
+tempfile = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 webbrowser = { workspace = true }

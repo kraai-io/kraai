@@ -1,8 +1,3 @@
-#![expect(
-    clippy::panic_in_result_fn,
-    reason = "image composer tests assert after fallible editor operations"
-)]
-
 use super::*;
 use crate::app::{KeyCode, KeyEvent, KeyModifiers, is_known_slash_command};
 use kraai_execution_types::ImageAttachment;
@@ -331,40 +326,6 @@ fn attachment_limit_keeps_the_draft() {
 }
 
 #[test]
-fn editor_preserves_reorders_and_removes_existing_chips() -> color_eyre::Result<()> {
-    let mut harness = test_harness();
-    paste(&mut harness);
-    harness.app.insert_input_text(" between ");
-    paste(&mut harness);
-    let original = harness.app.state.input.clone();
-    let (_, labels) = harness.app.state.draft_images.editor(&original);
-    let reordered = labels
-        .iter()
-        .rev()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(" new ");
-    harness
-        .app
-        .apply_edited_prompt(reordered, None, &original, &labels)?;
-    assert_eq!(harness.app.state.draft_images.len(), 2);
-    let original = harness.app.state.input.clone();
-    let (_, labels) = harness.app.state.draft_images.editor(&original);
-    let duplicate = labels.iter().take(1).cloned().collect::<String>().repeat(2);
-    assert!(
-        harness
-            .app
-            .apply_edited_prompt(duplicate, None, &original, &labels)
-            .is_err()
-    );
-    harness
-        .app
-        .apply_edited_prompt("only text".into(), None, &original, &labels)?;
-    assert_eq!(harness.app.state.draft_images.len(), 0);
-    Ok(())
-}
-
-#[test]
 fn automatic_session_creation_preserves_next_draft_and_pending_paste() {
     let mut harness = test_harness();
     ready(&mut harness);
@@ -416,28 +377,7 @@ fn recovery_preserves_pending_chip_and_completion_identity() {
 }
 
 #[test]
-fn editor_cannot_rebind_image_to_a_literal_label() -> color_eyre::Result<()> {
-    let mut harness = test_harness();
-    paste(&mut harness);
-    harness.app.insert_input_text(" literal [Image #1]");
-    let original = harness.app.state.input.clone();
-    let (editor_text, labels) = harness.app.state.draft_images.editor(&original);
-    harness
-        .app
-        .apply_edited_prompt(editor_text, None, &original, &labels)?;
-    assert_eq!(harness.app.state.input, original);
-    assert_eq!(harness.app.state.draft_images.len(), 1);
-    harness
-        .app
-        .apply_edited_prompt(" literal [Image #1]".into(), None, &original, &labels)?;
-    assert_eq!(harness.app.state.input, " literal [Image #1]");
-    assert_eq!(harness.app.state.draft_images.len(), 0);
-    Ok(())
-}
-
-#[test]
-fn image_numbers_follow_submitted_order_after_insertion_deletion_and_editor_reordering()
--> color_eyre::Result<()> {
+fn image_numbers_follow_submitted_order_after_insertion_and_deletion() {
     let mut harness = test_harness();
     let mut second = image();
     second.id = "b".repeat(64);
@@ -450,20 +390,13 @@ fn image_numbers_follow_submitted_order_after_insertion_deletion_and_editor_reor
     paste(&mut harness);
     assert_eq!(harness.app.state.input, "[Image #1][Image #2]");
     assert_eq!(harness.app.state.input_cursor, 10);
-    let original = harness.app.state.input.clone();
-    let (_, labels) = harness.app.state.draft_images.editor(&original);
-    let reordered = labels.iter().rev().cloned().collect::<String>();
-    harness
-        .app
-        .apply_edited_prompt(reordered, None, &original, &labels)?;
-    assert_eq!(harness.app.state.input, "[Image #1][Image #2]");
     assert_eq!(
         harness
             .app
             .compose_message(&harness.app.state.input)
             .images()
             .next(),
-        Some(&second)
+        Some(&image())
     );
     harness.app.state.input_cursor = 0;
     harness.app.delete_input_char();
@@ -474,9 +407,8 @@ fn image_numbers_follow_submitted_order_after_insertion_deletion_and_editor_reor
             .compose_message(&harness.app.state.input)
             .images()
             .next(),
-        Some(&image())
+        Some(&second)
     );
-    Ok(())
 }
 
 #[test]
@@ -521,56 +453,4 @@ fn failed_submission_does_not_merge_an_identical_independent_draft() {
             result: Err(kraai_runtime::RuntimeError::unavailable("failed")),
         });
     assert_eq!(harness.app.state.input, "same message\n\nsame message");
-}
-
-#[test]
-fn editor_distinguishes_literal_labels_and_marker_collisions() -> color_eyre::Result<()> {
-    let mut harness = test_harness();
-    harness
-        .app
-        .insert_input_text("literal [Image #1] [Image #1; kraai:0] before ");
-    paste(&mut harness);
-    harness.app.insert_input_text(" after [Image #1]");
-    let original = harness.app.state.input.clone();
-    let content = harness.app.compose_message(&original);
-    let (editor_text, labels) = harness.app.state.draft_images.editor(&original);
-    harness.app.apply_edited_prompt(
-        editor_text.replace("before", "edited before"),
-        None,
-        &original,
-        &labels,
-    )?;
-    let edited = harness.app.compose_message(&harness.app.state.input);
-    assert_eq!(
-        edited.images().collect::<Vec<_>>(),
-        content.images().collect::<Vec<_>>()
-    );
-    assert!(
-        edited
-            .text_only()
-            .contains("literal [Image #1] [Image #1; kraai:0] edited before")
-    );
-    assert!(edited.text_only().ends_with(" after [Image #1]"));
-    Ok(())
-}
-
-#[test]
-fn editor_keeps_an_image_that_finishes_loading_while_open() -> color_eyre::Result<()> {
-    let mut harness = test_harness();
-    let id = begin_paste(&mut harness);
-    let original = harness.app.state.input.clone();
-    let (editor_text, labels) = harness.app.state.draft_images.editor(&original);
-    harness.app.finish_image_import(id, Ok(Some(image())));
-    harness
-        .app
-        .apply_edited_prompt(editor_text, None, &original, &labels)?;
-    assert_eq!(
-        harness
-            .app
-            .compose_message(&harness.app.state.input)
-            .images()
-            .next(),
-        Some(&image())
-    );
-    Ok(())
 }

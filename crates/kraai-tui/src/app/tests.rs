@@ -518,7 +518,6 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
 mod approval_overflow;
 mod approval_response;
 mod cost;
-mod editor_review;
 mod enhancements;
 mod host_failure;
 mod session_load;
