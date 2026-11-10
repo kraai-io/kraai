@@ -60,45 +60,27 @@ fn provider(base_url: String) -> Result<OpenAiCodexProvider> {
                     .join("auth.json"),
             ),
         )?),
-        client: build_codex_http_client(true, false, &base_url)?,
+        client: build_codex_http_client(true, &base_url)?,
         models: RwLock::new(DiscoveredModels::default()),
         rejected_reasoning: RwLock::new(RejectedReasoning::default()),
         model_configs: BTreeMap::new(),
         base_url,
         proxy_token: Some("test-token".into()),
-        allow_http_proxy: false,
     })
 }
 
 #[test]
-fn subscription_config_rejects_http_backends() {
+fn provider_config_accepts_http_and_https_backends_on_any_host() {
     for url in [
+        "https://chatgpt.com/backend-api",
+        "https://proxy.example.com/backend-api",
+        "http://127.0.0.1:1234/backend-api",
+        "http://[::1]/backend-api",
+        "http://localhost/backend-api",
+        "http://192.168.1.10/backend-api",
         "http://example.com/backend-api",
-        "http://127.0.0.1/backend-api",
     ] {
-        let config = DynamicConfig::from([("base_url".into(), DynamicValue::String(url.into()))]);
-        assert!(!OpenAiCodexFactory::validate_provider_config(&config).is_empty());
-    }
-}
-
-#[test]
-fn backend_transport_validation_allows_https_and_only_loopback_http_proxies() {
-    for (url, subscription_allowed, proxy_allowed) in [
-        ("https://chatgpt.com/backend-api", true, true),
-        ("https://proxy.example.com/backend-api", true, true),
-        ("http://127.0.0.1:1234/backend-api", false, true),
-        ("http://127.0.0.2/backend-api", false, true),
-        ("http://[::1]/backend-api", false, true),
-        ("http://localhost/backend-api", false, true),
-        ("http://0.0.0.0/backend-api", false, false),
-        ("http://192.168.1.10/backend-api", false, false),
-        ("http://[::]/backend-api", false, false),
-        ("http://example.com/backend-api", false, false),
-        ("http://localhost.example.com/backend-api", false, false),
-        ("http://127.0.0.1.example.com/backend-api", false, false),
-    ] {
-        for (proxy_token, allowed) in [(false, subscription_allowed), (true, proxy_allowed)] {
-            assert_eq!(valid_backend_url(url, proxy_token, false), allowed, "{url}");
+        for proxy_token in [false, true] {
             let mut config =
                 DynamicConfig::from([("base_url".into(), DynamicValue::String(url.into()))]);
             if proxy_token {
@@ -107,9 +89,8 @@ fn backend_transport_validation_allows_https_and_only_loopback_http_proxies() {
                     DynamicValue::String("TEST_PROXY_TOKEN".into()),
                 );
             }
-            assert_eq!(
+            assert!(
                 OpenAiCodexFactory::validate_provider_config(&config).is_empty(),
-                allowed,
                 "{url}"
             );
         }
@@ -117,11 +98,11 @@ fn backend_transport_validation_allows_https_and_only_loopback_http_proxies() {
 }
 
 #[tokio::test]
-async fn unsafe_backends_are_rejected_before_loading_auth_or_building_requests() -> Result<()> {
+async fn malformed_backends_are_rejected_before_loading_auth_or_building_requests() -> Result<()> {
     for (url, proxy_token) in [
-        ("http://example.com/backend-api", None),
-        ("http://127.0.0.1/backend-api", None),
-        ("http://example.com/backend-api", Some("test-token".into())),
+        ("file:///tmp/backend-api", None),
+        ("https://user:secret@example.com/backend-api", None),
+        ("file:///tmp/backend-api", Some("test-token".into())),
     ] {
         let mut provider = provider(url.into())?;
         provider.proxy_token = proxy_token;
@@ -142,7 +123,7 @@ async fn unsafe_backends_are_rejected_before_loading_auth_or_building_requests()
                 DynamicConfig::from([("base_url".into(), DynamicValue::String(url.into()))]);
             assert!(
                 factory
-                    .create(ProviderId::new("unsafe"), config)
+                    .create(ProviderId::new("malformed"), config)
                     .is_err_and(|error| error.to_string() == BACKEND_URL_ERROR)
             );
         }
@@ -294,15 +275,16 @@ async fn redirect_server(location: &str) -> Result<(String, JoinHandle<Result<()
 }
 
 #[tokio::test]
-async fn subscription_redirect_policy_rejects_cross_origin_https_targets() -> Result<()> {
+async fn subscription_redirect_policy_rejects_cross_origin_targets() -> Result<()> {
     let origin = Url::parse("https://backend.example/backend-api")?.origin();
     for target in [
         "https://elsewhere.example/codex/models",
         "https://backend.example:8443/codex/models",
+        "http://backend.example/codex/models",
     ] {
         let (base_url, server) = redirect_server(target).await?;
         let client = streaming_http_client_builder()
-            .redirect(codex_redirect_policy(false, false, origin.clone()))
+            .redirect(codex_redirect_policy(false, origin.clone()))
             .build()?;
         let result = client
             .get(base_url)
@@ -312,30 +294,6 @@ async fn subscription_redirect_policy_rejects_cross_origin_https_targets() -> Re
         assert!(result.is_err_and(|error| error.is_redirect()), "{target}");
         server.await??;
     }
-    Ok(())
-}
-
-#[tokio::test]
-async fn proxy_redirect_cannot_bypass_backend_transport_validation() -> Result<()> {
-    let (base_url, server) = redirect_server("http://example.com/backend-api/codex/models").await?;
-    let provider = provider(base_url)?;
-    let result = provider.refresh_model_list().await;
-    assert!(result.is_err_and(|error| {
-        error
-            .downcast_ref::<reqwest::Error>()
-            .is_some_and(reqwest::Error::is_redirect)
-    }));
-    server.await??;
-    Ok(())
-}
-
-#[tokio::test]
-async fn subscription_client_rejects_http_requests() -> Result<()> {
-    let result = build_codex_http_client(false, false, DEFAULT_CHATGPT_BACKEND_URL)?
-        .get("http://127.0.0.1:1/backend-api/codex/models")
-        .send()
-        .await;
-    assert!(result.is_err_and(|error| error.is_builder()));
     Ok(())
 }
 
@@ -468,30 +426,6 @@ async fn pricing_uses_the_discovered_model_identity() -> Result<()> {
         ModelId::new("gpt-6-astra")
     );
     Ok(())
-}
-
-#[test]
-fn private_http_proxy_requires_explicit_opt_in_and_proxy_authentication() {
-    for address in ["192.168.1.10", "10.88.0.1", "169.254.1.2", "[fd00::1]"] {
-        let url = format!("http://{address}:1234/backend-api");
-        assert!(!valid_backend_url(&url, true, false));
-        assert!(!valid_backend_url(&url, false, true));
-        assert!(valid_backend_url(&url, true, true));
-        let mut config = DynamicConfig::from([
-            ("base_url".into(), DynamicValue::String(url)),
-            ("allow_http_proxy".into(), DynamicValue::Bool(true)),
-            (
-                "proxy_token_env".into(),
-                DynamicValue::String("TEST_PROXY_TOKEN".into()),
-            ),
-        ]);
-        assert!(OpenAiCodexFactory::validate_provider_config(&config).is_empty());
-        config.remove("proxy_token_env");
-        assert!(!OpenAiCodexFactory::validate_provider_config(&config).is_empty());
-    }
-    for url in ["http://example.com", "http://8.8.8.8", "http://0.0.0.0"] {
-        assert!(!valid_backend_url(url, true, true));
-    }
 }
 
 #[tokio::test]
