@@ -40,7 +40,7 @@ fn wheel_scrolling_moves_three_lines_and_resumes_following_at_bottom() {
     assert_eq!(harness.app.state.scroll, 0);
     assert!(!harness.app.state.auto_scroll);
 
-    harness.app.state.mode = super::UiMode::Help;
+    harness.app.state.mode = super::UiMode::Model;
     harness
         .app
         .handle_mouse_event(wheel(MouseEventKind::ScrollDown));
@@ -528,6 +528,7 @@ mod session_load;
 mod snapshot_delivery;
 
 mod auth_response;
+mod command_list;
 mod mcp_auth;
 
 mod images;

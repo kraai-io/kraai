@@ -34,10 +34,7 @@ fn metadata_refresh_reconciles_deferred_saves_before_the_turn_finishes() -> colo
     active.session.is_running = true;
     active.activity = SessionActivity::Streaming;
     snapshot(&mut harness, &SessionId::new("session"), 0, active);
-    harness
-        .app
-        .set_model_option("effort", "high")
-        .map_err(color_eyre::eyre::Error::msg)?;
+    set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
     assert!(saves(&harness).is_empty());
     remove_effort(&mut harness);
     assert!(harness.app.state.selected_model_options.is_empty());

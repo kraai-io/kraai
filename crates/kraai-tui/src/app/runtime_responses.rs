@@ -25,26 +25,31 @@ impl App {
             }
             RuntimeResponse::Models(Ok(models)) => {
                 self.state.config_loaded = true;
-                let previous_options = self.state.selected_model_options.clone();
-                let selected = self
-                    .state
-                    .filtered_models()
-                    .get(self.state.model_menu_index)
-                    .map(|(provider, model)| ((*provider).to_owned(), model.id.clone()));
+                let highlighted = (self.state.mode == UiMode::Model)
+                    .then(|| {
+                        self.state
+                            .filtered_models()
+                            .get(self.state.sheet_index)
+                            .map(|(provider, model)| ((*provider).to_owned(), model.id.clone()))
+                    })
+                    .flatten();
+                let setting = self.state.highlighted_model_setting();
                 self.state.models_by_provider = models;
-                let filtered = self.state.filtered_models();
-                let index = selected.map_or(self.state.model_menu_index, |(provider, id)| {
-                    filtered
-                        .iter()
-                        .position(|(candidate, model)| *candidate == provider && model.id == id)
-                        .unwrap_or(0)
-                });
-                self.state.model_menu_index = index.min(filtered.len().saturating_sub(1));
+                if let Some(id) = setting {
+                    self.state.highlight_model_setting(&id);
+                }
+                if self.state.mode == UiMode::Model {
+                    let filtered = self.state.filtered_models();
+                    let index = highlighted.map_or(self.state.sheet_index, |(provider, id)| {
+                        filtered
+                            .iter()
+                            .position(|(candidate, model)| *candidate == provider && model.id == id)
+                            .unwrap_or(0)
+                    });
+                    self.state.sheet_index = index.min(filtered.len().saturating_sub(1));
+                }
                 self.ensure_selected_model();
                 self.reconcile_model_options();
-                if self.state.selected_model_options != previous_options {
-                    self.save_workspace_preferences();
-                }
                 self.reconcile_pending_session_model_options();
                 self.maybe_send_startup_message();
             }

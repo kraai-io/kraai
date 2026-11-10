@@ -4,6 +4,7 @@ mod text_input;
 
 pub use chat_history::ChatHistory;
 pub(crate) use chat_history::RenderedLine;
+pub(crate) use chat_history::wrap_words;
 pub(crate) use terminal_text::display_width;
 pub(crate) use terminal_text::fitting_prefix;
 pub(crate) use terminal_text::normalize_terminal_text;

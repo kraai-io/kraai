@@ -26,12 +26,11 @@ pub(super) enum UiMode {
     Chat,
     Executions,
     AgentMenu,
-    ModelMenu,
-    ModelOptionsMenu,
+    Model,
+    ModelSettings,
     ProvidersMenu,
     Mcp,
     SessionsMenu,
-    Help,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -9,20 +9,19 @@ use ratatui::{
     widgets::{Block, Borders, Widget},
 };
 
-use crate::components::{ChatHistory, TextInput};
+use crate::components::ChatHistory;
 
 use super::{AppState, UiMode};
 
-mod command_popup;
 mod error;
 mod mcp;
 mod menus;
-mod model_options;
 mod providers;
 mod script_approval;
+mod sheet;
+mod sheets;
 mod status;
-use command_popup::render_command_popup;
-use menus::{render_agent_menu, render_help_menu, render_model_menu, render_sessions_menu};
+use menus::{render_agent_menu, render_sessions_menu};
 use providers::render_providers_menu;
 use script_approval::render_script_approval_panel;
 pub(super) use status::format_token_count;
@@ -49,7 +48,8 @@ pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
             12.min(available)
         }
     } else {
-        TextInput::new(&state.input, state.input_cursor)
+        state
+            .composer()
             .get_height(area.width)
             .min(10)
             .min((area.height / 3).max(3))
@@ -95,21 +95,18 @@ impl Widget for &AppState {
         if self.mode == UiMode::Chat && self.has_local_script_approval() {
             render_script_approval_panel(self, input_area, buf);
         } else {
-            TextInput::new(&self.input, self.input_cursor).render(input_area, buf);
+            self.composer().render(input_area, buf);
         }
-        if self.mode == UiMode::Chat && !self.has_local_script_approval() {
-            render_command_popup(self, area, input_area, buf);
+        if let Some(sheet) = sheets::active(self) {
+            sheet::render(&sheet, &self.sheet_scroll, chat_history_area, area, buf);
         }
 
         match self.mode {
             UiMode::AgentMenu => render_agent_menu(self, area, buf),
-            UiMode::ModelMenu => render_model_menu(self, area, buf),
-            UiMode::ModelOptionsMenu => model_options::render(self, area, buf),
             UiMode::ProvidersMenu => render_providers_menu(self, area, buf),
             UiMode::Mcp => mcp::render_mcp(self, area, buf),
             UiMode::SessionsMenu => render_sessions_menu(self, area, buf),
-            UiMode::Help => render_help_menu(self, area, buf),
-            UiMode::Chat | UiMode::Executions => {}
+            UiMode::Chat | UiMode::Executions | UiMode::Model | UiMode::ModelSettings => {}
         }
         error::render_error(self, area, buf);
     }
@@ -125,33 +122,6 @@ pub(super) fn copy_via_osc52(text: &str) -> Result<(), String> {
     stdout
         .flush()
         .map_err(|err| format!("stdout flush failed: {err}"))
-}
-
-pub(super) fn active_command_prefix(input: &str) -> Option<&str> {
-    let cmd = input.strip_prefix('/')?;
-    if cmd.chars().any(char::is_whitespace) {
-        return None;
-    }
-    Some(cmd)
-}
-
-pub(super) fn is_known_slash_command(command_line: &str) -> bool {
-    command_line
-        .split_whitespace()
-        .next()
-        .is_some_and(|command| {
-            super::SLASH_COMMANDS
-                .iter()
-                .any(|(known, _)| *known == command)
-        })
-}
-
-pub(super) fn slash_command_matches(prefix: &str) -> Vec<(&'static str, &'static str)> {
-    super::SLASH_COMMANDS
-        .iter()
-        .copied()
-        .filter(|(command, _)| command.starts_with(prefix))
-        .collect()
 }
 
 pub(super) fn adjust_index(current: usize, len: usize, delta: isize) -> usize {
@@ -221,7 +191,7 @@ pub(super) fn model_menu_previous_index(current_index: usize, len: usize) -> usi
 
 fn selection_style(active: bool) -> Style {
     if active {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(crate::theme::ACCENT)
     } else {
         Style::default()
     }

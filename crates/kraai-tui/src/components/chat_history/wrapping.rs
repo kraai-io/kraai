@@ -75,10 +75,35 @@ pub(super) fn push_prose(
     }
 }
 
+/// Word-wraps plain text to `width` columns.
+pub(crate) fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let style = Style::default();
+    let mut lines = Vec::new();
+    push_prose(
+        &mut lines,
+        &[RenderedSpan {
+            text: text.to_owned(),
+            style,
+        }],
+        width,
+        style,
+    );
+    lines.iter().map(ChatHistory::line_text).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ratatui::style::Modifier;
+
+    #[test]
+    fn plain_text_wraps_at_word_boundaries() {
+        assert_eq!(
+            wrap_words("budget is outside its bounds", 12),
+            ["budget is", "outside its", "bounds"]
+        );
+        assert!(wrap_words("anything", 0).is_empty());
+    }
 
     #[test]
     fn wraps_words_across_style_boundaries() {

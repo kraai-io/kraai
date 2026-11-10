@@ -357,7 +357,7 @@ fn model_search_preserves_order_unicode_and_cross_field_matches() {
         ("alpha  z", Vec::new()),
         ("missing", Vec::new()),
     ] {
-        harness.app.state.menu_search = query.to_owned();
+        harness.app.state.sheet_query = query.to_owned();
         let actual: Vec<_> = harness
             .app
             .state
@@ -367,11 +367,11 @@ fn model_search_preserves_order_unicode_and_cross_field_matches() {
             .collect();
         assert_eq!(actual, expected, "query: {query}");
     }
-    harness.app.state.mode = UiMode::ModelMenu;
-    harness.app.state.menu_search = String::from("Β ÉLAN");
+    harness.app.state.mode = UiMode::Model;
+    harness.app.state.sheet_query = String::from("Β ÉLAN");
     harness
         .app
-        .handle_model_menu_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        .handle_model_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
         harness.app.state.selected_provider_id.as_deref(),
         Some("Alpha")
@@ -403,42 +403,43 @@ fn model_refresh_preserves_selection_and_clamps_missing_or_filtered_entries() {
     harness.app.state.selected_provider_id = Some(String::from("provider"));
     harness.app.state.selected_model_id = Some(String::from("keep"));
     harness.app.state.models_by_provider = models(&["keep", "target"]);
-    harness.app.state.model_menu_index = 1;
+    harness.app.state.mode = UiMode::Model;
+    harness.app.state.sheet_index = 1;
 
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models(&[
             "other", "keep", "target",
         ]))));
-    assert_eq!(harness.app.state.model_menu_index, 2);
+    assert_eq!(harness.app.state.sheet_index, 2);
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models(&["other", "keep"]))));
-    assert_eq!(harness.app.state.model_menu_index, 0);
+    assert_eq!(harness.app.state.sheet_index, 0);
 
-    harness.app.state.model_menu_index = 99;
+    harness.app.state.sheet_index = 99;
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models(&["keep", "other"]))));
-    assert_eq!(harness.app.state.model_menu_index, 1);
+    assert_eq!(harness.app.state.sheet_index, 1);
 
-    harness.app.state.menu_search = String::from("missing");
+    harness.app.state.sheet_query = String::from("missing");
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models(&["keep", "other"]))));
-    assert_eq!(harness.app.state.model_menu_index, 0);
-    harness.app.state.menu_search.clear();
+    assert_eq!(harness.app.state.sheet_index, 0);
+    harness.app.state.sheet_query.clear();
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(HashMap::new())));
-    assert_eq!(harness.app.state.model_menu_index, 0);
+    assert_eq!(harness.app.state.sheet_index, 0);
     assert_eq!(harness.app.state.selected_model_id.as_deref(), Some("keep"));
 }
 
 #[test]
 fn model_search_matches_provider_name_and_id_with_empty_results() {
     let mut harness = test_harness();
-    harness.app.state.mode = UiMode::ModelMenu;
+    harness.app.state.mode = UiMode::Model;
     harness.app.state.models_by_provider.insert(
         String::from("provider"),
         vec![kraai_runtime::Model {
@@ -449,10 +450,10 @@ fn model_search_matches_provider_name_and_id_with_empty_results() {
         }],
     );
     for query in ["PROVIDER", "model-id", "display"] {
-        harness.app.state.menu_search = query.to_string();
+        harness.app.state.sheet_query = query.to_string();
         assert_eq!(harness.app.state.filtered_models().len(), 1);
     }
-    harness.app.state.menu_search = String::from("missing");
+    harness.app.state.sheet_query = String::from("missing");
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -602,40 +603,6 @@ fn delayed_profile_response_closes_execution_view() {
 }
 
 #[test]
-fn short_help_scrolls_to_final_binding_and_resets_on_reopen() {
-    let mut harness = test_harness();
-    harness.app.handle_command("help");
-    let first = screen(&harness.app.state, 90, 8);
-    assert!(first.contains("/ for commands"));
-    assert!(!first.contains("Close / cancel"));
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-    assert!(screen(&harness.app.state, 90, 8).contains("Close / cancel"));
-    let end = harness.app.state.help_scroll.get();
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(harness.app.state.help_scroll.get(), end - 1);
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert!(screen(&harness.app.state, 90, 8).contains("Close / cancel"));
-    screen(&harness.app.state, 90, 30);
-    assert_eq!(harness.app.state.help_scroll.get(), 0);
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-    screen(&harness.app.state, 90, 8);
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(harness.app.state.mode, UiMode::Chat);
-    harness.app.handle_command("help");
-    assert_eq!(harness.app.state.help_scroll.get(), 0);
-}
-
-#[test]
 fn error_details_preserve_draft_mode_and_pending_approval() {
     let mut harness = test_harness();
     harness.app.state.input = String::from("draft");
@@ -734,12 +701,12 @@ fn error_details_reach_end_of_large_error_and_resize() {
 #[test]
 fn shift_enter_inserts_newline_without_submitting_a_command() {
     let mut harness = test_harness();
-    harness.app.state.input = String::from("/help");
+    harness.app.state.input = String::from("/undo");
     harness.app.state.input_cursor = 5;
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
-    assert_eq!(harness.app.state.input, "/help\n");
+    assert_eq!(harness.app.state.input, "/undo\n");
     assert_eq!(harness.app.state.input_cursor, 6);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert!(harness.drain_requests().is_empty());

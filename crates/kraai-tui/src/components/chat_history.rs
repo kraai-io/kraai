@@ -12,6 +12,8 @@ use super::{display_width, fitting_prefix, normalize_terminal_text};
 mod markdown;
 mod wrapping;
 
+pub(crate) use wrapping::wrap_words;
+
 const MESSAGE_GUTTER_WIDTH: usize = 3;
 
 pub struct ChatHistory<'a> {
@@ -340,7 +342,7 @@ impl<'a> ChatHistory<'a> {
         width: u16,
     ) -> Vec<RenderedLine> {
         let style = Style::default().fg(if selected {
-            Color::Cyan
+            crate::theme::ACCENT
         } else {
             Color::DarkGray
         });
@@ -935,7 +937,7 @@ mod tests {
         let has_colored_inline_code = lines[0]
             .spans
             .iter()
-            .any(|span| span.text == "beta" && span.style.fg == Some(markdown::ACCENT));
+            .any(|span| span.text == "beta" && span.style.fg == Some(crate::theme::ACCENT));
         assert!(has_colored_inline_code);
     }
 

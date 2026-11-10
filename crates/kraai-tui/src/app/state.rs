@@ -25,8 +25,14 @@ pub(super) struct AppState {
     pub(super) cost_recovery_list_pending: bool,
     pub(super) cost_recovery_sessions: std::collections::BTreeSet<SessionId>,
     pub(super) exit: bool,
-    pub(super) menu_search: String,
-    pub(super) help_scroll: Cell<u16>,
+    /// Text typed while a sheet owns the composer; the message draft stays in `input`.
+    pub(super) sheet_query: String,
+    pub(super) sheet_index: usize,
+    pub(super) sheet_scroll: Cell<usize>,
+    pub(super) sheet_notice: Option<String>,
+    pub(super) model_settings: Option<super::model_options::ModelSettingsTarget>,
+    /// What the command list stays filtered by while its rows are walked into the composer.
+    pub(super) command_filter: Option<String>,
     pub(super) approval_scroll: Cell<usize>,
     pub(super) approval_expanded: bool,
     pub(super) execution_expanded: HashMap<String, bool>,
@@ -76,11 +82,9 @@ pub(super) struct AppState {
     pub(super) session_model_saves: HashMap<SessionId, super::session_model::SessionModelSave>,
     pub(super) next_model_save_id: u64,
     pub(super) selected_model_options: kraai_types::ModelOptionValues,
-    pub(super) option_menu_index: usize,
-    pub(super) option_choice_index: usize,
-    pub(super) option_editor: Option<super::model_options::ModelOptionEditor>,
-    pub(super) option_editor_input: String,
-    pub(super) option_editor_error: Option<String>,
+    /// Option values last chosen for each provider and model.
+    pub(super) remembered_model_options:
+        BTreeMap<String, BTreeMap<String, kraai_types::ModelOptionValues>>,
     pub(super) context_usage: Option<RuntimeSessionContextUsage>,
     pub(super) pending_script: Option<PendingScriptInfo>,
     pub(super) submitted_script_decisions: BTreeMap<SessionId, BTreeSet<String>>,
@@ -88,12 +92,9 @@ pub(super) struct AppState {
     pub(super) current_session_id: Option<SessionId>,
     pub(super) current_tip_id: Option<String>,
     pub(super) agent_menu_index: usize,
-    pub(super) model_menu_index: usize,
     pub(super) sessions_menu_index: usize,
     pub(super) script_approval_action: ScriptApprovalAction,
     pub(super) script_phase: ScriptPhase,
-    pub(super) command_completion_prefix: Option<String>,
-    pub(super) command_completion_index: usize,
     pub(super) command_popup_dismissed: bool,
     pub(super) settings_draft: Option<SettingsDocument>,
     pub(super) settings_errors: HashMap<String, String>,
@@ -141,8 +142,12 @@ impl Default for AppState {
                 .try_into()
                 .unwrap_or(u64::MAX),
             exit: false,
-            menu_search: String::new(),
-            help_scroll: Cell::new(0),
+            sheet_query: String::new(),
+            sheet_index: 0,
+            sheet_scroll: Cell::new(0),
+            sheet_notice: None,
+            model_settings: None,
+            command_filter: None,
             approval_scroll: Cell::new(0),
             approval_expanded: false,
             execution_expanded: HashMap::new(),
@@ -168,7 +173,7 @@ impl Default for AppState {
             auto_scroll: true,
             config_loaded: false,
             mode: UiMode::Chat,
-            status: String::from("Type /help for commands"),
+            status: String::from("Type / for commands"),
             last_error: None,
             error_open: false,
             error_scroll: Cell::new(0),
@@ -192,11 +197,7 @@ impl Default for AppState {
             session_model_saves: HashMap::new(),
             next_model_save_id: 0,
             selected_model_options: Default::default(),
-            option_menu_index: 0,
-            option_choice_index: 0,
-            option_editor: None,
-            option_editor_input: String::new(),
-            option_editor_error: None,
+            remembered_model_options: BTreeMap::new(),
             context_usage: None,
             pending_script: None,
             submitted_script_decisions: BTreeMap::new(),
@@ -204,12 +205,9 @@ impl Default for AppState {
             current_session_id: None,
             current_tip_id: None,
             agent_menu_index: 0,
-            model_menu_index: 0,
             sessions_menu_index: 0,
             script_approval_action: ScriptApprovalAction::Allow,
             script_phase: ScriptPhase::Idle,
-            command_completion_prefix: None,
-            command_completion_index: 0,
             command_popup_dismissed: false,
             settings_draft: None,
             settings_errors: HashMap::new(),
@@ -251,10 +249,24 @@ impl AppState {
                 super::WorkspacePreferences::default()
             });
 
+        let selected_model_options = workspace_preferences
+            .provider_id
+            .as_ref()
+            .zip(workspace_preferences.model_id.as_ref())
+            .and_then(|(provider, model)| {
+                workspace_preferences
+                    .model_options
+                    .get(provider)?
+                    .get(model)
+            })
+            .cloned()
+            .unwrap_or_default();
+
         Self {
             selected_provider_id: workspace_preferences.provider_id,
             selected_model_id: workspace_preferences.model_id,
-            selected_model_options: workspace_preferences.options,
+            selected_model_options,
+            remembered_model_options: workspace_preferences.model_options,
             selected_profile_id: startup_options
                 .agent_profile_id
                 .clone()

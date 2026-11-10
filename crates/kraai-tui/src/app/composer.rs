@@ -36,7 +36,7 @@ impl App {
             KeyCode::Char('d') if alt => self.delete_input_word(true),
             _ => return false,
         }
-        self.reset_completion_cycle();
+        self.reset_command_selection();
         true
     }
 
@@ -52,7 +52,7 @@ impl App {
     }
 }
 
-fn word_left(input: &str, cursor: usize) -> usize {
+pub(super) fn word_left(input: &str, cursor: usize) -> usize {
     let mut position = cursor;
     let mut word = false;
     for (index, ch) in input.get(..cursor).unwrap_or_default().char_indices().rev() {

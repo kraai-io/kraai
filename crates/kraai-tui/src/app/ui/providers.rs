@@ -654,7 +654,7 @@ fn auth_badge(auth: &ProviderAuthStatus) -> String {
 fn pane_style(active: bool) -> Style {
     if active {
         Style::default()
-            .fg(Color::Cyan)
+            .fg(crate::theme::ACCENT)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().add_modifier(Modifier::BOLD)

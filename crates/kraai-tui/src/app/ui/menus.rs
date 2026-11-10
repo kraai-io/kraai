@@ -9,53 +9,6 @@ use ratatui::{
 use super::super::AppState;
 use super::{centered_rect, menu_scroll_offset};
 
-pub(super) fn render_model_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
-    let models = state.filtered_models();
-    let popup_area = centered_rect(area.width.saturating_mul(3) / 4, area.height / 2, area);
-
-    let mut lines = vec![Line::styled(
-        "Select model (Enter to choose, Esc to close)",
-        Style::default().add_modifier(Modifier::BOLD),
-    )];
-
-    if models.is_empty() {
-        lines.push(Line::raw("No matching models"));
-    } else {
-        for (idx, (provider, model)) in models.iter().enumerate() {
-            let selected = idx == state.model_menu_index;
-            let marker = if selected { "⮞" } else { " " };
-            let current = state
-                .selected_provider_id
-                .as_ref()
-                .zip(state.selected_model_id.as_ref())
-                .is_some_and(|(p, m)| p == *provider && m == &model.id);
-            let suffix = if current { " (current)" } else { "" };
-            lines.push(Line::styled(
-                format!("{marker} {provider} / {}{}", model.name, suffix),
-                if selected {
-                    Style::default().fg(Color::Cyan)
-                } else {
-                    Style::default()
-                },
-            ));
-        }
-    }
-
-    let visible_lines = popup_area.height.saturating_sub(2) as usize;
-    let selected_line = if models.is_empty() {
-        1
-    } else {
-        state.model_menu_index.saturating_add(1)
-    };
-    let scroll_offset = menu_scroll_offset(selected_line, lines.len(), visible_lines);
-
-    Clear.render(popup_area, buf);
-    Paragraph::new(Text::from(lines))
-        .block(super::menu_block().title(format!("/model  Filter: {}", state.menu_search)))
-        .scroll((scroll_offset as u16, 0))
-        .render(popup_area, buf);
-}
-
 pub(super) fn render_agent_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
     let popup_area = centered_rect(area.width.saturating_mul(3) / 4, area.height / 2, area);
 
@@ -78,7 +31,7 @@ pub(super) fn render_agent_menu(state: &AppState, area: Rect, buf: &mut Buffer) 
             lines.push(Line::styled(
                 format!("{marker} {}{}", profile.id, suffix),
                 if selected {
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(crate::theme::ACCENT)
                 } else {
                     Style::default()
                 },
@@ -150,7 +103,7 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
     lines.push(Line::styled(
         format!("{marker} Start new chat"),
         if state.sessions_menu_index == 0 {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(crate::theme::ACCENT)
         } else {
             Style::default()
         },
@@ -179,7 +132,7 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
         lines.push(Line::styled(
             format!("{marker} {title}{current_suffix}{approval_suffix}{running_suffix}"),
             if selected {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(crate::theme::ACCENT)
             } else {
                 Style::default()
             },
@@ -206,37 +159,7 @@ pub(super) fn render_sessions_menu(state: &AppState, area: Rect, buf: &mut Buffe
 
     Clear.render(popup_area, buf);
     Paragraph::new(Text::from(lines))
-        .block(super::menu_block().title(format!("/sessions  Filter: {}", state.menu_search)))
+        .block(super::menu_block().title(format!("/sessions  Filter: {}", state.sheet_query)))
         .scroll((scroll_offset as u16, 0))
-        .render(popup_area, buf);
-}
-
-pub(super) fn render_help_menu(state: &AppState, area: Rect, buf: &mut Buffer) {
-    let lines = vec![
-        Line::raw("/ for commands"),
-        Line::raw(""),
-        Line::raw("Enter        Send       Shift+Enter  Newline"),
-        Line::raw("↑/↓          History"),
-        Line::raw("Ctrl+←/→     Move word  Ctrl+W       Delete word"),
-        Line::raw("PgUp/PgDn    Scroll     Home/End     First/last"),
-        Line::raw("Ctrl+V       Paste image"),
-        Line::raw("F6           Executions"),
-        Line::raw("F8           Error details"),
-        Line::raw("Esc          Close / cancel"),
-    ];
-    let popup_area = centered_rect(
-        area.width.min(52),
-        area.height.min(lines.len() as u16 + 2),
-        area,
-    );
-
-    let max_scroll =
-        (lines.len() as u16).saturating_sub(popup_area.height.saturating_sub(2).max(1));
-    let scroll = state.help_scroll.get().min(max_scroll);
-    state.help_scroll.set(scroll);
-    Clear.render(popup_area, buf);
-    Paragraph::new(Text::from(lines))
-        .scroll((scroll, 0))
-        .block(super::menu_block().title("Help · ↑/↓ scroll · Esc close"))
         .render(popup_area, buf);
 }

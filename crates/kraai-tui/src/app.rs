@@ -22,6 +22,7 @@ mod auth;
 mod chat;
 mod chat_render;
 mod clipboard_worker;
+mod commands;
 mod composer;
 mod cost;
 mod cursor;
@@ -35,8 +36,8 @@ mod images;
 mod input;
 mod lifecycle;
 mod mcp_auth;
-mod menu_search;
 mod model_options;
+mod model_sheet;
 mod palette;
 mod providers_flow;
 mod runtime_bridge;
@@ -46,6 +47,7 @@ mod session_commands;
 mod session_model;
 mod settings;
 mod settings_flow;
+mod sheet_query;
 mod state;
 mod terminal;
 mod terminal_reply;
@@ -57,6 +59,7 @@ use self::auth::{
     pending_auth_target,
 };
 use self::chat_render::build_tip_chain;
+use self::commands::{active_command_prefix, is_known_slash_command};
 use self::runtime_bridge::{RuntimeEventBridgeMessage, spawn_event_bridge, spawn_runtime_bridge};
 use self::settings::{
     clear_field_value, default_values, field_value_display, is_boolean_field, merge_values,
@@ -70,24 +73,10 @@ use self::types::{
     ScriptPhase, SettingsFocus, SettingsModelField, SettingsProviderField, UiMode, UsageModelKey,
 };
 use self::ui::{
-    STATUSLINE_STREAMING_FRAMES, active_command_prefix, adjust_index, copy_via_osc52,
-    format_token_count, is_known_slash_command, model_menu_next_index, model_menu_previous_index,
-    slash_command_matches,
+    STATUSLINE_STREAMING_FRAMES, adjust_index, copy_via_osc52, format_token_count,
+    model_menu_next_index, model_menu_previous_index,
 };
 use self::workspace_preferences::WorkspacePreferences;
-
-const SLASH_COMMANDS: [(&str, &str); 10] = [
-    ("agent", "Open agent selector"),
-    ("help", "Open command help"),
-    ("model", "Open model selector"),
-    ("option", "Configure selected model options"),
-    ("new", "Start new chat"),
-    ("providers", "Open providers"),
-    ("mcp", "MCP servers and sign-in"),
-    ("quit", "Exit Kraai"),
-    ("sessions", "Open sessions menu"),
-    ("undo", "Restore last user message"),
-];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeRequestDelivery {

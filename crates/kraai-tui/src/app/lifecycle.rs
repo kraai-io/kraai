@@ -141,20 +141,16 @@ impl App {
                 frame.render_widget(&self.state, area);
 
                 cursor.position = None;
+                let [_, _, input_area] = ui::chat_layout(&self.state, area);
                 if self.state.mode == UiMode::Chat {
-                    let [_, _, input_area] = ui::chat_layout(&self.state, area);
                     self.state.input_width = input_area.width;
-
-                    if self.state.composer_cursor_enabled()
-                        && input_area.width > 0
-                        && input_area.height > 0
-                    {
-                        cursor.position = Some(
-                            TextInput::new(&self.state.input, self.state.input_cursor)
-                                .get_cursor_position(input_area)
-                                .into(),
-                        );
-                    }
+                }
+                if self.state.composer_cursor_enabled()
+                    && input_area.width > 0
+                    && input_area.height > 0
+                {
+                    cursor.position =
+                        Some(self.state.composer().get_cursor_position(input_area).into());
                 }
                 if let Some(position) = cursor.position
                     && (!self.state.cursor_preferences.custom_blink() || cursor.visible)
