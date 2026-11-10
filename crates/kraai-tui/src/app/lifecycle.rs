@@ -132,7 +132,7 @@ impl App {
 
             terminal.draw(|frame| {
                 let area = frame.area();
-                if matches!(self.state.mode, UiMode::Chat | UiMode::Executions) {
+                if self.state.mode == UiMode::Chat {
                     let [chat_area, _, _] = ui::chat_layout(&self.state, area);
                     self.state.refresh_chat_render_cache(chat_area.width);
                     self.update_chat_viewport(chat_area.height);

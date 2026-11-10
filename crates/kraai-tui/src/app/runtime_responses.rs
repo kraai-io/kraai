@@ -114,9 +114,6 @@ impl App {
                 self.state.providers_advanced_focus = ProvidersAdvancedFocus::ProviderFields;
                 self.state.connect_provider_search.clear();
                 self.state.connect_provider_index = 0;
-                if self.state.mode == UiMode::Executions {
-                    self.close_executions();
-                }
                 self.state.mode = UiMode::ProvidersMenu;
                 self.state.status = String::from("Providers loaded");
             }
@@ -249,9 +246,6 @@ impl App {
                     self.request(RuntimeRequest::GetSessionSnapshot {
                         session_id: session_id.clone(),
                     });
-                    if self.state.mode == UiMode::Executions {
-                        self.close_executions();
-                    }
                     self.state.mode = UiMode::Chat;
                 }
 
@@ -414,11 +408,6 @@ impl App {
                             kraai_runtime::SessionActivity::Idle
                             | kraai_runtime::SessionActivity::Streaming => ScriptPhase::Idle,
                         };
-                        if self.state.mode == UiMode::Executions
-                            && self.state.has_local_script_approval()
-                        {
-                            self.close_executions();
-                        }
                         self.state.profile_locked = snapshot.session.profile_locked;
                         if let Some(existing) = self
                             .state

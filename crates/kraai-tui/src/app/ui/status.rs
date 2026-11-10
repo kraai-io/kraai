@@ -67,7 +67,7 @@ pub(super) fn render_status(state: &AppState, area: Rect, buf: &mut Buffer) {
         compact
     };
     if let Some(error) = &state.last_error {
-        let preview = format!("F8 error · {}", error.lines().next().unwrap_or("Error"));
+        let preview = format!("/error · {}", error.lines().next().unwrap_or("Error"));
         Paragraph::new(fit(&preview, usize::from(area.width)))
             .style(Style::default().fg(Color::Red))
             .render(Rect::new(area.x, area.y, area.width, 1), buf);
@@ -75,9 +75,7 @@ pub(super) fn render_status(state: &AppState, area: Rect, buf: &mut Buffer) {
             return;
         }
     }
-    let details = if state.mode == super::super::UiMode::Executions {
-        String::from("↑/↓ select · Enter toggle · Esc close")
-    } else if let Some(hints) = super::sheets::hints(state) {
+    let details = if let Some(hints) = super::sheets::hints(state) {
         hints
     } else {
         format!("{metadata} · {usage}")

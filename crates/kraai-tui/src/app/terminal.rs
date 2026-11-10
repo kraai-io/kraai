@@ -97,7 +97,7 @@ impl App {
             }
             return;
         }
-        if !matches!(self.state.mode, UiMode::Chat | UiMode::Executions) {
+        if self.state.mode != UiMode::Chat {
             return;
         }
 
@@ -130,11 +130,6 @@ impl App {
         if self.handle_error_key(key_event) {
             return;
         }
-        if self.state.mode == UiMode::Executions {
-            self.handle_execution_key_event(key_event);
-            return;
-        }
-
         if self.state.mode == UiMode::Chat && self.state.has_local_script_approval() {
             if matches!(key_event.code, KeyCode::Esc) {
                 return;
@@ -172,7 +167,6 @@ impl App {
 
         match self.state.mode {
             UiMode::Chat => self.handle_chat_key_event(key_event),
-            UiMode::Executions => self.handle_execution_key_event(key_event),
             UiMode::AgentMenu => self.handle_agent_menu_key_event(key_event),
             UiMode::Model => self.handle_model_key_event(key_event),
             UiMode::ModelSettings => self.handle_model_settings_key_event(key_event),
@@ -192,8 +186,9 @@ impl App {
         if self.handle_composer_shortcut(key_event) {
             return;
         }
-        if key_event.code == KeyCode::F(6) {
-            self.open_executions();
+        if key_event.code == KeyCode::Char('o') && key_event.modifiers == KeyModifiers::CONTROL {
+            self.state.scripts_expanded = !self.state.scripts_expanded;
+            self.invalidate_chat_cache();
             return;
         }
         if self.handle_command_list_key(key_event) {

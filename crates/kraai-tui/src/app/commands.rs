@@ -3,17 +3,18 @@ use super::*;
 pub(super) struct SlashCommand {
     pub(super) name: &'static str,
     pub(super) description: &'static str,
-    pub(super) key: &'static str,
     /// The command opens a list and takes no arguments, so Space after its name runs it.
     pub(super) opens_list: bool,
+    /// The command list shows the command only while an error is waiting to be read.
+    pub(super) needs_error: bool,
 }
 
 const fn command(name: &'static str, description: &'static str) -> SlashCommand {
     SlashCommand {
         name,
         description,
-        key: "",
         opens_list: false,
+        needs_error: false,
     }
 }
 
@@ -30,12 +31,12 @@ pub(super) static SLASH_COMMANDS: [SlashCommand; 9] = [
     command("new", "Start a new chat"),
     list("sessions", "Open or delete sessions"),
     command("undo", "Restore the last message"),
-    SlashCommand {
-        key: "f6",
-        ..list("runs", "Show script runs")
-    },
     list("providers", "Connect and edit providers"),
     command("mcp", "MCP servers and sign-in"),
+    SlashCommand {
+        needs_error: true,
+        ..command("error", "Read the last error")
+    },
     command("quit", "Exit"),
 ];
 
@@ -73,9 +74,12 @@ impl AppState {
         {
             return Vec::new();
         }
-        active_command_prefix(self.command_filter.as_deref().unwrap_or(&self.input))
-            .map(slash_command_matches)
-            .unwrap_or_default()
+        let mut matches =
+            active_command_prefix(self.command_filter.as_deref().unwrap_or(&self.input))
+                .map(slash_command_matches)
+                .unwrap_or_default();
+        matches.retain(|command| !command.needs_error || self.last_error.is_some());
+        matches
     }
 }
 

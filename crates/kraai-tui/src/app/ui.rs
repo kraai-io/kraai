@@ -37,9 +37,6 @@ pub(super) const STATUSLINE_STREAMING_FRAMES: [&str; 8] =
     ["·  ", "·· ", "···", " ··", "  ·", " ··", "···", "·· "];
 
 pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
-    if state.mode == UiMode::Executions {
-        return 0;
-    }
     let available = area.height.saturating_sub(footer_height(state, area));
     if state.mode == UiMode::Chat && state.has_local_script_approval() {
         if state.approval_expanded {
@@ -106,7 +103,7 @@ impl Widget for &AppState {
             UiMode::ProvidersMenu => render_providers_menu(self, area, buf),
             UiMode::Mcp => mcp::render_mcp(self, area, buf),
             UiMode::SessionsMenu => render_sessions_menu(self, area, buf),
-            UiMode::Chat | UiMode::Executions | UiMode::Model | UiMode::ModelSettings => {}
+            UiMode::Chat | UiMode::Model | UiMode::ModelSettings => {}
         }
         error::render_error(self, area, buf);
     }

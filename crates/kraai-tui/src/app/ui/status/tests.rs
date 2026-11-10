@@ -41,7 +41,7 @@ fn footer_layout_leaves_a_blank_row_above_status() {
         assert!(rows.first().is_some_and(|row| row.trim().is_empty()));
         assert!(rows.last().is_some_and(|row| !row.trim().is_empty()));
         if state.last_error.is_some() {
-            assert!(rows.get(1).is_some_and(|row| row.contains("F8 error")));
+            assert!(rows.get(1).is_some_and(|row| row.contains("/error")));
         }
     }
 }
@@ -68,10 +68,10 @@ fn footer_starts_with_activity_and_keeps_errors_accessible() {
             .chunks(usize::from(width))
             .map(|row| row.iter().map(|cell| cell.symbol()).collect())
             .collect();
-        assert!(rows.first().is_some_and(|row| row.contains("F8 error")));
+        assert!(rows.first().is_some_and(|row| row.contains("/error")));
         assert!(
             rows.get(1)
-                .is_some_and(|row| row.contains("Astra") && !row.contains("F8 error"))
+                .is_some_and(|row| row.contains("Astra") && !row.contains("/error"))
         );
     }
 }

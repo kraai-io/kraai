@@ -48,7 +48,7 @@ fn arrows_walk_the_list_and_write_the_command() {
     let mut harness = test_harness();
     type_text(&mut harness, "/");
     let all = listed(&harness);
-    assert_eq!(all.len(), 9);
+    assert_eq!(all.len(), 8);
     for (code, input) in [
         (KeyCode::Down, "/agent"),
         (KeyCode::Up, "/model"),
@@ -91,12 +91,12 @@ fn enter_runs_the_highlighted_command() {
 
     let mut harness = test_harness();
     type_text(&mut harness, "/s");
-    assert_eq!(listed(&harness), ["sessions", "runs", "providers"]);
+    assert_eq!(listed(&harness), ["sessions", "providers"]);
     key(&mut harness, KeyCode::Tab);
     key(&mut harness, KeyCode::Tab);
-    assert_eq!(harness.app.state.input, "/runs");
+    assert_eq!(harness.app.state.input, "/providers");
     key(&mut harness, KeyCode::Enter);
-    assert_eq!(harness.app.state.mode, UiMode::Executions);
+    assert_eq!(harness.app.state.mode, UiMode::ProvidersMenu);
     assert!(harness.app.state.input.is_empty());
     assert!(harness.app.state.command_filter.is_none());
 }
@@ -139,4 +139,26 @@ fn escape_dismisses_the_list_and_keeps_the_written_command() {
     assert!(harness.app.state.command_filter.is_none());
     key(&mut harness, KeyCode::Tab);
     assert_eq!(harness.app.state.input, "/model");
+}
+
+#[test]
+fn error_is_listed_and_opens_only_while_an_error_waits() {
+    let mut harness = test_harness();
+    type_text(&mut harness, "/err");
+    assert!(listed(&harness).is_empty());
+    type_text(&mut harness, "or");
+    key(&mut harness, KeyCode::Enter);
+    assert!(!harness.app.state.error_open);
+    assert_eq!(harness.app.state.status, "No error to read");
+    assert!(harness.app.state.input.is_empty());
+
+    harness.app.set_error(String::from("Stream error: offline"));
+    type_text(&mut harness, "/err");
+    assert_eq!(listed(&harness), ["error"]);
+    key(&mut harness, KeyCode::Enter);
+    assert!(harness.app.state.error_open);
+    assert!(harness.app.state.input.is_empty());
+    key(&mut harness, KeyCode::Esc);
+    assert!(!harness.app.state.error_open);
+    assert!(harness.app.state.last_error.is_some());
 }

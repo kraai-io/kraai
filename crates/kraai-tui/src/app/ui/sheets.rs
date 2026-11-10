@@ -71,7 +71,6 @@ fn commands(state: &AppState) -> Option<Sheet> {
                 SheetRow::Item(SheetItem {
                     label: format!("/{}", command.name),
                     detail: command.description.to_owned(),
-                    meta: command.key.to_owned(),
                     ..SheetItem::default()
                 })
             })

@@ -300,7 +300,17 @@ impl App {
                     return;
                 };
                 let query = self.state.sheet_query.trim().to_owned();
-                let value = resolve_option_input(option, &query).unwrap_or(query);
+                let Some(value) = resolve_option_input(option, &query) else {
+                    self.state.sheet_notice = Some(match option.kind {
+                        ModelOptionKind::Integer { .. } => {
+                            format!("{} takes a whole number", option.label)
+                        }
+                        ModelOptionKind::Choice { .. } | ModelOptionKind::Boolean { .. } => {
+                            format!("{} has no choice named {query}", option.label)
+                        }
+                    });
+                    return;
+                };
                 if self.apply_model_setting(&target, &option.id, &value) {
                     self.state.sheet_query.clear();
                 }

@@ -24,7 +24,6 @@ pub(super) enum SubmissionSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum UiMode {
     Chat,
-    Executions,
     AgentMenu,
     Model,
     ModelSettings,

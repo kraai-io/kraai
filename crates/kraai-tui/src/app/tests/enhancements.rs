@@ -54,7 +54,7 @@ fn narrow_status_keeps_error_ahead_of_model_metadata() {
         last_error: Some(String::from("Stream error: offline")),
         ..AppState::default()
     };
-    assert!(screen(&state, 28, 12).contains("F8 error"));
+    assert!(screen(&state, 28, 12).contains("/error"));
     for (phase, streaming, retry, expected) in [
         (ScriptPhase::Idle, true, false, "Working"),
         (ScriptPhase::Executing, false, false, "Running"),
@@ -194,7 +194,7 @@ fn word_editing_preserves_unicode() {
 }
 
 #[test]
-fn executions_collapse_success_expand_failure_and_retain_source() {
+fn ctrl_o_expands_script_source_and_output_in_the_chat_and_keeps_the_draft() {
     use kraai_types::{AssistantItem, ConversationItem, ToolCallId};
     let mut harness = test_harness();
     let call = Message {
@@ -236,93 +236,23 @@ fn executions_collapse_success_expand_failure_and_retain_source() {
         .state
         .chat_history
         .insert(result.id.clone(), result);
+    harness.app.state.input = String::from("draft-to-preserve");
     let collapsed = screen(&harness.app.state, 100, 30);
-    assert!(collapsed.contains("0.1s"));
+    assert!(collapsed.contains("1 script · 0.1s  [ctrl+o]"));
     assert!(!collapsed.contains("secret-source"));
     assert!(!collapsed.contains("secret-output"));
-    harness.app.open_executions();
-    harness.app.toggle_execution();
+    let ctrl_o = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
+    harness.app.handle_key_event(ctrl_o);
     let expanded = screen(&harness.app.state, 100, 30);
     assert!(expanded.contains("secret-source"));
     assert!(expanded.contains("secret-output"));
-    harness.app.state.execution_expanded.clear();
-    if let Some(message) = harness
-        .app
-        .state
-        .chat_history
-        .get_mut(&MessageId::new("result"))
-        && let ConversationItem::ScriptResult { output, .. } = &mut message.content
-    {
-        *output = output
-            .display_text()
-            .replace("exit_code=\"0\"", "exit_code=\"1\"")
-            .into();
-    }
-    harness.app.invalidate_chat_cache();
-    assert!(!screen(&harness.app.state, 100, 30).contains("secret-output"));
-}
-
-#[test]
-fn execution_toggle_recovers_selection_after_tip_changes() {
-    use kraai_types::{ConversationItem, ToolCallId};
-    let mut harness = test_harness();
-    for (id, parent_id) in [("first", None), ("second", Some("first"))] {
-        let message = Message {
-            id: MessageId::new(id),
-            parent_id: parent_id.map(MessageId::new),
-            content: ConversationItem::ScriptResult {
-                outcome: kraai_execution_types::ScriptExecutionOutcome {
-                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
-                    exit_code: Some(0),
-                },
-                call_id: ToolCallId::new(id),
-                output: String::from(
-                    "<tool_call_result status=\"completed\" exit_code=\"0\"></tool_call_result>",
-                )
-                .into(),
-            },
-            status: MessageStatus::Complete,
-            agent_profile_id: None,
-            generation: None,
-        };
-        harness
-            .app
-            .state
-            .chat_history
-            .insert(message.id.clone(), message);
-    }
-    harness.app.state.current_tip_id = Some(String::from("second"));
-    harness.app.select_execution(false);
-    assert_eq!(
-        harness.app.state.selected_execution.as_deref(),
-        Some("second")
-    );
-    harness.app.state.current_tip_id = Some(String::from("first"));
-    harness
-        .app
-        .state
-        .chat_history
-        .remove(&MessageId::new("second"));
-    harness.app.invalidate_chat_cache();
-    harness.app.toggle_execution();
-    assert_eq!(
-        harness.app.state.selected_execution.as_deref(),
-        Some("first")
-    );
-    assert_eq!(
-        harness.app.state.execution_expanded.get("first"),
-        Some(&true)
-    );
-    assert!(!harness.app.state.execution_expanded.contains_key("second"));
-
-    harness.app.state.chat_history.clear();
-    harness.app.invalidate_chat_cache();
-    harness.app.toggle_execution();
-    assert!(harness.app.state.selected_execution.is_none());
-    assert_eq!(
-        harness.app.state.execution_expanded.get("first"),
-        Some(&true)
-    );
+    assert!(!expanded.contains("[ctrl+o]"));
+    assert!(expanded.contains("draft-to-preserve"));
+    assert_eq!(harness.app.state.mode, UiMode::Chat);
+    harness.app.handle_key_event(ctrl_o);
+    assert_eq!(screen(&harness.app.state, 100, 30), collapsed);
+    assert_eq!(harness.app.state.input, "draft-to-preserve");
+    assert!(harness.drain_requests().is_empty());
 }
 
 #[test]
@@ -465,144 +395,6 @@ fn model_search_matches_provider_name_and_id_with_empty_results() {
 }
 
 #[test]
-fn execution_view_navigates_from_latest_and_preserves_draft() {
-    use kraai_types::{ConversationItem, ToolCallId};
-    let mut harness = test_harness();
-    harness.app.state.input = String::from("draft-to-preserve");
-    for (id, parent_id) in [("first", None), ("second", Some("first"))] {
-        let message = Message {
-            id: MessageId::new(id),
-            parent_id: parent_id.map(MessageId::new),
-            content: ConversationItem::ScriptResult {
-                outcome: kraai_execution_types::ScriptExecutionOutcome {
-                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
-                    exit_code: Some(0),
-                },
-                call_id: ToolCallId::new(id),
-                output: String::from(
-                    "<tool_call_result status=\"failed\">output-detail</tool_call_result>",
-                )
-                .into(),
-            },
-            status: MessageStatus::Complete,
-            agent_profile_id: None,
-            generation: None,
-        };
-        harness
-            .app
-            .state
-            .chat_history
-            .insert(message.id.clone(), message);
-    }
-    harness.app.state.current_tip_id = Some(String::from("second"));
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
-    assert_eq!(harness.app.state.mode, UiMode::Executions);
-    assert_eq!(
-        harness.app.state.selected_execution.as_deref(),
-        Some("second")
-    );
-    assert_eq!(
-        crate::app::ui::bottom_panel_height(&harness.app.state, Rect::new(0, 0, 100, 30)),
-        0
-    );
-    assert!(!screen(&harness.app.state, 100, 30).contains("draft-to-preserve"));
-    harness.app.handle_paste(String::from("ignored"));
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(
-        harness.app.state.execution_expanded.get("second"),
-        Some(&true)
-    );
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(
-        harness.app.state.selected_execution.as_deref(),
-        Some("first")
-    );
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(
-        harness.app.state.execution_expanded.get("first"),
-        Some(&true)
-    );
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(
-        harness.app.state.execution_expanded.get("first"),
-        Some(&false)
-    );
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(
-        harness.app.state.selected_execution.as_deref(),
-        Some("second")
-    );
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(harness.app.state.mode, UiMode::Chat);
-    assert!(harness.app.state.execution_expanded.is_empty());
-    assert!(harness.app.state.selected_execution.is_none());
-    assert_eq!(harness.app.state.input, "draft-to-preserve");
-    assert!(!screen(&harness.app.state, 100, 30).contains("output-detail"));
-    assert!(harness.drain_requests().is_empty());
-}
-
-#[test]
-fn approval_closes_execution_view_and_empty_view_can_exit() {
-    let mut harness = test_harness();
-    harness.app.open_executions();
-    assert!(harness.app.state.selected_execution.is_none());
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
-    assert_eq!(harness.app.state.mode, UiMode::Chat);
-    harness.app.open_executions();
-    harness
-        .app
-        .state
-        .execution_expanded
-        .insert(String::from("old"), true);
-    harness.app.enter_script_decision_phase();
-    assert_eq!(harness.app.state.mode, UiMode::Chat);
-    assert!(harness.app.state.execution_expanded.is_empty());
-    assert_eq!(
-        harness.app.state.script_phase,
-        ScriptPhase::AwaitingApproval
-    );
-}
-
-#[test]
-fn delayed_profile_response_closes_execution_view() {
-    let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.open_executions();
-    harness
-        .app
-        .state
-        .execution_expanded
-        .insert(String::from("old"), true);
-    harness.app.state.selected_execution = Some(String::from("old"));
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SetSessionProfile {
-            session_id: SessionId::new("session"),
-            profile_id: String::from("agent"),
-            result: Ok(()),
-        });
-    assert_eq!(harness.app.state.mode, UiMode::Chat);
-    assert!(harness.app.state.execution_expanded.is_empty());
-    assert!(harness.app.state.selected_execution.is_none());
-}
-
-#[test]
 fn error_details_preserve_draft_mode_and_pending_approval() {
     let mut harness = test_harness();
     harness.app.state.input = String::from("draft");
@@ -612,9 +404,7 @@ fn error_details_preserve_draft_mode_and_pending_approval() {
 second
 final",
     ));
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+    harness.app.open_error();
     assert!(screen(&harness.app.state, 80, 20).contains("final"));
     harness.app.handle_paste(String::from("hidden edit"));
     harness
@@ -631,9 +421,7 @@ final",
         ScriptPhase::AwaitingApproval
     );
     assert!(harness.drain_requests().is_empty());
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+    harness.app.open_error();
     harness.app.state.status = String::from("Another notice");
     harness
         .app
@@ -676,9 +464,7 @@ fn error_details_reach_end_of_large_error_and_resize() {
         .repeat(66_000)
     );
     harness.app.set_error(error);
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+    harness.app.open_error();
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));

@@ -140,7 +140,10 @@ impl App {
                 self.set_input_text(String::new());
                 self.open_model_sheet(parts.collect::<Vec<_>>().join(" "));
             }
-            "runs" => self.open_executions(),
+            "error" => {
+                self.set_input_text(String::new());
+                self.open_error();
+            }
             "agent" => {
                 if self.state.turn_blocks_user_commands() {
                     self.state.status =
