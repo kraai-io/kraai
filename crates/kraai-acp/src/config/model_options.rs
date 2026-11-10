@@ -54,19 +54,8 @@ pub(super) fn model_option(
         Some(ModelOptionValue::Integer(value)) => value.to_string(),
         None => String::new(),
     };
-    let description = if matches!(option.kind, ModelOptionKind::Integer { .. }) {
-        Some(if option.required {
-            format!("Set with /option {} <integer>", option.id)
-        } else {
-            format!(
-                "Set with /option {} <integer>; clear with /option {} --clear",
-                option.id, option.id
-            )
-        })
-    } else {
-        option.description.clone()
-    };
-    acp::SessionConfigOption::select(id, &option.label, selected, choices).description(description)
+    acp::SessionConfigOption::select(id, &option.label, selected, choices)
+        .description(option.description.clone())
 }
 
 pub(crate) async fn set_model_option(
@@ -126,22 +115,6 @@ mod tests {
         assert_eq!(
             chosen.get("currentValue").and_then(Value::as_bool),
             Some(false)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn integer_options_explain_the_typed_setter() -> color_eyre::Result<()> {
-        let definition = serde_json::from_value(
-            serde_json::json!({"id":"budget","label":"Budget","type":"integer","min":10,"max":100,"binding":{"type":"body","path":"/budget"}}),
-        )?;
-        let option = serde_json::to_value(model_option(&definition, None))?;
-        assert_eq!(option.get("currentValue").and_then(Value::as_str), Some(""));
-        assert!(
-            option
-                .get("description")
-                .and_then(Value::as_str)
-                .is_some_and(|description| description.contains("/option budget <integer>"))
         );
         Ok(())
     }

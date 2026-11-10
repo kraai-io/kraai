@@ -3,40 +3,19 @@ use kraai_runtime::RuntimeHandle;
 
 use crate::{content, error};
 
-pub(crate) enum Command {
-    Undo,
-    Option { id: String, value: String },
-}
-
-pub(crate) fn parse(prompt: &[acp::ContentBlock]) -> Result<Option<Command>> {
+/// Whether the prompt is the `/undo` command.
+pub(crate) fn is_undo(prompt: &[acp::ContentBlock]) -> Result<bool> {
     let Some(acp::ContentBlock::Text(text)) = prompt.first() else {
-        return Ok(None);
+        return Ok(false);
     };
     let mut words = text.text.split_whitespace();
-    let first = words.next();
-    if first == Some("/option") {
-        let usage = "Usage: /option <id> <value|--clear>";
-        let id = words.next().ok_or_else(|| error::invalid(usage))?;
-        let value = words.next().ok_or_else(|| error::invalid(usage))?;
-        if words.next().is_some() {
-            return Err(error::invalid(usage));
-        }
-        return Ok(Some(Command::Option {
-            id: id.to_owned(),
-            value: if value == "--clear" {
-                String::new()
-            } else {
-                value.to_owned()
-            },
-        }));
-    }
-    if first != Some("/undo") {
-        return Ok(None);
+    if words.next() != Some("/undo") {
+        return Ok(false);
     }
     if words.next().is_some() {
         return Err(error::invalid("Usage: /undo"));
     }
-    Ok(Some(Command::Undo))
+    Ok(true)
 }
 
 pub(crate) async fn advertise(
@@ -50,10 +29,6 @@ pub(crate) async fn advertise(
                 acp::AvailableCommand::new(
                     "undo",
                     "Remove the last user turn from conversation context; keep file changes",
-                ),
-                acp::AvailableCommand::new(
-                    "option",
-                    "Set or clear a model option: /option <id> <value|--clear>",
                 ),
             ])),
         ))
