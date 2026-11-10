@@ -60,7 +60,7 @@ fn provider(base_url: String) -> Result<OpenAiCodexProvider> {
                     .join("auth.json"),
             ),
         )?),
-        client: build_codex_http_client(true, &base_url)?,
+        client: streaming_http_client_builder().build()?,
         models: RwLock::new(DiscoveredModels::default()),
         rejected_reasoning: RwLock::new(RejectedReasoning::default()),
         model_configs: BTreeMap::new(),
@@ -79,6 +79,7 @@ fn provider_config_accepts_http_and_https_backends_on_any_host() {
         "http://localhost/backend-api",
         "http://192.168.1.10/backend-api",
         "http://example.com/backend-api",
+        "https://user:secret@example.com/backend-api",
     ] {
         for proxy_token in [false, true] {
             let mut config =
@@ -97,36 +98,21 @@ fn provider_config_accepts_http_and_https_backends_on_any_host() {
     }
 }
 
-#[tokio::test]
-async fn malformed_backends_are_rejected_before_loading_auth_or_building_requests() -> Result<()> {
-    for (url, proxy_token) in [
-        ("file:///tmp/backend-api", None),
-        ("https://user:secret@example.com/backend-api", None),
-        ("file:///tmp/backend-api", Some("test-token".into())),
+#[test]
+fn backends_that_cannot_take_an_endpoint_path_are_rejected_at_creation() -> Result<()> {
+    let factory = OpenAiCodexFactory::new(provider(String::new())?.auth);
+    for url in [
+        "file:///tmp/backend-api",
+        "https://example.com/backend-api?key=value",
+        "https://example.com/backend-api#fragment",
     ] {
-        let mut provider = provider(url.into())?;
-        provider.proxy_token = proxy_token;
-        for operation in ["list models", "responses"] {
-            let built = std::sync::atomic::AtomicBool::new(false);
-            let result = provider
-                .send_authenticated_request(operation, &ProviderRequestContext::default(), |auth| {
-                    built.store(true, std::sync::atomic::Ordering::Relaxed);
-                    provider.authenticated_get(url, auth)
-                })
-                .await;
-            assert!(result.is_err_and(|error| error.to_string() == BACKEND_URL_ERROR));
-            assert!(!built.load(std::sync::atomic::Ordering::Relaxed));
-        }
-        let factory = OpenAiCodexFactory::new(provider.auth.clone());
-        if provider.proxy_token.is_none() {
-            let config =
-                DynamicConfig::from([("base_url".into(), DynamicValue::String(url.into()))]);
-            assert!(
-                factory
-                    .create(ProviderId::new("malformed"), config)
-                    .is_err_and(|error| error.to_string() == BACKEND_URL_ERROR)
-            );
-        }
+        let config = DynamicConfig::from([("base_url".into(), DynamicValue::String(url.into()))]);
+        assert!(
+            factory
+                .create(ProviderId::new("malformed"), config)
+                .is_err_and(|error| error.to_string() == BACKEND_URL_ERROR),
+            "{url}"
+        );
     }
     Ok(())
 }
@@ -251,48 +237,6 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
             body.get("prompt_cache_key").and_then(Value::as_str),
             cache_key
         );
-    }
-    Ok(())
-}
-
-async fn redirect_server(location: &str) -> Result<(String, JoinHandle<Result<()>>)> {
-    let mut listener = http::Listener::bind("/backend-api").await?;
-    let url = listener.url()?;
-    let response = format!(
-        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    );
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await?;
-        let mut buffer = [0_u8; 4096];
-        ensure!(
-            stream.read(&mut buffer).await? > 0,
-            "missing redirect request"
-        );
-        stream.write_all(response.as_bytes()).await?;
-        Ok::<_, color_eyre::Report>(())
-    });
-    Ok((url, server))
-}
-
-#[tokio::test]
-async fn subscription_redirect_policy_rejects_cross_origin_targets() -> Result<()> {
-    let origin = Url::parse("https://backend.example/backend-api")?.origin();
-    for target in [
-        "https://elsewhere.example/codex/models",
-        "https://backend.example:8443/codex/models",
-        "http://backend.example/codex/models",
-    ] {
-        let (base_url, server) = redirect_server(target).await?;
-        let client = streaming_http_client_builder()
-            .redirect(codex_redirect_policy(false, origin.clone()))
-            .build()?;
-        let result = client
-            .get(base_url)
-            .header("ChatGPT-Account-Id", "test-account")
-            .send()
-            .await;
-        assert!(result.is_err_and(|error| error.is_redirect()), "{target}");
-        server.await??;
     }
     Ok(())
 }

@@ -25,52 +25,20 @@ use crate::wire::{ListModelsResponse, ResponsesCustomTool, ResponsesRequest};
 
 const DEFAULT_CHATGPT_BACKEND_URL: &str = "https://chatgpt.com/backend-api";
 const CODEX_CLIENT_VERSION: &str = "0.159.2";
-const BACKEND_URL_ERROR: &str = "OpenAI Codex backend URL must be an http or https URL with a host and without credentials, a query, or a fragment";
+const BACKEND_URL_ERROR: &str = "OpenAI Codex backend URL must be an http or https URL with a host and without a query or a fragment";
 
 #[cfg(test)]
 #[path = "discovery_tests.rs"]
 mod discovery_tests;
 
+/// Whether endpoint paths can be appended to the URL and requested over HTTP.
 fn valid_backend_url(value: &str) -> bool {
     Url::parse(value).is_ok_and(|url| {
         matches!(url.scheme(), "http" | "https")
             && url.host_str().is_some()
-            && url.username().is_empty()
-            && url.password().is_none()
             && url.query().is_none()
             && url.fragment().is_none()
     })
-}
-
-fn codex_redirect_policy(proxy_token: bool, origin: url::Origin) -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(move |attempt| {
-        if !proxy_token && attempt.url().origin() != origin {
-            attempt.error(
-                "OpenAI Codex subscription redirects must stay on the configured backend origin",
-            )
-        } else if attempt.previous().len() >= 10 {
-            attempt.error("too many redirects")
-        } else {
-            attempt.follow()
-        }
-    })
-}
-
-fn build_codex_http_client(proxy_token: bool, base_url: &str) -> Result<Client> {
-    Ok(streaming_http_client_builder()
-        .redirect(codex_redirect_policy(
-            proxy_token,
-            Url::parse(base_url)?.origin(),
-        ))
-        .build()?)
-}
-
-fn valid_environment_name(value: &str) -> bool {
-    let mut bytes = value.bytes();
-    bytes
-        .next()
-        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
-        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 #[derive(Clone)]
@@ -116,9 +84,7 @@ impl OpenAiCodexFactory {
                     value_kind: FieldValueKind::Url,
                     required: false,
                     secret: false,
-                    help_text: Some(
-                        "ChatGPT backend URL; override only for a trusted proxy".to_string(),
-                    ),
+                    help_text: Some("ChatGPT backend URL, or a proxy for it".to_string()),
                     default_value: Some(DynamicValue::String(
                         DEFAULT_CHATGPT_BACKEND_URL.to_string(),
                     )),
@@ -130,7 +96,7 @@ impl OpenAiCodexFactory {
                     required: false,
                     secret: false,
                     help_text: Some(
-                        "Short-lived proxy token environment variable; evaluation use only"
+                        "Environment variable holding a bearer token sent in place of the ChatGPT sign-in"
                             .to_string(),
                     ),
                     default_value: None,
@@ -158,13 +124,11 @@ impl OpenAiCodexFactory {
             }],
         };
         if let Some(value) = config.get("proxy_token_env")
-            && value
-                .as_str()
-                .is_none_or(|name| name.trim().is_empty() || !valid_environment_name(name.trim()))
+            && value.as_str().is_none_or(|name| name.trim().is_empty())
         {
             errors.push(ValidationError {
                 field: "proxy_token_env".to_string(),
-                message: "Proxy token environment variable name is invalid".to_string(),
+                message: "Proxy token environment variable name must not be empty".to_string(),
             });
         }
         errors
@@ -197,15 +161,10 @@ impl OpenAiCodexFactory {
         if !valid_backend_url(&base_url) {
             return Err(eyre!(BACKEND_URL_ERROR));
         }
-        if proxy_token.is_some() && base_url == DEFAULT_CHATGPT_BACKEND_URL {
-            return Err(eyre!(
-                "OpenAI Codex proxy token requires a non-default backend URL"
-            ));
-        }
         Ok(Box::new(OpenAiCodexProvider {
             id,
             auth: self.auth.clone(),
-            client: build_codex_http_client(proxy_token.is_some(), &base_url)?,
+            client: streaming_http_client_builder().build()?,
             models: RwLock::new(DiscoveredModels::default()),
             rejected_reasoning: RwLock::new(RejectedReasoning::default()),
             model_configs: BTreeMap::new(),
@@ -496,9 +455,6 @@ impl OpenAiCodexProvider {
     where
         F: Fn(RequestAuthentication) -> RequestBuilder + Send + Sync,
     {
-        if !valid_backend_url(&self.base_url) {
-            return Err(eyre!(BACKEND_URL_ERROR));
-        }
         if let Some(token) = &self.proxy_token {
             let auth = RequestAuthentication::ProxyToken(token.clone());
             let response = send_http_with_retry(
@@ -681,18 +637,18 @@ mod tests {
     }
 
     #[test]
-    fn backend_url_validation_rejects_credentials_queries_and_non_http_schemes() {
+    fn backend_url_validation_rejects_queries_fragments_and_non_http_schemes() {
         for url in [
             "https://chatgpt.com/backend-api",
             "http://127.0.0.1:1234/backend-api",
             "http://192.168.1.10/backend-api",
             "http://example.com/backend-api",
+            "https://user:secret@example.com/backend-api",
         ] {
             assert!(valid_backend_url(url), "{url}");
         }
         for url in [
             "file:///tmp/backend",
-            "https://user:secret@example.com/backend",
             "https://example.com/backend?redirect=elsewhere",
             "https://example.com/backend#fragment",
         ] {
