@@ -335,11 +335,7 @@ async fn session_stays_running_between_streams_until_turn_finishes() -> Result<(
             .unwrap();
         assert!(session.is_running);
         assert_eq!(session.is_streaming, is_streaming);
-        assert!(
-            !sessions
-                .iter()
-                .any(|session| session.id == idle_session && session.is_running)
-        );
+        assert!(!sessions.iter().any(|session| session.id == idle_session));
         let snapshot = harness
             .handle
             .get_session_snapshot(session_id.clone())
