@@ -338,9 +338,7 @@ async fn session_stays_running_between_streams_until_turn_finishes() -> Result<(
         assert!(
             !sessions
                 .iter()
-                .find(|session| session.id == idle_session)
-                .unwrap()
-                .is_running
+                .any(|session| session.id == idle_session && session.is_running)
         );
         let snapshot = harness
             .handle
