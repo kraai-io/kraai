@@ -330,6 +330,9 @@ impl Columns {
         let mut columns = Self { label: 0, value: 0 };
         for row in &sheet.rows {
             if let SheetRow::Item(item) = row {
+                if item.value.is_empty() && item.choices.is_empty() && item.detail.is_empty() {
+                    continue;
+                }
                 columns.label = columns.label.max(display_width(&item.label));
                 columns.value = columns.value.max(display_width(&item.value));
                 if sheet.align_choices {

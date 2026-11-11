@@ -2,7 +2,7 @@ use kraai_runtime::Session;
 
 use super::super::super::AppState;
 use super::super::sheet::{Sheet, SheetItem, SheetRow, Tone};
-use super::{notice, plural};
+use super::{age, notice, plural};
 
 pub(super) fn sessions(state: &AppState) -> Sheet {
     let sessions = state.listed_sessions();
@@ -85,17 +85,6 @@ fn row(state: &AppState, session: &Session, local: bool, armed: bool, now: u64) 
     }
 }
 
-/// How long ago something happened, right-aligned to three columns.
-fn age(seconds: u64) -> String {
-    let (count, unit) = match seconds {
-        0..60 => (seconds, 's'),
-        60..3600 => (seconds / 60, 'm'),
-        3600..86400 => (seconds / 3600, 'h'),
-        _ => (seconds / 86400, 'd'),
-    };
-    format!("{count:>2}{unit}")
-}
-
 /// Writes a path under the home directory with `~` in place of the home directory.
 fn short_path(path: &str, home: &str) -> String {
     match path.strip_prefix(home) {
@@ -108,23 +97,7 @@ fn short_path(path: &str, home: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{age, short_path};
-
-    #[test]
-    fn ages_use_the_largest_whole_unit() {
-        for (seconds, expected) in [
-            (0, " 0s"),
-            (59, "59s"),
-            (60, " 1m"),
-            (3599, "59m"),
-            (3600, " 1h"),
-            (86399, "23h"),
-            (86400, " 1d"),
-            (86400 * 400, "400d"),
-        ] {
-            assert_eq!(age(seconds), expected);
-        }
-    }
+    use super::short_path;
 
     #[test]
     fn only_paths_under_home_are_shortened() {

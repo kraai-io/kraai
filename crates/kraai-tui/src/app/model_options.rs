@@ -47,8 +47,8 @@ fn stepped_choice(
 ) -> Option<String> {
     let choices = model_option_choices(option);
     let next = match (chosen_choice(&choices, value), forward) {
-        (Some(position), false) => model_menu_previous_index(position, choices.len()),
-        (Some(position), true) => model_menu_next_index(position, choices.len()),
+        (Some(position), false) => previous_wrapping(position, choices.len()),
+        (Some(position), true) => next_wrapping(position, choices.len()),
         (None, false) => choices.len().saturating_sub(1),
         (None, true) => 0,
     };
@@ -377,11 +377,9 @@ impl App {
         let option = active.get(index);
         match key.code {
             KeyCode::Up | KeyCode::BackTab => {
-                self.state.sheet_index = model_menu_previous_index(index, len)
+                self.state.sheet_index = previous_wrapping(index, len)
             }
-            KeyCode::Down | KeyCode::Tab => {
-                self.state.sheet_index = model_menu_next_index(index, len)
-            }
+            KeyCode::Down | KeyCode::Tab => self.state.sheet_index = next_wrapping(index, len),
             KeyCode::Left | KeyCode::Right => {
                 let Some(option) = option else {
                     return;

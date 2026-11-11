@@ -9,6 +9,8 @@ use super::sheet::{Note, Sheet, SheetItem, SheetRow, Tone};
 
 mod agent;
 mod mcp;
+mod provider_config;
+mod providers;
 mod sessions;
 
 /// The sheet the current mode shows above the status line, if any.
@@ -19,8 +21,8 @@ pub(super) fn active(state: &AppState) -> Option<Sheet> {
         UiMode::ModelSettings => Some(model_settings(state)),
         UiMode::Agent => Some(agent::agents(state)),
         UiMode::Mcp => Some(mcp::mcp(state)),
+        UiMode::Providers => Some(providers::providers(state)),
         UiMode::Sessions => Some(sessions::sessions(state)),
-        _ => None,
     }
 }
 
@@ -68,6 +70,7 @@ pub(super) fn hints(state: &AppState) -> Option<String> {
             ))
         }
         UiMode::Agent => Some(String::from("tab or ↑↓ select · enter use · esc close")),
+        UiMode::Providers => Some(providers::hints(state)),
         UiMode::Mcp if state.mcp_open.is_some() => Some(String::from(
             "tab or ↑↓ select · enter run · ctrl+r refresh · esc back",
         )),
@@ -223,13 +226,30 @@ fn model_settings(state: &AppState) -> Sheet {
     }
 }
 
-/// What the last key press could not do, as the sheet's closing note.
+/// What the last key press did, and what it could not do, as the sheet's closing notes.
 fn notice(state: &AppState) -> Vec<Note> {
     state
-        .sheet_notice
+        .sheet_feedback
         .iter()
-        .map(|notice| Note::new(notice, Tone::Danger))
+        .map(|feedback| Note::new(feedback, Tone::Plain))
+        .chain(
+            state
+                .sheet_notice
+                .iter()
+                .map(|notice| Note::new(notice, Tone::Danger)),
+        )
         .collect()
+}
+
+/// How long ago something happened, right-aligned to three columns.
+fn age(seconds: u64) -> String {
+    let (count, unit) = match seconds {
+        0..60 => (seconds, 's'),
+        60..3600 => (seconds / 60, 'm'),
+        3600..86400 => (seconds / 3600, 'h'),
+        _ => (seconds / 86400, 'd'),
+    };
+    format!("{count:>2}{unit}")
 }
 
 fn plural(count: usize, noun: &str) -> String {
@@ -253,7 +273,23 @@ fn compact_tokens(tokens: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::compact_tokens;
+    use super::{age, compact_tokens};
+
+    #[test]
+    fn ages_use_the_largest_whole_unit() {
+        for (seconds, expected) in [
+            (0, " 0s"),
+            (59, "59s"),
+            (60, " 1m"),
+            (3599, "59m"),
+            (3600, " 1h"),
+            (86399, "23h"),
+            (86400, " 1d"),
+            (86400 * 400, "400d"),
+        ] {
+            assert_eq!(age(seconds), expected);
+        }
+    }
 
     #[test]
     fn context_windows_shorten_to_thousands_and_millions() {

@@ -149,12 +149,8 @@ impl App {
                 self.open_agent_sheet();
             }
             "providers" => {
-                self.state.mode = UiMode::ProvidersMenu;
-                self.state.providers_view = ProvidersView::List;
-                self.state.status = String::from("Loading providers");
-                self.request(RuntimeRequest::ListProviderDefinitions);
-                self.request(RuntimeRequest::GetSettings);
-                self.request(RuntimeRequest::GetProviderAuthStatuses);
+                self.set_input_text(String::new());
+                self.open_providers_sheet();
             }
             "mcp" => self.handle_mcp_command(parts.collect()),
             "sessions" => {

@@ -11,9 +11,8 @@ use kraai_types::{Message, MessageContent, MessageId, SessionId};
 use super::auth::ProviderAuthStatus;
 use super::chat_render::ChatRenderCache;
 use super::types::{
-    ActiveSettingsEditor, ExitUsageTotals, OptimisticMessage, PendingSubmit,
-    ProvidersAdvancedFocus, ProvidersView, ScriptApprovalAction, ScriptPhase, SettingsFocus,
-    UiMode,
+    ExitUsageTotals, OptimisticMessage, PendingSubmit, ProvidersView, ScriptApprovalAction,
+    ScriptPhase, UiMode,
 };
 
 pub(super) struct AppState {
@@ -32,6 +31,8 @@ pub(super) struct AppState {
     pub(super) sheet_notice: Option<String>,
     /// The highlighted row was asked to delete something and waits for the key a second time.
     pub(super) sheet_armed: bool,
+    /// What the last key press did, shown under the rows of a sheet.
+    pub(super) sheet_feedback: Option<String>,
     pub(super) model_settings: Option<super::model_options::ModelSettingsTarget>,
     /// What the command list stays filtered by while its rows are walked into the composer.
     pub(super) command_filter: Option<String>,
@@ -100,18 +101,11 @@ pub(super) struct AppState {
     pub(super) command_popup_dismissed: bool,
     pub(super) settings_draft: Option<SettingsDocument>,
     pub(super) settings_errors: HashMap<String, String>,
-    pub(super) settings_focus: SettingsFocus,
+    /// The place in the settings of the provider whose sheet is open.
     pub(super) settings_provider_index: usize,
-    pub(super) settings_model_index: usize,
-    pub(super) settings_provider_field_index: usize,
-    pub(super) settings_model_field_index: usize,
-    pub(super) settings_editor: Option<ActiveSettingsEditor>,
-    pub(super) settings_editor_input: String,
-    pub(super) settings_delete_armed: bool,
     pub(super) providers_view: ProvidersView,
-    pub(super) providers_advanced_focus: ProvidersAdvancedFocus,
-    pub(super) connect_provider_search: String,
-    pub(super) connect_provider_index: usize,
+    /// The configuration row whose value the composer is typing.
+    pub(super) config_editing: Option<super::provider_config::ConfigRow>,
     /// Sign-in state of each provider type that signs in with an account.
     pub(super) provider_auth: HashMap<String, ProviderAuthStatus>,
     pub(super) mcp_auth: BTreeMap<String, kraai_runtime::McpAuthStatus>,
@@ -149,6 +143,7 @@ impl Default for AppState {
             sheet_scroll: Cell::new(0),
             sheet_notice: None,
             sheet_armed: false,
+            sheet_feedback: None,
             model_settings: None,
             command_filter: None,
             approval_scroll: Cell::new(0),
@@ -213,18 +208,9 @@ impl Default for AppState {
             command_popup_dismissed: false,
             settings_draft: None,
             settings_errors: HashMap::new(),
-            settings_focus: SettingsFocus::ProviderList,
             settings_provider_index: 0,
-            settings_model_index: 0,
-            settings_provider_field_index: 0,
-            settings_model_field_index: 0,
-            settings_editor: None,
-            settings_editor_input: String::new(),
-            settings_delete_armed: false,
             providers_view: ProvidersView::List,
-            providers_advanced_focus: ProvidersAdvancedFocus::ProviderFields,
-            connect_provider_search: String::new(),
-            connect_provider_index: 0,
+            config_editing: None,
             provider_auth: HashMap::new(),
             mcp_auth: BTreeMap::new(),
             mcp_browser_intent: Default::default(),

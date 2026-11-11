@@ -75,13 +75,13 @@ pub(super) fn render_status(state: &AppState, area: Rect, buf: &mut Buffer) {
             return;
         }
     }
-    let details = if let Some(hints) = super::sheets::hints(state) {
-        hints
-    } else {
-        format!("{metadata} · {usage}")
-    };
+    let hints = super::sheets::hints(state);
+    let crowded = hints.as_ref().is_some_and(|hints| {
+        display_width(&activity) + 3 + display_width(hints) > usize::from(area.width)
+    });
+    let details = hints.unwrap_or_else(|| format!("{metadata} · {usage}"));
     render_pair(
-        &activity,
+        if crowded { "" } else { &activity },
         &details,
         Style::default().fg(statusline_activity_color(state)),
         Style::default().fg(Color::DarkGray),

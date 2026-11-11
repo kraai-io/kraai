@@ -105,8 +105,8 @@ impl App {
         let written = self.state.input.strip_prefix('/') == Some(selected.name);
         let step = match key.code {
             KeyCode::Tab if !written => Some(index),
-            KeyCode::Down | KeyCode::Tab => Some(model_menu_next_index(index, len)),
-            KeyCode::Up | KeyCode::BackTab => Some(model_menu_previous_index(index, len)),
+            KeyCode::Down | KeyCode::Tab => Some(next_wrapping(index, len)),
+            KeyCode::Up | KeyCode::BackTab => Some(previous_wrapping(index, len)),
             _ => None,
         };
         if let Some(index) = step {

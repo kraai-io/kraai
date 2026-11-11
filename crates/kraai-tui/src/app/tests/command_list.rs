@@ -84,7 +84,7 @@ fn enter_runs_the_highlighted_command() {
     key(&mut harness, KeyCode::Tab);
     assert_eq!(harness.app.state.input, "/providers");
     key(&mut harness, KeyCode::Enter);
-    assert_eq!(harness.app.state.mode, UiMode::ProvidersMenu);
+    assert_eq!(harness.app.state.mode, UiMode::Providers);
     assert!(harness.app.state.input.is_empty());
     assert!(harness.app.state.command_filter.is_none());
 }

@@ -71,8 +71,8 @@ fn delayed_auth_snapshot_cannot_restore_completed_login_state() {
 #[test]
 fn delayed_auth_event_cannot_overwrite_a_newer_snapshot_or_status() {
     let mut harness = test_harness();
-    harness.app.state.mode = UiMode::ProvidersMenu;
-    harness.app.state.providers_view = ProvidersView::Detail;
+    harness.app.state.mode = UiMode::Providers;
+    harness.app.state.providers_view = ProvidersView::Provider;
     harness
         .app
         .handle_runtime_response(RuntimeResponse::ProviderAuthStatus(Ok(

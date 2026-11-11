@@ -40,7 +40,8 @@ mod mcp_auth;
 mod model_options;
 mod model_sheet;
 mod palette;
-mod providers_flow;
+mod provider_config;
+mod providers_sheet;
 mod runtime_bridge;
 mod runtime_events;
 mod runtime_responses;
@@ -48,7 +49,6 @@ mod session_commands;
 mod session_model;
 mod sessions_sheet;
 mod settings;
-mod settings_flow;
 mod sheet_query;
 mod state;
 mod terminal;
@@ -70,13 +70,12 @@ use self::settings::{
 use self::state::AppState;
 pub use self::types::StartupOptions;
 use self::types::{
-    ActiveSettingsEditor, OptimisticMessage, PendingSubmit, ProviderDetailAction,
-    ProvidersAdvancedFocus, ProvidersView, RuntimeRequest, RuntimeResponse, ScriptApprovalAction,
-    ScriptPhase, SettingsFocus, SettingsModelField, SettingsProviderField, UiMode, UsageModelKey,
+    OptimisticMessage, PendingSubmit, ProvidersView, RuntimeRequest, RuntimeResponse,
+    ScriptApprovalAction, ScriptPhase, UiMode, UsageModelKey,
 };
 use self::ui::{
-    STATUSLINE_STREAMING_FRAMES, adjust_index, copy_via_osc52, format_token_count,
-    model_menu_next_index, model_menu_previous_index,
+    STATUSLINE_STREAMING_FRAMES, copy_via_osc52, format_token_count, next_wrapping,
+    previous_wrapping,
 };
 use self::workspace_preferences::WorkspacePreferences;
 

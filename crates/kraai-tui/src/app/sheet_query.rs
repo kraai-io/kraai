@@ -35,6 +35,7 @@ impl AppState {
             UiMode::Model => Some(String::from("/model ")),
             UiMode::Agent => Some(String::from("/agent ")),
             UiMode::Sessions => Some(String::from("/sessions ")),
+            UiMode::Providers => Some(self.providers_prefix()),
             UiMode::Mcp => Some(match &self.mcp_open {
                 Some(server) => format!("/mcp › {server} › "),
                 None => String::from("/mcp "),
@@ -46,7 +47,7 @@ impl AppState {
                         .map_or(target.model_id.as_str(), |model| model.name.as_str())
                 )
             }),
-            _ => None,
+            UiMode::Chat => None,
         }
     }
 
@@ -65,10 +66,35 @@ impl App {
     pub(super) fn open_sheet(&mut self, mode: UiMode) {
         self.state.sheet_query.clear();
         self.state.sheet_notice = None;
+        self.state.sheet_feedback = None;
         self.state.sheet_armed = false;
         self.state.model_settings = None;
+        self.state.config_editing = None;
         self.state.mode = mode;
         self.state.reset_sheet_selection();
+    }
+
+    pub(super) fn close_sheet(&mut self) {
+        self.open_sheet(UiMode::Chat);
+        self.state.mcp_open = None;
+        self.state.providers_view = ProvidersView::List;
+        self.reset_command_selection();
+    }
+
+    /// Returns to the chat from whatever sheet is open, leaving the command list alone.
+    pub(super) fn leave_sheet(&mut self) {
+        if self.state.mode != UiMode::Chat {
+            self.close_sheet();
+        }
+    }
+
+    /// Closes the sheet and puts `command` back in an empty composer, as if backspacing into it.
+    pub(super) fn close_sheet_to_composer(&mut self, command: &str) {
+        self.close_sheet();
+        if self.state.input.is_empty() && self.state.draft_images.len() == 0 {
+            self.set_input_text(command.to_owned());
+            self.state.command_popup_dismissed = false;
+        }
     }
 
     /// Applies a key that edits the filter of a sheet a command opened. Backspace on an empty
@@ -96,8 +122,8 @@ impl App {
     pub(super) fn walk_sheet(&mut self, key: KeyEvent, len: usize) -> bool {
         let index = self.state.sheet_index.min(len.saturating_sub(1));
         self.state.sheet_index = match key.code {
-            KeyCode::Up | KeyCode::BackTab => model_menu_previous_index(index, len),
-            KeyCode::Down | KeyCode::Tab => model_menu_next_index(index, len),
+            KeyCode::Up | KeyCode::BackTab => previous_wrapping(index, len),
+            KeyCode::Down | KeyCode::Tab => next_wrapping(index, len),
             _ => return false,
         };
         true

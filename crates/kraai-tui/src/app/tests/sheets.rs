@@ -56,27 +56,6 @@ fn with_sessions(harness: &mut TestHarness) {
     state.current_session_id = Some(SessionId::new("fetch"));
 }
 
-/// The rows of the open sheet, from its rule to the line above the status line.
-fn sheet(harness: &TestHarness, width: u16) -> Vec<String> {
-    let rows = screen_rows(&harness.app.state, width, 30);
-    let start = rows
-        .iter()
-        .position(|row| row.starts_with("─ "))
-        .unwrap_or(rows.len());
-    let end = rows
-        .iter()
-        .rposition(|row| row.contains(" · esc ") || row.contains("any other key"))
-        .unwrap_or(rows.len());
-    rows.get(start..end.saturating_sub(1))
-        .unwrap_or_default()
-        .to_vec()
-}
-
-fn spaced(left: &str, right: &str, width: usize) -> String {
-    let used = left.chars().count() + right.chars().count() + 1;
-    format!("{left}{}{right}", " ".repeat(width.saturating_sub(used)))
-}
-
 #[test]
 fn agent_sheet_opens_on_the_agent_in_use_and_describes_the_highlighted_one() {
     let mut harness = test_harness();
@@ -202,7 +181,7 @@ fn sessions_from_this_workspace_come_first_and_others_show_where_they_ran() {
             spaced("  Fix fetch", "current   0s", 60),
             spaced("  Add sign-in", "needs approval   0s", 60),
             String::from("  elsewhere"),
-            spaced("  Other work   ~/elsewhere", "running   0s", 60),
+            spaced("  Other work  ~/elsewhere", "running   0s", 60),
         ]
     );
     let rows = screen_rows(&harness.app.state, 80, 30);
@@ -310,6 +289,6 @@ fn a_refreshed_session_list_keeps_the_highlight_on_the_same_session() {
     assert_eq!(harness.app.state.sheet_index, 4);
     assert_eq!(
         sheet(&harness, 60).get(7),
-        Some(&spaced("▌ Other work   ~/elsewhere", "running   0s", 60))
+        Some(&spaced("▌ Other work  ~/elsewhere", "running   0s", 60))
     );
 }

@@ -157,7 +157,7 @@ impl App {
                 return;
             }
             match self.state.mode {
-                UiMode::ProvidersMenu => self.handle_providers_escape(),
+                UiMode::Providers => self.close_providers_level(),
                 UiMode::Model => self.close_sheet(),
                 UiMode::ModelSettings => self.close_model_settings(),
                 UiMode::Mcp => self.close_mcp_level(),
@@ -171,7 +171,7 @@ impl App {
             UiMode::Agent => self.handle_agent_key_event(key_event),
             UiMode::Model => self.handle_model_key_event(key_event),
             UiMode::ModelSettings => self.handle_model_settings_key_event(key_event),
-            UiMode::ProvidersMenu => self.handle_providers_key_event(key_event),
+            UiMode::Providers => self.handle_providers_key_event(key_event),
             UiMode::Mcp => self.handle_mcp_key_event(key_event),
             UiMode::Sessions => self.handle_sessions_key_event(key_event),
         }
@@ -262,12 +262,18 @@ impl App {
                 self.paste_into_sheet_query(&text);
                 return;
             }
-            _ => {}
+            UiMode::Providers if self.state.providers_view == ProvidersView::Config => {
+                self.paste_into_provider_config(&text);
+                return;
+            }
+            UiMode::Providers => {
+                self.paste_into_sheet_query(&text);
+                self.state.reset_sheet_selection();
+                return;
+            }
+            UiMode::Chat => {}
         }
-        if self.state.mode != UiMode::Chat
-            || self.state.has_local_script_approval()
-            || text.is_empty()
-        {
+        if self.state.has_local_script_approval() || text.is_empty() {
             return;
         }
 
@@ -320,33 +326,6 @@ impl App {
             KeyCode::Home => self.state.approval_scroll.set(0),
             KeyCode::End => self.state.approval_scroll.set(usize::MAX),
             KeyCode::Char('f') => self.state.approval_expanded = !self.state.approval_expanded,
-            _ => {}
-        }
-    }
-
-    pub(super) fn handle_providers_key_event(&mut self, key_event: KeyEvent) {
-        if self.state.settings_editor.is_some() {
-            self.handle_settings_editor_key_event(key_event);
-            return;
-        }
-
-        match self.state.providers_view {
-            ProvidersView::List => self.handle_provider_list_key_event(key_event),
-            ProvidersView::Connect => self.handle_connect_provider_key_event(key_event),
-            ProvidersView::Detail => self.handle_provider_detail_key_event(key_event),
-            ProvidersView::Advanced => self.handle_advanced_provider_key_event(key_event),
-        }
-    }
-
-    pub(super) fn handle_settings_editor_key_event(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Enter => self.commit_settings_editor(),
-            KeyCode::Backspace => {
-                self.state.settings_editor_input.pop();
-            }
-            KeyCode::Char(c) => {
-                self.state.settings_editor_input.push(c);
-            }
             _ => {}
         }
     }

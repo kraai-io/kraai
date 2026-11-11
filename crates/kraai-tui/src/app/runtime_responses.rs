@@ -93,20 +93,6 @@ impl App {
             RuntimeResponse::Settings(Ok(settings)) => {
                 self.state.settings_draft = Some(settings);
                 self.state.settings_errors.clear();
-                self.state.settings_focus = SettingsFocus::ProviderList;
-                self.state.settings_provider_index = 0;
-                self.state.settings_model_index = 0;
-                self.state.settings_provider_field_index = 0;
-                self.state.settings_model_field_index = 0;
-                self.state.settings_editor = None;
-                self.state.settings_editor_input.clear();
-                self.state.settings_delete_armed = false;
-                self.state.providers_view = ProvidersView::List;
-                self.state.providers_advanced_focus = ProvidersAdvancedFocus::ProviderFields;
-                self.state.connect_provider_search.clear();
-                self.state.connect_provider_index = 0;
-                self.state.mode = UiMode::ProvidersMenu;
-                self.state.status = String::from("Providers loaded");
             }
             RuntimeResponse::Settings(Err(err)) => {
                 self.set_error(format!("Failed loading settings: {err}"));
@@ -314,9 +300,6 @@ impl App {
             }
             RuntimeResponse::SaveSettings(Ok(())) => {
                 self.state.settings_errors.clear();
-                self.state.settings_delete_armed = false;
-                self.state.settings_editor = None;
-                self.state.settings_editor_input.clear();
                 self.state.status = String::from("Providers saved");
                 self.request(RuntimeRequest::ListModels);
             }

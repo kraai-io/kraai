@@ -57,31 +57,6 @@ impl App {
         self.settle_highlighted_model();
     }
 
-    pub(super) fn close_sheet(&mut self) {
-        self.state.mode = UiMode::Chat;
-        self.state.sheet_query.clear();
-        self.state.sheet_notice = None;
-        self.state.sheet_armed = false;
-        self.state.model_settings = None;
-        self.reset_command_selection();
-    }
-
-    /// Returns to the chat from whatever sheet is open, leaving the command list alone.
-    pub(super) fn leave_sheet(&mut self) {
-        if self.state.mode != UiMode::Chat {
-            self.close_sheet();
-        }
-    }
-
-    /// Closes the sheet and puts `command` back in an empty composer, as if backspacing into it.
-    pub(super) fn close_sheet_to_composer(&mut self, command: &str) {
-        self.close_sheet();
-        if self.state.input.is_empty() && self.state.draft_images.len() == 0 {
-            self.set_input_text(command.to_owned());
-            self.state.command_popup_dismissed = false;
-        }
-    }
-
     pub(super) fn handle_model_key_event(&mut self, key: KeyEvent) {
         self.step_model_sheet(key);
         self.settle_highlighted_model();

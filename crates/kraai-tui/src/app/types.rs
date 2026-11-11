@@ -27,7 +27,7 @@ pub(super) enum UiMode {
     Agent,
     Model,
     ModelSettings,
-    ProvidersMenu,
+    Providers,
     Mcp,
     Sessions,
 }
@@ -36,8 +36,10 @@ pub(super) enum UiMode {
 pub(super) enum ProvidersView {
     List,
     Connect,
-    Detail,
-    Advanced,
+    /// One provider's actions.
+    Provider,
+    /// One provider's fields and models.
+    Config,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,50 +53,6 @@ pub(super) enum ScriptPhase {
     Idle,
     AwaitingApproval,
     Executing,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SettingsFocus {
-    ProviderList,
-    ProviderForm,
-    ModelList,
-    ModelForm,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum SettingsProviderField {
-    Id,
-    TypeId,
-    Value(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum SettingsModelField {
-    Id,
-    Value(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum ActiveSettingsEditor {
-    Provider(SettingsProviderField),
-    Model(SettingsModelField),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ProviderDetailAction {
-    BrowserLogin,
-    DeviceCodeLogin,
-    CancelLogin,
-    Logout,
-    Advanced,
-    RefreshModels,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ProvidersAdvancedFocus {
-    ProviderFields,
-    Models,
-    ModelFields,
 }
 
 #[derive(Clone, Debug)]
