@@ -62,12 +62,9 @@ Each agent's terminal UI, started fresh in the same repo and left idle:
 
 | | Memory (RSS) | CPU, first 30 s | CPU while idle |
 | --- | --- | --- | --- |
-| Kraai | 42 MB | 0.17 s | 0.07% |
-| Codex 0.162.0 | 470 MB | 2.2 s | 0.8% |
-| Claude Code 2.1.295 | 320 MB | 3.4 s | 0.2% |
-
-Kraai uses a tenth of Codex's memory, a small fraction of its startup CPU, and
-about a tenth of its idle CPU.
+| Kraai | 40 MB | 0.06 s | 0.02% |
+| Codex 0.167.0 | 274 MB | 0.87 s | 0.8% |
+| Claude Code 2.1.322 | 270 MB | 2.9 s | 0.23% |
 
 Each number is the median of three runs on Linux, in a 200×50 tmux pane, with
 the idle CPU measured over 60 seconds. Only each agent's own processes count;

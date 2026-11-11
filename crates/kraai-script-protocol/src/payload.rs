@@ -25,19 +25,11 @@ const SCRIPT_METADATA_PREFIX: &str = "#";
 pub const DEFAULT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn parse_script_input(input: &str) -> Result<ScriptBlock, ProtocolError> {
-    let header_start = input
-        .char_indices()
-        .find_map(|(index, character)| (!character.is_ascii_whitespace()).then_some(index))
-        .ok_or(ProtocolError::EmptyScript)?;
-    let header_tail = &input[header_start..];
-    let header_end = header_tail.find(['\n', '\r']).unwrap_or(header_tail.len());
-    let (attributes, source) = match metadata_fields(&header_tail[..header_end]) {
-        Some(fields) => (
-            parse_fields(fields)?,
-            header_tail[header_end..].trim_start_matches(['\r', '\n']),
-        ),
-        None => (ScriptMetadata::default(), header_tail),
-    };
+    let (fields, source) = split_script_header(input);
+    if fields.is_none() && source.is_empty() {
+        return Err(ProtocolError::EmptyScript);
+    }
+    let attributes = fields.map(parse_fields).transpose()?.unwrap_or_default();
     let timeout = attributes
         .timeout
         .map_or(Ok(DEFAULT_SCRIPT_TIMEOUT), parse_duration)?;
@@ -57,6 +49,20 @@ pub fn parse_script_input(input: &str) -> Result<ScriptBlock, ProtocolError> {
         timeout,
         requested_capabilities,
     })
+}
+
+/// Splits a script into the fields of its metadata header, when its first non-blank line is
+/// one, and the source that follows.
+pub fn split_script_header(input: &str) -> (Option<&str>, &str) {
+    let tail = input.trim_start_matches(|character: char| character.is_ascii_whitespace());
+    let header_end = tail.find(['\n', '\r']).unwrap_or(tail.len());
+    match metadata_fields(&tail[..header_end]) {
+        Some(fields) => (
+            Some(fields),
+            tail[header_end..].trim_start_matches(['\r', '\n']),
+        ),
+        None => (None, tail),
+    }
 }
 
 fn metadata_fields(line: &str) -> Option<&str> {
@@ -187,6 +193,22 @@ mod tests {
                 .requested_capabilities
                 .contains(SandboxCapability::Network)
         );
+    }
+
+    #[test]
+    fn splits_the_header_off_whole_and_partial_scripts() {
+        for (input, fields, source) in [
+            ("# timeout=5min\nls\n", Some(" timeout=5min"), "ls\n"),
+            ("\n\n# timeout=5min\r\n\r\nls", Some(" timeout=5min"), "ls"),
+            ("# timeout=", Some(" timeout="), ""),
+            ("# timeo", None, "# timeo"),
+            ("# list files\nls", None, "# list files\nls"),
+            ("#!/usr/bin/env nu\nls", None, "#!/usr/bin/env nu\nls"),
+            ("\n  ls", None, "ls"),
+            (" \n", None, ""),
+        ] {
+            assert_eq!(split_script_header(input), (fields, source), "{input:?}");
+        }
     }
 
     #[test]

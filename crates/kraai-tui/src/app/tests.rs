@@ -614,6 +614,7 @@ mod model_options;
 mod model_selection;
 mod providers;
 mod responsiveness;
+mod running_scripts;
 mod session_model;
 mod sheets;
 #[path = "tests/startup.rs"]

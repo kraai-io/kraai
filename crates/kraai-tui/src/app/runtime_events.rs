@@ -18,6 +18,8 @@ impl App {
                     | Event::StreamError { .. }
                     | Event::ContinuationFailed { .. }
                     | Event::ScriptApprovalRequested { .. }
+                    | Event::ScriptStarted { .. }
+                    | Event::ScriptOutputTail { .. }
             )
         {
             return;
@@ -25,9 +27,43 @@ impl App {
 
         match event {
             Event::TurnCompleted { session_id } => {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
+                    self.state.running_scripts.clear();
+                }
                 self.request(RuntimeRequest::GetSessionSnapshot { session_id });
             }
-            Event::ScriptPrepared { .. } | Event::ScriptStarted { .. } => {}
+            Event::ScriptPrepared { .. } => {}
+            Event::ScriptStarted {
+                session_id,
+                call_id,
+                timeout_millis,
+            } => {
+                if self.state.current_session_id.as_ref() == Some(&session_id) {
+                    let started = Instant::now();
+                    self.state.running_scripts.insert(
+                        call_id,
+                        RunningScript {
+                            started,
+                            timeout: Duration::from_millis(timeout_millis),
+                            tail: Vec::new(),
+                        },
+                    );
+                    self.state.script_clock = Some(started);
+                    self.invalidate_script_cards();
+                }
+            }
+            Event::ScriptOutputTail {
+                session_id,
+                call_id,
+                lines,
+            } => {
+                if self.state.current_session_id.as_ref() == Some(&session_id)
+                    && let Some(script) = self.state.running_scripts.get_mut(&call_id)
+                {
+                    script.tail = lines;
+                    self.invalidate_script_cards();
+                }
+            }
             Event::RequestUsageUpdated {
                 session_id,
                 request,
@@ -87,7 +123,6 @@ impl App {
                 self.state.profile_locked = true;
                 self.state.script_phase = ScriptPhase::Idle;
                 self.state.profile_lock_stale_after_terminal_event = false;
-                self.state.statusline_animation_frame = 0;
                 self.last_statusline_animation_tick = None;
             }
             Event::ItemStarted {
@@ -164,7 +199,6 @@ impl App {
                     if apply_state {
                         self.state.is_streaming = false;
                         self.state.retry_waiting = false;
-                        self.state.statusline_animation_frame = 0;
                         self.last_statusline_animation_tick = None;
                     }
                     self.request_sync_for_session(&session_id);
@@ -181,7 +215,6 @@ impl App {
                     if apply_state {
                         self.state.is_streaming = false;
                         self.state.retry_waiting = false;
-                        self.state.statusline_animation_frame = 0;
                         self.last_statusline_animation_tick = None;
                         self.state.profile_lock_stale_after_terminal_event =
                             self.state.profile_locked;
@@ -198,7 +231,6 @@ impl App {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.state.is_streaming = false;
                     self.state.retry_waiting = false;
-                    self.state.statusline_animation_frame = 0;
                     self.last_statusline_animation_tick = None;
                     self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
                     self.state.feedback.completion_until = None;
@@ -234,7 +266,6 @@ impl App {
                     if apply_state {
                         self.state.is_streaming = false;
                         self.state.retry_waiting = false;
-                        self.state.statusline_animation_frame = 0;
                         self.last_statusline_animation_tick = None;
                         self.state.profile_lock_stale_after_terminal_event =
                             self.state.profile_locked;
@@ -281,8 +312,15 @@ impl App {
                 self.state.pending_script = Some(script);
                 self.enter_script_decision_phase();
             }
-            Event::ScriptResultReady { session_id, .. } => {
+            Event::ScriptResultReady {
+                session_id,
+                call_id,
+                ..
+            } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
+                    if self.state.running_scripts.remove(&call_id).is_some() {
+                        self.invalidate_script_cards();
+                    }
                     self.state.pending_script = None;
                     self.state.script_phase = ScriptPhase::Idle;
                     self.state.profile_lock_stale_after_terminal_event = false;

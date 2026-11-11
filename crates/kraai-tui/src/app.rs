@@ -16,7 +16,7 @@ use ratatui::crossterm::event::{
     MouseEventKind,
 };
 
-use crate::components::TextInput;
+use crate::components::{TextInput, running_dot};
 
 mod agent_sheet;
 mod auth;
@@ -29,7 +29,6 @@ mod cost;
 mod cursor;
 mod cursor_preferences;
 mod draft_images;
-mod duration;
 mod error;
 mod executions;
 mod feedback;
@@ -70,12 +69,11 @@ use self::settings::{
 use self::state::AppState;
 pub use self::types::StartupOptions;
 use self::types::{
-    OptimisticMessage, PendingSubmit, ProvidersView, RuntimeRequest, RuntimeResponse,
-    ScriptApprovalAction, ScriptPhase, UiMode, UsageModelKey,
+    OptimisticMessage, PendingSubmit, ProvidersView, RunningScript, RuntimeRequest,
+    RuntimeResponse, ScriptApprovalAction, ScriptPhase, UiMode, UsageModelKey,
 };
 use self::ui::{
-    STATUSLINE_STREAMING_FRAMES, copy_via_osc52, format_token_count, next_wrapping,
-    previous_wrapping,
+    activity_text, copy_via_osc52, format_token_count, next_wrapping, previous_wrapping,
 };
 use self::workspace_preferences::WorkspacePreferences;
 

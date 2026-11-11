@@ -519,3 +519,72 @@ fn a_result_with_images_reads_its_sections_and_lists_the_images_after_them() {
         "{lines:?}"
     );
 }
+
+#[test]
+fn a_changed_card_rebuilds_only_the_messages_with_running_scripts() {
+    let user = message(
+        "user",
+        None,
+        ConversationItem::User {
+            content: String::from("question").into(),
+        },
+    );
+    let assistant = message(
+        "assistant",
+        Some("user"),
+        ConversationItem::Assistant {
+            items: vec![text_item("checking"), call_item("call", "cargo build")],
+        },
+    );
+    let mut state = AppState {
+        chat_history: [(user.id.clone(), user), (assistant.id.clone(), assistant)]
+            .into_iter()
+            .collect(),
+        current_tip_id: Some(String::from("assistant")),
+        ..AppState::default()
+    };
+    let started = std::time::Instant::now();
+    state.running_scripts.insert(
+        String::from("call"),
+        crate::app::types::RunningScript {
+            started,
+            timeout: std::time::Duration::from_secs(300),
+            tail: Vec::new(),
+        },
+    );
+    state.script_clock = Some(started);
+    state.refresh_chat_render_cache(80);
+    let user_section = state.chat_render_cache.borrow().sections.first().cloned();
+
+    if let Some(script) = state.running_scripts.get_mut("call") {
+        script.tail = vec![kraai_runtime::ScriptOutputLine {
+            stream: kraai_execution_types::ScriptOutputStream::Stdout,
+            text: String::from("Compiling kraai"),
+        }];
+    }
+    if let Some(user) = state.chat_history.get_mut(&MessageId::new("user")) {
+        user.content = ConversationItem::User {
+            content: String::from("changed without a new epoch").into(),
+        };
+    }
+    state.cards_epoch += 1;
+    state.refresh_chat_render_cache(80);
+
+    let lines = rendered_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("Compiling kraai")));
+    assert!(lines.iter().any(|line| line.contains("question")));
+    assert!(!lines.iter().any(|line| line.contains("changed without")));
+    let cache = state.chat_render_cache.borrow();
+    assert!(matches!(
+        (&user_section, cache.sections.first()),
+        (Some(before), Some(after)) if Arc::ptr_eq(before, after)
+    ));
+    assert_eq!(
+        cache.total_lines,
+        cache
+            .sections
+            .iter()
+            .map(|section| section.len())
+            .sum::<usize>()
+    );
+}

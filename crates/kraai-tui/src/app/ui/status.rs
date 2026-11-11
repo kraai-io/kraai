@@ -1,12 +1,11 @@
 use std::time::{Duration, Instant};
 
-use super::super::duration::format_duration;
+use crate::duration::format_duration;
 
 use ratatui::{buffer::Buffer, layout::Rect, style::Style};
 
 use super::super::model_options::option_summary;
 use super::super::{AppState, ScriptPhase};
-use super::STATUSLINE_STREAMING_FRAMES;
 use crate::components::{display_width, fitting_prefix, normalize_terminal_text};
 use crate::theme;
 
@@ -136,7 +135,7 @@ pub(super) fn fit(text: &str, width: usize) -> String {
 /// What the turn is doing, in the colour that says how much it wants attention. Empty while
 /// there is nothing to report.
 fn activity(state: &AppState) -> Fact {
-    let (text, style) = activity_text(state);
+    let (text, style) = activity_text(state, Instant::now());
     Fact {
         text,
         style,
@@ -144,7 +143,9 @@ fn activity(state: &AppState) -> Fact {
     }
 }
 
-fn activity_text(state: &AppState) -> (String, Style) {
+/// The words and style of what the turn is doing at `now`. A busy turn breathes its colour in
+/// time with the running scripts' dots.
+pub(in crate::app) fn activity_text(state: &AppState, now: Instant) -> (String, Style) {
     let accent = Style::default().fg(theme::ACCENT);
     let waiting = Style::default().fg(theme::WAITING);
     let muted = Style::default().fg(theme::MUTED);
@@ -162,15 +163,21 @@ fn activity_text(state: &AppState) -> (String, Style) {
         } else {
             "Working"
         };
-        let frame = STATUSLINE_STREAMING_FRAMES
-            .get(state.statusline_animation_frame % STATUSLINE_STREAMING_FRAMES.len())
-            .copied()
-            .unwrap_or_default();
-        let text = match state.turn_timer.elapsed(Instant::now()) {
-            Some(elapsed) => format!("{activity} {} {frame}", whole_seconds(elapsed)),
-            None => format!("{activity} {frame}"),
+        let text = match state.turn_timer.elapsed(now) {
+            Some(elapsed) => format!("{activity} {}", whole_seconds(elapsed)),
+            None => activity.to_owned(),
         };
-        return (text, if state.retry_waiting { waiting } else { accent });
+        let colour = if state.retry_waiting {
+            theme::WAITING
+        } else {
+            theme::ACCENT
+        };
+        let colour = state
+            .palette
+            .muted
+            .and_then(|muted| theme::breathe(state.breath(now), colour, muted))
+            .unwrap_or(colour);
+        return (text, Style::default().fg(colour));
     }
     let Some(took) = state.turn_timer.last_duration().map(whole_seconds) else {
         return if state.turn_cancelled {
@@ -185,9 +192,7 @@ fn activity_text(state: &AppState) -> (String, Style) {
         (format!("Stopped after {took}"), muted)
     } else {
         let colour = if state.feedback.completion_until.is_some() {
-            state
-                .feedback
-                .completion_color(Instant::now(), state.palette.muted)
+            state.feedback.completion_color(now, state.palette.muted)
         } else {
             theme::MUTED
         };

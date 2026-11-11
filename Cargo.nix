@@ -11461,7 +11461,7 @@ rec {
           }
         ];
         features = {
-          "typescript" = [ "dep:ts-rs" "kraai-types/typescript" "kraai-provider-core/typescript" ];
+          "typescript" = [ "dep:ts-rs" "kraai-types/typescript" "kraai-provider-core/typescript" "kraai-execution-types/typescript" ];
         };
         resolvedDefaultFeatures = [ "typescript" ];
       };

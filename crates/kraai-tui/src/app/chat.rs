@@ -314,6 +314,7 @@ impl App {
         self.restore_session_cost();
         self.state.optimistic_messages.clear();
         self.state.pending_script = None;
+        self.state.running_scripts.clear();
         if has_session {
             self.state.agent_profiles.clear();
         }
@@ -330,7 +331,6 @@ impl App {
         self.state.profile_lock_stale_after_terminal_event = false;
         self.state.turn_timer = kraai_runtime::TurnTimer::default();
         self.state.feedback = super::feedback::VisualFeedback::default();
-        self.state.statusline_animation_frame = 0;
         self.last_statusline_animation_tick = None;
         self.state.auto_scroll = true;
         self.state.scroll = 0;
@@ -427,7 +427,7 @@ impl App {
             self.state.script_phase = ScriptPhase::Idle;
             self.state.profile_lock_stale_after_terminal_event = false;
             self.state.is_streaming = true;
-            self.state.statusline_animation_frame = 0;
+            self.state.breath_origin = Instant::now();
             self.last_statusline_animation_tick = None;
             self.state.turn_cancelled = false;
         }
@@ -482,7 +482,6 @@ impl App {
         self.state.profile_locked = false;
         self.state.profile_lock_stale_after_terminal_event = false;
         self.state.script_phase = ScriptPhase::Idle;
-        self.state.statusline_animation_frame = 0;
         self.last_statusline_animation_tick = None;
         self.event_lag_session_resync_pending = false;
         self.event_lag_script_resync_pending = false;
@@ -495,6 +494,10 @@ impl App {
 
     pub(super) fn invalidate_chat_cache(&mut self) {
         self.state.chat_epoch = self.state.chat_epoch.wrapping_add(1);
+    }
+
+    pub(super) fn invalidate_script_cards(&mut self) {
+        self.state.cards_epoch = self.state.cards_epoch.wrapping_add(1);
     }
 
     pub(super) fn reconcile_optimistic_messages(&mut self) {

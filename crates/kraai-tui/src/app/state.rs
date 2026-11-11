@@ -11,9 +11,10 @@ use kraai_types::{Message, MessageContent, MessageId, SessionId};
 use super::auth::ProviderAuthStatus;
 use super::chat_render::ChatRenderCache;
 use super::types::{
-    ExitUsageTotals, OptimisticMessage, PendingSubmit, ProvidersView, ScriptApprovalAction,
-    ScriptPhase, UiMode,
+    ExitUsageTotals, OptimisticMessage, PendingSubmit, ProvidersView, RunningScript,
+    ScriptApprovalAction, ScriptPhase, UiMode,
 };
+use crate::components::{RunningCard, ScriptCard, running_dot};
 
 pub(super) struct AppState {
     pub(super) session_cost: kraai_types::CostSummary,
@@ -54,6 +55,9 @@ pub(super) struct AppState {
     pub(super) optimistic_messages: Vec<OptimisticMessage>,
     pub(super) optimistic_seq: u64,
     pub(super) chat_epoch: u64,
+    /// Moves when only the script cards may have changed, so the chat rebuilds just the
+    /// messages that hold them.
+    pub(super) cards_epoch: u64,
     pub(super) chat_render_cache: RefCell<ChatRenderCache>,
     pub(super) chat_viewport_height: u16,
     pub(super) scroll: usize,
@@ -73,7 +77,8 @@ pub(super) struct AppState {
     pub(super) feedback: super::feedback::VisualFeedback,
     pub(super) cursor_preferences: super::cursor_preferences::CursorPreferences,
     pub(super) palette: super::palette::TerminalPalette,
-    pub(super) statusline_animation_frame: usize,
+    /// The moment every breathing colour counts its breath from.
+    pub(super) breath_origin: std::time::Instant,
     pub(super) models_by_provider: HashMap<String, Vec<Model>>,
     pub(super) agent_profiles: Vec<AgentProfileSummary>,
     pub(super) agent_profile_warnings: Vec<AgentProfileWarning>,
@@ -92,6 +97,11 @@ pub(super) struct AppState {
         BTreeMap<String, BTreeMap<String, kraai_types::ModelOptionValues>>,
     pub(super) context_usage: Option<RuntimeSessionContextUsage>,
     pub(super) pending_script: Option<PendingScriptInfo>,
+    /// Scripts of the current session that are running, by call id.
+    pub(super) running_scripts: HashMap<String, RunningScript>,
+    /// The time the chat last drew running scripts for. It moves only when a card would show
+    /// something new, so no card is rebuilt for a frame that looks the same.
+    pub(super) script_clock: Option<std::time::Instant>,
     pub(super) submitted_script_decisions: BTreeMap<SessionId, BTreeSet<String>>,
     pub(super) sessions: Vec<Session>,
     pub(super) current_session_id: Option<SessionId>,
@@ -167,6 +177,7 @@ impl Default for AppState {
             optimistic_messages: Vec::new(),
             optimistic_seq: 0,
             chat_epoch: 0,
+            cards_epoch: 0,
             chat_render_cache: RefCell::new(ChatRenderCache::default()),
             chat_viewport_height: 0,
             scroll: 0,
@@ -184,7 +195,7 @@ impl Default for AppState {
             feedback: super::feedback::VisualFeedback::default(),
             cursor_preferences: Default::default(),
             palette: super::palette::TerminalPalette::default(),
-            statusline_animation_frame: 0,
+            breath_origin: std::time::Instant::now(),
             models_by_provider: HashMap::new(),
             agent_profiles: Vec::new(),
             agent_profile_warnings: Vec::new(),
@@ -201,6 +212,8 @@ impl Default for AppState {
             remembered_model_options: BTreeMap::new(),
             context_usage: None,
             pending_script: None,
+            running_scripts: HashMap::new(),
+            script_clock: None,
             submitted_script_decisions: BTreeMap::new(),
             sessions: Vec::new(),
             current_session_id: None,
@@ -269,6 +282,38 @@ impl AppState {
                 .map(|path| path.display().to_string())
                 .unwrap_or_default(),
             ..Self::default()
+        }
+    }
+
+    /// How far into the shared breath `at` is.
+    pub(super) fn breath(&self, at: std::time::Instant) -> std::time::Duration {
+        at.saturating_duration_since(self.breath_origin)
+    }
+
+    /// Where the script call `call_id` stands, for a message the model is or is not still
+    /// writing.
+    pub(super) fn script_card(&self, call_id: &str, writing: bool) -> ScriptCard {
+        if let Some(script) = self.running_scripts.get(call_id) {
+            let now = self.script_clock.unwrap_or(script.started);
+            return ScriptCard::Running(RunningCard::new(
+                now.saturating_duration_since(script.started),
+                script.timeout,
+                script.tail.clone(),
+                running_dot(self.breath(now), self.palette.muted),
+            ));
+        }
+        if self.script_phase == ScriptPhase::AwaitingApproval
+            && self
+                .pending_script
+                .as_ref()
+                .is_some_and(|script| script.call_id == call_id)
+        {
+            return ScriptCard::AwaitingApproval;
+        }
+        if writing {
+            ScriptCard::Writing
+        } else {
+            ScriptCard::Waiting
         }
     }
 

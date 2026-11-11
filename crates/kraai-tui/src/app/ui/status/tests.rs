@@ -53,12 +53,22 @@ fn the_line_starts_one_column_in_with_what_the_turn_is_doing() {
     state.is_streaming = true;
     assert_eq!(
         row(&state, 60).trim_end(),
-        " Working ·    Astra  136,000/272,000  50%  $0.0000"
+        " Working  Astra  136,000/272,000  50%  $0.0000"
     );
     assert_eq!(colour_at(&state, 60, "Working"), Some(theme::ACCENT));
     assert_eq!(colour_at(&state, 60, "Astra"), Some(theme::MUTED));
     state.retry_waiting = true;
     assert_eq!(colour_at(&state, 60, "Retrying"), Some(theme::WAITING));
+
+    state.palette.muted = Some(Color::Rgb(88, 82, 115));
+    state.breath_origin = Instant::now() - Duration::from_millis(800);
+    assert_eq!(colour_at(&state, 60, "Retrying"), Some(theme::WAITING));
+    state.retry_waiting = false;
+    assert_eq!(
+        colour_at(&state, 60, "Working"),
+        Some(Color::Rgb(101, 97, 129))
+    );
+    state.palette.muted = None;
 
     state.is_streaming = false;
     state.retry_waiting = false;
@@ -83,14 +93,11 @@ fn a_narrow_line_gives_up_facts_from_the_least_important_and_then_cuts_from_the_
     state.is_streaming = true;
     state.selected_profile_id = Some(String::from("Coding"));
     for (width, expected) in [
-        (
-            70,
-            " Working ·    Astra  Coding  136,000/272,000  50%  $0.0000",
-        ),
-        (56, " Working ·    Astra  Coding  50%  $0.0000"),
-        (40, " Working ·    Astra  50%  $0.0000"),
-        (30, " Working ·    Astra  50%  $0…"),
-        (14, " Working ·"),
+        (66, " Working  Astra  Coding  136,000/272,000  50%  $0.0000"),
+        (52, " Working  Astra  Coding  50%  $0.0000"),
+        (36, " Working  Astra  50%  $0.0000"),
+        (26, " Working  Astra  50%  $0…"),
+        (10, " Working"),
         (8, " Worki…"),
     ] {
         assert_eq!(row(&state, width).trim_end(), expected, "{width}");

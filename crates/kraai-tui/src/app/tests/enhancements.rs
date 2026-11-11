@@ -475,19 +475,28 @@ fn animation_and_copy_feedback_expire_without_idle_redraws() {
     assert!(
         !harness
             .app
-            .advance_statusline_animation(now + std::time::Duration::from_millis(119))
+            .advance_statusline_animation(now + std::time::Duration::from_millis(300))
+    );
+    harness.app.state.palette.muted = Some(ratatui::style::Color::Rgb(88, 82, 115));
+    harness.app.state.breath_origin = now;
+    assert!(
+        harness
+            .app
+            .advance_statusline_animation(now + std::time::Duration::from_millis(300))
+    );
+    assert!(
+        !harness
+            .app
+            .advance_statusline_animation(now + std::time::Duration::from_millis(349))
     );
     assert!(
         harness
             .app
-            .advance_statusline_animation(now + std::time::Duration::from_millis(120))
+            .advance_statusline_animation(now + std::time::Duration::from_millis(600))
     );
-    assert_eq!(harness.app.state.statusline_animation_frame, 1);
-    for frame in crate::app::ui::STATUSLINE_STREAMING_FRAMES {
-        assert_eq!(crate::components::display_width(frame), 3);
-    }
+    harness.app.state.palette.muted = None;
     harness.app.state.is_streaming = false;
-    assert!(harness.app.advance_statusline_animation(now));
+    assert!(!harness.app.advance_statusline_animation(now));
     harness.app.state.feedback.completion_until = Some(now + std::time::Duration::from_secs(1));
     harness
         .app
