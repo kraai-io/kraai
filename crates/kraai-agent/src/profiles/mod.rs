@@ -148,7 +148,6 @@ fn built_in_profiles() -> Vec<AgentProfile> {
         permissions: SandboxPermissionSet::new([
             read_capability,
             SandboxCapability::WorkspaceWrite,
-            SandboxCapability::Network,
         ]),
         permission_rules: CapabilityPermissionRules::default(),
         escalation_policy: EscalationPolicy::Prompt,
@@ -458,6 +457,12 @@ mod tests {
                 .permissions
                 .capabilities()
                 .contains(SandboxCapability::HostWrite)
+        );
+        assert!(
+            !coding
+                .permissions
+                .capabilities()
+                .contains(SandboxCapability::Network)
         );
         assert!(!coding.permissions.capabilities().is_unsandboxed());
         let coding_no_sandbox = resolved

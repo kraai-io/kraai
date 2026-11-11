@@ -30,18 +30,6 @@ pub struct SandboxPermissionSet {
 }
 
 impl SandboxPermissionSet {
-    pub fn workspace_read() -> Self {
-        Self {
-            capabilities: SandboxCapabilities::workspace_read(),
-        }
-    }
-
-    pub fn workspace_write() -> Self {
-        Self {
-            capabilities: SandboxCapabilities::workspace_write(),
-        }
-    }
-
     pub fn new(capabilities: impl IntoIterator<Item = SandboxCapability>) -> Self {
         Self {
             capabilities: SandboxCapabilities::new(capabilities),

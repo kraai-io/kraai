@@ -105,23 +105,17 @@ fn push_sandbox_notice(rendered: &mut String, granted: &SandboxCapabilities) {
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let mut missing = [
+    let missing = [
         SandboxCapability::HostWrite,
         SandboxCapability::Network,
         SandboxCapability::HostRead,
         SandboxCapability::WorkspaceWrite,
     ]
     .into_iter()
-    .filter(|capability| !granted.contains(*capability))
-    .peekable();
-    let example = missing
-        .peek()
-        .copied()
-        .unwrap_or(SandboxCapability::NoSandbox)
-        .as_str();
+    .filter(|capability| !granted.contains(*capability));
     let not_granted = names(&mut missing.chain([SandboxCapability::NoSandbox]));
     rendered.push_str(&format!(
-        "<sandbox>The sandbox likely blocked this script. It ran with: {}. If it needs more access, rerun it with the capabilities it needs in its header, such as `# timeout=30sec permissions={example}`. Not granted: {not_granted}.</sandbox>\n",
+        "<sandbox>The sandbox likely blocked this script. It ran with: {}. If it needs more access, rerun it with only the capabilities it needs in its header, such as `# timeout=30sec permissions=<capability>`. Not granted: {not_granted}.</sandbox>\n",
         names(&mut granted.iter()),
     ));
 }
@@ -271,16 +265,19 @@ mod tests {
             })
         };
         assert_eq!(
-            notice(kraai_execution_types::SandboxCapabilities::workspace_write()),
+            notice(kraai_execution_types::SandboxCapabilities::new([
+                kraai_execution_types::SandboxCapability::HostRead,
+                kraai_execution_types::SandboxCapability::WorkspaceWrite,
+            ])),
             "<tool_call_result status=\"completed\" exit_code=\"128\">\n\
-<sandbox>The sandbox likely blocked this script. It ran with: workspace-read, workspace-write, network. If it needs more access, rerun it with the capabilities it needs in its header, such as `# timeout=30sec permissions=host-write`. Not granted: host-write, host-read, no-sandbox.</sandbox>\n\
+<sandbox>The sandbox likely blocked this script. It ran with: workspace-read, host-read, workspace-write. If it needs more access, rerun it with only the capabilities it needs in its header, such as `# timeout=30sec permissions=<capability>`. Not granted: host-write, network, no-sandbox.</sandbox>\n\
 </tool_call_result>"
         );
         let unrestricted = kraai_execution_types::SandboxCapabilities::new([
             kraai_execution_types::SandboxCapability::HostWrite,
             kraai_execution_types::SandboxCapability::Network,
         ]);
-        assert!(notice(unrestricted).contains("permissions=no-sandbox`. Not granted: no-sandbox."));
+        assert!(notice(unrestricted).contains("Not granted: no-sandbox."));
     }
 
     #[test]

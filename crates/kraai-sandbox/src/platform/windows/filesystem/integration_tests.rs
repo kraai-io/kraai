@@ -55,7 +55,9 @@ fn real_filesystem_without_acls_is_rejected() -> Result<(), Box<dyn std::error::
     let mut plan = crate::LaunchPlan::new(
         std::env::current_exe()?,
         root.clone(),
-        kraai_execution_types::SandboxCapabilities::workspace_read(),
+        kraai_execution_types::SandboxCapabilities::new([
+            kraai_execution_types::SandboxCapability::WorkspaceRead,
+        ]),
         std::time::Duration::from_secs(10),
     );
     plan.runtime_roots.push(

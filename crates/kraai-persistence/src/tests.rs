@@ -48,7 +48,9 @@ fn execution(session: &str) -> NewScriptExecution {
         call_id: ToolCallId::new("call"),
         profile: ScriptProfileSnapshot {
             id: "test".into(),
-            permissions: kraai_execution_types::SandboxPermissionSet::workspace_read(),
+            permissions: kraai_execution_types::SandboxPermissionSet::new([
+                kraai_execution_types::SandboxCapability::WorkspaceRead,
+            ]),
             permission_rules: Default::default(),
             commands: Vec::new(),
             escalation_policy: kraai_execution_types::EscalationPolicy::Deny,

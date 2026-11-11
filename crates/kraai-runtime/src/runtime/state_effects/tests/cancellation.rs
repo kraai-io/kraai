@@ -92,7 +92,7 @@ async fn cancelled_unpolled_effect_commit_keeps_session_and_shutdown_ownership()
         execution_id: ScriptExecutionId::new(Ulid::generate()),
         session_id: session.clone(),
         workspace_root: PathBuf::from("/workspace"),
-        effective_capabilities: SandboxCapabilities::workspace_read(),
+        effective_capabilities: SandboxCapabilities::new([SandboxCapability::WorkspaceRead]),
         store: store.clone(),
         barrier: barrier.clone(),
         session_task: Arc::new(tasks.session_token(&session)),
