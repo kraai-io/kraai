@@ -179,13 +179,12 @@ fn sheet(harness: &TestHarness, width: u16) -> Vec<String> {
     chat.get(start..).unwrap_or_default().to_vec()
 }
 
-/// The key hints the status line shows after what Kraai is doing.
+/// The key hints the status line shows while a sheet is open.
 fn hints(harness: &TestHarness) -> String {
     let [_, status, _] = screen_parts(harness, 120);
     status
         .last()
-        .and_then(|row| row.split_once(" · "))
-        .map(|(_, hints)| hints.to_owned())
+        .map(|row| row.trim().to_owned())
         .unwrap_or_default()
 }
 

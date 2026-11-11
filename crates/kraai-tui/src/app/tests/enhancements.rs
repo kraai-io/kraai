@@ -552,7 +552,7 @@ fn only_newly_finished_turns_show_completion_feedback() -> color_eyre::Result<()
     assert!(
         completed
             .lines()
-            .any(|line| line.starts_with(" Finished in 2s"))
+            .any(|line| line.ends_with("  Finished in 2s"))
     );
     assert!(!completed.contains("✓"));
     harness.app.state.feedback.completion_until = None;

@@ -230,7 +230,7 @@ fn off_and_zero_remain_distinct_from_unset() -> color_eyre::Result<()> {
         Some(&ModelOptionValue::Integer(0))
     );
     key(&mut harness, KeyCode::Enter);
-    assert!(screen(&harness.app.state, 100, 30).contains("Model (High, thinking, budget 0)"));
+    assert!(screen(&harness.app.state, 100, 30).contains("Model  High, thinking, budget 0"));
 
     open_settings(&mut harness, "thinking")?;
     type_text(&mut harness, "off");
