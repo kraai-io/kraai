@@ -10,8 +10,10 @@ use std::sync::Arc;
 use super::{display_width, fitting_prefix, normalize_terminal_text};
 
 mod markdown;
+mod scripts;
 mod wrapping;
 
+pub(crate) use scripts::{ScriptMark, ScriptSection, ScriptView};
 pub(crate) use wrapping::wrap_words;
 
 const MESSAGE_GUTTER_WIDTH: usize = 3;
@@ -330,40 +332,6 @@ impl<'a> ChatHistory<'a> {
                 );
                 line
             })
-            .collect()
-    }
-
-    /// The one line that stands for a run of scripts while their output is collapsed.
-    pub(crate) fn build_script_group_lines(summary: &str, width: u16) -> Vec<RenderedLine> {
-        Self::script_heading(&format!("  {summary}  [ctrl+o]"), width)
-    }
-
-    /// One script with its source and output.
-    pub(crate) fn build_script_lines(
-        summary: &str,
-        source: Option<&str>,
-        output: &str,
-        width: u16,
-    ) -> Vec<RenderedLine> {
-        let mut lines = Self::script_heading(&format!("⌄ {summary}"), width);
-        for (label, text) in [
-            ("Source", source.unwrap_or("Source unavailable")),
-            ("Output", output),
-        ] {
-            lines.extend(Self::script_heading(label, width));
-            for line in
-                Self::wrap_with_prefix(&normalize_terminal_text(text), width as usize, "  ", "  ")
-            {
-                lines.push(Self::single_span_line(line, Style::default()));
-            }
-        }
-        lines
-    }
-
-    fn script_heading(text: &str, width: u16) -> Vec<RenderedLine> {
-        Self::wrap_with_prefix(text, width as usize, "", "")
-            .into_iter()
-            .map(|line| Self::single_span_line(line, Style::default().fg(crate::theme::MUTED)))
             .collect()
     }
 

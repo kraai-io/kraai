@@ -11703,6 +11703,10 @@ rec {
             packageId = "kraai-sandbox";
           }
           {
+            name = "kraai-script-protocol";
+            packageId = "kraai-script-protocol";
+          }
+          {
             name = "kraai-types";
             packageId = "kraai-types";
           }

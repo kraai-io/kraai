@@ -135,9 +135,7 @@ impl AppState {
                 match prior_entries.remove(&key) {
                     Some(entry) if entry.fingerprint == fingerprint => entry.lines,
                     _ => Arc::new(ChatHistory::build_script_lines(
-                        &super::executions::result_summary(&output),
-                        source,
-                        &output,
+                        &super::executions::script_view(&output, source),
                         width,
                     )),
                 }
