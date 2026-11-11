@@ -55,15 +55,6 @@ pub(super) fn configure_optional(harness: &mut TestHarness) -> color_eyre::Resul
     Ok(())
 }
 
-fn screen(state: &AppState, width: u16, height: u16) -> String {
-    use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
-
-    let area = Rect::new(0, 0, width, height);
-    let mut buffer = Buffer::empty(area);
-    state.render(area, &mut buffer);
-    buffer.content.iter().map(|cell| cell.symbol()).collect()
-}
-
 fn active_ids(harness: &TestHarness) -> Vec<String> {
     harness
         .app
@@ -293,7 +284,7 @@ fn backspace_and_escape_step_back_through_the_model_list() -> color_eyre::Result
     let mut harness = test_harness();
     configure_optional(&mut harness)?;
     open_settings(&mut harness, "effort")?;
-    assert!(screen(&harness.app.state, 100, 30).contains("/model › Model › "));
+    assert_eq!(composer(&harness), "/model › Model ›");
     key(&mut harness, KeyCode::Backspace);
     assert_eq!(harness.app.state.mode, UiMode::Model);
     ctrl(&mut harness, 's');
@@ -522,9 +513,8 @@ fn a_highlighted_model_starts_on_medium_and_models_never_highlighted_stay_unset(
     fresh.name = "Fresh".into();
     models.push(fresh);
     let row = |harness: &TestHarness, name: &str| {
-        let text: Vec<char> = screen(&harness.app.state, 100, 30).chars().collect();
-        text.chunks(100)
-            .map(|row| row.iter().collect::<String>())
+        screen_rows(&harness.app.state, 100, 30)
+            .into_iter()
             .find(|row| row.contains(name))
             .unwrap_or_default()
             .trim()

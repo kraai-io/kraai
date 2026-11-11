@@ -153,6 +153,11 @@ fn screen_rows(state: &AppState, width: u16, height: u16) -> Vec<String> {
         .collect()
 }
 
+/// The screen at the given size as one string, with a line break after each row.
+fn screen(state: &AppState, width: u16, height: u16) -> String {
+    screen_rows(state, width, height).join("\n")
+}
+
 /// The screen at the given width, split into the chat, the status line and the composer.
 fn screen_parts(harness: &TestHarness, width: u16) -> [Vec<String>; 3] {
     let area = ratatui::layout::Rect::new(0, 0, width, 40);

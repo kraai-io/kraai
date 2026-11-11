@@ -1,19 +1,7 @@
 use super::*;
 use crate::app::{KeyCode, KeyEvent, KeyModifiers, UiMode};
 use kraai_types::{ScriptCall, SessionId};
-use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
-
-fn screen(state: &AppState, width: u16, height: u16) -> String {
-    let area = Rect::new(0, 0, width, height);
-    let mut buffer = Buffer::empty(area);
-    state.render(area, &mut buffer);
-    buffer
-        .content()
-        .chunks(width.max(1) as usize)
-        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+use ratatui::layout::Rect;
 
 #[test]
 fn approval_scroll_reaches_end_and_moves_back_with_metadata_pinned() {
