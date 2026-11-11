@@ -13,8 +13,7 @@ const RAIL: &str = "   │ ";
 pub(crate) enum ScriptMark {
     Passed,
     Failed,
-    /// Cancelled, or a result whose outcome cannot be read.
-    Other,
+    Cancelled,
 }
 
 pub(crate) struct ScriptSection<'a> {
@@ -52,7 +51,7 @@ impl ChatHistory<'_> {
         let (marker, heading) = match view.mark {
             ScriptMark::Passed => (" ✓ ", muted),
             ScriptMark::Failed => (" ✗ ", Style::default().fg(theme::DANGER)),
-            ScriptMark::Other => (" ○ ", muted),
+            ScriptMark::Cancelled => (" ○ ", muted),
         };
         let mut lines = Vec::new();
         Self::push_wrapped_lines(&mut lines, &view.summary, width, heading, marker, INDENT);
@@ -164,7 +163,7 @@ mod tests {
 
     #[test]
     fn passed_and_unreadable_scripts_stay_muted_and_fit_narrow_widths() {
-        for (mark, marker) in [(ScriptMark::Passed, " ✓ "), (ScriptMark::Other, " ○ ")] {
+        for (mark, marker) in [(ScriptMark::Passed, " ✓ "), (ScriptMark::Cancelled, " ○ ")] {
             let view = ScriptView {
                 mark,
                 summary: String::from("exit 0"),

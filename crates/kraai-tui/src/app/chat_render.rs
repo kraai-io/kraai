@@ -116,14 +116,21 @@ impl AppState {
                 match prior_entries.remove(&key) {
                     Some(entry) if entry.fingerprint == fingerprint => entry.lines,
                     _ => Arc::new(ChatHistory::build_script_group_lines(
-                        &super::executions::group_summary(
-                            group.iter().map(|message| message.display_text()),
-                        ),
+                        &super::executions::group_summary(group.iter().filter_map(|message| {
+                            match &message.content {
+                                ConversationItem::ScriptResult {
+                                    outcome, output, ..
+                                } => Some((*outcome, output.display_text())),
+                                _ => None,
+                            }
+                        })),
                         width,
                     )),
                 }
             } else if let ConversationItem::ScriptResult {
-                call_id, output, ..
+                call_id,
+                output,
+                outcome,
             } = &msg.content
             {
                 fingerprint = message_fingerprint(msg);
@@ -135,7 +142,7 @@ impl AppState {
                 match prior_entries.remove(&key) {
                     Some(entry) if entry.fingerprint == fingerprint => entry.lines,
                     _ => Arc::new(ChatHistory::build_script_lines(
-                        &super::executions::script_view(&output, source),
+                        &super::executions::script_view(*outcome, &output, source),
                         width,
                     )),
                 }
@@ -288,6 +295,9 @@ fn message_fingerprint(msg: &Message) -> u64 {
         MessageStatus::Cancelled => 2u8.hash(&mut hasher),
     }
     msg.display_text().hash(&mut hasher);
+    if let ConversationItem::ScriptResult { outcome, .. } = &msg.content {
+        (outcome.status.as_str(), outcome.exit_code).hash(&mut hasher);
+    }
     hasher.finish()
 }
 

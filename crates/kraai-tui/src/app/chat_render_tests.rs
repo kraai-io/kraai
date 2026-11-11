@@ -417,3 +417,54 @@ fn consecutive_scripts_group_across_hidden_calls_but_not_visible_messages() {
     }
     assert!(lines.iter().any(|line| line.contains("Next step")));
 }
+
+#[test]
+fn a_changed_outcome_redraws_a_script_whose_text_stayed_the_same() {
+    let result = |exit_code| {
+        message(
+            "result",
+            None,
+            ConversationItem::ScriptResult {
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
+                    exit_code: Some(exit_code),
+                },
+                call_id: ToolCallId::new("call"),
+                output: String::from("<tool_call_result elapsed_ms=\"300\"></tool_call_result>")
+                    .into(),
+            },
+        )
+    };
+    let mut state = AppState {
+        chat_history: [(MessageId::new("result"), result(0))]
+            .into_iter()
+            .collect(),
+        current_tip_id: Some(String::from("result")),
+        ..AppState::default()
+    };
+    for expanded in [false, true] {
+        state.scripts_expanded = expanded;
+        for (exit_code, expected) in [
+            (0, "0.3s"),
+            (3, if expanded { "exit 3" } else { "1 failed" }),
+        ] {
+            state
+                .chat_history
+                .insert(MessageId::new("result"), result(exit_code));
+            state.chat_epoch += 1;
+            state.refresh_chat_render_cache(80);
+            let lines = rendered_lines(&state);
+            assert!(
+                lines.iter().any(|line| line.contains(expected)),
+                "{lines:?}"
+            );
+            assert_eq!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("failed") || line.contains("exit 3")),
+                exit_code != 0,
+                "{lines:?}"
+            );
+        }
+    }
+}

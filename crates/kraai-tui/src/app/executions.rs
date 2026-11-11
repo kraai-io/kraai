@@ -1,67 +1,46 @@
 use std::time::Duration;
 
+use kraai_execution_types::{ScriptExecutionOutcome, ScriptExecutionStatus};
 use kraai_script_protocol::{ParsedToolCallResult, ToolCallResultSection, parse_tool_call_result};
 
 use super::duration::format_duration;
 use crate::components::{ScriptMark, ScriptSection, ScriptView};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Outcome {
-    Passed,
-    Failed,
-    Cancelled,
-    Unknown,
+fn mark(outcome: ScriptExecutionOutcome) -> ScriptMark {
+    if outcome.succeeded() {
+        ScriptMark::Passed
+    } else if outcome.status == ScriptExecutionStatus::Cancelled {
+        ScriptMark::Cancelled
+    } else {
+        ScriptMark::Failed
+    }
 }
 
-struct Fields<'a> {
-    status: &'a str,
-    exit: Option<&'a str>,
-    elapsed: Option<u64>,
+/// The run time, which only the rendered result records.
+fn elapsed_millis(parsed: Option<&ParsedToolCallResult<'_>>) -> Option<u64> {
+    parsed?.attribute("elapsed_ms")?.parse().ok()
 }
 
-impl<'a> Fields<'a> {
-    fn read(parsed: Option<&'a ParsedToolCallResult<'_>>) -> Self {
-        let attribute = |name| parsed.and_then(|parsed| parsed.attribute(name));
-        Self {
-            status: attribute("status").unwrap_or("unknown"),
-            exit: attribute("exit_code"),
-            elapsed: attribute("elapsed_ms").and_then(|value| value.parse().ok()),
-        }
-    }
-
-    fn outcome(&self) -> Outcome {
-        match (self.status, self.exit) {
-            ("completed", Some("0")) => Outcome::Passed,
-            ("cancelled", _) => Outcome::Cancelled,
-            ("unknown", _) | ("completed", None) => Outcome::Unknown,
-            _ => Outcome::Failed,
-        }
-    }
-
-    fn summary(&self) -> String {
-        let mut summary = if self.status == "completed" {
-            format!("exit {}", self.exit.unwrap_or("unknown"))
-        } else if self.status == "cancelled" {
-            String::from("cancelled")
-        } else {
-            match self.exit {
-                Some(exit) => format!("{} · exit {exit}", self.status),
-                None => self.status.to_string(),
+fn summary(outcome: ScriptExecutionOutcome, elapsed: Option<u64>) -> String {
+    let mut summary = match (outcome.status, outcome.exit_code) {
+        (ScriptExecutionStatus::Cancelled, _) => String::from("cancelled"),
+        (ScriptExecutionStatus::Completed, Some(code)) => format!("exit {code}"),
+        (ScriptExecutionStatus::Completed, None) => String::from("no exit code"),
+        (status, code) => {
+            let status = status.as_str().replace('-', " ");
+            match code {
+                Some(code) => format!("{status} · exit {code}"),
+                None => status,
             }
-        };
-        if let Some(elapsed) = self.elapsed {
-            summary.push_str(&format!(
-                " · {}",
-                format_duration(Duration::from_millis(elapsed))
-            ));
         }
-        summary
+    };
+    if let Some(elapsed) = elapsed {
+        summary.push_str(&format!(
+            " · {}",
+            format_duration(Duration::from_millis(elapsed))
+        ));
     }
-}
-
-#[cfg(test)]
-fn result_summary(output: &str) -> String {
-    Fields::read(parse_tool_call_result(output).as_ref()).summary()
+    summary
 }
 
 fn section_label(section: &ToolCallResultSection<'_>) -> String {
@@ -83,9 +62,12 @@ fn section_label(section: &ToolCallResultSection<'_>) -> String {
 }
 
 /// What the expanded chat shows for one script result.
-pub(super) fn script_view<'a>(output: &'a str, source: Option<&'a str>) -> ScriptView<'a> {
+pub(super) fn script_view<'a>(
+    outcome: ScriptExecutionOutcome,
+    output: &'a str,
+    source: Option<&'a str>,
+) -> ScriptView<'a> {
     let parsed = parse_tool_call_result(output);
-    let fields = Fields::read(parsed.as_ref());
     let sections = match &parsed {
         Some(parsed) => parsed
             .sections
@@ -101,12 +83,8 @@ pub(super) fn script_view<'a>(output: &'a str, source: Option<&'a str>) -> Scrip
         }],
     };
     ScriptView {
-        mark: match fields.outcome() {
-            Outcome::Passed => ScriptMark::Passed,
-            Outcome::Failed => ScriptMark::Failed,
-            Outcome::Cancelled | Outcome::Unknown => ScriptMark::Other,
-        },
-        summary: fields.summary(),
+        mark: mark(outcome),
+        summary: summary(outcome, elapsed_millis(parsed.as_ref())),
         source,
         sections: sections
             .into_iter()
@@ -115,32 +93,28 @@ pub(super) fn script_view<'a>(output: &'a str, source: Option<&'a str>) -> Scrip
     }
 }
 
-pub(super) fn group_summary(outputs: impl Iterator<Item = impl AsRef<str>>) -> String {
+pub(super) fn group_summary(
+    results: impl Iterator<Item = (ScriptExecutionOutcome, impl AsRef<str>)>,
+) -> String {
     let mut count = 0;
     let mut failed = 0;
     let mut cancelled = 0;
-    let mut unknown = 0;
     let mut elapsed = Some(0u64);
-    for output in outputs {
+    for (outcome, output) in results {
         count += 1;
-        let parsed = parse_tool_call_result(output.as_ref());
-        let fields = Fields::read(parsed.as_ref());
-        match fields.outcome() {
-            Outcome::Passed => {}
-            Outcome::Failed => failed += 1,
-            Outcome::Cancelled => cancelled += 1,
-            Outcome::Unknown => unknown += 1,
+        match mark(outcome) {
+            ScriptMark::Passed => {}
+            ScriptMark::Failed => failed += 1,
+            ScriptMark::Cancelled => cancelled += 1,
         }
         elapsed = elapsed
-            .zip(fields.elapsed)
+            .zip(elapsed_millis(
+                parse_tool_call_result(output.as_ref()).as_ref(),
+            ))
             .and_then(|(total, next)| total.checked_add(next));
     }
     let mut summary = format!("{count} {}", if count == 1 { "script" } else { "scripts" });
-    for (count, label) in [
-        (failed, "failed"),
-        (cancelled, "cancelled"),
-        (unknown, "unknown"),
-    ] {
+    for (count, label) in [(failed, "failed"), (cancelled, "cancelled")] {
         if count > 0 {
             summary.push_str(&format!(" · {count} {label}"));
         }
@@ -156,74 +130,125 @@ pub(super) fn group_summary(outputs: impl Iterator<Item = impl AsRef<str>>) -> S
 
 #[cfg(test)]
 mod tests {
-    use super::{group_summary, result_summary, script_view};
+    use kraai_execution_types::{ScriptExecutionOutcome, ScriptExecutionStatus};
+
+    use super::{group_summary, script_view};
     use crate::components::ScriptMark;
 
+    const fn outcome(
+        status: ScriptExecutionStatus,
+        exit_code: Option<i32>,
+    ) -> ScriptExecutionOutcome {
+        ScriptExecutionOutcome { status, exit_code }
+    }
+
+    const PASSED: ScriptExecutionOutcome = outcome(ScriptExecutionStatus::Completed, Some(0));
+
     #[test]
-    fn groups_count_each_result_category_and_sum_durations() {
-        let outputs = [
-            "<tool_call_result status=\"completed\" exit_code=\"0\" elapsed_ms=\"100\">",
-            "<tool_call_result status=\"completed\" exit_code=\"2\" elapsed_ms=\"200\">",
-            "<tool_call_result status=\"timed-out\" elapsed_ms=\"300\">",
-            "<tool_call_result status=\"cancelled\" elapsed_ms=\"400\">",
-            "<tool_call_result status=\"unknown\" elapsed_ms=\"500\">",
-            "<tool_call_result status=\"completed\" elapsed_ms=\"600\">",
+    fn groups_count_failures_and_cancellations_and_sum_durations() {
+        let results = [
+            (PASSED, "<tool_call_result elapsed_ms=\"100\">"),
+            (
+                outcome(ScriptExecutionStatus::Completed, Some(2)),
+                "<tool_call_result elapsed_ms=\"200\">",
+            ),
+            (
+                outcome(ScriptExecutionStatus::TimedOut, None),
+                "<tool_call_result elapsed_ms=\"300\">",
+            ),
+            (
+                outcome(ScriptExecutionStatus::Cancelled, None),
+                "<tool_call_result elapsed_ms=\"400\">",
+            ),
+            (
+                outcome(ScriptExecutionStatus::Completed, None),
+                "<tool_call_result elapsed_ms=\"500\">",
+            ),
         ];
         assert_eq!(
-            group_summary(outputs.into_iter()),
-            "6 scripts · 2 failed · 1 cancelled · 2 unknown · 2.1s"
+            group_summary(results.into_iter()),
+            "5 scripts · 3 failed · 1 cancelled · 1.5s"
         );
+    }
+
+    #[test]
+    fn the_structured_outcome_wins_over_what_the_text_claims() {
+        let failed = outcome(ScriptExecutionStatus::RuntimeError, None);
+        let text = "<tool_call_result status=\"completed\" exit_code=\"0\" elapsed_ms=\"100\">";
+        assert_eq!(
+            group_summary([(failed, text)].into_iter()),
+            "1 script · 1 failed · 0.1s"
+        );
+        let view = script_view(failed, text, None);
+        assert!(view.mark == ScriptMark::Failed);
+        assert_eq!(view.summary, "runtime error · 0.1s");
+
+        let view = script_view(PASSED, "<tool_call_result status=\"runtime-error\">", None);
+        assert!(view.mark == ScriptMark::Passed);
+        assert_eq!(view.summary, "exit 0");
     }
 
     #[test]
     fn groups_do_not_report_partial_or_overflowed_durations() {
-        let valid = "<tool_call_result status=\"completed\" exit_code=\"0\" elapsed_ms=\"100\">";
-        for duration in [
-            "",
-            " elapsed_ms=\"invalid\"",
-            " elapsed_ms=\"-1\"",
-            " elapsed_ms=\"18446744073709551615\"",
+        let valid = "<tool_call_result elapsed_ms=\"100\">";
+        for other in [
+            "<tool_call_result>",
+            "<tool_call_result elapsed_ms=\"invalid\">",
+            "<tool_call_result elapsed_ms=\"-1\">",
+            "<tool_call_result elapsed_ms=\"18446744073709551615\">",
+            "not a result",
         ] {
-            let other =
-                format!("<tool_call_result status=\"completed\" exit_code=\"0\"{duration}>");
-            assert_eq!(
-                group_summary([valid, other.as_str()].into_iter()),
-                "2 scripts"
-            );
-            assert_eq!(
-                group_summary([other.as_str(), valid].into_iter()),
-                "2 scripts"
-            );
+            for results in [[valid, other], [other, valid]] {
+                assert_eq!(
+                    group_summary(results.into_iter().map(|output| (PASSED, output))),
+                    "2 scripts"
+                );
+            }
         }
-    }
-
-    #[test]
-    fn groups_handle_single_unknown_and_zero_duration_results() {
         assert_eq!(
-            group_summary(["not an XML result"].into_iter()),
-            "1 script · 1 unknown"
-        );
-        assert_eq!(
-            group_summary(
-                ["<tool_call_result status=\"completed\" exit_code=\"0\" elapsed_ms=\"0\">"]
-                    .into_iter()
-            ),
+            group_summary([(PASSED, "<tool_call_result elapsed_ms=\"0\">")].into_iter()),
             "1 script · 0s"
         );
     }
 
     #[test]
     fn summaries_show_exit_or_cancellation_without_redundant_labels() {
-        for (status, expected) in [
-            ("completed", "exit 1 · 0.5s"),
-            ("cancelled", "cancelled · 0.5s"),
-            ("timed-out", "timed-out · exit 1 · 0.5s"),
+        for (status, exit_code, expected) in [
+            (ScriptExecutionStatus::Completed, Some(1), "exit 1 · 0.5s"),
+            (
+                ScriptExecutionStatus::Completed,
+                None,
+                "no exit code · 0.5s",
+            ),
+            (
+                ScriptExecutionStatus::Cancelled,
+                Some(1),
+                "cancelled · 0.5s",
+            ),
+            (
+                ScriptExecutionStatus::TimedOut,
+                Some(1),
+                "timed out · exit 1 · 0.5s",
+            ),
+            (
+                ScriptExecutionStatus::FailedToStart,
+                None,
+                "failed to start · 0.5s",
+            ),
         ] {
-            assert_eq!(
-                result_summary(&format!(
-                    "<tool_call_result status=\"{status}\" exit_code=\"1\" elapsed_ms=\"500\"></tool_call_result>"
-                )),
-                expected
+            let view = script_view(
+                outcome(status, exit_code),
+                "<tool_call_result elapsed_ms=\"500\"></tool_call_result>",
+                None,
+            );
+            assert_eq!(view.summary, expected);
+            assert!(
+                view.mark
+                    == if status == ScriptExecutionStatus::Cancelled {
+                        ScriptMark::Cancelled
+                    } else {
+                        ScriptMark::Failed
+                    }
             );
         }
     }
@@ -235,7 +260,11 @@ mod tests {
 <stdout>plain\n</stdout>\n\
 <stderr encoding=\"binary\" byte_count=\"9\" full_output=\"/tmp/err\">kept</stderr>\n\
 </tool_call_result>";
-        let view = script_view(output, Some("ls"));
+        let view = script_view(
+            outcome(ScriptExecutionStatus::Completed, Some(2)),
+            output,
+            Some("ls"),
+        );
         assert!(view.mark == ScriptMark::Failed);
         assert_eq!(view.summary, "exit 2 · 0.5s");
         assert_eq!(view.source, Some("ls"));
@@ -259,7 +288,7 @@ mod tests {
         let truncated = "<tool_call_result status=\"completed\" exit_code=\"0\">\n\
 <stdout byte_count=\"40000\" truncated=\"true\">head</stdout>\n\
 </tool_call_result>";
-        let view = script_view(truncated, None);
+        let view = script_view(PASSED, truncated, None);
         assert!(view.mark == ScriptMark::Passed);
         assert_eq!(
             view.sections.first().map(|section| section.label.as_str()),
@@ -269,9 +298,8 @@ mod tests {
 
     #[test]
     fn view_keeps_text_it_cannot_read_and_drops_blank_output() {
-        let view = script_view("not a result", None);
-        assert!(view.mark == ScriptMark::Other);
-        assert_eq!(view.summary, "unknown");
+        let view = script_view(PASSED, "not a result", None);
+        assert_eq!(view.summary, "exit 0");
         assert_eq!(view.sections.len(), 1);
         assert_eq!(
             view.sections.first().map(|section| section.text),
@@ -279,10 +307,11 @@ mod tests {
         );
 
         let cancelled = script_view(
+            outcome(ScriptExecutionStatus::Cancelled, None),
             "<tool_call_result status=\"cancelled\">\n</tool_call_result>",
             None,
         );
-        assert!(cancelled.mark == ScriptMark::Other);
+        assert!(cancelled.mark == ScriptMark::Cancelled);
         assert_eq!(cancelled.summary, "cancelled");
         assert!(cancelled.sections.is_empty());
     }
