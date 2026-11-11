@@ -132,14 +132,6 @@ impl App {
                         self.apply_mcp_auth_status(status);
                     }
                     self.state.mcp_loaded = true;
-                    if self
-                        .state
-                        .mcp_selected
-                        .as_ref()
-                        .is_none_or(|name| !self.state.mcp_auth.contains_key(name))
-                    {
-                        self.state.mcp_selected = self.state.mcp_auth.keys().next().cloned();
-                    }
                 }
                 Err(error) => self.state.mcp_error = Some(format!("MCP auth failed: {error}")),
             },

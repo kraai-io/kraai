@@ -160,6 +160,7 @@ impl App {
                 UiMode::ProvidersMenu => self.handle_providers_escape(),
                 UiMode::Model => self.close_sheet(),
                 UiMode::ModelSettings => self.close_model_settings(),
+                UiMode::Mcp => self.close_mcp_level(),
                 _ => self.close_sheet(),
             }
             return;
@@ -252,7 +253,7 @@ impl App {
             return;
         }
         match self.state.mode {
-            UiMode::Agent | UiMode::Model | UiMode::Sessions => {
+            UiMode::Agent | UiMode::Mcp | UiMode::Model | UiMode::Sessions => {
                 self.paste_into_sheet_query(&text);
                 self.state.reset_sheet_selection();
                 return;

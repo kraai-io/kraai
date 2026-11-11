@@ -8,6 +8,7 @@ use super::super::{AppState, UiMode};
 use super::sheet::{Note, Sheet, SheetItem, SheetRow, Tone};
 
 mod agent;
+mod mcp;
 mod sessions;
 
 /// The sheet the current mode shows above the status line, if any.
@@ -17,6 +18,7 @@ pub(super) fn active(state: &AppState) -> Option<Sheet> {
         UiMode::Model => Some(models(state)),
         UiMode::ModelSettings => Some(model_settings(state)),
         UiMode::Agent => Some(agent::agents(state)),
+        UiMode::Mcp => Some(mcp::mcp(state)),
         UiMode::Sessions => Some(sessions::sessions(state)),
         _ => None,
     }
@@ -66,6 +68,12 @@ pub(super) fn hints(state: &AppState) -> Option<String> {
             ))
         }
         UiMode::Agent => Some(String::from("tab or ↑↓ select · enter use · esc close")),
+        UiMode::Mcp if state.mcp_open.is_some() => Some(String::from(
+            "tab or ↑↓ select · enter run · ctrl+r refresh · esc back",
+        )),
+        UiMode::Mcp => Some(String::from(
+            "tab or ↑↓ select · enter open · ctrl+r refresh · esc close",
+        )),
         UiMode::Sessions if state.sheet_armed => Some(String::from(
             "del delete this session · any other key keeps it",
         )),

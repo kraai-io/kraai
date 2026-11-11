@@ -6,6 +6,11 @@ impl AppState {
         self.sheet_scroll.set(0);
     }
 
+    /// Backspace with nothing typed asks to leave the sheet the way it was entered.
+    pub(super) fn wants_back(&self, key: KeyEvent) -> bool {
+        key.code == KeyCode::Backspace && key.modifiers.is_empty() && self.sheet_query.is_empty()
+    }
+
     pub(super) fn filtered_models(&self) -> Vec<(&str, &Model)> {
         let query = self.sheet_query.to_lowercase();
         let mut providers: Vec<_> = self.models_by_provider.iter().collect();
@@ -30,6 +35,10 @@ impl AppState {
             UiMode::Model => Some(String::from("/model ")),
             UiMode::Agent => Some(String::from("/agent ")),
             UiMode::Sessions => Some(String::from("/sessions ")),
+            UiMode::Mcp => Some(match &self.mcp_open {
+                Some(server) => format!("/mcp › {server} › "),
+                None => String::from("/mcp "),
+            }),
             UiMode::ModelSettings => self.model_settings.as_ref().map(|target| {
                 format!(
                     "/model › {} › ",
@@ -65,18 +74,21 @@ impl App {
     /// Applies a key that edits the filter of a sheet a command opened. Backspace on an empty
     /// filter hands `command` back to the composer. False when the key is not an edit.
     pub(super) fn filter_sheet(&mut self, key: KeyEvent, command: &str) -> bool {
-        if key.code == KeyCode::Backspace
-            && key.modifiers.is_empty()
-            && self.state.sheet_query.is_empty()
-        {
+        if self.state.wants_back(key) {
             self.close_sheet_to_composer(command);
             return true;
         }
-        if self.edit_sheet_query(key) {
+        self.edit_sheet_filter(key)
+    }
+
+    /// Applies a key that edits a sheet's filter and puts the highlight back on the first row.
+    /// False when the key is not an edit.
+    pub(super) fn edit_sheet_filter(&mut self, key: KeyEvent) -> bool {
+        let edited = self.edit_sheet_query(key);
+        if edited {
             self.state.reset_sheet_selection();
-            return true;
         }
-        false
+        edited
     }
 
     /// Moves the highlight through `len` rows with the arrows, Tab and Shift+Tab, wrapping at

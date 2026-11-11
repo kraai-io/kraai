@@ -51,7 +51,11 @@ impl AppState {
         !(self.error_open && self.last_error.is_some())
             && match self.mode {
                 UiMode::Chat => !self.has_local_script_approval(),
-                UiMode::Agent | UiMode::Model | UiMode::ModelSettings | UiMode::Sessions => true,
+                UiMode::Agent
+                | UiMode::Mcp
+                | UiMode::Model
+                | UiMode::ModelSettings
+                | UiMode::Sessions => true,
                 _ => false,
             }
     }

@@ -1,76 +1,165 @@
 use kraai_runtime::{McpAuthState, McpAuthStatus};
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{App, RuntimeRequest, open_external_target};
+use super::{App, AppState, RuntimeRequest, UiMode, open_external_target};
 
 pub(super) struct BrowserIntent {
     pub(super) request_id: u64,
     sequence: Option<u64>,
 }
 
+/// What a server's sheet offers, depending on where its sign-in stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum McpAction {
+    SignIn,
+    OpenBrowser,
+    CopyUrl,
+    CancelSignIn,
+    LogOut,
+}
+
+impl McpAction {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::SignIn => "Sign in",
+            Self::OpenBrowser => "Open the browser again",
+            Self::CopyUrl => "Copy the sign-in URL",
+            Self::CancelSignIn => "Cancel sign-in",
+            Self::LogOut => "Log out",
+        }
+    }
+
+    fn offered(state: &McpAuthState) -> &'static [Self] {
+        match state {
+            McpAuthState::Unavailable => &[],
+            McpAuthState::SignedOut => &[Self::SignIn],
+            McpAuthState::Starting => &[Self::CancelSignIn],
+            McpAuthState::Pending { .. } => &[Self::OpenBrowser, Self::CopyUrl, Self::CancelSignIn],
+            McpAuthState::Authenticated => &[Self::LogOut],
+        }
+    }
+}
+
+impl AppState {
+    /// The servers the server list shows: every server, or the ones the typed text names.
+    pub(super) fn listed_mcp_servers(&self) -> Vec<&McpAuthStatus> {
+        let query = self.sheet_query.to_lowercase();
+        self.mcp_auth
+            .values()
+            .filter(|status| status.server.to_lowercase().contains(&query))
+            .collect()
+    }
+
+    /// The actions the open server offers that the typed text names.
+    pub(super) fn listed_mcp_actions(&self) -> Vec<McpAction> {
+        let query = self.sheet_query.to_lowercase();
+        self.mcp_open
+            .as_ref()
+            .and_then(|server| self.mcp_auth.get(server))
+            .map(|status| McpAction::offered(&status.state))
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .filter(|action| action.label().to_lowercase().contains(&query))
+            .collect()
+    }
+
+    fn highlighted_mcp_server(&self) -> Option<String> {
+        if self.mode != UiMode::Mcp || self.mcp_open.is_some() {
+            return None;
+        }
+        let servers = self.listed_mcp_servers();
+        servers
+            .get(self.sheet_index.min(servers.len().checked_sub(1)?))
+            .map(|status| status.server.clone())
+    }
+
+    fn highlight_mcp_server(&mut self, server: &str) {
+        if let Some(index) = self
+            .listed_mcp_servers()
+            .iter()
+            .position(|status| status.server == server)
+        {
+            self.sheet_index = index;
+        }
+    }
+}
+
 impl App {
     pub(super) fn handle_mcp_command(&mut self, args: Vec<&str>) {
-        self.state.mode = super::UiMode::Mcp;
-        self.state.mcp_scroll.set(0);
+        self.open_sheet(UiMode::Mcp);
+        self.state.mcp_open = None;
         self.state.mcp_error = None;
-        if let Some(server) = args.get(1) {
-            self.state.mcp_selected = Some((*server).into());
-            self.state.mcp_feedback.remove(*server);
-        }
-        let request = match args.as_slice() {
-            [] | ["status"] => RuntimeRequest::GetMcpAuthStatuses,
-            ["login", server] => {
+        let (action, server) = match args.as_slice() {
+            [] | ["status"] => {
+                self.request(RuntimeRequest::GetMcpAuthStatuses);
+                return;
+            }
+            ["login", server] => (McpAction::SignIn, *server),
+            ["cancel", server] => (McpAction::CancelSignIn, *server),
+            ["logout", server] => (McpAction::LogOut, *server),
+            ["copy", server] => (McpAction::CopyUrl, *server),
+            _ => {
+                self.state.sheet_notice = Some(String::from(
+                    "Use /mcp status, /mcp login <server>, /mcp cancel <server>, /mcp logout <server>, or /mcp copy <server>",
+                ));
+                return;
+            }
+        };
+        self.state.mcp_open = Some(server.to_owned());
+        self.run_mcp_action(server, action);
+    }
+
+    fn run_mcp_action(&mut self, server: &str, action: McpAction) {
+        self.state.mcp_feedback.remove(server);
+        let pending_url = self
+            .state
+            .mcp_auth
+            .get(server)
+            .and_then(|status| match &status.state {
+                McpAuthState::Pending { auth_url } => Some(auth_url.clone()),
+                _ => None,
+            });
+        let request = match action {
+            McpAction::SignIn => {
                 let request_id = self.state.next_mcp_login_request;
                 self.state.next_mcp_login_request = request_id.wrapping_add(1);
                 self.state.mcp_browser_intent.insert(
-                    (*server).into(),
+                    server.to_owned(),
                     BrowserIntent {
                         request_id,
                         sequence: None,
                     },
                 );
                 RuntimeRequest::StartMcpLogin {
-                    server: (*server).into(),
+                    server: server.to_owned(),
                     request_id,
                 }
             }
-            ["cancel", server] => {
-                self.state.mcp_browser_intent.remove(*server);
+            McpAction::CancelSignIn => {
+                self.state.mcp_browser_intent.remove(server);
                 RuntimeRequest::CancelMcpLogin {
-                    server: (*server).into(),
+                    server: server.to_owned(),
                 }
             }
-            ["logout", server] => {
-                self.state.mcp_browser_intent.remove(*server);
+            McpAction::LogOut => {
+                self.state.mcp_browser_intent.remove(server);
                 RuntimeRequest::LogoutMcp {
-                    server: (*server).into(),
+                    server: server.to_owned(),
                 }
             }
-            ["copy", server] => {
-                let url = self
-                    .state
-                    .mcp_auth
-                    .get(*server)
-                    .and_then(|status| match &status.state {
-                        McpAuthState::Pending { auth_url } => Some(auth_url.clone()),
-                        _ => None,
-                    });
-                let message = match url {
-                    Some(url) => {
+            McpAction::CopyUrl | McpAction::OpenBrowser => {
+                let message = match (action, pending_url) {
+                    (_, None) => format!("No pending sign-in URL for {server}"),
+                    (McpAction::CopyUrl, Some(url)) => {
                         match self.copy_text_to_clipboard(&url, super::feedback::CopyTarget::Auth) {
                             Ok(()) => String::from("MCP sign-in URL copied"),
                             Err(error) => format!("Copy failed: {error}. Sign in at {url}"),
                         }
                     }
-                    None => format!("No pending sign-in URL for {server}"),
+                    (_, Some(url)) => browser_feedback(open_external_target(&url)),
                 };
-                self.state.mcp_feedback.insert((*server).into(), message);
-                return;
-            }
-            _ => {
-                self.state.mcp_error = Some(String::from(
-                    "Use /mcp status, /mcp login <server>, /mcp cancel <server>, /mcp logout <server>, or /mcp copy <server>",
-                ));
+                self.state.mcp_feedback.insert(server.to_owned(), message);
                 return;
             }
         };
@@ -133,96 +222,84 @@ impl App {
         } else if let McpAuthState::Pending { auth_url } = &status.state {
             if browser_intent {
                 self.state.mcp_browser_intent.remove(&status.server);
-                let message = match open(auth_url) {
-                    Ok(()) => String::from("Browser opened. Complete sign-in to continue."),
-                    Err(error) => {
-                        format!("Cannot open browser: {error}. Press y to copy the sign-in URL.")
-                    }
-                };
                 self.state
                     .mcp_feedback
-                    .insert(status.server.clone(), message);
+                    .insert(status.server.clone(), browser_feedback(open(auth_url)));
             }
         } else if browser_intent && !matches!(status.state, McpAuthState::Starting) {
             self.state.mcp_browser_intent.remove(&status.server);
         }
-        if self.state.mcp_selected.is_none() {
-            self.state.mcp_selected = Some(status.server.clone());
-        }
+        let highlighted = self.state.highlighted_mcp_server();
         self.state.mcp_auth.insert(status.server.clone(), status);
+        if let Some(server) = highlighted {
+            self.state.highlight_mcp_server(&server);
+        }
+    }
+
+    /// Steps out of a server's sheet to the server list, or out of the list to the chat.
+    pub(super) fn close_mcp_level(&mut self) {
+        match self.state.mcp_open.take() {
+            Some(server) => {
+                self.open_sheet(UiMode::Mcp);
+                self.state.highlight_mcp_server(&server);
+            }
+            None => self.close_sheet(),
+        }
     }
 
     pub(super) fn handle_mcp_key_event(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('q') => self.state.mode = super::UiMode::Chat,
-            KeyCode::Char('r') => {
-                self.state.mcp_error = None;
-                self.request(RuntimeRequest::GetMcpAuthStatuses);
-            }
-            KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End => {
-                let servers: Vec<_> = self.state.mcp_auth.keys().cloned().collect();
-                if servers.is_empty() {
-                    return;
-                }
-                let index = servers
-                    .iter()
-                    .position(|name| Some(name) == self.state.mcp_selected.as_ref())
-                    .unwrap_or(0);
-                let next = match key.code {
-                    KeyCode::Up => index.saturating_sub(1),
-                    KeyCode::Down => (index + 1).min(servers.len() - 1),
-                    KeyCode::End => servers.len() - 1,
-                    _ => 0,
-                };
-                self.state.mcp_selected = servers.get(next).cloned();
-                self.state.mcp_scroll.set(0);
-            }
-            KeyCode::PageUp => self
-                .state
-                .mcp_scroll
-                .set(self.state.mcp_scroll.get().saturating_sub(10)),
-            KeyCode::PageDown => self
-                .state
-                .mcp_scroll
-                .set(self.state.mcp_scroll.get().saturating_add(10)),
-            _ => {
-                let Some(server) = self.state.mcp_selected.clone() else {
-                    return;
-                };
-                let Some(status) = self.state.mcp_auth.get(&server) else {
-                    return;
-                };
-                let operation = match (&status.state, key.code) {
-                    (McpAuthState::SignedOut, KeyCode::Enter | KeyCode::Char('b')) => "login",
-                    (McpAuthState::Starting | McpAuthState::Pending { .. }, KeyCode::Char('x')) => {
-                        "cancel"
-                    }
-                    (McpAuthState::Authenticated, KeyCode::Char('l')) => "logout",
-                    (McpAuthState::Pending { .. }, KeyCode::Char('y')) => "copy",
-                    (McpAuthState::Pending { auth_url }, KeyCode::Char('o') | KeyCode::Enter) => {
-                        let message = match open_external_target(auth_url) {
-                            Ok(()) => String::from("Browser opened. Complete sign-in to continue."),
-                            Err(error) => format!(
-                                "Cannot open browser: {error}. Press y to copy the sign-in URL."
-                            ),
-                        };
-                        self.state.mcp_feedback.insert(server, message);
-                        return;
-                    }
-                    _ => return,
-                };
-                if operation == "login" && self.state.mcp_browser_intent.contains_key(&server) {
-                    return;
-                }
-                self.handle_mcp_command(vec![operation, &server]);
-            }
+        self.state.sheet_notice = None;
+        if key.code == KeyCode::Char('r') && key.modifiers == KeyModifiers::CONTROL {
+            self.state.mcp_error = None;
+            self.request(RuntimeRequest::GetMcpAuthStatuses);
+            return;
         }
+        let Some(server) = self.state.mcp_open.clone() else {
+            let len = self.state.listed_mcp_servers().len();
+            if self.filter_sheet(key, "/mcp") || self.walk_sheet(key, len) {
+                return;
+            }
+            if key.code == KeyCode::Enter
+                && let Some(server) = self.state.highlighted_mcp_server()
+            {
+                self.open_sheet(UiMode::Mcp);
+                self.state.mcp_feedback.remove(&server);
+                self.state.mcp_open = Some(server);
+            }
+            return;
+        };
+        if self.state.wants_back(key) {
+            self.close_mcp_level();
+            return;
+        }
+        let actions = self.state.listed_mcp_actions();
+        if self.edit_sheet_filter(key) || self.walk_sheet(key, actions.len()) {
+            return;
+        }
+        let index = self.state.sheet_index.min(actions.len().saturating_sub(1));
+        if key.code != KeyCode::Enter {
+            return;
+        }
+        let Some(action) = actions.get(index).copied() else {
+            return;
+        };
+        if action == McpAction::SignIn && self.state.mcp_browser_intent.contains_key(&server) {
+            return;
+        }
+        self.run_mcp_action(&server, action);
+    }
+}
+
+fn browser_feedback(opened: Result<(), String>) -> String {
+    match opened {
+        Ok(()) => String::from("Browser opened. Complete sign-in to continue."),
+        Err(error) => format!("Cannot open the browser: {error}. Copy the sign-in URL instead."),
     }
 }
 
 pub(super) fn status_label(status: &McpAuthStatus) -> &str {
     match status.state {
-        McpAuthState::Unavailable => "no browser login",
+        McpAuthState::Unavailable => "no browser sign-in",
         McpAuthState::SignedOut => "signed out",
         McpAuthState::Starting => "preparing sign-in",
         McpAuthState::Pending { .. } => "waiting for sign-in",

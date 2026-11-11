@@ -101,7 +101,7 @@ pub(super) fn render(
 ) {
     let width = usize::from(chat.width);
     let text_width = width.saturating_sub(INDENT + 1);
-    let (note_offset, notes) = note_lines(&sheet.notes, text_width);
+    let notes = note_lines(&sheet.notes, text_width);
     let limit = (screen.height / 2).max(3).min(chat.height);
     let note_rows = u16::try_from(notes.len())
         .unwrap_or(u16::MAX)
@@ -139,8 +139,8 @@ pub(super) fn render(
             buf,
             body.x,
             y,
-            INDENT + note_offset,
-            &fit(&note.text, text_width.saturating_sub(note_offset)),
+            INDENT + note.offset,
+            &fit(&note.text, text_width.saturating_sub(note.offset)),
             note.tone.over(Style::default()),
         );
     }
@@ -207,17 +207,29 @@ pub(super) fn render(
     }
 }
 
-/// Wraps the notes to `width`. Returns the column their text starts in and one entry per line.
-fn note_lines(notes: &[Note], width: usize) -> (usize, Vec<Note>) {
+struct NoteLine {
+    label: String,
+    /// The column the text starts in. Notes with a label share one; the others start at zero.
+    offset: usize,
+    text: String,
+    tone: Tone,
+}
+
+/// Wraps the notes to `width`, one entry per line.
+fn note_lines(notes: &[Note], width: usize) -> Vec<NoteLine> {
     let label = notes
         .iter()
         .map(|note| display_width(&note.label))
         .max()
         .unwrap_or(0)
         .min(width / 3);
-    let offset = if label == 0 { 0 } else { label + GAP };
     let mut lines = Vec::new();
     for note in notes {
+        let offset = if note.label.is_empty() {
+            0
+        } else {
+            label + GAP
+        };
         let mut wrapped = wrap_words(
             &normalize_terminal_text(&note.text),
             width.saturating_sub(offset),
@@ -226,18 +238,19 @@ fn note_lines(notes: &[Note], width: usize) -> (usize, Vec<Note>) {
             wrapped.push(String::new());
         }
         for (index, text) in wrapped.into_iter().enumerate() {
-            lines.push(Note {
+            lines.push(NoteLine {
                 label: if index == 0 {
                     fit(&note.label, label)
                 } else {
                     String::new()
                 },
+                offset,
                 text,
                 tone: note.tone,
             });
         }
     }
-    (offset, lines)
+    lines
 }
 
 fn rule(caption: &str, count: &str, width: usize) -> String {

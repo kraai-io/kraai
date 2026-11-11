@@ -358,7 +358,7 @@ impl App {
             return;
         };
         let query_is_empty = self.state.sheet_query.is_empty();
-        if key.code == KeyCode::Backspace && key.modifiers.is_empty() && query_is_empty {
+        if self.state.wants_back(key) {
             self.close_model_settings();
             return;
         }

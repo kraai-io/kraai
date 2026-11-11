@@ -14,7 +14,6 @@ use crate::components::ChatHistory;
 use super::{AppState, UiMode};
 
 mod error;
-mod mcp;
 mod providers;
 mod script_approval;
 mod sheet;
@@ -98,9 +97,9 @@ impl Widget for &AppState {
 
         match self.mode {
             UiMode::ProvidersMenu => render_providers_menu(self, area, buf),
-            UiMode::Mcp => mcp::render_mcp(self, area, buf),
             UiMode::Chat
             | UiMode::Agent
+            | UiMode::Mcp
             | UiMode::Model
             | UiMode::ModelSettings
             | UiMode::Sessions => {}
