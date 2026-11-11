@@ -30,6 +30,8 @@ pub(super) struct AppState {
     pub(super) sheet_index: usize,
     pub(super) sheet_scroll: Cell<usize>,
     pub(super) sheet_notice: Option<String>,
+    /// The highlighted row was asked to delete something and waits for the key a second time.
+    pub(super) sheet_armed: bool,
     pub(super) model_settings: Option<super::model_options::ModelSettingsTarget>,
     /// What the command list stays filtered by while its rows are walked into the composer.
     pub(super) command_filter: Option<String>,
@@ -90,8 +92,9 @@ pub(super) struct AppState {
     pub(super) sessions: Vec<Session>,
     pub(super) current_session_id: Option<SessionId>,
     pub(super) current_tip_id: Option<String>,
-    pub(super) agent_menu_index: usize,
-    pub(super) sessions_menu_index: usize,
+    /// Where Kraai runs, as sessions record it. Empty when it is unknown.
+    pub(super) workspace_dir: String,
+    pub(super) home_dir: String,
     pub(super) script_approval_action: ScriptApprovalAction,
     pub(super) script_phase: ScriptPhase,
     pub(super) command_popup_dismissed: bool,
@@ -145,6 +148,7 @@ impl Default for AppState {
             sheet_index: 0,
             sheet_scroll: Cell::new(0),
             sheet_notice: None,
+            sheet_armed: false,
             model_settings: None,
             command_filter: None,
             approval_scroll: Cell::new(0),
@@ -202,8 +206,8 @@ impl Default for AppState {
             sessions: Vec::new(),
             current_session_id: None,
             current_tip_id: None,
-            agent_menu_index: 0,
-            sessions_menu_index: 0,
+            workspace_dir: String::new(),
+            home_dir: String::new(),
             script_approval_action: ScriptApprovalAction::Allow,
             script_phase: ScriptPhase::Idle,
             command_popup_dismissed: false,
@@ -269,6 +273,12 @@ impl AppState {
                 .agent_profile_id
                 .clone()
                 .or(workspace_preferences.agent_profile_id),
+            workspace_dir: super::workspace_preferences::current_workspace()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            home_dir: std::env::home_dir()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
             ..Self::default()
         }
     }

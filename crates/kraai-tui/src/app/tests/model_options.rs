@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::app::model_options::active_options;
-use crate::app::{KeyCode, KeyEvent, KeyModifiers, UiMode};
+use crate::app::{KeyCode, UiMode};
 use kraai_types::{
     ModelOptionDefinition, ModelOptionKind, ModelOptionValue, ModelOptionValues, SessionId,
 };
@@ -53,24 +53,6 @@ pub(super) fn configure_optional(harness: &mut TestHarness) -> color_eyre::Resul
         ("budget".into(), ModelOptionValue::Integer(50)),
     ]);
     Ok(())
-}
-
-fn key(harness: &mut TestHarness, code: KeyCode) {
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
-}
-
-fn ctrl(harness: &mut TestHarness, ch: char) {
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL));
-}
-
-fn type_text(harness: &mut TestHarness, text: &str) {
-    for ch in text.chars() {
-        key(harness, KeyCode::Char(ch));
-    }
 }
 
 fn screen(state: &AppState, width: u16, height: u16) -> String {

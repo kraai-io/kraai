@@ -24,12 +24,12 @@ pub(super) enum SubmissionSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum UiMode {
     Chat,
-    AgentMenu,
+    Agent,
     Model,
     ModelSettings,
     ProvidersMenu,
     Mcp,
-    SessionsMenu,
+    Sessions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

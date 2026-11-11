@@ -261,7 +261,7 @@ impl App {
     pub(super) fn enter_script_decision_phase(&mut self) {
         self.state.approval_scroll.set(0);
         self.state.approval_expanded = false;
-        self.state.mode = UiMode::Chat;
+        self.leave_sheet();
         self.state.script_phase = ScriptPhase::AwaitingApproval;
         self.state.script_approval_action = ScriptApprovalAction::Allow;
     }
@@ -300,7 +300,7 @@ impl App {
 
     pub(super) fn reset_session_state(&mut self, session_id: Option<SessionId>, status: &str) {
         let has_session = session_id.is_some();
-        self.state.mode = UiMode::Chat;
+        self.leave_sheet();
         self.state.current_session_id = session_id;
         self.state.last_session_model = None;
         self.restore_pending_session_model();

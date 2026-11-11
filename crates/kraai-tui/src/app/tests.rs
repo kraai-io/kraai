@@ -114,6 +114,45 @@ fn test_harness() -> TestHarness {
     }
 }
 
+fn key(harness: &mut TestHarness, code: super::KeyCode) {
+    harness
+        .app
+        .handle_key_event(super::KeyEvent::new(code, super::KeyModifiers::NONE));
+}
+
+fn ctrl(harness: &mut TestHarness, ch: char) {
+    harness.app.handle_key_event(super::KeyEvent::new(
+        super::KeyCode::Char(ch),
+        super::KeyModifiers::CONTROL,
+    ));
+}
+
+fn type_text(harness: &mut TestHarness, text: &str) {
+    for ch in text.chars() {
+        key(harness, super::KeyCode::Char(ch));
+    }
+}
+
+/// The screen at the given size, one string per row with trailing spaces removed.
+fn screen_rows(state: &AppState, width: u16, height: u16) -> Vec<String> {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
+
+    let area = Rect::new(0, 0, width, height);
+    let mut buffer = Buffer::empty(area);
+    state.render(area, &mut buffer);
+    buffer
+        .content()
+        .chunks(usize::from(width.max(1)))
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
+}
+
 impl TestHarness {
     fn drain_requests(&self) -> Vec<RuntimeRequest> {
         let mut requests = Vec::new();
@@ -536,6 +575,7 @@ mod model_options;
 mod model_selection;
 mod responsiveness;
 mod session_model;
+mod sheets;
 #[path = "tests/startup.rs"]
 mod startup;
 mod submission_recovery;

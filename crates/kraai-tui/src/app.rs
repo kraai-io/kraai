@@ -18,6 +18,7 @@ use ratatui::crossterm::event::{
 
 use crate::components::TextInput;
 
+mod agent_sheet;
 mod auth;
 mod chat;
 mod chat_render;
@@ -45,6 +46,7 @@ mod runtime_events;
 mod runtime_responses;
 mod session_commands;
 mod session_model;
+mod sessions_sheet;
 mod settings;
 mod settings_flow;
 mod sheet_query;

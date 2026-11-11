@@ -29,11 +29,8 @@ impl AppState {
 
 impl App {
     pub(super) fn open_model_sheet(&mut self, query: String) {
+        self.open_sheet(UiMode::Model);
         self.state.sheet_query = query;
-        self.state.sheet_notice = None;
-        self.state.model_settings = None;
-        self.state.mode = UiMode::Model;
-        self.state.reset_sheet_selection();
         if self.state.sheet_query.is_empty()
             && let Some((provider_id, model_id)) = self
                 .state
@@ -52,11 +49,7 @@ impl App {
 
     /// Returns to the model list with `provider_id` / `model_id` highlighted.
     pub(super) fn return_to_model_sheet(&mut self, provider_id: &str, model_id: &str) {
-        self.state.sheet_query.clear();
-        self.state.sheet_notice = None;
-        self.state.model_settings = None;
-        self.state.mode = UiMode::Model;
-        self.state.reset_sheet_selection();
+        self.open_sheet(UiMode::Model);
         self.state.sheet_index = self
             .state
             .model_position(provider_id, model_id)
@@ -68,8 +61,16 @@ impl App {
         self.state.mode = UiMode::Chat;
         self.state.sheet_query.clear();
         self.state.sheet_notice = None;
+        self.state.sheet_armed = false;
         self.state.model_settings = None;
         self.reset_command_selection();
+    }
+
+    /// Returns to the chat from whatever sheet is open, leaving the command list alone.
+    pub(super) fn leave_sheet(&mut self) {
+        if self.state.mode != UiMode::Chat {
+            self.close_sheet();
+        }
     }
 
     /// Closes the sheet and puts `command` back in an empty composer, as if backspacing into it.
@@ -88,30 +89,15 @@ impl App {
 
     fn step_model_sheet(&mut self, key: KeyEvent) {
         self.state.sheet_notice = None;
-        if key.code == KeyCode::Backspace
-            && key.modifiers.is_empty()
-            && self.state.sheet_query.is_empty()
-        {
-            self.close_sheet_to_composer("/model");
-            return;
-        }
-        if self.edit_sheet_query(key) {
-            self.state.reset_sheet_selection();
-            return;
-        }
         let len = self.state.filtered_models().len();
-        let index = self.state.sheet_index.min(len.saturating_sub(1));
+        if self.filter_sheet(key, "/model") || self.walk_sheet(key, len) {
+            return;
+        }
         let selected = self
             .state
             .highlighted_model()
             .map(|(provider, model)| (provider.to_owned(), model.id.clone(), model.name.clone()));
         match key.code {
-            KeyCode::Up | KeyCode::BackTab => {
-                self.state.sheet_index = model_menu_previous_index(index, len)
-            }
-            KeyCode::Down | KeyCode::Tab => {
-                self.state.sheet_index = model_menu_next_index(index, len)
-            }
             KeyCode::Left | KeyCode::Right => {
                 if let Some((provider_id, model_id, _)) = selected {
                     self.step_inline_option(&provider_id, &model_id, key.code == KeyCode::Right);

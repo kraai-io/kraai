@@ -13,7 +13,52 @@ use crate::theme;
 
 const INDENT: usize = 2;
 const GAP: usize = 2;
-const MAX_NOTICE_ROWS: u16 = 3;
+const MAX_NOTE_ROWS: u16 = 8;
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum Tone {
+    #[default]
+    Plain,
+    Waiting,
+    Danger,
+}
+
+impl Tone {
+    fn over(self, base: Style) -> Style {
+        match self {
+            Self::Plain => base,
+            Self::Waiting => base.fg(theme::WAITING),
+            Self::Danger => base.fg(theme::DANGER),
+        }
+    }
+}
+
+/// A line of text under the rows that stays in view while the rows scroll.
+#[derive(Default)]
+pub(super) struct Note {
+    /// Names the text, in a column every note of the sheet shares.
+    pub(super) label: String,
+    pub(super) text: String,
+    pub(super) tone: Tone,
+}
+
+impl Note {
+    pub(super) fn new(text: impl Into<String>, tone: Tone) -> Self {
+        Self {
+            label: String::new(),
+            text: text.into(),
+            tone,
+        }
+    }
+
+    pub(super) fn field(label: &str, text: impl Into<String>) -> Self {
+        Self {
+            label: label.to_owned(),
+            text: text.into(),
+            tone: Tone::Plain,
+        }
+    }
+}
 
 #[derive(Default)]
 pub(super) struct SheetItem {
@@ -26,6 +71,8 @@ pub(super) struct SheetItem {
     pub(super) meta: String,
     pub(super) tag: String,
     pub(super) waiting: bool,
+    /// Colours the label and the tag. A plain row keeps its tag in the accent.
+    pub(super) tone: Tone,
 }
 
 pub(super) enum SheetRow {
@@ -39,7 +86,7 @@ pub(super) struct Sheet {
     pub(super) rows: Vec<SheetRow>,
     pub(super) selected: usize,
     pub(super) empty: String,
-    pub(super) notice: Option<String>,
+    pub(super) notes: Vec<Note>,
     /// Choices share one column wide enough for the longest row. When false, each row's detail
     /// follows straight after its own choices.
     pub(super) align_choices: bool,
@@ -54,17 +101,15 @@ pub(super) fn render(
 ) {
     let width = usize::from(chat.width);
     let text_width = width.saturating_sub(INDENT + 1);
-    let notice = sheet.notice.as_deref().map_or_else(Vec::new, |notice| {
-        wrap_words(&normalize_terminal_text(notice), text_width)
-    });
+    let (note_offset, notes) = note_lines(&sheet.notes, text_width);
     let limit = (screen.height / 2).max(3).min(chat.height);
-    let notice_rows = u16::try_from(notice.len())
+    let note_rows = u16::try_from(notes.len())
         .unwrap_or(u16::MAX)
-        .min(MAX_NOTICE_ROWS)
+        .min(MAX_NOTE_ROWS)
         .min(limit.saturating_sub(2));
     let wanted = u16::try_from(sheet.rows.len().max(1))
         .unwrap_or(u16::MAX)
-        .saturating_add(1 + notice_rows);
+        .saturating_add(1 + note_rows);
     let height = wanted.min(limit);
     if height == 0 || chat.width == 0 {
         return;
@@ -79,15 +124,24 @@ pub(super) fn render(
     );
 
     let mut body = Rect::new(area.x, area.y + 1, area.width, height - 1);
-    body.height = body.height.saturating_sub(notice_rows);
-    for (line, text) in (0..notice_rows).zip(&notice) {
+    body.height = body.height.saturating_sub(note_rows);
+    for (line, note) in (0..note_rows).zip(&notes) {
+        let y = body.bottom() + line;
         put(
             buf,
             body.x,
-            body.bottom() + line,
+            y,
             INDENT,
-            &fit(text, text_width),
-            Style::default().fg(theme::DANGER),
+            &note.label,
+            Style::default().fg(theme::MUTED),
+        );
+        put(
+            buf,
+            body.x,
+            y,
+            INDENT + note_offset,
+            &fit(&note.text, text_width.saturating_sub(note_offset)),
+            note.tone.over(Style::default()),
         );
     }
     if sheet.rows.is_empty() {
@@ -151,6 +205,39 @@ pub(super) fn render(
             }
         }
     }
+}
+
+/// Wraps the notes to `width`. Returns the column their text starts in and one entry per line.
+fn note_lines(notes: &[Note], width: usize) -> (usize, Vec<Note>) {
+    let label = notes
+        .iter()
+        .map(|note| display_width(&note.label))
+        .max()
+        .unwrap_or(0)
+        .min(width / 3);
+    let offset = if label == 0 { 0 } else { label + GAP };
+    let mut lines = Vec::new();
+    for note in notes {
+        let mut wrapped = wrap_words(
+            &normalize_terminal_text(&note.text),
+            width.saturating_sub(offset),
+        );
+        if wrapped.is_empty() {
+            wrapped.push(String::new());
+        }
+        for (index, text) in wrapped.into_iter().enumerate() {
+            lines.push(Note {
+                label: if index == 0 {
+                    fit(&note.label, label)
+                } else {
+                    String::new()
+                },
+                text,
+                tone: note.tone,
+            });
+        }
+    }
+    (offset, lines)
 }
 
 fn rule(caption: &str, count: &str, width: usize) -> String {
@@ -355,7 +442,11 @@ fn render_item(item: &SheetItem, selected: bool, columns: &Columns, area: Rect, 
         let mut x = end - right_width;
         end = x.saturating_sub(GAP);
         if !item.tag.is_empty() {
-            put(buf, area.x, area.y, x, &item.tag, base.fg(theme::ACCENT));
+            let tag = match item.tone {
+                Tone::Plain => base.fg(theme::ACCENT),
+                tone => tone.over(base),
+            };
+            put(buf, area.x, area.y, x, &item.tag, tag);
             x += display_width(&item.tag) + GAP;
         }
         put(buf, area.x, area.y, x, &item.meta, muted);
@@ -368,7 +459,10 @@ fn render_item(item: &SheetItem, selected: bool, columns: &Columns, area: Rect, 
         area.y,
         x,
         &fit(&item.label, end.saturating_sub(x)),
-        base,
+        match item.tone {
+            Tone::Waiting => base,
+            tone => tone.over(base),
+        },
     );
     x += columns.label + GAP;
     let waiting = base.fg(theme::WAITING);
@@ -440,7 +534,7 @@ mod tests {
             rows,
             selected,
             empty: String::from("Nothing here"),
-            notice: None,
+            notes: Vec::new(),
             align_choices: true,
         }
     }
@@ -519,7 +613,7 @@ mod tests {
         assert_ne!(buffer[(19, 6)].bg, theme::RAISED);
 
         let mut empty = sheet(Vec::new(), 0);
-        empty.notice = Some(String::from("Budget is out of range"));
+        empty.notes = vec![Note::new("Budget is out of range", Tone::Danger)];
         let lines = lines(&empty, &Cell::new(0), 30, 8);
         assert_eq!(lines.get(6).map(String::as_str), Some("  Nothing here"));
         assert_eq!(
@@ -531,9 +625,10 @@ mod tests {
     #[test]
     fn long_notice_wraps_and_leaves_room_for_a_row() {
         let mut view = sheet(vec![item("one"), item("two"), item("three")], 2);
-        view.notice = Some(String::from(
+        view.notes = vec![Note::new(
             "budget: Budget is outside its supported bounds",
-        ));
+            Tone::Danger,
+        )];
         let lines = lines(&view, &Cell::new(0), 30, 8);
         assert_eq!(
             lines.get(4..).unwrap_or_default(),

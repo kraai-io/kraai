@@ -74,17 +74,7 @@ impl App {
                     if !selected_is_available {
                         self.state.selected_profile_id = Some(catalog.default_profile_id);
                     }
-                    self.state.agent_menu_index = self
-                        .state
-                        .selected_profile_id
-                        .as_ref()
-                        .and_then(|selected| {
-                            self.state
-                                .agent_profiles
-                                .iter()
-                                .position(|profile| &profile.id == selected)
-                        })
-                        .unwrap_or(0);
+                    self.state.highlight_selected_agent();
                     if let Some(warning) = self.state.agent_profile_warnings.first() {
                         self.state.status = format!("Agent profile warning: {}", warning.message);
                     }
@@ -247,7 +237,9 @@ impl App {
                     self.request(RuntimeRequest::GetSessionSnapshot {
                         session_id: session_id.clone(),
                     });
-                    self.state.mode = UiMode::Chat;
+                    if self.state.mode == UiMode::Agent {
+                        self.close_sheet();
+                    }
                 }
 
                 if self
@@ -472,29 +464,7 @@ impl App {
                 }
             }
             RuntimeResponse::Sessions(Ok(sessions)) => {
-                let selected = self
-                    .state
-                    .sessions_menu_index
-                    .checked_sub(1)
-                    .and_then(|index| {
-                        self.state
-                            .filtered_sessions()
-                            .get(index)
-                            .map(|session| session.id.clone())
-                    });
-                self.state.sessions = sessions;
-                if let Some(id) = selected {
-                    self.state.sessions_menu_index = self
-                        .state
-                        .filtered_sessions()
-                        .iter()
-                        .position(|session| session.id == id)
-                        .map_or(0, |index| index + 1);
-                }
-                self.state.sessions_menu_index = self
-                    .state
-                    .sessions_menu_index
-                    .min(self.state.filtered_sessions().len());
+                self.replace_sessions(sessions);
                 self.sync_current_session_profile_from_sessions();
                 self.refresh_session_model_saves();
                 if self.event_lag_session_resync_pending {

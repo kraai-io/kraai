@@ -77,37 +77,6 @@ fn narrow_status_keeps_error_ahead_of_model_metadata() {
 }
 
 #[test]
-fn session_filter_selects_and_deletes_the_visible_session() {
-    let mut harness = test_harness();
-    harness.app.state.mode = UiMode::SessionsMenu;
-    let mut first = session_snapshot(None).session;
-    first.id = SessionId::new("alpha");
-    first.title = Some(String::from("First"));
-    let mut second = first.clone();
-    second.id = SessionId::new("beta");
-    second.title = Some(String::from("Xylophone"));
-    harness.app.state.sessions = vec![first, second];
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
-    assert!(harness.drain_requests().is_empty());
-    assert_eq!(harness.app.state.filtered_sessions().len(), 1);
-    assert_eq!(harness.app.state.sessions_menu_index, 1);
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(
-        matches!(harness.requests_rx.try_recv(), Ok(RuntimeRequest::LoadSession { session_id, .. }) if session_id == SessionId::new("beta"))
-    );
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-    assert!(
-        matches!(harness.requests_rx.try_recv(), Ok(RuntimeRequest::DeleteSession { session_id }) if session_id == SessionId::new("beta"))
-    );
-}
-
-#[test]
 fn composer_scroll_keeps_cursor_and_tail_visible() {
     let input = (0..50)
         .map(|line| format!("line-{line:03} 你好"))

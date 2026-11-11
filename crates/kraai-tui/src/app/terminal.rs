@@ -160,19 +160,19 @@ impl App {
                 UiMode::ProvidersMenu => self.handle_providers_escape(),
                 UiMode::Model => self.close_sheet(),
                 UiMode::ModelSettings => self.close_model_settings(),
-                _ => self.state.mode = UiMode::Chat,
+                _ => self.close_sheet(),
             }
             return;
         }
 
         match self.state.mode {
             UiMode::Chat => self.handle_chat_key_event(key_event),
-            UiMode::AgentMenu => self.handle_agent_menu_key_event(key_event),
+            UiMode::Agent => self.handle_agent_key_event(key_event),
             UiMode::Model => self.handle_model_key_event(key_event),
             UiMode::ModelSettings => self.handle_model_settings_key_event(key_event),
             UiMode::ProvidersMenu => self.handle_providers_key_event(key_event),
             UiMode::Mcp => self.handle_mcp_key_event(key_event),
-            UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
+            UiMode::Sessions => self.handle_sessions_key_event(key_event),
         }
     }
 
@@ -252,7 +252,7 @@ impl App {
             return;
         }
         match self.state.mode {
-            UiMode::Model | UiMode::SessionsMenu => {
+            UiMode::Agent | UiMode::Model | UiMode::Sessions => {
                 self.paste_into_sheet_query(&text);
                 self.state.reset_sheet_selection();
                 return;
@@ -293,82 +293,6 @@ impl App {
         self.clear_message_draft();
         self.state.command_popup_dismissed = false;
         self.reset_command_selection();
-    }
-
-    pub(super) fn handle_agent_menu_key_event(&mut self, key_event: KeyEvent) {
-        let len = self.state.agent_profiles.len();
-
-        match key_event.code {
-            KeyCode::Up if len > 0 => {
-                self.state.agent_menu_index =
-                    model_menu_previous_index(self.state.agent_menu_index, len);
-            }
-            KeyCode::Down if len > 0 => {
-                self.state.agent_menu_index =
-                    model_menu_next_index(self.state.agent_menu_index, len);
-            }
-            KeyCode::Enter => {
-                if self.state.turn_blocks_user_commands() {
-                    self.state.status =
-                        String::from("Cannot change agent while the current turn is active");
-                    self.state.mode = UiMode::Chat;
-                    return;
-                }
-                if let Some(profile) = self.state.agent_profiles.get(self.state.agent_menu_index) {
-                    if let Some(session_id) = self.state.current_session_id.clone() {
-                        self.request(RuntimeRequest::SetSessionProfile {
-                            session_id,
-                            profile_id: profile.id.clone(),
-                        });
-                    } else {
-                        self.state.selected_profile_id = Some(profile.id.clone());
-                        self.state.status = format!("Selected agent: {}", profile.id);
-                        self.save_workspace_preferences();
-                        self.state.mode = UiMode::Chat;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub(super) fn handle_sessions_menu_key_event(&mut self, key_event: KeyEvent) {
-        if self.edit_sheet_query(key_event) {
-            self.state.reset_sheet_selection();
-            return;
-        }
-        let sessions = self.state.filtered_sessions();
-        let total = sessions.len() + 1;
-
-        match key_event.code {
-            KeyCode::Up if total > 0 => {
-                self.state.sessions_menu_index =
-                    (self.state.sessions_menu_index + total - 1) % total;
-            }
-            KeyCode::Down if total > 0 => {
-                self.state.sessions_menu_index = (self.state.sessions_menu_index + 1) % total;
-            }
-            KeyCode::Enter => {
-                if self.state.sessions_menu_index == 0 {
-                    self.start_new_chat();
-                } else if let Some(session) =
-                    sessions.get(self.state.sessions_menu_index.saturating_sub(1))
-                {
-                    self.load_session(session.id.clone());
-                }
-            }
-            KeyCode::Delete => {
-                if self.state.sessions_menu_index > 0
-                    && let Some(session) =
-                        sessions.get(self.state.sessions_menu_index.saturating_sub(1))
-                {
-                    self.request(RuntimeRequest::DeleteSession {
-                        session_id: session.id.clone(),
-                    });
-                }
-            }
-            _ => {}
-        }
     }
 
     pub(super) fn handle_script_approval_key_event(&mut self, key_event: KeyEvent) {

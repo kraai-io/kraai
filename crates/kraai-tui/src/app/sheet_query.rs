@@ -4,8 +4,6 @@ impl AppState {
     pub(super) fn reset_sheet_selection(&mut self) {
         self.sheet_index = 0;
         self.sheet_scroll.set(0);
-        self.sessions_menu_index =
-            usize::from(!self.sheet_query.is_empty() && !self.filtered_sessions().is_empty());
     }
 
     pub(super) fn filtered_models(&self) -> Vec<(&str, &Model)> {
@@ -26,27 +24,12 @@ impl AppState {
             .collect()
     }
 
-    pub(super) fn filtered_sessions(&self) -> Vec<&kraai_runtime::Session> {
-        let query = self.sheet_query.to_lowercase();
-        self.sessions
-            .iter()
-            .filter(|session| {
-                format!(
-                    "{} {} {}",
-                    session.id,
-                    session.title.as_deref().unwrap_or_default(),
-                    session.workspace_dir
-                )
-                .to_lowercase()
-                .contains(&query)
-            })
-            .collect()
-    }
-
     /// The breadcrumb shown ahead of the query while a sheet owns the composer.
     pub(super) fn sheet_prefix(&self) -> Option<String> {
         match self.mode {
             UiMode::Model => Some(String::from("/model ")),
+            UiMode::Agent => Some(String::from("/agent ")),
+            UiMode::Sessions => Some(String::from("/sessions ")),
             UiMode::ModelSettings => self.model_settings.as_ref().map(|target| {
                 format!(
                     "/model › {} › ",
@@ -69,6 +52,45 @@ impl AppState {
 }
 
 impl App {
+    /// Opens a sheet with nothing typed and its first row highlighted.
+    pub(super) fn open_sheet(&mut self, mode: UiMode) {
+        self.state.sheet_query.clear();
+        self.state.sheet_notice = None;
+        self.state.sheet_armed = false;
+        self.state.model_settings = None;
+        self.state.mode = mode;
+        self.state.reset_sheet_selection();
+    }
+
+    /// Applies a key that edits the filter of a sheet a command opened. Backspace on an empty
+    /// filter hands `command` back to the composer. False when the key is not an edit.
+    pub(super) fn filter_sheet(&mut self, key: KeyEvent, command: &str) -> bool {
+        if key.code == KeyCode::Backspace
+            && key.modifiers.is_empty()
+            && self.state.sheet_query.is_empty()
+        {
+            self.close_sheet_to_composer(command);
+            return true;
+        }
+        if self.edit_sheet_query(key) {
+            self.state.reset_sheet_selection();
+            return true;
+        }
+        false
+    }
+
+    /// Moves the highlight through `len` rows with the arrows, Tab and Shift+Tab, wrapping at
+    /// both ends. False when the key is something else.
+    pub(super) fn walk_sheet(&mut self, key: KeyEvent, len: usize) -> bool {
+        let index = self.state.sheet_index.min(len.saturating_sub(1));
+        self.state.sheet_index = match key.code {
+            KeyCode::Up | KeyCode::BackTab => model_menu_previous_index(index, len),
+            KeyCode::Down | KeyCode::Tab => model_menu_next_index(index, len),
+            _ => return false,
+        };
+        true
+    }
+
     /// Applies a typing key to the sheet query; false when the key is not an edit.
     pub(super) fn edit_sheet_query(&mut self, key: KeyEvent) -> bool {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);

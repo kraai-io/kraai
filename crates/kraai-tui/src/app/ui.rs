@@ -15,13 +15,11 @@ use super::{AppState, UiMode};
 
 mod error;
 mod mcp;
-mod menus;
 mod providers;
 mod script_approval;
 mod sheet;
 mod sheets;
 mod status;
-use menus::{render_agent_menu, render_sessions_menu};
 use providers::render_providers_menu;
 use script_approval::render_script_approval_panel;
 pub(super) use status::format_token_count;
@@ -99,11 +97,13 @@ impl Widget for &AppState {
         }
 
         match self.mode {
-            UiMode::AgentMenu => render_agent_menu(self, area, buf),
             UiMode::ProvidersMenu => render_providers_menu(self, area, buf),
             UiMode::Mcp => mcp::render_mcp(self, area, buf),
-            UiMode::SessionsMenu => render_sessions_menu(self, area, buf),
-            UiMode::Chat | UiMode::Model | UiMode::ModelSettings => {}
+            UiMode::Chat
+            | UiMode::Agent
+            | UiMode::Model
+            | UiMode::ModelSettings
+            | UiMode::Sessions => {}
         }
         error::render_error(self, area, buf);
     }

@@ -145,17 +145,8 @@ impl App {
                 self.open_error();
             }
             "agent" => {
-                if self.state.turn_blocks_user_commands() {
-                    self.state.status =
-                        String::from("Cannot change agent while the current turn is active");
-                    return;
-                }
-                self.state.mode = UiMode::AgentMenu;
-                if let Some(session_id) = self.state.current_session_id.clone() {
-                    self.request(RuntimeRequest::GetSessionSnapshot { session_id });
-                } else {
-                    self.request(RuntimeRequest::GetAgentProfileCatalog);
-                }
+                self.set_input_text(String::new());
+                self.open_agent_sheet();
             }
             "providers" => {
                 self.state.mode = UiMode::ProvidersMenu;
@@ -167,10 +158,8 @@ impl App {
             }
             "mcp" => self.handle_mcp_command(parts.collect()),
             "sessions" => {
-                self.state.sheet_query.clear();
-                self.state.sessions_menu_index = 0;
-                self.state.mode = UiMode::SessionsMenu;
-                self.request(RuntimeRequest::ListSessions);
+                self.set_input_text(String::new());
+                self.open_sessions_sheet();
             }
             "new" => {
                 self.start_new_chat();
@@ -291,17 +280,7 @@ impl App {
         self.state.selected_profile_id = state.selected_profile_id;
         self.state.profile_locked = state.profile_locked;
         self.state.profile_lock_stale_after_terminal_event = false;
-        if let Some(selected_profile_id) = self.state.selected_profile_id.as_ref()
-            && let Some(index) = self
-                .state
-                .agent_profiles
-                .iter()
-                .position(|profile| &profile.id == selected_profile_id)
-        {
-            self.state.agent_menu_index = index;
-        } else {
-            self.state.agent_menu_index = 0;
-        }
+        self.state.highlight_selected_agent();
         if let Some(warning) = self.state.agent_profile_warnings.first() {
             self.state.status = format!("Agent profile warning: {}", warning.message);
         }

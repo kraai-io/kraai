@@ -5,7 +5,10 @@ use super::super::model_options::{
     option_value_label, summarize_options,
 };
 use super::super::{AppState, UiMode};
-use super::sheet::{Sheet, SheetItem, SheetRow};
+use super::sheet::{Note, Sheet, SheetItem, SheetRow, Tone};
+
+mod agent;
+mod sessions;
 
 /// The sheet the current mode shows above the status line, if any.
 pub(super) fn active(state: &AppState) -> Option<Sheet> {
@@ -13,6 +16,8 @@ pub(super) fn active(state: &AppState) -> Option<Sheet> {
         UiMode::Chat => commands(state),
         UiMode::Model => Some(models(state)),
         UiMode::ModelSettings => Some(model_settings(state)),
+        UiMode::Agent => Some(agent::agents(state)),
+        UiMode::Sessions => Some(sessions::sessions(state)),
         _ => None,
     }
 }
@@ -60,6 +65,13 @@ pub(super) fn hints(state: &AppState) -> Option<String> {
                 "tab or ↑↓ select · {change} · enter {enter} · esc back"
             ))
         }
+        UiMode::Agent => Some(String::from("tab or ↑↓ select · enter use · esc close")),
+        UiMode::Sessions if state.sheet_armed => Some(String::from(
+            "del delete this session · any other key keeps it",
+        )),
+        UiMode::Sessions => Some(String::from(
+            "tab or ↑↓ select · enter open · del delete · esc close",
+        )),
         _ => None,
     }
 }
@@ -84,7 +96,7 @@ fn commands(state: &AppState) -> Option<Sheet> {
             .collect(),
         selected: state.sheet_index,
         empty: String::new(),
-        notice: None,
+        notes: Vec::new(),
         align_choices: true,
     })
 }
@@ -136,7 +148,7 @@ fn models(state: &AppState) -> Sheet {
         } else {
             String::from("No models match")
         },
-        notice: state.sheet_notice.clone(),
+        notes: notice(state),
     }
 }
 
@@ -152,7 +164,7 @@ fn model_settings(state: &AppState) -> Sheet {
             rows: Vec::new(),
             selected: 0,
             empty: String::from("This model is no longer available"),
-            notice: state.sheet_notice.clone(),
+            notes: notice(state),
             align_choices: true,
         };
     };
@@ -198,9 +210,18 @@ fn model_settings(state: &AppState) -> Sheet {
         rows,
         selected: state.sheet_index,
         empty: format!("{} has no settings", model.name),
-        notice: state.sheet_notice.clone(),
+        notes: notice(state),
         align_choices: true,
     }
+}
+
+/// What the last key press could not do, as the sheet's closing note.
+fn notice(state: &AppState) -> Vec<Note> {
+    state
+        .sheet_notice
+        .iter()
+        .map(|notice| Note::new(notice, Tone::Danger))
+        .collect()
 }
 
 fn plural(count: usize, noun: &str) -> String {

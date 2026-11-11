@@ -1,17 +1,5 @@
 use super::*;
-use crate::app::{KeyCode, KeyEvent, KeyModifiers, UiMode};
-
-fn key(harness: &mut TestHarness, code: KeyCode) {
-    harness
-        .app
-        .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
-}
-
-fn type_text(harness: &mut TestHarness, text: &str) {
-    for ch in text.chars() {
-        key(harness, KeyCode::Char(ch));
-    }
-}
+use crate::app::{KeyCode, UiMode};
 
 fn listed(harness: &TestHarness) -> Vec<&'static str> {
     harness

@@ -14,10 +14,14 @@ pub(super) fn save_for_current_workspace(preferences: &WorkspacePreferences) -> 
     store.save(&workspace, preferences)
 }
 
-fn store_for_current_workspace() -> Result<(WorkspacePreferencesStore, PathBuf)> {
-    let workspace = std::env::current_dir()
+pub(super) fn current_workspace() -> std::io::Result<PathBuf> {
+    std::env::current_dir()
         .and_then(|path| path.canonicalize())
-        .or_else(|_| std::env::current_dir())?;
+        .or_else(|_| std::env::current_dir())
+}
+
+fn store_for_current_workspace() -> Result<(WorkspacePreferencesStore, PathBuf)> {
+    let workspace = current_workspace()?;
     let store = WorkspacePreferencesStore::new(&kraai_persistence::agent_state_root()?);
     Ok((store, workspace))
 }
