@@ -119,12 +119,9 @@ impl AppState {
             .provider_definitions
             .iter()
             .filter(|definition| {
-                format!(
-                    "{} {} {}",
-                    definition.display_name, definition.type_id, definition.description
-                )
-                .to_lowercase()
-                .contains(&query)
+                format!("{} {}", definition.display_name, definition.type_id)
+                    .to_lowercase()
+                    .contains(&query)
             })
             .collect();
         definitions.sort_by_key(|definition| provider_definition_rank(definition));

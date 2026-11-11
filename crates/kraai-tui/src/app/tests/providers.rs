@@ -379,7 +379,7 @@ fn connecting_lists_the_kinds_of_provider_and_opens_the_new_one() {
     assert_eq!(harness.app.state.sheet_index, 2);
 
     key(&mut harness, KeyCode::Enter);
-    type_text(&mut harness, "compatible");
+    type_text(&mut harness, "chat");
     assert_eq!(
         sheet(&harness, 70).get(1..).unwrap_or_default(),
         [
