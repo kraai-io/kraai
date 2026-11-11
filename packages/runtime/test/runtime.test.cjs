@@ -39,7 +39,8 @@ test('sessions, settings, structured errors, subscriptions and shutdown', { time
   assert.ok(snapshot.profiles.profiles.some(profile => profile.id === 'isolated'));
   assert.equal(typeof snapshot.event_sequence, 'number');
   assert.ok(Array.isArray(snapshot.profiles.profiles[0].capabilities));
-  assert.ok(unwrap(await runtime.listSessions()).some(session => session.id === id));
+  assert.deepEqual(unwrap(await runtime.listSessions()), []);
+  assert.equal(unwrap(await runtime.getWorkspaceState(id)).workspace_dir, snapshot.session.workspace_dir);
   assert.equal((await runtime.getSessionSnapshot('missing')).Err.kind, 'not_found');
   assert.equal((await runtime.listUserInputHistory(-1)).Err.kind, 'invalid_argument');
   assert.equal((await runtime.listUserInputHistory(Number.MAX_SAFE_INTEGER + 1)).Err.kind, 'invalid_argument');

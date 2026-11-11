@@ -75,11 +75,9 @@ impl Server {
         let id = session::runtime_id(&request.session_id)?;
         let existing = self
             .runtime
-            .list_sessions()
+            .get_workspace_state(id.clone())
             .await
             .map_err(error::runtime)?
-            .into_iter()
-            .find(|session| session.id == id)
             .ok_or_else(|| error::invalid("Unknown session"))?;
         if std::path::Path::new(&existing.workspace_dir) != cwd {
             return Err(error::invalid(

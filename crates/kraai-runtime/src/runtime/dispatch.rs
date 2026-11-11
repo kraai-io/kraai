@@ -329,6 +329,12 @@ impl RuntimeCore {
                             session.is_streaming = activity.streaming;
                         }
                     }
+                    sessions.retain(|session| {
+                        session.tip_id.is_some()
+                            || session.is_running
+                            || session.is_streaming
+                            || session.waiting_for_approval
+                    });
                     Ok::<_, RuntimeError>(sessions)
                 }
                 .await;

@@ -401,6 +401,59 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
 }
 
 #[tokio::test]
+async fn session_list_omits_sessions_without_messages() -> Result<()> {
+    let Some(harness) =
+        RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("first reply")]]).await
+    else {
+        return Ok(());
+    };
+
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    assert!(harness.handle.list_sessions().await?.is_empty());
+    assert!(
+        harness
+            .handle
+            .get_workspace_state(session_id.clone())
+            .await?
+            .is_some()
+    );
+
+    harness
+        .handle
+        .send_message(
+            session_id.clone(),
+            String::from("hello"),
+            String::from("mock-model"),
+            String::from("mock"),
+            Default::default(),
+        )
+        .await?;
+    harness
+        .events
+        .wait_for("stream completion", |events| {
+            events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::StreamComplete {
+                        session_id: completed_session,
+                        ..
+                    } if completed_session == &session_id
+                )
+            })
+        })
+        .await;
+
+    let listed = harness.handle.list_sessions().await?;
+    assert_eq!(
+        listed.iter().map(|session| &session.id).collect::<Vec<_>>(),
+        vec![&session_id]
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_public_ids_return_errors_without_stopping_runtime() -> Result<()> {
     let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
         return Ok(());
