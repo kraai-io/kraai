@@ -184,11 +184,9 @@ fn server_sheet_shows_the_sign_in_url_and_why_the_browser_did_not_open() {
 #[test]
 fn background_auth_updates_do_not_change_chat_feedback() {
     let mut harness = test_harness();
-    harness.app.state.status = "Unrelated chat status".into();
     let mut failed = status(1, McpAuthState::SignedOut);
     failed.error = Some("Login failed".into());
     harness.app.apply_mcp_auth_status(failed);
-    assert_eq!(harness.app.state.status, "Unrelated chat status");
     assert!(harness.app.state.last_error.is_none());
     assert!(!harness.app.state.error_open);
     assert_eq!(harness.app.state.mode, UiMode::Chat);

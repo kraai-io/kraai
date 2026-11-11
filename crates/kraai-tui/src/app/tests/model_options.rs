@@ -121,7 +121,6 @@ fn arrows_step_through_unset_and_every_choice_and_apply_at_once() -> color_eyre:
     assert!(screen(&harness.app.state, 100, 30).contains("Effort    unset  Low  High"));
     key(&mut harness, KeyCode::Right);
     assert_eq!(value(&harness, "effort"), None);
-    assert_eq!(harness.app.state.status, "Unset effort");
     key(&mut harness, KeyCode::Right);
     assert_eq!(
         value(&harness, "effort"),
@@ -157,7 +156,6 @@ fn delete_unsets_the_highlighted_setting() -> color_eyre::Result<()> {
         open_settings(&mut harness, id)?;
         key(&mut harness, KeyCode::Delete);
         assert_eq!(value(&harness, id), None);
-        assert_eq!(harness.app.state.status, format!("Unset {id}"));
         assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
     }
     Ok(())
@@ -732,8 +730,9 @@ fn missing_options_block_submission_without_selecting_defaults() -> color_eyre::
     harness.app.submit_message("Hello".into());
     assert!(harness.drain_requests().is_empty());
     assert!(harness.app.state.selected_model_options.is_empty());
-    assert!(harness.app.state.status.contains("effort"));
-    assert!(harness.app.state.status.contains("thinking"));
+    let error = harness.app.state.last_error.clone().unwrap_or_default();
+    assert!(error.contains("effort"));
+    assert!(error.contains("thinking"));
     Ok(())
 }
 
@@ -801,7 +800,7 @@ fn session_restore_does_not_overwrite_later_option_edits() -> color_eyre::Result
     configure(&mut harness)?;
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "loaded");
+        .reset_chat_session(Some(SessionId::new("session")));
     let mut snapshot = session_snapshot(None);
     let selected = std::collections::BTreeMap::from([(
         "effort".into(),

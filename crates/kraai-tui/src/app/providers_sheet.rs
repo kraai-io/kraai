@@ -343,7 +343,6 @@ impl App {
         if self.state.mode == UiMode::Providers {
             self.state.sheet_feedback = Some(text.clone());
         }
-        self.state.status = text;
     }
 
     fn refresh_provider_models(&mut self) {

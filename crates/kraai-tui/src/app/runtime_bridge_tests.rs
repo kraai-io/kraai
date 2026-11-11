@@ -98,7 +98,7 @@ async fn startup_lag_is_reported_before_the_completion_marker()
     poll_pending(forwarding.as_mut()).await;
     assert!(matches!(
         messages.try_recv()?,
-        RuntimeEventBridgeMessage::Lagged(1)
+        RuntimeEventBridgeMessage::Lagged
     ));
     for sequence in 2..=3 {
         assert!(matches!(

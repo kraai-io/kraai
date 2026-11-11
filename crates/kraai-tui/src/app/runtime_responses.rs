@@ -75,9 +75,6 @@ impl App {
                         self.state.selected_profile_id = Some(catalog.default_profile_id);
                     }
                     self.state.highlight_selected_agent();
-                    if let Some(warning) = self.state.agent_profile_warnings.first() {
-                        self.state.status = format!("Agent profile warning: {}", warning.message);
-                    }
                     self.maybe_send_startup_message();
                 }
                 Err(error) => {
@@ -168,7 +165,7 @@ impl App {
                 if let Some(pending) = &pending_submit {
                     self.preserve_model_selection_after_creation(pending);
                 }
-                self.reset_session_state(Some(session_id.clone()), "Session ready");
+                self.reset_session_state(Some(session_id.clone()));
                 self.state.pending_submit = pending_submit;
                 self.state.selected_profile_id = draft_profile_id.clone();
                 self.request_sync_for_session(&session_id);
@@ -210,7 +207,6 @@ impl App {
                 self.request(RuntimeRequest::ListSessions);
                 if is_foreground {
                     self.state.selected_profile_id = Some(profile_id.clone());
-                    self.state.status = format!("Selected agent: {profile_id}");
                     self.save_workspace_preferences();
                     self.request(RuntimeRequest::GetSessionSnapshot {
                         session_id: session_id.clone(),
@@ -291,7 +287,6 @@ impl App {
                     self.state
                         .optimistic_messages
                         .retain(|message| Some(&message.local_id) != pending.local_id.as_ref());
-                    self.update_queued_status();
                     self.invalidate_chat_cache();
                     self.state.is_streaming = false;
                     self.state.profile_lock_stale_after_terminal_event = false;
@@ -300,7 +295,6 @@ impl App {
             }
             RuntimeResponse::SaveSettings(Ok(())) => {
                 self.state.settings_errors.clear();
-                self.state.status = String::from("Providers saved");
                 self.request(RuntimeRequest::ListModels);
             }
             RuntimeResponse::SaveSettings(Err(err)) => {
@@ -405,12 +399,9 @@ impl App {
                 match result {
                     Ok(Some(message)) => {
                         self.restore_message_draft(message);
-                        self.state.status = String::from("Restored last user message");
                         self.request_sync_for_session(&session_id);
                     }
-                    Ok(None) => {
-                        self.state.status = String::from("No user message to undo");
-                    }
+                    Ok(None) => {}
                     Err(err) => {
                         self.set_error(format!("Failed to undo: {err}"));
                     }
@@ -427,12 +418,10 @@ impl App {
                 self.state.pending_session_load_id = None;
                 match result {
                     Ok(true) => {
-                        self.reset_chat_session(Some(session_id), "Session loaded");
+                        self.reset_chat_session(Some(session_id));
                         self.request_sync();
                     }
-                    Ok(false) => {
-                        self.state.status = String::from("Session not found");
-                    }
+                    Ok(false) => {}
                     Err(err) => {
                         self.set_error(format!("Failed to load session: {err}"));
                     }
@@ -473,12 +462,11 @@ impl App {
                 session_id,
                 result: Ok(()),
             } => {
-                self.state.status = String::from("Session deleted");
                 self.state.sessions.retain(|s| s.id != session_id);
                 self.state.failed_messages.remove(&Some(session_id.clone()));
                 self.state.session_model_saves.remove(&session_id);
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
-                    self.reset_chat_session(None, "Session deleted");
+                    self.reset_chat_session(None);
                 }
             }
             RuntimeResponse::DeleteSession {
@@ -503,7 +491,6 @@ impl App {
                     self.state.pending_script = None;
                     self.state.script_phase = ScriptPhase::Executing;
                     self.state.profile_lock_stale_after_terminal_event = false;
-                    self.state.status = String::from("Executing approved Nushell script");
                 }
             }
             RuntimeResponse::ApproveScript {
@@ -531,7 +518,6 @@ impl App {
                 {
                     self.state.pending_script = None;
                     self.state.script_phase = ScriptPhase::Executing;
-                    self.state.status = String::from("Script capability escalation denied");
                 }
             }
             RuntimeResponse::DenyScript {
@@ -543,10 +529,7 @@ impl App {
                     self.set_error(format!("Failed denying script: {err}"));
                 }
             }
-            RuntimeResponse::CancelStream(Ok(true)) => {}
-            RuntimeResponse::CancelStream(Ok(false)) => {
-                self.state.status = String::from("No active stream to cancel");
-            }
+            RuntimeResponse::CancelStream(Ok(_)) => {}
             RuntimeResponse::CancelStream(Err(err)) => {
                 self.set_error(format!("Failed cancelling stream: {err}"));
             }

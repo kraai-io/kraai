@@ -268,6 +268,18 @@ fn session_snapshot_at(
     }
 }
 
+fn retry_scheduled(session: &str) -> Event {
+    Event::ProviderRetryScheduled {
+        session_id: SessionId::new(session),
+        provider_id: String::new(),
+        model_id: String::new(),
+        operation: String::new(),
+        retry_number: 1,
+        delay_seconds: 1,
+        reason: String::new(),
+    }
+}
+
 #[test]
 fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
     let mut harness = test_harness();
@@ -284,27 +296,19 @@ fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
         .app
         .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Event(RuntimeEvent {
             sequence: 9,
-            event: Event::ContextStateChanged {
-                session_id: SessionId::new("other-session"),
-                notifications: vec![String::from("other session event was delivered")],
-            },
+            event: retry_scheduled("other-session"),
         }));
-    assert_eq!(
-        harness.app.state.status,
-        "other session event was delivered"
-    );
+    assert!(harness.app.state.retry_waiting);
+    harness.app.state.retry_waiting = false;
 
     harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
         .app
         .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Event(RuntimeEvent {
             sequence: 10,
-            event: Event::ContextStateChanged {
-                session_id: SessionId::new("session"),
-                notifications: vec![String::from("covered event should be ignored")],
-            },
+            event: retry_scheduled("session"),
         }));
-    assert_ne!(harness.app.state.status, "covered event should be ignored");
+    assert!(!harness.app.state.retry_waiting);
 }
 
 #[test]
@@ -328,7 +332,6 @@ fn snapshot_is_rejected_only_when_a_newer_event_for_its_session_was_applied() {
             result: Box::new(Ok(session_snapshot_at(10, None))),
         });
 
-    assert_eq!(harness.app.state.status, "newer session state");
     assert!(
         !harness
             .app
@@ -365,22 +368,6 @@ fn script_approval_event_enters_single_script_decision_state() {
         harness.app.state.script_approval_action,
         ScriptApprovalAction::Allow
     );
-}
-
-#[test]
-fn foreground_context_state_changes_are_reported_to_the_user() {
-    let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness
-        .app
-        .handle_runtime_event(Event::ContextStateChanged {
-            session_id: SessionId::new("session"),
-            notifications: vec![String::from(
-                "src/removed.rs was automatically unpinned because it no longer exists.",
-            )],
-        });
-
-    assert!(harness.app.state.status.contains("automatically unpinned"));
 }
 
 #[test]
@@ -567,7 +554,7 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
     }))?;
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("other")), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("other")));
     harness.app.handle_runtime_event(Event::TurnTimingChanged {
         session_id: SessionId::new("session"),
         timer,
@@ -578,7 +565,7 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
     );
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("session")));
     let mut snapshot = session_snapshot(None);
     snapshot.activity = SessionActivity::Streaming;
     snapshot.session.is_streaming = true;

@@ -162,7 +162,7 @@ fn statusline_activity_label(state: &AppState) -> String {
             })
             .unwrap_or_else(|| format!("{frame} {activity}"));
     }
-    if state.status == "Stream cancelled" {
+    if state.turn_cancelled {
         return statusline_terminal_activity_label("Cancelled after", state);
     }
     if state.last_error.is_some() {
@@ -191,7 +191,7 @@ fn statusline_terminal_activity_label(label: &str, state: &AppState) -> String {
 fn statusline_activity_color(state: &AppState) -> Color {
     if state.script_phase == ScriptPhase::AwaitingApproval
         || state.retry_waiting
-        || state.status == "Stream cancelled"
+        || state.turn_cancelled
     {
         Color::Yellow
     } else if state.feedback.completion_until.is_some()

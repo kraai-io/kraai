@@ -281,13 +281,11 @@ impl App {
                     self.handle_runtime_event(event.event);
                 }
             }
-            RuntimeEventBridgeMessage::Lagged(skipped) => {
+            RuntimeEventBridgeMessage::Lagged => {
                 self.state.cost_recovery_list_pending = true;
                 self.event_lag_session_resync_pending = true;
                 self.event_lag_script_resync_pending = true;
                 self.state.retry_waiting = false;
-                self.state.status =
-                    format!("Missed {skipped} runtime event(s); resynchronizing session state");
                 if self.startup_sync != StartupSync::WaitingForRuntime {
                     self.request_sync();
                 }

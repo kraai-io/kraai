@@ -34,8 +34,6 @@ impl AppState {
 impl App {
     pub(super) fn open_agent_sheet(&mut self) {
         if self.state.turn_blocks_user_commands() {
-            self.state.status =
-                String::from("Cannot change agent while the current turn is active");
             return;
         }
         self.open_sheet(UiMode::Agent);
@@ -57,8 +55,6 @@ impl App {
         }
         if self.state.turn_blocks_user_commands() {
             self.close_sheet();
-            self.state.status =
-                String::from("Cannot change agent while the current turn is active");
             return;
         }
         let index = self.state.sheet_index.min(len.saturating_sub(1));
@@ -76,7 +72,6 @@ impl App {
                 profile_id,
             });
         } else {
-            self.state.status = format!("Selected agent: {profile_id}");
             self.state.selected_profile_id = Some(profile_id);
             self.save_workspace_preferences();
             self.close_sheet();

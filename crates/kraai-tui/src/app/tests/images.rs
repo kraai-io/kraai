@@ -145,10 +145,10 @@ fn late_import_cannot_restore_deleted_cleared_or_switched_chips() {
             _ => {
                 harness
                     .app
-                    .reset_chat_session(Some(SessionId::new("second")), "");
+                    .reset_chat_session(Some(SessionId::new("second")));
                 harness
                     .app
-                    .reset_chat_session(Some(SessionId::new("first")), "");
+                    .reset_chat_session(Some(SessionId::new("first")));
             }
         }
         let new = begin_paste(&mut harness);
@@ -184,8 +184,14 @@ fn failed_clipboard_read_removes_only_its_chip() {
     assert_eq!(harness.app.state.input, "before new after");
     assert_eq!(harness.app.state.input_cursor, 11);
     assert!(!harness.app.state.draft_images.pending());
-    assert!(harness.app.state.last_error.is_some());
-    assert!(harness.app.state.status.contains("clipboard busy"));
+    assert!(
+        harness
+            .app
+            .state
+            .last_error
+            .as_ref()
+            .is_some_and(|error| error.contains("clipboard busy"))
+    );
 }
 
 #[test]
@@ -213,7 +219,6 @@ fn missing_clipboard_image_preserves_draft_and_typing_without_an_error() {
         assert!(!harness.app.state.draft_images.pending());
         assert!(harness.app.state.last_error.is_none());
         assert!(!harness.app.state.error_open);
-        assert_ne!(harness.app.state.status, "Loading clipboard image");
         paste(&mut harness);
         assert_eq!(harness.app.state.draft_images.len(), 2);
     }

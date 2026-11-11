@@ -282,10 +282,6 @@ fn model_search_preserves_order_unicode_and_cross_field_matches() {
         Some("Alpha")
     );
     assert_eq!(harness.app.state.selected_model_id.as_deref(), Some("Z-β"));
-    assert_eq!(
-        harness.app.state.status,
-        "Selected model: Alpha / ÉLAN 模型"
-    );
     assert_eq!(harness.app.state.mode, UiMode::Chat);
 }
 
@@ -397,12 +393,10 @@ final",
     );
     assert!(harness.drain_requests().is_empty());
     harness.app.open_error();
-    harness.app.state.status = String::from("Another notice");
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
     assert!(harness.app.state.last_error.is_none());
-    assert_eq!(harness.app.state.status, "Another notice");
 }
 
 #[test]

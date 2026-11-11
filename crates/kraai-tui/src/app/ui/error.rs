@@ -45,12 +45,12 @@ pub(super) fn render_error(state: &AppState, area: Rect, buf: &mut Buffer) {
         .border_style(Style::default().fg(Color::Red));
     let inner = block.inner(popup);
     block.render(popup, buf);
-    let show_status = !state.status.is_empty() && state.status != *error && inner.height > 1;
+    let notice = state.error_notice.as_ref().filter(|_| inner.height > 1);
     let body = Rect::new(
         inner.x,
         inner.y,
         inner.width,
-        inner.height.saturating_sub(if show_status { 2 } else { 1 }),
+        inner.height.saturating_sub(1 + u16::from(notice.is_some())),
     );
     let lines = ChatHistory::wrap_with_prefix(
         &normalize_terminal_text(error),
@@ -70,8 +70,8 @@ pub(super) fn render_error(state: &AppState, area: Rect, buf: &mut Buffer) {
         .map(|line| Line::raw(line.as_str()))
         .collect();
     Paragraph::new(visible).render(body, buf);
-    if show_status {
-        Paragraph::new(normalize_terminal_text(&state.status).replace('\n', " "))
+    if let Some(notice) = notice {
+        Paragraph::new(normalize_terminal_text(notice).replace('\n', " "))
             .style(Style::default().fg(Color::Gray))
             .render(Rect::new(inner.x, inner.bottom() - 2, inner.width, 1), buf);
     }

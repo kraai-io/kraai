@@ -193,7 +193,7 @@ fn loading_session_restores_model_without_overwriting_later_selection() {
     let mut harness = test_harness();
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("session")));
     let mut snapshot = session_snapshot_at(1, None);
     snapshot.session.selected_model = Some(kraai_types::ModelSelection {
         provider_id: ProviderId::new("saved-provider"),
@@ -244,7 +244,7 @@ fn snapshot_older_than_a_session_event_still_restores_the_model() {
     let mut harness = test_harness();
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("session")));
     harness
         .app
         .handle_runtime_event_bridge_message(stream_event(
@@ -277,7 +277,7 @@ fn observer_refreshes_model_when_saved_selection_changes() {
     let mut harness = test_harness();
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("session")));
     for (sequence, selection) in [
         None,
         Some(("first-provider", "first-model", "low")),

@@ -60,7 +60,10 @@ pub(super) struct AppState {
     pub(super) auto_scroll: bool,
     pub(super) config_loaded: bool,
     pub(super) mode: UiMode,
-    pub(super) status: String,
+    /// The last turn ended because it was cancelled.
+    pub(super) turn_cancelled: bool,
+    /// What the error panel says about a key that failed, such as a copy.
+    pub(super) error_notice: Option<String>,
     pub(super) last_error: Option<String>,
     pub(super) error_open: bool,
     pub(super) error_scroll: Cell<usize>,
@@ -170,7 +173,8 @@ impl Default for AppState {
             auto_scroll: true,
             config_loaded: false,
             mode: UiMode::Chat,
-            status: String::from("Type / for commands"),
+            turn_cancelled: false,
+            error_notice: None,
             last_error: None,
             error_open: false,
             error_scroll: Cell::new(0),

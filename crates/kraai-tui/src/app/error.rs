@@ -4,9 +4,8 @@ impl App {
     pub(super) fn open_error(&mut self) {
         if self.state.last_error.is_some() {
             self.state.error_open = true;
+            self.state.error_notice = None;
             self.state.error_scroll.set(0);
-        } else {
-            self.state.status = String::from("No error to read");
         }
     }
 
@@ -27,17 +26,14 @@ impl App {
             KeyCode::Home => self.state.error_scroll.set(0),
             KeyCode::End => self.state.error_scroll.set(usize::MAX),
             KeyCode::Char('c') if key.modifiers.is_empty() => {
-                if let Some(error) = self.state.last_error.clone()
-                    && let Err(error) =
-                        self.copy_text_to_clipboard(&error, super::feedback::CopyTarget::Error)
-                {
-                    self.state.status = format!("Copy failed: {error}");
+                if let Some(error) = self.state.last_error.clone() {
+                    self.state.error_notice = self
+                        .copy_text_to_clipboard(&error, super::feedback::CopyTarget::Error)
+                        .err()
+                        .map(|error| format!("Copy failed: {error}"));
                 }
             }
             KeyCode::Char('d') if key.modifiers.is_empty() => {
-                if self.state.last_error.as_ref() == Some(&self.state.status) {
-                    self.state.status.clear();
-                }
                 self.state.last_error = None;
                 self.state.error_open = false;
                 self.state.error_scroll.set(0);

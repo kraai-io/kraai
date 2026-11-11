@@ -42,6 +42,7 @@ impl App {
                     let now = Instant::now();
                     if timer.elapsed(now).is_some() {
                         self.state.feedback.completion_until = None;
+                        self.state.turn_cancelled = false;
                     } else if self.state.turn_timer.elapsed(now).is_some()
                         && timer.last_duration().is_some()
                     {
@@ -57,7 +58,6 @@ impl App {
             }
             Event::ConfigLoaded => {
                 self.state.config_loaded = true;
-                self.state.status = String::from("Config loaded");
                 if self.startup_sync != StartupSync::WaitingForRuntime {
                     self.request_sync();
                 }
@@ -202,7 +202,7 @@ impl App {
                     self.last_statusline_animation_tick = None;
                     self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
                     self.state.feedback.completion_until = None;
-                    self.state.status = String::from("Stream cancelled");
+                    self.state.turn_cancelled = true;
                     self.request_sync_for_session(&session_id);
                 }
                 if self.state.current_session_id.as_ref() != Some(&session_id) {
@@ -220,33 +220,15 @@ impl App {
                 }
                 if apply_state {
                     self.discard_streamed_content(&message_id);
-                    self.state.status =
-                        String::from("Provider stream failed, retrying the response");
                 }
             }
-            Event::ProviderRetryScheduled {
-                session_id,
-                retry_number,
-                delay_seconds,
-                ..
-            } => {
+            Event::ProviderRetryScheduled { session_id, .. } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.state.retry_waiting = true;
                     self.state.profile_lock_stale_after_terminal_event = false;
-                    self.state.status =
-                        format!("Provider error, retry #{retry_number} in {delay_seconds}s");
                 }
             }
-            Event::ContextStateChanged {
-                session_id,
-                notifications,
-            } => {
-                if self.state.current_session_id.as_ref() == Some(&session_id)
-                    && !notifications.is_empty()
-                {
-                    self.state.status = notifications.join(" ");
-                }
-            }
+            Event::ContextStateChanged { .. } => {}
             Event::ContinuationFailed { session_id, error } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     if apply_state {
@@ -298,20 +280,12 @@ impl App {
                 }
                 self.state.pending_script = Some(script);
                 self.enter_script_decision_phase();
-                self.state.status = String::from("Script capability approval required");
             }
-            Event::ScriptResultReady {
-                session_id,
-                execution_id: _,
-                outcome,
-                ..
-            } => {
+            Event::ScriptResultReady { session_id, .. } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.state.pending_script = None;
                     self.state.script_phase = ScriptPhase::Idle;
                     self.state.profile_lock_stale_after_terminal_event = false;
-                    self.state.status =
-                        format!("Script {}; waiting for assistant", outcome.status.as_str());
                 } else {
                     self.request(RuntimeRequest::ListSessions);
                 }

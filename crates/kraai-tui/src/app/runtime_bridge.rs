@@ -12,7 +12,7 @@ const HISTORY_PAGE: usize = 200;
 #[derive(Debug)]
 pub(super) enum RuntimeEventBridgeMessage {
     Event(RuntimeEvent),
-    Lagged(u64),
+    Lagged,
     StartupComplete(kraai_runtime::RuntimeResult<kraai_runtime::RuntimeStartupState>),
 }
 
@@ -112,9 +112,7 @@ fn forward_runtime_event(
 ) -> bool {
     let message = match event {
         Ok(event) => RuntimeEventBridgeMessage::Event(event),
-        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-            RuntimeEventBridgeMessage::Lagged(skipped)
-        }
+        Err(broadcast::error::RecvError::Lagged(_)) => RuntimeEventBridgeMessage::Lagged,
         Err(broadcast::error::RecvError::Closed) => return false,
     };
     sender.send(message).is_ok()
