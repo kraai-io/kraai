@@ -32,7 +32,7 @@ pub(super) static SLASH_COMMANDS: [SlashCommand; 9] = [
     list("sessions", "Open or delete sessions"),
     command("undo", "Restore the last message"),
     list("providers", "Connect and edit providers"),
-    command("mcp", "MCP servers and sign-in"),
+    list("mcp", "MCP servers and sign-in"),
     SlashCommand {
         needs_error: true,
         ..command("error", "Read the last error")

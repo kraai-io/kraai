@@ -103,8 +103,8 @@ fn space_runs_a_written_command_that_opens_a_list() {
 }
 
 #[test]
-fn space_after_a_command_that_takes_arguments_types_a_space() {
-    for command in ["/mcp", "/quit", "/new", "/undo"] {
+fn space_after_a_command_that_opens_no_list_types_a_space() {
+    for command in ["/quit", "/new", "/undo"] {
         let mut harness = test_harness();
         type_text(&mut harness, command);
         key(&mut harness, KeyCode::Tab);

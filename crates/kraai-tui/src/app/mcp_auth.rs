@@ -86,31 +86,14 @@ impl AppState {
 }
 
 impl App {
-    pub(super) fn handle_mcp_command(&mut self, args: Vec<&str>) {
+    pub(super) fn open_mcp_sheet(&mut self) {
         self.open_sheet(UiMode::Mcp);
         self.state.mcp_open = None;
         self.state.mcp_error = None;
-        let (action, server) = match args.as_slice() {
-            [] | ["status"] => {
-                self.request(RuntimeRequest::GetMcpAuthStatuses);
-                return;
-            }
-            ["login", server] => (McpAction::SignIn, *server),
-            ["cancel", server] => (McpAction::CancelSignIn, *server),
-            ["logout", server] => (McpAction::LogOut, *server),
-            ["copy", server] => (McpAction::CopyUrl, *server),
-            _ => {
-                self.state.sheet_notice = Some(String::from(
-                    "Use /mcp status, /mcp login <server>, /mcp cancel <server>, /mcp logout <server>, or /mcp copy <server>",
-                ));
-                return;
-            }
-        };
-        self.state.mcp_open = Some(server.to_owned());
-        self.run_mcp_action(server, action);
+        self.request(RuntimeRequest::GetMcpAuthStatuses);
     }
 
-    fn run_mcp_action(&mut self, server: &str, action: McpAction) {
+    pub(super) fn run_mcp_action(&mut self, server: &str, action: McpAction) {
         self.state.mcp_feedback.remove(server);
         let pending_url = self
             .state

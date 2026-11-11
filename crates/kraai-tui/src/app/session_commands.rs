@@ -152,7 +152,10 @@ impl App {
                 self.set_input_text(String::new());
                 self.open_providers_sheet();
             }
-            "mcp" => self.handle_mcp_command(parts.collect()),
+            "mcp" => {
+                self.set_input_text(String::new());
+                self.open_mcp_sheet();
+            }
             "sessions" => {
                 self.set_input_text(String::new());
                 self.open_sessions_sheet();

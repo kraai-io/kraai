@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::UiMode;
+use crate::app::mcp_auth::McpAction;
 use kraai_runtime::{McpAuthState, McpAuthStatus};
 use ratatui::crossterm::event::KeyCode;
 use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
@@ -11,6 +12,10 @@ fn status(sequence: u64, state: McpAuthState) -> McpAuthStatus {
         state,
         error: None,
     }
+}
+
+fn sign_in(harness: &mut TestHarness) {
+    harness.app.run_mcp_action("example", McpAction::SignIn);
 }
 
 fn pending(sequence: u64) -> McpAuthStatus {
@@ -32,7 +37,7 @@ fn pending_status_only_opens_browser_once_after_explicit_login() {
     };
     harness.app.apply_mcp_auth_status_with(pending(1), open);
     assert_eq!(opened.get(), 0);
-    harness.app.handle_command("mcp login example");
+    sign_in(&mut harness);
     harness.app.apply_mcp_auth_status_with(pending(1), open);
     assert_eq!(opened.get(), 0);
     let starting = harness
@@ -52,8 +57,10 @@ fn cancel_clears_browser_intent_and_late_pending_cannot_replace_completion() {
         opened.set(true);
         Ok(())
     };
-    harness.app.handle_command("mcp login example");
-    harness.app.handle_command("mcp cancel example");
+    sign_in(&mut harness);
+    harness
+        .app
+        .run_mcp_action("example", McpAction::CancelSignIn);
     harness.app.apply_mcp_auth_status_with(pending(2), open);
     assert!(!opened.get());
     harness
@@ -79,7 +86,7 @@ fn delayed_start_response_opens_cached_pending_after_initial_snapshot() {
         opened.set(opened.get() + 1);
         Ok(())
     };
-    harness.app.handle_command("mcp login example");
+    sign_in(&mut harness);
     harness
         .app
         .apply_mcp_auth_status(status(0, McpAuthState::SignedOut));
@@ -100,9 +107,11 @@ fn rapid_login_cancel_login_only_opens_latest_attempt() {
         opened.set(opened.get() + 1);
         Ok(())
     };
-    harness.app.handle_command("mcp login example");
-    harness.app.handle_command("mcp cancel example");
-    harness.app.handle_command("mcp login example");
+    sign_in(&mut harness);
+    harness
+        .app
+        .run_mcp_action("example", McpAction::CancelSignIn);
+    sign_in(&mut harness);
     harness
         .app
         .handle_runtime_response(RuntimeResponse::StartMcpLogin {
@@ -133,7 +142,12 @@ fn rapid_login_cancel_login_only_opens_latest_attempt() {
 #[test]
 fn server_sheet_shows_the_sign_in_url_and_why_the_browser_did_not_open() {
     let mut harness = test_harness();
-    harness.app.handle_command("mcp login example");
+    harness
+        .app
+        .apply_mcp_auth_status(status(0, McpAuthState::SignedOut));
+    harness.app.handle_command("mcp");
+    key(&mut harness, KeyCode::Enter);
+    key(&mut harness, KeyCode::Enter);
     let starting = harness
         .app
         .acknowledge_mcp_login(0, status(1, McpAuthState::Starting));
@@ -165,23 +179,6 @@ fn server_sheet_shows_the_sign_in_url_and_why_the_browser_did_not_open() {
             .any(|row| row.ends_with("tab or ↑↓ select · enter run · ctrl+r refresh · esc back"))
     );
     assert!(rows.iter().any(|row| row.trim() == "/mcp › example ›"));
-}
-
-#[test]
-fn mcp_commands_validate_arguments_before_dispatch() {
-    let mut harness = test_harness();
-    harness.app.handle_command("mcp login example extra");
-    assert!(harness.drain_requests().is_empty());
-    harness.app.handle_command("mcp");
-    harness.app.handle_command("mcp login example");
-    harness.app.handle_command("mcp cancel example");
-    harness.app.handle_command("mcp logout example");
-    assert!(matches!(harness.drain_requests().as_slice(), [
-        RuntimeRequest::GetMcpAuthStatuses,
-        RuntimeRequest::StartMcpLogin { server: login, .. },
-        RuntimeRequest::CancelMcpLogin { server: cancel },
-        RuntimeRequest::LogoutMcp { server: logout },
-    ] if login == "example" && cancel == login && logout == login));
 }
 
 #[test]
@@ -260,7 +257,7 @@ fn server_list_opens_a_server_whose_rows_follow_its_sign_in_state() {
     type_text(&mut harness, "cancel");
     assert_eq!(
         harness.app.state.listed_mcp_actions(),
-        [crate::app::mcp_auth::McpAction::CancelSignIn]
+        [McpAction::CancelSignIn]
     );
     key(&mut harness, KeyCode::Enter);
     assert!(
@@ -288,7 +285,7 @@ fn server_list_opens_a_server_whose_rows_follow_its_sign_in_state() {
 #[test]
 fn duplicate_pending_snapshot_preserves_browser_failure_feedback() {
     let mut harness = test_harness();
-    harness.app.handle_command("mcp login example");
+    sign_in(&mut harness);
     let starting = harness
         .app
         .acknowledge_mcp_login(0, status(1, McpAuthState::Starting));
