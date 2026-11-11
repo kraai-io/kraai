@@ -46,6 +46,7 @@ impl App {
                 .model_position(provider_id, model_id)
                 .unwrap_or(0);
         }
+        self.settle_highlighted_model();
         self.request(RuntimeRequest::ListModels);
     }
 
@@ -60,6 +61,7 @@ impl App {
             .state
             .model_position(provider_id, model_id)
             .unwrap_or(0);
+        self.settle_highlighted_model();
     }
 
     pub(super) fn close_sheet(&mut self) {
@@ -80,6 +82,11 @@ impl App {
     }
 
     pub(super) fn handle_model_key_event(&mut self, key: KeyEvent) {
+        self.step_model_sheet(key);
+        self.settle_highlighted_model();
+    }
+
+    fn step_model_sheet(&mut self, key: KeyEvent) {
         self.state.sheet_notice = None;
         if key.code == KeyCode::Backspace
             && key.modifiers.is_empty()

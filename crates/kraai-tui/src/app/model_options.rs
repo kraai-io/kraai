@@ -68,6 +68,30 @@ pub(super) fn inline_option<'a>(
     })
 }
 
+/// The level a model starts on: "medium" when it lists one, otherwise the middle of its list.
+fn starting_effort(option: &ModelOptionDefinition) -> Option<String> {
+    let ModelOptionKind::Choice { choices } = &option.kind else {
+        return None;
+    };
+    choices
+        .iter()
+        .find(|choice| choice.id == "medium")
+        .or_else(|| choices.get(choices.len().saturating_sub(1) / 2))
+        .map(|choice| choice.id.clone())
+}
+
+/// Gives a model the reasoning effort it needs when it holds none. Returns whether it did.
+fn fill_starting_effort(model: &Model, values: &mut ModelOptionValues) -> bool {
+    let Some((id, effort)) = inline_option(model, values)
+        .filter(|option| option.required && !values.contains_key(&option.id))
+        .and_then(|option| Some((option.id.clone(), starting_effort(option)?)))
+    else {
+        return false;
+    };
+    values.insert(id, ModelOptionValue::Choice(effort));
+    true
+}
+
 pub(super) fn active_options<'a>(
     model: &'a Model,
     values: &'a ModelOptionValues,
@@ -243,11 +267,22 @@ impl App {
             self.state.model_option_values(provider_id, model_id),
         )?;
         kraai_types::reconcile_model_option_values(&model.options, &mut values);
+        fill_starting_effort(model, &mut values);
         self.state.status = if input.is_empty() {
             format!("Unset {id}")
         } else {
             format!("Selected {id}: {input}")
         };
+        self.store_model_options(provider_id, model_id, values);
+        Ok(())
+    }
+
+    fn store_model_options(
+        &mut self,
+        provider_id: &str,
+        model_id: &str,
+        values: ModelOptionValues,
+    ) {
         if self.state.is_current_model(provider_id, model_id) {
             self.state.selected_model_options = values;
             self.save_model_selection();
@@ -259,7 +294,23 @@ impl App {
                 .insert(model_id.to_owned(), values);
             self.save_workspace_preferences();
         }
-        Ok(())
+    }
+
+    /// Gives the model the model list highlights a reasoning effort when it needs one and has
+    /// none, so it can run as soon as it is used.
+    pub(super) fn settle_highlighted_model(&mut self) {
+        if self.state.mode != UiMode::Model {
+            return;
+        }
+        let Some((provider_id, model)) = self.state.highlighted_model() else {
+            return;
+        };
+        let mut values = self.state.model_option_values(provider_id, &model.id);
+        if !fill_starting_effort(model, &mut values) {
+            return;
+        }
+        let (provider_id, model_id) = (provider_id.to_owned(), model.id.clone());
+        self.store_model_options(&provider_id, &model_id, values);
     }
 
     /// Steps the reasoning effort of a model from the model list.

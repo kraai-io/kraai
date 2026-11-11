@@ -50,6 +50,7 @@ impl App {
                 }
                 self.ensure_selected_model();
                 self.reconcile_model_options();
+                self.settle_highlighted_model();
                 self.reconcile_pending_session_model_options();
                 self.maybe_send_startup_message();
             }

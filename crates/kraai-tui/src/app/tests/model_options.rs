@@ -432,7 +432,11 @@ fn arrows_change_reasoning_effort_on_the_highlighted_model_only() -> color_eyre:
     let rendered = screen(&harness.app.state, 100, 30);
     assert!(rendered.contains("Reasoner  low  medium  high"));
     assert!(rendered.contains("tab or ↑↓ select · ←→ effort · enter use · esc close"));
-    key(&mut harness, KeyCode::Right);
+    assert_eq!(
+        remembered(&harness, "reasoner", "reasoning_effort"),
+        Some(&ModelOptionValue::Choice("medium".into()))
+    );
+    key(&mut harness, KeyCode::Left);
     assert_eq!(
         remembered(&harness, "reasoner", "reasoning_effort"),
         Some(&ModelOptionValue::Choice("low".into()))
@@ -514,12 +518,13 @@ fn highlighted_model_keeps_its_other_settings_beside_the_effort_choices() -> col
     let rendered = screen(&harness.app.state, 100, 30);
     assert!(rendered.contains("Reasoner  low  medium  high  thinking"));
     key(&mut harness, KeyCode::Up);
-    assert!(screen(&harness.app.state, 100, 30).contains("Reasoner  medium, thinking"));
+    assert!(screen(&harness.app.state, 100, 30).contains("Reasoner  low, thinking"));
     Ok(())
 }
 
 #[test]
-fn models_never_set_up_stay_unset_whatever_the_model_in_use_holds() -> color_eyre::Result<()> {
+fn a_highlighted_model_starts_on_medium_and_models_never_highlighted_stay_unset()
+-> color_eyre::Result<()> {
     let mut harness = test_harness();
     configure_optional(&mut harness)?;
     add_effort_model(&mut harness, true)?;
@@ -555,7 +560,11 @@ fn models_never_set_up_stay_unset_whatever_the_model_in_use_holds() -> color_eyr
         harness.app.state.selected_model_id.as_deref(),
         Some("reasoner")
     );
-    assert!(harness.app.state.selected_model_options.is_empty());
+    let medium = ModelOptionValues::from([(
+        "reasoning_effort".into(),
+        ModelOptionValue::Choice("medium".into()),
+    )]);
+    assert_eq!(harness.app.state.selected_model_options, medium);
 
     harness.app.handle_command("model");
     key(&mut harness, KeyCode::Right);
@@ -569,7 +578,7 @@ fn models_never_set_up_stay_unset_whatever_the_model_in_use_holds() -> color_eyr
         ModelOptionValues::from([
             (
                 "reasoning_effort".into(),
-                ModelOptionValue::Choice("low".into())
+                ModelOptionValue::Choice("high".into())
             ),
             ("thinking".into(), ModelOptionValue::Boolean(true)),
         ])
@@ -591,9 +600,53 @@ fn models_never_set_up_stay_unset_whatever_the_model_in_use_holds() -> color_eyr
         harness.app.state.selected_model_id.as_deref(),
         Some("fresh")
     );
-    assert!(harness.app.state.selected_model_options.is_empty());
+    assert_eq!(harness.app.state.selected_model_options, medium);
     assert_eq!(
         remembered(&harness, "reasoner", "reasoning_effort"),
+        Some(&ModelOptionValue::Choice("high".into()))
+    );
+    Ok(())
+}
+
+#[test]
+fn an_effort_that_a_toggle_switches_on_starts_in_the_middle_of_its_list() -> color_eyre::Result<()>
+{
+    let mut harness = test_harness();
+    configure_optional(&mut harness)?;
+    harness
+        .app
+        .state
+        .models_by_provider
+        .entry("provider".into())
+        .or_default()
+        .push(kraai_runtime::Model {
+            id: "gated".into(),
+            name: "Gated".into(),
+            max_context: None,
+            options: serde_json::from_value(serde_json::json!([
+                {"id":"reasoning_enabled","label":"Thinking enabled","type":"boolean","required":true},
+                {"id":"reasoning_effort","label":"Reasoning effort","type":"choice","required":true,"active_when":{"option":"reasoning_enabled","value":true},"binding":{"type":"body","path":"/effort"},"choices":[{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}]}
+            ]))?,
+        });
+    harness.app.handle_command("model");
+    key(&mut harness, KeyCode::Up);
+    assert!(
+        harness
+            .app
+            .state
+            .model_option_values("provider", "gated")
+            .is_empty()
+    );
+    ctrl(&mut harness, 's');
+    key(&mut harness, KeyCode::Right);
+    assert_eq!(remembered(&harness, "gated", "reasoning_effort"), None);
+    key(&mut harness, KeyCode::Right);
+    assert_eq!(
+        remembered(&harness, "gated", "reasoning_enabled"),
+        Some(&ModelOptionValue::Boolean(true))
+    );
+    assert_eq!(
+        remembered(&harness, "gated", "reasoning_effort"),
         Some(&ModelOptionValue::Choice("low".into()))
     );
     Ok(())
