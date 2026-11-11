@@ -204,7 +204,11 @@ impl App {
                     self.handle_submit();
                 }
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c)
+                if !key_event
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 self.insert_input_char(c);
                 if active_command_prefix(&self.state.input).is_none() {
                     self.state.command_popup_dismissed = false;

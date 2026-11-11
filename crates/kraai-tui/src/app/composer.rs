@@ -31,7 +31,6 @@ impl App {
                     .snap(word_right(&self.state.input, self.state.input_cursor), true)
             }
             KeyCode::Backspace if control || alt => self.delete_input_word(false),
-            KeyCode::Char('w') if control => self.delete_input_word(false),
             KeyCode::Delete if control => self.delete_input_word(true),
             KeyCode::Char('d') if alt => self.delete_input_word(true),
             _ => return false,

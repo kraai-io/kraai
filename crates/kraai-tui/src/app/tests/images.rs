@@ -122,7 +122,7 @@ fn word_deletion_and_unicode_edits_keep_remaining_image_order() {
     paste(&mut harness);
     harness
         .app
-        .handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        .handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL));
     assert_eq!(harness.app.state.input, "é [Image #1] ");
     assert_eq!(harness.app.state.draft_images.len(), 1);
     harness.app.state.input_cursor = 0;

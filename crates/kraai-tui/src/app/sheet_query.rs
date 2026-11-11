@@ -75,9 +75,6 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let query = &mut self.state.sheet_query;
         match key.code {
-            KeyCode::Char('w') if control => {
-                query.truncate(composer::word_left(query, query.len()))
-            }
             KeyCode::Backspace if control || alt => {
                 query.truncate(composer::word_left(query, query.len()))
             }

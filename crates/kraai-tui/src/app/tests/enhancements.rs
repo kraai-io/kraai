@@ -183,9 +183,15 @@ fn word_editing_preserves_unicode() {
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
     assert_eq!(harness.app.state.input_cursor, "hello 你好 ".len());
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        harness
+            .app
+            .handle_key_event(KeyEvent::new(KeyCode::Char('w'), modifiers));
+        assert_eq!(harness.app.state.input, "hello 你好 world");
+    }
     harness
         .app
-        .handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        .handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL));
     assert_eq!(harness.app.state.input, "hello world");
     harness
         .app
