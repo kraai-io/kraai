@@ -271,7 +271,10 @@ mod tests {
             })
         };
         assert_eq!(
-            notice(kraai_execution_types::SandboxCapabilities::workspace_write()),
+            notice(kraai_execution_types::SandboxCapabilities::new([
+                kraai_execution_types::SandboxCapability::WorkspaceWrite,
+                kraai_execution_types::SandboxCapability::Network
+            ])),
             "<tool_call_result status=\"completed\" exit_code=\"128\">\n\
 <sandbox>The sandbox likely blocked this script. It ran with: workspace-read, workspace-write, network. If it needs more access, rerun it with the capabilities it needs in its header, such as `# timeout=30sec permissions=host-write`. Not granted: host-write, host-read, no-sandbox.</sandbox>\n\
 </tool_call_result>"

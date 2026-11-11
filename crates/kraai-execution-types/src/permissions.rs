@@ -34,21 +34,6 @@ impl SandboxCapability {
 pub struct SandboxCapabilities(BTreeSet<SandboxCapability>);
 
 impl SandboxCapabilities {
-    pub fn workspace_read() -> Self {
-        Self(BTreeSet::from([
-            SandboxCapability::WorkspaceRead,
-            SandboxCapability::Network,
-        ]))
-    }
-
-    pub fn workspace_write() -> Self {
-        Self(BTreeSet::from([
-            SandboxCapability::WorkspaceRead,
-            SandboxCapability::WorkspaceWrite,
-            SandboxCapability::Network,
-        ]))
-    }
-
     pub fn new(capabilities: impl IntoIterator<Item = SandboxCapability>) -> Self {
         let mut effective = capabilities.into_iter().collect::<BTreeSet<_>>();
         if effective.contains(&SandboxCapability::NoSandbox) {

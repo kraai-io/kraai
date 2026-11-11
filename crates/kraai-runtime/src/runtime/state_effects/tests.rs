@@ -19,7 +19,7 @@ fn open_request(path: &str) -> StateEffectRequest {
 #[test]
 fn open_file_scope_is_derived_from_the_actual_path_and_execution_authority() {
     let workspace = Path::new("/workspace");
-    let workspace_read = SandboxCapabilities::workspace_read();
+    let workspace_read = SandboxCapabilities::new([SandboxCapability::WorkspaceRead]);
     let workspace_mutations = authorize_context_mutations(
         &open_request("/workspace/src/lib.rs"),
         workspace,
@@ -89,7 +89,7 @@ fn context_effect_errors_preserve_validation_order() {
             authorize_context_mutations(
                 &request,
                 Path::new("/workspace"),
-                &SandboxCapabilities::workspace_read(),
+                &SandboxCapabilities::new([SandboxCapability::WorkspaceRead]),
             )
             .unwrap_err(),
             expected,
@@ -112,7 +112,7 @@ fn close_file_effects_keep_extra_payload_fields_and_require_the_matching_command
     let mutations = authorize_context_mutations(
         &request,
         Path::new("/workspace"),
-        &SandboxCapabilities::workspace_read(),
+        &SandboxCapabilities::new([SandboxCapability::WorkspaceRead]),
     )
     .unwrap();
     assert!(matches!(
@@ -126,7 +126,7 @@ fn close_file_effects_keep_extra_payload_fields_and_require_the_matching_command
         authorize_context_mutations(
             &request,
             Path::new("/workspace"),
-            &SandboxCapabilities::workspace_read(),
+            &SandboxCapabilities::new([SandboxCapability::WorkspaceRead]),
         )
         .unwrap_err(),
         "command 'kraai-open-files' cannot apply opened-files operation 'close'",
