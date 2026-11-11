@@ -503,7 +503,6 @@ fn highlighted_model_keeps_its_other_settings_beside_the_effort_choices() -> col
     key(&mut harness, KeyCode::Down);
     key(&mut harness, KeyCode::Right);
     key(&mut harness, KeyCode::Right);
-    key(&mut harness, KeyCode::Right);
     assert_eq!(
         remembered(&harness, "reasoner", "thinking"),
         Some(&ModelOptionValue::Boolean(true))
@@ -516,6 +515,87 @@ fn highlighted_model_keeps_its_other_settings_beside_the_effort_choices() -> col
     assert!(rendered.contains("Reasoner  low  medium  high  thinking"));
     key(&mut harness, KeyCode::Up);
     assert!(screen(&harness.app.state, 100, 30).contains("Reasoner  medium, thinking"));
+    Ok(())
+}
+
+#[test]
+fn models_never_set_up_stay_unset_whatever_the_model_in_use_holds() -> color_eyre::Result<()> {
+    let mut harness = test_harness();
+    configure_optional(&mut harness)?;
+    add_effort_model(&mut harness, true)?;
+    let models = harness
+        .app
+        .state
+        .models_by_provider
+        .entry("provider".into())
+        .or_default();
+    let mut fresh = models
+        .last()
+        .cloned()
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing model"))?;
+    fresh.id = "fresh".into();
+    fresh.name = "Fresh".into();
+    models.push(fresh);
+    let row = |harness: &TestHarness, name: &str| {
+        let text: Vec<char> = screen(&harness.app.state, 100, 30).chars().collect();
+        text.chunks(100)
+            .map(|row| row.iter().collect::<String>())
+            .find(|row| row.contains(name))
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+
+    harness.app.handle_command("model");
+    assert_eq!(row(&harness, "Reasoner"), "Reasoner");
+    assert_eq!(row(&harness, "Fresh"), "Fresh");
+    key(&mut harness, KeyCode::Down);
+    key(&mut harness, KeyCode::Enter);
+    assert_eq!(
+        harness.app.state.selected_model_id.as_deref(),
+        Some("reasoner")
+    );
+    assert!(harness.app.state.selected_model_options.is_empty());
+
+    harness.app.handle_command("model");
+    key(&mut harness, KeyCode::Right);
+    ctrl(&mut harness, 's');
+    key(&mut harness, KeyCode::Down);
+    key(&mut harness, KeyCode::Right);
+    key(&mut harness, KeyCode::Right);
+    key(&mut harness, KeyCode::Esc);
+    assert_eq!(
+        harness.app.state.selected_model_options,
+        ModelOptionValues::from([
+            (
+                "reasoning_effort".into(),
+                ModelOptionValue::Choice("low".into())
+            ),
+            ("thinking".into(), ModelOptionValue::Boolean(true)),
+        ])
+    );
+    assert!(
+        harness
+            .app
+            .state
+            .model_option_values("provider", "fresh")
+            .is_empty()
+    );
+    assert_eq!(row(&harness, "Fresh"), "Fresh");
+    assert!(row(&harness, "Model").contains("High, thinking, budget 50"));
+
+    key(&mut harness, KeyCode::Down);
+    assert_eq!(row(&harness, "Fresh"), "▌ Fresh     low  medium  high");
+    key(&mut harness, KeyCode::Enter);
+    assert_eq!(
+        harness.app.state.selected_model_id.as_deref(),
+        Some("fresh")
+    );
+    assert!(harness.app.state.selected_model_options.is_empty());
+    assert_eq!(
+        remembered(&harness, "reasoner", "reasoning_effort"),
+        Some(&ModelOptionValue::Choice("low".into()))
+    );
     Ok(())
 }
 

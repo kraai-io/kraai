@@ -146,18 +146,21 @@ impl AppState {
     }
 
     /// The values a model would run with: the active ones for the model in use, otherwise the
-    /// ones remembered for it, otherwise the active ones carried over.
+    /// ones last set for it. A model that was never set up has none.
     pub(super) fn model_option_values(
         &self,
         provider_id: &str,
         model_id: &str,
     ) -> ModelOptionValues {
-        let remembered = self
-            .remembered_model_options
-            .get(provider_id)
-            .and_then(|models| models.get(model_id))
-            .filter(|_| !self.is_current_model(provider_id, model_id));
-        let mut values = remembered.unwrap_or(&self.selected_model_options).clone();
+        let mut values = if self.is_current_model(provider_id, model_id) {
+            self.selected_model_options.clone()
+        } else {
+            self.remembered_model_options
+                .get(provider_id)
+                .and_then(|models| models.get(model_id))
+                .cloned()
+                .unwrap_or_default()
+        };
         if let Some(model) = self.find_model(provider_id, model_id) {
             kraai_types::reconcile_model_option_values(&model.options, &mut values);
         }

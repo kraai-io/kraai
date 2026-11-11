@@ -143,7 +143,14 @@ fn model_picker_saves_the_complete_typed_selection() -> color_eyre::Result<()> {
     second.id = "second".into();
     models.push(second);
     let values = options("high", true, Some(50));
-    harness.app.state.selected_model_options = values.clone();
+    harness.app.state.selected_model_options = options("low", false, None);
+    harness
+        .app
+        .state
+        .remembered_model_options
+        .entry("provider".into())
+        .or_default()
+        .insert("second".into(), values.clone());
     harness.app.state.mode = super::super::UiMode::Model;
     harness.app.state.sheet_index = harness
         .app
