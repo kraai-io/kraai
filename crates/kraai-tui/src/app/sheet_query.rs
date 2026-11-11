@@ -51,10 +51,24 @@ impl AppState {
         }
     }
 
+    /// The sheet query as the composer shows it. A secret being typed shows as dots.
+    fn typed_in_sheet(&self) -> std::borrow::Cow<'_, str> {
+        let secret = self
+            .config_editing
+            .as_ref()
+            .is_some_and(|row| self.config_secret(row));
+        if secret {
+            "•".repeat(self.sheet_query.chars().count()).into()
+        } else {
+            self.sheet_query.as_str().into()
+        }
+    }
+
     pub(super) fn composer(&self) -> TextInput<'_> {
         match self.sheet_prefix() {
             Some(prefix) => {
-                TextInput::with_prefix(&prefix, &self.sheet_query, self.sheet_query.len())
+                let typed = self.typed_in_sheet();
+                TextInput::with_prefix(&prefix, &typed, typed.len())
             }
             None => TextInput::new(&self.input, self.input_cursor),
         }

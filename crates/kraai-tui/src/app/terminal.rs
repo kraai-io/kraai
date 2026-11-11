@@ -252,6 +252,7 @@ impl App {
         if self.state.error_open && self.state.last_error.is_some() {
             return;
         }
+        self.state.sheet_armed = false;
         match self.state.mode {
             UiMode::Agent | UiMode::Mcp | UiMode::Model | UiMode::Sessions => {
                 self.paste_into_sheet_query(&text);

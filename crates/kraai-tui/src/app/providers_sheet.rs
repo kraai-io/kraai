@@ -180,6 +180,7 @@ impl App {
         if self.state.config_editing.take().is_some() {
             self.state.sheet_query.clear();
             self.state.sheet_notice = None;
+            self.state.sheet_armed = false;
             return;
         }
         match self.state.providers_view {

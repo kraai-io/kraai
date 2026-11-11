@@ -34,6 +34,17 @@ pub(super) enum ConfigKind {
     AddModel,
 }
 
+/// A secret as the form shows it: dots, then the last four characters of a long one.
+pub(super) fn masked(secret: &str) -> String {
+    let characters = secret.chars().count();
+    let tail: String = if characters >= 12 {
+        secret.chars().skip(characters - 4).collect()
+    } else {
+        String::new()
+    };
+    format!("{}{tail}", "•".repeat(8))
+}
+
 impl AppState {
     /// The rows of the open provider's configuration, top to bottom.
     pub(super) fn config_rows(&self) -> Vec<ConfigRow> {
@@ -125,6 +136,18 @@ impl AppState {
         .unwrap_or_default()
     }
 
+    /// The row holds something to keep off the screen, such as an API key.
+    pub(super) fn config_secret(&self, row: &ConfigRow) -> bool {
+        self.config_field(row).is_some_and(|field| field.secret)
+    }
+
+    /// Saving the edit as typed would erase a secret the row holds.
+    pub(super) fn edit_clears_secret(&self, row: &ConfigRow) -> bool {
+        self.config_secret(row)
+            && self.sheet_query.trim().is_empty()
+            && !self.config_value(row).is_empty()
+    }
+
     /// Why the last save refused what a row holds.
     pub(super) fn config_error(&self, row: &ConfigRow) -> Option<&str> {
         let provider = self.settings_provider_index;
@@ -144,10 +167,12 @@ impl App {
     pub(super) fn handle_provider_config_key(&mut self, key: KeyEvent) {
         let armed = std::mem::take(&mut self.state.sheet_armed);
         if let Some(row) = self.state.config_editing.clone() {
-            if key.code == KeyCode::Enter {
-                self.commit_config_edit(&row);
-            } else {
+            if key.code != KeyCode::Enter {
                 self.edit_sheet_query(key);
+            } else if self.state.edit_clears_secret(&row) && !armed {
+                self.state.sheet_armed = true;
+            } else {
+                self.commit_config_edit(&row);
             }
             return;
         }
@@ -172,7 +197,11 @@ impl App {
                 None => {}
             },
             (KeyCode::Enter, ConfigKind::Text) => {
-                self.state.sheet_query = self.state.config_value(&row);
+                self.state.sheet_query = if self.state.config_secret(&row) {
+                    String::new()
+                } else {
+                    self.state.config_value(&row)
+                };
                 self.state.config_editing = Some(row);
             }
             (KeyCode::Char(ch), ConfigKind::Text) if typed => {

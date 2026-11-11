@@ -506,6 +506,93 @@ fn configuration_is_one_form_edited_in_the_composer() {
 }
 
 #[test]
+fn a_secret_is_pasted_and_saved_without_ever_reaching_the_screen() {
+    let mut harness = test_harness();
+    open_providers(&mut harness);
+    for definition in &mut harness.app.state.provider_definitions {
+        definition.provider_fields.push(FieldDefinition {
+            secret: true,
+            ..field("key", "API key", FieldValueKind::SecretString, false)
+        });
+    }
+    key(&mut harness, KeyCode::Down);
+    key(&mut harness, KeyCode::Enter);
+    type_text(&mut harness, "edit");
+    key(&mut harness, KeyCode::Enter);
+    harness.drain_requests();
+    for _ in 0..5 {
+        key(&mut harness, KeyCode::Down);
+    }
+    let row = |harness: &TestHarness| sheet(harness, 70).get(7).cloned().unwrap_or_default();
+    let shown = |harness: &TestHarness| screen_rows(&harness.app.state, 120, 40).join("\n");
+    let stored = |document: &SettingsDocument| {
+        document.providers.get(1).and_then(|provider| {
+            provider
+                .values
+                .iter()
+                .find(|entry| entry.key == "key")
+                .map(|entry| entry.value.clone())
+        })
+    };
+    assert_eq!(row(&harness), "▌ API key         unset");
+
+    harness
+        .app
+        .handle_paste(String::from("sk-test-1234567890abcd\r\n"));
+    assert_eq!(row(&harness), "▌ API key         22 characters");
+    assert_eq!(
+        composer(&harness),
+        format!("/providers › local › config › API key = {}", "•".repeat(22))
+    );
+    assert!(!shown(&harness).contains("sk-test"));
+    key(&mut harness, KeyCode::Enter);
+    assert_eq!(
+        saved(&harness).last().and_then(stored),
+        Some(SettingsValue::String(String::from(
+            "sk-test-1234567890abcd"
+        )))
+    );
+    assert_eq!(row(&harness), "▌ API key         ••••••••abcd");
+    assert!(!shown(&harness).contains("sk-test"));
+
+    key(&mut harness, KeyCode::Enter);
+    assert_eq!(
+        composer(&harness),
+        "/providers › local › config › API key ="
+    );
+    assert_eq!(row(&harness), "▌ API key         ••••••••abcd");
+    key(&mut harness, KeyCode::Enter);
+    assert!(saved(&harness).is_empty());
+    assert_eq!(
+        row(&harness),
+        spaced("▌ API key         ••••••••abcd", "enter again to clear", 70)
+    );
+    assert_eq!(
+        hints(&harness),
+        "enter clear the saved value · any other key keeps it"
+    );
+    type_text(&mut harness, "short");
+    assert_eq!(row(&harness), "▌ API key         5 characters");
+    assert_eq!(hints(&harness), "enter save · esc cancel");
+    key(&mut harness, KeyCode::Enter);
+    assert_eq!(
+        saved(&harness).last().and_then(stored),
+        Some(SettingsValue::String(String::from("short")))
+    );
+    assert_eq!(row(&harness), "▌ API key         ••••••••");
+
+    key(&mut harness, KeyCode::Enter);
+    key(&mut harness, KeyCode::Enter);
+    key(&mut harness, KeyCode::Esc);
+    assert!(!harness.app.state.sheet_armed);
+    key(&mut harness, KeyCode::Enter);
+    key(&mut harness, KeyCode::Enter);
+    key(&mut harness, KeyCode::Enter);
+    assert_eq!(saved(&harness).last().map(stored), Some(None));
+    assert_eq!(row(&harness), "▌ API key         unset");
+}
+
+#[test]
 fn toggles_and_the_type_step_in_place_and_models_are_added_and_removed() {
     let mut harness = test_harness();
     open_config(&mut harness);
