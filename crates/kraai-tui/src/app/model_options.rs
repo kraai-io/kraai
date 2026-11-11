@@ -1,4 +1,7 @@
-use kraai_types::{ModelOptionDefinition, ModelOptionKind, ModelOptionValue, ModelOptionValues};
+use kraai_types::{
+    ModelOptionDefinition, ModelOptionKind, ModelOptionValue, ModelOptionValues,
+    REASONING_EFFORT_OPTION_ID,
+};
 
 use super::*;
 
@@ -36,6 +39,35 @@ pub(super) fn chosen_choice(
     choices.iter().position(|(id, _)| *id == current)
 }
 
+/// The choice one step left or right of the value in effect, wrapping at the ends.
+fn stepped_choice(
+    option: &ModelOptionDefinition,
+    value: Option<&ModelOptionValue>,
+    forward: bool,
+) -> Option<String> {
+    let choices = model_option_choices(option);
+    let next = match (chosen_choice(&choices, value), forward) {
+        (Some(position), false) => model_menu_previous_index(position, choices.len()),
+        (Some(position), true) => model_menu_next_index(position, choices.len()),
+        (None, false) => choices.len().saturating_sub(1),
+        (None, true) => 0,
+    };
+    choices.into_iter().nth(next).map(|(value, _)| value)
+}
+
+/// The reasoning effort option of a model while it is active. The model list changes it in
+/// place on the highlighted row.
+pub(super) fn inline_option<'a>(
+    model: &'a Model,
+    values: &ModelOptionValues,
+) -> Option<&'a ModelOptionDefinition> {
+    model.options.iter().find(|option| {
+        option.id == REASONING_EFFORT_OPTION_ID
+            && matches!(option.kind, ModelOptionKind::Choice { .. })
+            && option.is_active(values)
+    })
+}
+
 pub(super) fn active_options<'a>(
     model: &'a Model,
     values: &'a ModelOptionValues,
@@ -68,7 +100,14 @@ pub(super) fn option_value_label(
 
 /// The values in effect for a model as short words, such as "High, thinking, budget 50".
 pub(super) fn option_summary(model: &Model, values: &ModelOptionValues) -> String {
-    active_options(model, values)
+    summarize_options(active_options(model, values), values)
+}
+
+pub(super) fn summarize_options<'a>(
+    options: impl Iterator<Item = &'a ModelOptionDefinition>,
+    values: &ModelOptionValues,
+) -> String {
+    options
         .filter_map(|option| match values.get(&option.id)? {
             ModelOptionValue::Boolean(true) => Some(option.label.to_lowercase()),
             ModelOptionValue::Boolean(false) => None,
@@ -125,11 +164,12 @@ impl AppState {
         values
     }
 
-    pub(super) fn model_has_settings(&self, provider_id: &str, model_id: &str) -> bool {
+    /// Whether the settings sheet of a model holds a setting the model list cannot change.
+    pub(super) fn model_has_more_settings(&self, provider_id: &str, model_id: &str) -> bool {
         self.find_model(provider_id, model_id).is_some_and(|model| {
-            active_options(model, &self.model_option_values(provider_id, model_id))
-                .next()
-                .is_some()
+            let values = self.model_option_values(provider_id, model_id);
+            let inline = inline_option(model, &values).map(|option| option.id.as_str());
+            active_options(model, &values).any(|option| Some(option.id.as_str()) != inline)
         })
     }
 
@@ -219,6 +259,25 @@ impl App {
         Ok(())
     }
 
+    /// Steps the reasoning effort of a model from the model list.
+    pub(super) fn step_inline_option(&mut self, provider_id: &str, model_id: &str, forward: bool) {
+        let values = self.state.model_option_values(provider_id, model_id);
+        let Some((id, value)) = self
+            .state
+            .find_model(provider_id, model_id)
+            .and_then(|model| inline_option(model, &values))
+            .and_then(|option| {
+                let value = stepped_choice(option, values.get(&option.id), forward)?;
+                Some((option.id.clone(), value))
+            })
+        else {
+            return;
+        };
+        if let Err(error) = self.set_model_option(provider_id, model_id, &id, &value) {
+            self.state.sheet_notice = Some(error);
+        }
+    }
+
     pub(super) fn open_model_settings(&mut self, provider_id: String, model_id: String) {
         self.state.model_settings = Some(ModelSettingsTarget {
             provider_id,
@@ -273,17 +332,9 @@ impl App {
                 let Some(option) = option else {
                     return;
                 };
-                let choices = model_option_choices(option);
-                let next = match (chosen_choice(&choices, values.get(&option.id)), key.code) {
-                    (Some(position), KeyCode::Left) => {
-                        model_menu_previous_index(position, choices.len())
-                    }
-                    (Some(position), _) => model_menu_next_index(position, choices.len()),
-                    (None, KeyCode::Left) => choices.len().saturating_sub(1),
-                    (None, _) => 0,
-                };
-                if let Some((value, _)) = choices.get(next) {
-                    self.apply_model_setting(&target, &option.id, value);
+                let forward = key.code == KeyCode::Right;
+                if let Some(value) = stepped_choice(option, values.get(&option.id), forward) {
+                    self.apply_model_setting(&target, &option.id, &value);
                 }
             }
             KeyCode::Delete if query_is_empty => {

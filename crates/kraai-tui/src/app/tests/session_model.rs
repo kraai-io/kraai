@@ -84,8 +84,8 @@ fn option_picker_saves_partial_choices_before_any_message() -> color_eyre::Resul
     configure(&mut harness)?;
     harness.app.handle_command("model");
     harness.app.handle_key_event(super::super::KeyEvent::new(
-        super::super::KeyCode::Enter,
-        super::super::KeyModifiers::NONE,
+        super::super::KeyCode::Char('s'),
+        super::super::KeyModifiers::CONTROL,
     ));
     harness.drain_requests();
     for code in [
@@ -152,12 +152,10 @@ fn model_picker_saves_the_complete_typed_selection() -> color_eyre::Result<()> {
         .iter()
         .position(|(_, model)| model.id == "second")
         .ok_or_else(|| color_eyre::eyre::eyre!("missing second model"))?;
-    for _ in 0..2 {
-        harness.app.handle_key_event(super::super::KeyEvent::new(
-            super::super::KeyCode::Enter,
-            super::super::KeyModifiers::NONE,
-        ));
-    }
+    harness.app.handle_key_event(super::super::KeyEvent::new(
+        super::super::KeyCode::Enter,
+        super::super::KeyModifiers::NONE,
+    ));
     assert!(
         matches!(saves(&harness).as_slice(), [(session, _, selection)]
         if session.as_str() == "session" && selection.model_id.as_str() == "second" && selection.options == values)

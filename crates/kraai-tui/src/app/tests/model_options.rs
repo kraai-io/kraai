@@ -61,6 +61,12 @@ fn key(harness: &mut TestHarness, code: KeyCode) {
         .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
 }
 
+fn ctrl(harness: &mut TestHarness, ch: char) {
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL));
+}
+
 fn type_text(harness: &mut TestHarness, text: &str) {
     for ch in text.chars() {
         key(harness, KeyCode::Char(ch));
@@ -100,7 +106,7 @@ fn model_mut(harness: &mut TestHarness) -> color_eyre::Result<&mut kraai_runtime
 /// Opens the settings of the model in use through the model list and highlights `id`.
 fn open_settings(harness: &mut TestHarness, id: &str) -> color_eyre::Result<()> {
     harness.app.handle_command("model");
-    key(harness, KeyCode::Enter);
+    ctrl(harness, 's');
     assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
     harness.app.state.sheet_index = active_ids(harness)
         .iter()
@@ -310,7 +316,7 @@ fn backspace_and_escape_step_back_through_the_model_list() -> color_eyre::Result
     assert!(screen(&harness.app.state, 100, 30).contains("/model › Model › "));
     key(&mut harness, KeyCode::Backspace);
     assert_eq!(harness.app.state.mode, UiMode::Model);
-    key(&mut harness, KeyCode::Enter);
+    ctrl(&mut harness, 's');
     assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
     key(&mut harness, KeyCode::Esc);
     assert_eq!(harness.app.state.mode, UiMode::Model);
@@ -326,7 +332,7 @@ fn backspace_and_escape_step_back_through_the_model_list() -> color_eyre::Result
 }
 
 #[test]
-fn enter_opens_the_settings_and_a_second_enter_uses_the_model() -> color_eyre::Result<()> {
+fn enter_uses_the_model_and_ctrl_s_opens_its_settings() -> color_eyre::Result<()> {
     let mut harness = test_harness();
     configure_optional(&mut harness)?;
     let mut plain = model_mut(&mut harness)?.clone();
@@ -342,25 +348,174 @@ fn enter_opens_the_settings_and_a_second_enter_uses_the_model() -> color_eyre::R
         .push(plain);
 
     harness.app.handle_command("model");
-    assert!(screen(&harness.app.state, 100, 30).contains("enter settings"));
-    key(&mut harness, KeyCode::Enter);
-    assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
-    key(&mut harness, KeyCode::Enter);
-    assert_eq!(harness.app.state.mode, UiMode::Chat);
-    assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
-        Some("model")
-    );
-
-    harness.app.handle_command("model");
     key(&mut harness, KeyCode::Tab);
-    assert!(screen(&harness.app.state, 100, 30).contains("enter use"));
+    let rendered = screen(&harness.app.state, 100, 30);
+    assert!(rendered.contains("tab or ↑↓ select · enter use · esc close"));
+    ctrl(&mut harness, 's');
+    assert_eq!(harness.app.state.mode, UiMode::Model);
+    assert!(screen(&harness.app.state, 100, 30).contains("Plain has no other settings"));
+    key(&mut harness, KeyCode::Right);
+    assert!(harness.app.state.sheet_notice.is_none());
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert_eq!(
         harness.app.state.selected_model_id.as_deref(),
         Some("plain")
     );
+
+    harness.app.handle_command("model");
+    key(&mut harness, KeyCode::Tab);
+    let rendered = screen(&harness.app.state, 100, 30);
+    assert!(rendered.contains("tab or ↑↓ select · ctrl+s settings · enter use · esc close"));
+    key(&mut harness, KeyCode::Enter);
+    assert_eq!(harness.app.state.mode, UiMode::Chat);
+    assert_eq!(
+        harness.app.state.selected_model_id.as_deref(),
+        Some("model")
+    );
+    assert_eq!(
+        value(&harness, "effort"),
+        Some(&ModelOptionValue::Choice("high".into()))
+    );
+    Ok(())
+}
+
+/// Adds a second model whose only setting is a required reasoning effort.
+fn add_effort_model(harness: &mut TestHarness, extra: bool) -> color_eyre::Result<()> {
+    let mut options: Vec<ModelOptionDefinition> = serde_json::from_value(serde_json::json!([
+        {"id":"reasoning_effort","label":"Reasoning effort","type":"choice","required":true,"binding":{"type":"body","path":"/effort"},"choices":[{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"}]},
+        {"id":"thinking","label":"Thinking","type":"boolean","required":false}
+    ]))?;
+    if !extra {
+        options.truncate(1);
+    }
+    harness
+        .app
+        .state
+        .models_by_provider
+        .entry("provider".into())
+        .or_default()
+        .push(kraai_runtime::Model {
+            id: "reasoner".into(),
+            name: "Reasoner".into(),
+            max_context: None,
+            options,
+        });
+    Ok(())
+}
+
+fn remembered<'a>(harness: &'a TestHarness, model: &str, id: &str) -> Option<&'a ModelOptionValue> {
+    harness
+        .app
+        .state
+        .remembered_model_options
+        .get("provider")?
+        .get(model)?
+        .get(id)
+}
+
+#[test]
+fn arrows_change_reasoning_effort_on_the_highlighted_model_only() -> color_eyre::Result<()> {
+    let mut harness = test_harness();
+    configure_optional(&mut harness)?;
+    add_effort_model(&mut harness, false)?;
+    let before = harness.app.state.selected_model_options.clone();
+
+    harness.app.handle_command("model");
+    let rendered = screen(&harness.app.state, 100, 30);
+    assert!(!rendered.contains("low  medium  high"));
+    assert!(!rendered.contains("←→ effort"));
+    key(&mut harness, KeyCode::Left);
+    assert_eq!(harness.app.state.selected_model_options, before);
+
+    key(&mut harness, KeyCode::Down);
+    let rendered = screen(&harness.app.state, 100, 30);
+    assert!(rendered.contains("Reasoner  low  medium  high"));
+    assert!(rendered.contains("tab or ↑↓ select · ←→ effort · enter use · esc close"));
+    key(&mut harness, KeyCode::Right);
+    assert_eq!(
+        remembered(&harness, "reasoner", "reasoning_effort"),
+        Some(&ModelOptionValue::Choice("low".into()))
+    );
+    key(&mut harness, KeyCode::Left);
+    assert_eq!(
+        remembered(&harness, "reasoner", "reasoning_effort"),
+        Some(&ModelOptionValue::Choice("high".into()))
+    );
+    assert_eq!(harness.app.state.mode, UiMode::Model);
+    assert_eq!(harness.app.state.sheet_index, 1);
+    assert_eq!(
+        harness.app.state.selected_model_id.as_deref(),
+        Some("model")
+    );
+    assert_eq!(harness.app.state.selected_model_options, before);
+
+    key(&mut harness, KeyCode::Up);
+    let rendered = screen(&harness.app.state, 100, 30);
+    assert!(!rendered.contains("low  medium  high"));
+    assert!(rendered.contains("Reasoner  high"));
+    assert_eq!(
+        remembered(&harness, "reasoner", "reasoning_effort"),
+        Some(&ModelOptionValue::Choice("high".into()))
+    );
+
+    key(&mut harness, KeyCode::Down);
+    key(&mut harness, KeyCode::Enter);
+    assert_eq!(harness.app.state.mode, UiMode::Chat);
+    assert_eq!(
+        harness.app.state.selected_model_id.as_deref(),
+        Some("reasoner")
+    );
+    assert_eq!(
+        value(&harness, "reasoning_effort"),
+        Some(&ModelOptionValue::Choice("high".into()))
+    );
+
+    harness.app.handle_command("model");
+    key(&mut harness, KeyCode::Right);
+    assert_eq!(
+        value(&harness, "reasoning_effort"),
+        Some(&ModelOptionValue::Choice("low".into()))
+    );
+    ctrl(&mut harness, 's');
+    assert_eq!(harness.app.state.mode, UiMode::Model);
+    assert_eq!(
+        harness.app.state.sheet_notice.as_deref(),
+        Some("Reasoner has no other settings")
+    );
+    Ok(())
+}
+
+#[test]
+fn highlighted_model_keeps_its_other_settings_beside_the_effort_choices() -> color_eyre::Result<()>
+{
+    let mut harness = test_harness();
+    configure_optional(&mut harness)?;
+    add_effort_model(&mut harness, true)?;
+    harness.app.handle_command("model");
+    key(&mut harness, KeyCode::Down);
+    assert!(
+        screen(&harness.app.state, 100, 30)
+            .contains("tab or ↑↓ select · ←→ effort · ctrl+s settings · enter use · esc close")
+    );
+    ctrl(&mut harness, 's');
+    assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
+    key(&mut harness, KeyCode::Down);
+    key(&mut harness, KeyCode::Right);
+    key(&mut harness, KeyCode::Right);
+    key(&mut harness, KeyCode::Right);
+    assert_eq!(
+        remembered(&harness, "reasoner", "thinking"),
+        Some(&ModelOptionValue::Boolean(true))
+    );
+    key(&mut harness, KeyCode::Esc);
+    assert_eq!(harness.app.state.mode, UiMode::Model);
+    key(&mut harness, KeyCode::Right);
+    key(&mut harness, KeyCode::Right);
+    let rendered = screen(&harness.app.state, 100, 30);
+    assert!(rendered.contains("Reasoner  low  medium  high  thinking"));
+    key(&mut harness, KeyCode::Up);
+    assert!(screen(&harness.app.state, 100, 30).contains("Reasoner  medium, thinking"));
     Ok(())
 }
 
@@ -388,7 +543,7 @@ fn tab_and_shift_tab_walk_the_model_list_and_the_settings() -> color_eyre::Resul
         assert_eq!(harness.app.state.sheet_index, expected);
         assert_eq!(harness.app.state.mode, UiMode::Model);
     }
-    key(&mut harness, KeyCode::Enter);
+    ctrl(&mut harness, 's');
     for (code, expected) in [
         (KeyCode::Tab, 1),
         (KeyCode::BackTab, 0),
@@ -418,7 +573,7 @@ fn each_model_remembers_its_own_settings() -> color_eyre::Result<()> {
 
     harness.app.handle_command("model");
     key(&mut harness, KeyCode::Down);
-    key(&mut harness, KeyCode::Enter);
+    ctrl(&mut harness, 's');
     type_text(&mut harness, "low");
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
@@ -443,7 +598,7 @@ fn each_model_remembers_its_own_settings() -> color_eyre::Result<()> {
     harness.app.handle_command("model");
     key(&mut harness, KeyCode::Up);
     key(&mut harness, KeyCode::Enter);
-    key(&mut harness, KeyCode::Enter);
+    assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert_eq!(
         harness.app.state.selected_model_id.as_deref(),
         Some("model")

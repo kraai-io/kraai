@@ -40,6 +40,9 @@ pub(super) struct Sheet {
     pub(super) selected: usize,
     pub(super) empty: String,
     pub(super) notice: Option<String>,
+    /// Choices share one column wide enough for the longest row. When false, each row's detail
+    /// follows straight after its own choices.
+    pub(super) align_choices: bool,
 }
 
 pub(super) fn render(
@@ -107,7 +110,7 @@ pub(super) fn render(
     let offset = window(&sheet.rows, selected_row, capacity, scroll.get());
     scroll.set(offset);
     let markers = capacity >= 3;
-    let columns = Columns::measure(&sheet.rows, width);
+    let columns = Columns::measure(sheet, width);
     for line in 0..capacity {
         let index = offset + line;
         let Some(row) = sheet.rows.get(index) else {
@@ -223,15 +226,15 @@ struct Columns {
 }
 
 impl Columns {
-    fn measure(rows: &[SheetRow], width: usize) -> Self {
+    fn measure(sheet: &Sheet, width: usize) -> Self {
         let mut columns = Self { label: 0, value: 0 };
-        for row in rows {
+        for row in &sheet.rows {
             if let SheetRow::Item(item) = row {
                 columns.label = columns.label.max(display_width(&item.label));
-                columns.value = columns
-                    .value
-                    .max(display_width(&item.value))
-                    .max(choices_width(&item.choices));
+                columns.value = columns.value.max(display_width(&item.value));
+                if sheet.align_choices {
+                    columns.value = columns.value.max(choices_width(&item.choices));
+                }
             }
         }
         columns.label = columns.label.min(width / 2);
@@ -281,14 +284,16 @@ struct ChoiceStyles {
     mark: Style,
 }
 
+/// Draws the choices from column `x` and returns how many columns they took.
 fn render_choices(
     item: &SheetItem,
     styles: &ChoiceStyles,
-    mut x: usize,
+    start: usize,
     end: usize,
     area: Rect,
     buf: &mut Buffer,
-) {
+) -> usize {
+    let mut x = start;
     let run = choice_run(&item.choices, item.chosen, end.saturating_sub(x));
     if run.start > 0 {
         put(buf, area.x, area.y, x, "…", styles.mark);
@@ -316,7 +321,9 @@ fn render_choices(
     }
     if run.end < item.choices.len() {
         put(buf, area.x, area.y, x, "…", styles.mark);
+        x += 1 + GAP;
     }
+    x.saturating_sub(start + GAP)
 }
 
 fn render_item(item: &SheetItem, selected: bool, columns: &Columns, area: Rect, buf: &mut Buffer) {
@@ -364,30 +371,33 @@ fn render_item(item: &SheetItem, selected: bool, columns: &Columns, area: Rect, 
         base,
     );
     x += columns.label + GAP;
-    if columns.value > 0 {
-        let waiting = base.fg(theme::WAITING);
-        if item.choices.is_empty() {
-            put(
-                buf,
-                area.x,
-                area.y,
-                x,
-                &fit(&item.value, end.saturating_sub(x)),
-                if item.waiting { waiting } else { base },
-            );
-        } else {
-            let styles = ChoiceStyles {
-                chosen: if selected {
-                    Style::default().bg(theme::ACCENT).fg(theme::ON_ACCENT)
-                } else {
-                    Style::default().bg(theme::RAISED)
-                },
-                other: if item.waiting { waiting } else { muted },
-                mark: muted,
-            };
-            render_choices(item, &styles, x, end, area, buf);
-        }
-        x += columns.value + GAP;
+    let waiting = base.fg(theme::WAITING);
+    let value_width = if item.choices.is_empty() {
+        put(
+            buf,
+            area.x,
+            area.y,
+            x,
+            &fit(&item.value, end.saturating_sub(x)),
+            if item.waiting { waiting } else { base },
+        );
+        columns.value
+    } else {
+        let styles = ChoiceStyles {
+            chosen: if selected {
+                Style::default().bg(theme::ACCENT).fg(theme::ON_ACCENT)
+            } else {
+                Style::default().bg(theme::RAISED)
+            },
+            other: if item.waiting { waiting } else { muted },
+            mark: muted,
+        };
+        columns
+            .value
+            .max(render_choices(item, &styles, x, end, area, buf))
+    };
+    if value_width > 0 {
+        x += value_width + GAP;
     }
     put(
         buf,
@@ -431,6 +441,7 @@ mod tests {
             selected,
             empty: String::from("Nothing here"),
             notice: None,
+            align_choices: true,
         }
     }
 

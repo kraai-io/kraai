@@ -114,7 +114,7 @@ fn reopening_the_sheet_clears_the_previous_notice_and_text() -> color_eyre::Resu
     assert_eq!(harness.app.state.mode, UiMode::Model);
     assert!(harness.app.state.sheet_notice.is_none());
     assert!(harness.app.state.sheet_query.is_empty());
-    key(&mut harness, KeyCode::Enter);
+    ctrl(&mut harness, 's');
     assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
     assert!(harness.app.state.sheet_notice.is_none());
     assert!(harness.app.state.sheet_query.is_empty());

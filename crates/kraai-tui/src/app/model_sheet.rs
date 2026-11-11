@@ -13,6 +13,13 @@ impl AppState {
             && self.selected_model_id.as_deref() == Some(model_id)
     }
 
+    /// The model the model list highlights.
+    pub(super) fn highlighted_model(&self) -> Option<(&str, &Model)> {
+        let models = self.filtered_models();
+        let index = self.sheet_index.min(models.len().checked_sub(1)?);
+        models.get(index).copied()
+    }
+
     fn model_position(&self, provider_id: &str, model_id: &str) -> Option<usize> {
         self.filtered_models()
             .iter()
@@ -73,6 +80,7 @@ impl App {
     }
 
     pub(super) fn handle_model_key_event(&mut self, key: KeyEvent) {
+        self.state.sheet_notice = None;
         if key.code == KeyCode::Backspace
             && key.modifiers.is_empty()
             && self.state.sheet_query.is_empty()
@@ -84,12 +92,12 @@ impl App {
             self.state.reset_sheet_selection();
             return;
         }
-        let models = self.state.filtered_models();
-        let len = models.len();
+        let len = self.state.filtered_models().len();
         let index = self.state.sheet_index.min(len.saturating_sub(1));
-        let selected = models
-            .get(index)
-            .map(|(provider, model)| ((*provider).to_owned(), model.id.clone()));
+        let selected = self
+            .state
+            .highlighted_model()
+            .map(|(provider, model)| (provider.to_owned(), model.id.clone(), model.name.clone()));
         match key.code {
             KeyCode::Up | KeyCode::BackTab => {
                 self.state.sheet_index = model_menu_previous_index(index, len)
@@ -97,13 +105,23 @@ impl App {
             KeyCode::Down | KeyCode::Tab => {
                 self.state.sheet_index = model_menu_next_index(index, len)
             }
-            KeyCode::Enter => {
-                if let Some((provider_id, model_id)) = selected {
-                    if self.state.model_has_settings(&provider_id, &model_id) {
+            KeyCode::Left | KeyCode::Right => {
+                if let Some((provider_id, model_id, _)) = selected {
+                    self.step_inline_option(&provider_id, &model_id, key.code == KeyCode::Right);
+                }
+            }
+            KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
+                if let Some((provider_id, model_id, name)) = selected {
+                    if self.state.model_has_more_settings(&provider_id, &model_id) {
                         self.open_model_settings(provider_id, model_id);
                     } else {
-                        self.select_model(&provider_id, &model_id);
+                        self.state.sheet_notice = Some(format!("{name} has no other settings"));
                     }
+                }
+            }
+            KeyCode::Enter => {
+                if let Some((provider_id, model_id, _)) = selected {
+                    self.select_model(&provider_id, &model_id);
                 }
             }
             _ => {}

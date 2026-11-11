@@ -1,7 +1,8 @@
 use kraai_types::ModelOptionKind;
 
 use super::super::model_options::{
-    active_options, chosen_choice, model_option_choices, option_summary, option_value_label,
+    active_options, chosen_choice, inline_option, model_option_choices, option_summary,
+    option_value_label, summarize_options,
 };
 use super::super::{AppState, UiMode};
 use super::sheet::{Sheet, SheetItem, SheetRow};
@@ -23,12 +24,18 @@ pub(super) fn hints(state: &AppState) -> Option<String> {
             Some(String::from("tab or ↑↓ select · enter run · esc dismiss"))
         }
         UiMode::Model => {
-            let opens_settings = state
-                .filtered_models()
-                .get(state.sheet_index)
-                .is_some_and(|(provider, model)| state.model_has_settings(provider, &model.id));
-            let enter = if opens_settings { "settings" } else { "use" };
-            Some(format!("tab or ↑↓ select · enter {enter} · esc close"))
+            let mut hints = vec!["tab or ↑↓ select"];
+            if let Some((provider, model)) = state.highlighted_model() {
+                let values = state.model_option_values(provider, &model.id);
+                if inline_option(model, &values).is_some() {
+                    hints.push("←→ effort");
+                }
+                if state.model_has_more_settings(provider, &model.id) {
+                    hints.push("ctrl+s settings");
+                }
+            }
+            hints.extend(["enter use", "esc close"]);
+            Some(hints.join(" · "))
         }
         UiMode::ModelSettings => {
             let target = state.model_settings.as_ref()?;
@@ -78,6 +85,7 @@ fn commands(state: &AppState) -> Option<Sheet> {
         selected: state.sheet_index,
         empty: String::new(),
         notice: None,
+        align_choices: true,
     })
 }
 
@@ -85,15 +93,29 @@ fn models(state: &AppState) -> Sheet {
     let models = state.filtered_models();
     let mut rows = Vec::with_capacity(models.len());
     let mut heading = None;
-    for (provider, model) in &models {
+    let highlighted = state.sheet_index.min(models.len().saturating_sub(1));
+    for (index, (provider, model)) in models.iter().enumerate() {
         if heading != Some(*provider) {
             heading = Some(*provider);
             rows.push(SheetRow::Heading((*provider).to_owned()));
         }
         let current = state.is_current_model(provider, &model.id);
+        let values = state.model_option_values(provider, &model.id);
+        let effort = inline_option(model, &values).filter(|_| index == highlighted);
+        let choices = effort.map(model_option_choices).unwrap_or_default();
         rows.push(SheetRow::Item(SheetItem {
             label: model.name.clone(),
-            detail: option_summary(model, &state.model_option_values(provider, &model.id)),
+            detail: match effort {
+                Some(effort) => summarize_options(
+                    active_options(model, &values).filter(|option| option.id != effort.id),
+                    &values,
+                ),
+                None => option_summary(model, &values),
+            },
+            chosen: effort.and_then(|effort| chosen_choice(&choices, values.get(&effort.id))),
+            waiting: effort
+                .is_some_and(|effort| effort.required && !values.contains_key(&effort.id)),
+            choices: choices.into_iter().map(|(_, label)| label).collect(),
             meta: model.max_context.map(compact_tokens).unwrap_or_default(),
             tag: if current {
                 String::from("current")
@@ -107,6 +129,7 @@ fn models(state: &AppState) -> Sheet {
         caption: String::from("model"),
         count: plural(models.len(), "model"),
         rows,
+        align_choices: false,
         selected: state.sheet_index,
         empty: if state.models_by_provider.values().all(Vec::is_empty) {
             String::from("No models yet. Connect a provider with /providers")
@@ -130,6 +153,7 @@ fn model_settings(state: &AppState) -> Sheet {
             selected: 0,
             empty: String::from("This model is no longer available"),
             notice: state.sheet_notice.clone(),
+            align_choices: true,
         };
     };
     let options: Vec<_> = active_options(model, &values).collect();
@@ -175,6 +199,7 @@ fn model_settings(state: &AppState) -> Sheet {
         selected: state.sheet_index,
         empty: format!("{} has no settings", model.name),
         notice: state.sheet_notice.clone(),
+        align_choices: true,
     }
 }
 
