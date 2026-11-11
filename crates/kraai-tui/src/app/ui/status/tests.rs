@@ -1,3 +1,4 @@
+use super::super::super::UiMode;
 use super::*;
 use ratatui::style::Color;
 
@@ -40,31 +41,29 @@ fn astra() -> AppState {
 }
 
 #[test]
-fn facts_start_one_column_in_and_the_turn_is_a_tag_against_the_right_edge() {
+fn the_line_starts_one_column_in_with_what_the_turn_is_doing() {
     let mut state = astra();
     assert_eq!(
         row(&state, 60).trim_end(),
         " Astra  136,000/272,000  50%  $0.0000"
     );
-    assert_eq!(colour_at(&state, 60, "Astra"), Some(Color::Reset));
+    assert_eq!(colour_at(&state, 60, "Astra"), Some(theme::MUTED));
     assert_eq!(colour_at(&state, 60, "50%"), Some(theme::MUTED));
 
     state.is_streaming = true;
     assert_eq!(
-        row(&state, 60),
-        format!(
-            " Astra  136,000/272,000  50%  $0.0000{}Working ·   ",
-            " ".repeat(11)
-        )
+        row(&state, 60).trim_end(),
+        " Working ·    Astra  136,000/272,000  50%  $0.0000"
     );
     assert_eq!(colour_at(&state, 60, "Working"), Some(theme::ACCENT));
+    assert_eq!(colour_at(&state, 60, "Astra"), Some(theme::MUTED));
     state.retry_waiting = true;
     assert_eq!(colour_at(&state, 60, "Retrying"), Some(theme::WAITING));
 
     state.is_streaming = false;
     state.retry_waiting = false;
     state.script_phase = ScriptPhase::AwaitingApproval;
-    assert!(row(&state, 60).ends_with("  Needs approval "));
+    assert!(row(&state, 60).starts_with(" Needs approval  Astra  "));
     assert_eq!(colour_at(&state, 60, "Needs"), Some(theme::WAITING));
 }
 
@@ -79,33 +78,36 @@ fn a_missing_model_takes_the_waiting_colour() {
 }
 
 #[test]
-fn a_narrow_line_gives_up_facts_before_it_cuts_the_tag() {
+fn a_narrow_line_gives_up_facts_from_the_least_important_and_then_cuts_from_the_right() {
     let mut state = astra();
     state.is_streaming = true;
     state.selected_profile_id = Some(String::from("Coding"));
     for (width, expected) in [
-        (70, " Astra  Coding  136,000/272,000  50%  $0.0000"),
-        (56, " Astra  Coding  50%  $0.0000"),
-        (40, " Astra  50%  $0.0000"),
-        (30, " Astra  50%  $0…"),
-        (14, ""),
+        (
+            70,
+            " Working ·    Astra  Coding  136,000/272,000  50%  $0.0000",
+        ),
+        (56, " Working ·    Astra  Coding  50%  $0.0000"),
+        (40, " Working ·    Astra  50%  $0.0000"),
+        (30, " Working ·    Astra  50%  $0…"),
+        (14, " Working ·"),
+        (8, " Worki…"),
     ] {
-        let line = row(&state, width);
-        assert!(line.ends_with("Working ·   "), "{line}");
-        assert_eq!(
-            line.trim_end_matches("Working ·   ").trim_end(),
-            expected,
-            "{width}"
-        );
+        assert_eq!(row(&state, width).trim_end(), expected, "{width}");
     }
-    assert_eq!(row(&state, 8), " Worki… ");
 }
 
 #[test]
-fn footer_layout_leaves_a_blank_row_above_status() {
-    for last_error in [None, Some(String::from("error"))] {
+fn footer_layout_leaves_a_row_above_status_that_holds_the_hints_of_an_open_sheet() {
+    for (last_error, mode) in [
+        (None, UiMode::Chat),
+        (Some(String::from("error")), UiMode::Chat),
+        (None, UiMode::Agent),
+        (Some(String::from("error")), UiMode::Agent),
+    ] {
         let state = AppState {
             last_error,
+            mode,
             ..AppState::default()
         };
         let area = Rect::new(0, 0, 80, 24);
@@ -120,8 +122,18 @@ fn footer_layout_leaves_a_blank_row_above_status() {
             .chunks(usize::from(footer.width))
             .map(|row| row.iter().map(|cell| cell.symbol()).collect())
             .collect();
-        assert!(rows.first().is_some_and(|row| row.trim().is_empty()));
-        assert!(rows.last().is_some_and(|row| !row.trim().is_empty()));
+        assert_eq!(
+            rows.first().map(|row| row.trim_end()),
+            Some(if state.mode == UiMode::Chat {
+                ""
+            } else {
+                " tab or ↑↓ select · enter use · esc close"
+            })
+        );
+        assert!(
+            rows.last()
+                .is_some_and(|row| row.starts_with(" No model selected  "))
+        );
         if state.last_error.is_some() {
             assert!(rows.get(1).is_some_and(|row| row.contains("/error")));
         }

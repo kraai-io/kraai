@@ -172,8 +172,11 @@ fn provider_list_waits_for_settings_then_lists_providers_and_a_connect_row() {
     assert_eq!(composer(&harness), "/providers");
     let [_, status, _] = screen_parts(&harness, 80);
     assert_eq!(
-        status.last().map(String::as_str),
-        Some(" tab or ↑↓ select · enter open · del remove · ctrl+r refresh · esc close")
+        status,
+        [
+            " tab or ↑↓ select · enter open · del remove · ctrl+r refresh · esc close",
+            " No model selected  0 tokens  $0.0000",
+        ]
     );
 
     ctrl(&mut harness, 'r');

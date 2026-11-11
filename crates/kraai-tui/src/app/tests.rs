@@ -183,7 +183,7 @@ fn sheet(harness: &TestHarness, width: u16) -> Vec<String> {
 fn hints(harness: &TestHarness) -> String {
     let [_, status, _] = screen_parts(harness, 120);
     status
-        .last()
+        .first()
         .map(|row| row.trim().to_owned())
         .unwrap_or_default()
 }

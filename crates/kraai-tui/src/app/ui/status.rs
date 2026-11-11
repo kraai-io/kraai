@@ -30,61 +30,47 @@ impl Fact {
     }
 }
 
-/// Draws the status line as one row in the grammar of the sheets: what the composer talks to
-/// on the left, and what the turn is doing as a tag against the right edge. An error waiting to
-/// be read gets a row of its own above it.
+/// Draws the footer from the bottom up: the status line, an error waiting to be read above it,
+/// and the open sheet's key hints above that, so they touch the sheet. The status line is what
+/// the turn is doing, then what the composer talks to.
 pub(super) fn render_status(state: &AppState, area: Rect, buf: &mut Buffer) {
-    if area.height == 0 {
-        return;
+    let inset = u16::from(area.width > 2);
+    let area = Rect::new(area.x + inset, area.y, area.width - 2 * inset, area.height);
+    let mut rows = (area.y..area.bottom())
+        .rev()
+        .map(|y| Rect::new(area.x, y, area.width, 1));
+    if (state.last_error.is_none() || area.height > 1)
+        && let Some(row) = rows.next()
+    {
+        render_row(facts(state), None, row, buf);
     }
-    let padding = area
-        .height
-        .saturating_sub(1 + u16::from(state.last_error.is_some()))
-        .min(1);
-    let area = Rect::new(
-        area.x + u16::from(area.width > 2),
-        area.y + padding,
-        area.width.saturating_sub(2 * u16::from(area.width > 2)),
-        area.height - padding,
-    );
     let danger = Style::default().fg(theme::DANGER);
-    if let Some(error) = &state.last_error {
+    if let Some(error) = &state.last_error
+        && let Some(row) = rows.next()
+    {
         render_row(
             vec![Fact {
                 text: error.lines().next().unwrap_or("Error").to_owned(),
                 style: danger,
                 drop: None,
             }],
-            ("/error", danger),
-            Rect::new(area.x, area.y, area.width, 1),
+            Some(("/error", danger)),
+            row,
             buf,
         );
-        if area.height < 2 {
-            return;
-        }
     }
-    let line = Rect::new(area.x, area.bottom() - 1, area.width, 1);
-    let (activity, style) = activity(state);
-    match super::sheets::hints(state) {
-        Some(hints) => {
-            let crowded =
-                display_width(&hints) + GAP + display_width(&activity) > usize::from(line.width);
-            render_row(
-                vec![Fact::new(hints, None)],
-                (if crowded { "" } else { &activity }, style),
-                line,
-                buf,
-            );
-        }
-        None => render_row(facts(state), (&activity, style), line, buf),
+    if let Some(hints) = super::sheets::hints(state)
+        && let Some(row) = rows.next()
+    {
+        render_row(vec![Fact::new(hints, None)], None, row, buf);
     }
 }
 
 /// Draws `facts` from the left edge and `tag` against the right one. The tag keeps its room and
 /// the facts give way, least important first.
-fn render_row(mut facts: Vec<Fact>, tag: (&str, Style), area: Rect, buf: &mut Buffer) {
+fn render_row(mut facts: Vec<Fact>, tag: Option<(&str, Style)>, area: Rect, buf: &mut Buffer) {
     let width = usize::from(area.width);
-    let (tag, tag_style) = tag;
+    let (tag, tag_style) = tag.unwrap_or_default();
     let tag = fit(tag, width);
     let tag_width = display_width(&tag);
     let room = if tag.is_empty() {
@@ -147,9 +133,18 @@ pub(super) fn fit(text: &str, width: usize) -> String {
     result
 }
 
-/// What the turn is doing and the colour that says how much it wants attention. Empty while
+/// What the turn is doing, in the colour that says how much it wants attention. Empty while
 /// there is nothing to report.
-fn activity(state: &AppState) -> (String, Style) {
+fn activity(state: &AppState) -> Fact {
+    let (text, style) = activity_text(state);
+    Fact {
+        text,
+        style,
+        drop: None,
+    }
+}
+
+fn activity_text(state: &AppState) -> (String, Style) {
     let accent = Style::default().fg(theme::ACCENT);
     let waiting = Style::default().fg(theme::WAITING);
     let muted = Style::default().fg(theme::MUTED);
@@ -204,8 +199,8 @@ fn whole_seconds(duration: Duration) -> String {
     format_duration(Duration::from_secs(duration.as_secs()))
 }
 
-/// The left side of the status line: the model, how it is set up, the agent, then what the
-/// session has used.
+/// The status line: what the turn is doing, the model, how it is set up, the agent, then what
+/// the session has used.
 fn facts(state: &AppState) -> Vec<Fact> {
     let (model, options) = model_facts(state);
     let (tokens, percent) = context_facts(state);
@@ -225,6 +220,7 @@ fn facts(state: &AppState) -> Vec<Fact> {
         if incomplete { " (incomplete)" } else { "" }
     );
     vec![
+        activity(state),
         model,
         Fact::new(options, Some(3)),
         Fact::new(agent_label(state), Some(1)),
@@ -257,14 +253,7 @@ fn model_facts(state: &AppState) -> (Fact, String) {
         ),
         None => (model_id.to_owned(), String::new()),
     };
-    (
-        Fact {
-            text: name,
-            style: Style::default(),
-            drop: None,
-        },
-        options,
-    )
+    (Fact::new(name, None), options)
 }
 
 fn agent_label(state: &AppState) -> String {
