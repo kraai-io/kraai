@@ -384,9 +384,9 @@ rec {
       };
       "agent-client-protocol" = rec {
         crateName = "agent-client-protocol";
-        version = "3.6.0";
+        version = "5.2.0";
         edition = "2024";
-        sha256 = "1xn4ix1jlvww5zia6vk1gpmcsqn51j4cp55rcfjd39mlmqc1zd49";
+        sha256 = "1cdc43wnb4iyizj579s6kgqarx288kl1hbwxqqp0kj3rws1rscrj";
         libName = "agent_client_protocol";
         license = "Apache-2.0";
         authors = [
@@ -401,7 +401,11 @@ rec {
             name = "agent-client-protocol-schema";
             packageId = "agent-client-protocol-schema";
             usesDefaultFeatures = false;
-            features = [ "tracing" ];
+            features = [ "unstable_proxy_chains" ];
+          }
+          {
+            name = "anyhow";
+            packageId = "anyhow";
           }
           {
             name = "futures";
@@ -449,14 +453,18 @@ rec {
           "process" = [ "dep:async-io" "dep:async-process" "dep:shell-words" "dep:rustix" "dep:windows-sys" ];
           "schemars" = [ "dep:schemars" "agent-client-protocol-schema/schemars" ];
           "stdio" = [ "dep:blocking" ];
-          "unstable" = [ "unstable_end_turn_token_usage" "unstable_llm_providers" "unstable_mcp_over_acp" "unstable_plan_operations" "unstable_session_fork" "unstable_session_system_prompt" "unstable_subagents" ];
+          "unstable" = [ "unstable_auth_status" "unstable_end_turn_token_usage" "unstable_llm_providers" "unstable_mcp_over_acp" "unstable_plan_operations" "unstable_session_archive" "unstable_session_fork" "unstable_session_options" "unstable_session_set_title" "unstable_session_status" "unstable_subagents" ];
+          "unstable_auth_status" = [ "agent-client-protocol-schema/unstable_auth_status" ];
           "unstable_end_turn_token_usage" = [ "agent-client-protocol-schema/unstable_end_turn_token_usage" ];
           "unstable_llm_providers" = [ "agent-client-protocol-schema/unstable_llm_providers" ];
           "unstable_mcp_over_acp" = [ "agent-client-protocol-schema/unstable_mcp_over_acp" ];
           "unstable_plan_operations" = [ "agent-client-protocol-schema/unstable_plan_operations" ];
           "unstable_protocol_v2" = [ "agent-client-protocol-schema/unstable_protocol_v2" ];
+          "unstable_session_archive" = [ "agent-client-protocol-schema/unstable_session_archive" ];
           "unstable_session_fork" = [ "agent-client-protocol-schema/unstable_session_fork" ];
-          "unstable_session_system_prompt" = [ "agent-client-protocol-schema/unstable_session_system_prompt" ];
+          "unstable_session_options" = [ "agent-client-protocol-schema/unstable_session_options" ];
+          "unstable_session_set_title" = [ "agent-client-protocol-schema/unstable_session_set_title" ];
+          "unstable_session_status" = [ "agent-client-protocol-schema/unstable_session_status" ];
           "unstable_subagents" = [ "agent-client-protocol-schema/unstable_subagents" ];
           "wasm_js" = [ "uuid/js" ];
         };
@@ -464,9 +472,9 @@ rec {
       };
       "agent-client-protocol-derive" = rec {
         crateName = "agent-client-protocol-derive";
-        version = "3.6.0";
+        version = "5.2.0";
         edition = "2024";
-        sha256 = "0s73ys56lwyqfzbnqm18ccqls8bxgkwcmyw401va9byknmf2abax";
+        sha256 = "1i2lkip5gnqfbxlyp2w1ak2qfsq064pfhi2is9abiahxv389z8q5";
         procMacro = true;
         libName = "agent_client_protocol_derive";
         license = "Apache-2.0";
@@ -487,9 +495,9 @@ rec {
       };
       "agent-client-protocol-schema" = rec {
         crateName = "agent-client-protocol-schema";
-        version = "1.13.0";
+        version = "1.17.0";
         edition = "2024";
-        sha256 = "1zhq9mnqmai8j842qsj13frjlm0w8y975snm2yk65l8n7giwxiy7";
+        sha256 = "0z93sh949lx0mdnwdg24r9nwni0vv085sbl7f20rqkzw76z9bm9z";
         libName = "agent_client_protocol_schema";
         license = "Apache-2.0";
         authors = [
@@ -529,9 +537,9 @@ rec {
         features = {
           "default" = [ "schemars" ];
           "schemars" = [ "dep:schemars" "serde_with/schemars_1" ];
-          "unstable" = [ "unstable_llm_providers" "unstable_mcp_over_acp" "unstable_plan_operations" "unstable_session_fork" "unstable_session_system_prompt" "unstable_subagents" "unstable_end_turn_token_usage" ];
+          "unstable" = [ "unstable_auth_status" "unstable_llm_providers" "unstable_mcp_over_acp" "unstable_plan_operations" "unstable_proxy_chains" "unstable_session_archive" "unstable_session_fork" "unstable_session_status" "unstable_session_options" "unstable_session_set_title" "unstable_subagents" "unstable_end_turn_token_usage" ];
         };
-        resolvedDefaultFeatures = [ "tracing" ];
+        resolvedDefaultFeatures = [ "unstable_proxy_chains" ];
       };
       "ahash" = rec {
         crateName = "ahash";
@@ -10606,7 +10614,7 @@ rec {
           }
           {
             name = "sse-stream";
-            packageId = "sse-stream";
+            packageId = "sse-stream 0.3.0";
           }
           {
             name = "tokio";
@@ -20774,9 +20782,9 @@ rec {
       };
       "rmcp" = rec {
         crateName = "rmcp";
-        version = "3.8.0";
+        version = "3.10.0";
         edition = "2024";
-        sha256 = "07wdhyif6shi746f929ljw26hdbcs48m005zcfh3x1w6a60ibgpq";
+        sha256 = "0qz1rfdwb571mikm7v5n4w327h4sqg0aync22r599fas9m89x55m";
         license = "Apache-2.0";
         dependencies = [
           {
@@ -20825,7 +20833,7 @@ rec {
           {
             name = "libc";
             packageId = "libc";
-            target = { target, features }: ("linux" == target."os" or null);
+            target = { target, features }: (target."unix" or false);
           }
           {
             name = "oauth2";
@@ -20860,8 +20868,12 @@ rec {
             packageId = "serde_json";
           }
           {
+            name = "sha2";
+            packageId = "sha2 0.11.1";
+          }
+          {
             name = "sse-stream";
-            packageId = "sse-stream";
+            packageId = "sse-stream 0.2.6";
             optional = true;
           }
           {
@@ -20924,13 +20936,14 @@ rec {
           "elicitation" = [ "dep:url" ];
           "local" = [ "rmcp-macros?/local" ];
           "macros" = [ "dep:rmcp-macros" "dep:pastey" ];
-          "request-state" = [ "dep:hmac" "dep:sha2" "dep:zeroize" "base64" ];
+          "request-state" = [ "dep:hmac" "dep:zeroize" "base64" ];
           "reqwest" = [ "__reqwest" "reqwest?/rustls" ];
           "reqwest-native-tls" = [ "__reqwest" "reqwest?/native-tls" ];
           "reqwest-tls-no-provider" = [ "__reqwest" "reqwest?/rustls-no-provider" ];
           "schemars" = [ "dep:schemars" ];
           "server" = [ "transport-async-rw" "schemars" "dep:pastey" "uuid" ];
           "server-side-http" = [ "uuid" "dep:rand" "dep:tokio-stream" "dep:http" "dep:http-body" "dep:http-body-util" "dep:bytes" "dep:sse-stream" "tower" "base64" ];
+          "skills-fs" = [ "server" "base64" "dep:cap-std" "dep:yaml_serde" ];
           "tower" = [ "dep:tower-service" ];
           "transport-async-rw" = [ "tokio/io-util" "tokio-util/codec" ];
           "transport-child-process" = [ "transport-async-rw" "tokio/process" "dep:process-wrap" ];
@@ -23005,7 +23018,7 @@ rec {
         features = {
           "default" = [ "std" ];
         };
-        resolvedDefaultFeatures = [ "std" ];
+        resolvedDefaultFeatures = [ "default" "std" ];
       };
       "siphasher" = rec {
         crateName = "siphasher";
@@ -23186,7 +23199,7 @@ rec {
           "bindgen" = [ "dep:bindgen" ];
         };
       };
-      "sse-stream" = rec {
+      "sse-stream 0.2.6" = rec {
         crateName = "sse-stream";
         version = "0.2.6";
         edition = "2021";
@@ -23222,6 +23235,60 @@ rec {
           "tracing" = [ "dep:tracing" ];
         };
         resolvedDefaultFeatures = [ "default" ];
+      };
+      "sse-stream 0.3.0" = rec {
+        crateName = "sse-stream";
+        version = "0.3.0";
+        edition = "2021";
+        sha256 = "1939rrd18cyzaq9pz4mlgb5f7l0hwiik5vy8kixlza7vq07id1fk";
+        libName = "sse_stream";
+        license = "MIT OR Apache-2.0";
+        authors = [
+          "4t145 <u4t145@163.com>"
+        ];
+        dependencies = [
+          {
+            name = "bytes";
+            packageId = "bytes";
+          }
+          {
+            name = "futures-util";
+            packageId = "futures-util";
+          }
+          {
+            name = "http-body";
+            packageId = "http-body";
+          }
+          {
+            name = "http-body-util";
+            packageId = "http-body-util";
+          }
+          {
+            name = "memchr";
+            packageId = "memchr";
+            optional = true;
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+          }
+          {
+            name = "simdutf8";
+            packageId = "simdutf8";
+            optional = true;
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+        ];
+        features = {
+          "default" = [ "memchr" "simdutf8" ];
+          "memchr" = [ "dep:memchr" ];
+          "simdutf8" = [ "dep:simdutf8" ];
+          "tracing" = [ "dep:tracing" ];
+        };
+        resolvedDefaultFeatures = [ "default" "memchr" "simdutf8" ];
       };
       "stable_deref_trait" = rec {
         crateName = "stable_deref_trait";
@@ -24927,9 +24994,9 @@ rec {
       };
       "toml" = rec {
         crateName = "toml";
-        version = "1.1.8+spec-1.1.0";
+        version = "1.2.1+spec-1.1.0";
         edition = "2024";
-        sha256 = "13b7kqvw7aa4x08i03d2fpima1i75v0lqxl0wrmisx6qwh09wj10";
+        sha256 = "1mrcyghs23p7g74w9lzpal3hd3jqp67ayswmy48wgniwhr8mqxfm";
         license = "MIT OR Apache-2.0";
         dependencies = [
           {
