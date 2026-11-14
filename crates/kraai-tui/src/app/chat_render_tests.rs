@@ -468,3 +468,54 @@ fn a_changed_outcome_redraws_a_script_whose_text_stayed_the_same() {
         }
     }
 }
+
+#[test]
+fn a_result_with_images_reads_its_sections_and_lists_the_images_after_them() {
+    let image = kraai_execution_types::ImageAttachment {
+        id: String::from("img"),
+        mime_type: String::from("image/png"),
+        width: 4,
+        height: 3,
+        byte_length: 10,
+    };
+    let result = message(
+        "result",
+        None,
+        ConversationItem::ScriptResult {
+            outcome: kraai_execution_types::ScriptExecutionOutcome {
+                status: kraai_execution_types::ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+            },
+            call_id: ToolCallId::new("call"),
+            output: kraai_types::MessageContent(vec![
+                kraai_types::ContentPart::Text {
+                    text: String::from(
+                        "<tool_call_result elapsed_ms=\"300\">\n<stdout>drew a chart\n</stdout>\n</tool_call_result>",
+                    ),
+                },
+                kraai_types::ContentPart::Image { image },
+            ]),
+        },
+    );
+    let state = AppState {
+        chat_history: [(MessageId::new("result"), result)].into_iter().collect(),
+        current_tip_id: Some(String::from("result")),
+        scripts_expanded: true,
+        ..AppState::default()
+    };
+    state.refresh_chat_render_cache(80);
+    let lines = rendered_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("0.3s")), "{lines:?}");
+    assert!(
+        lines.iter().any(|line| line.contains("drew a chart")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("[Image img: 4×3]")),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("tool_call_result")),
+        "{lines:?}"
+    );
+}

@@ -276,6 +276,15 @@ impl App {
         };
         match row {
             ConfigRow::ProviderId => {
+                if draft
+                    .providers
+                    .iter()
+                    .enumerate()
+                    .any(|(index, provider)| index != provider_index && provider.id == text)
+                {
+                    self.state.sheet_notice = Some(format!("A provider is already named {text}"));
+                    return;
+                }
                 let Some(provider) = draft.providers.get_mut(provider_index) else {
                     return;
                 };
@@ -376,15 +385,18 @@ impl App {
         let Some(draft) = self.state.settings_draft.as_mut() else {
             return;
         };
-        let count = draft
-            .models
-            .iter()
-            .filter(|model| model.provider_id == provider_id)
-            .count();
+        let Some(id) = (1..).map(|number| format!("model-{number}")).find(|id| {
+            !draft
+                .models
+                .iter()
+                .any(|model| model.provider_id == provider_id && model.id == *id)
+        }) else {
+            return;
+        };
         draft.models.push(ModelSettings {
             options: Vec::new(),
             remove_options: Vec::new(),
-            id: format!("model-{}", count + 1),
+            id,
             provider_id,
             values: default_values(&fields),
         });

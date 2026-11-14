@@ -120,7 +120,7 @@ impl AppState {
                             match &message.content {
                                 ConversationItem::ScriptResult {
                                     outcome, output, ..
-                                } => Some((*outcome, output.display_text())),
+                                } => Some((*outcome, output.text_only())),
                                 _ => None,
                             }
                         })),
@@ -134,7 +134,8 @@ impl AppState {
             } = &msg.content
             {
                 fingerprint = message_fingerprint(msg);
-                let output = output.display_text();
+                let images = output.image_labels().collect::<Vec<_>>().join("\n");
+                let output = output.text_only();
                 let source = sources.get(call_id.as_str()).copied();
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 (fingerprint, source).hash(&mut hasher);
@@ -142,7 +143,7 @@ impl AppState {
                 match prior_entries.remove(&key) {
                     Some(entry) if entry.fingerprint == fingerprint => entry.lines,
                     _ => Arc::new(ChatHistory::build_script_lines(
-                        &super::executions::script_view(*outcome, &output, source),
+                        &super::executions::script_view(*outcome, &output, &images, source),
                         width,
                     )),
                 }

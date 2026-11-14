@@ -310,9 +310,15 @@ fn window(rows: &[SheetRow], selected: Option<usize>, capacity: usize, scroll: u
         .filter(|above| matches!(rows.get(*above), Some(SheetRow::Heading(_))))
         .unwrap_or(selected);
     let first = scroll + usize::from(scroll > 0);
-    let last = scroll + capacity - 1 - usize::from(scroll < max_scroll);
+    let last_shown = |scroll: usize| scroll + capacity - 1 - usize::from(scroll < max_scroll);
+    let last = last_shown(scroll);
     if focus_top < first {
-        focus_top.saturating_sub(1)
+        let with_heading = focus_top.saturating_sub(1);
+        if selected <= last_shown(with_heading) {
+            with_heading
+        } else {
+            selected.saturating_sub(1).min(max_scroll)
+        }
     } else if selected > last {
         (selected + 2 - capacity).min(max_scroll)
     } else {
@@ -760,5 +766,14 @@ mod tests {
         assert_eq!(window(&rows, Some(10), 4, 0), 7);
         assert_eq!(window(&rows, Some(5), 2, 0), 4);
         assert_eq!(window(&rows, None, 4, 99), 7);
+    }
+
+    #[test]
+    fn three_rows_keep_the_selection_when_its_heading_does_not_fit_with_it() {
+        let mut rows = vec![SheetRow::Heading(String::from("a")), item("a1")];
+        rows.push(SheetRow::Heading(String::from("b")));
+        rows.extend((0..4).map(|index| item(&format!("b{index}"))));
+        assert_eq!(window(&rows, Some(3), 3, 4), 2);
+        assert_eq!(window(&rows, Some(3), 3, 2), 2);
     }
 }

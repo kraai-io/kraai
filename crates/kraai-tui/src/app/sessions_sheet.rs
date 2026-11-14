@@ -50,19 +50,23 @@ impl App {
         self.request(RuntimeRequest::ListSessions);
     }
 
-    /// Replaces the known sessions and keeps the session list on the session it highlighted.
+    /// Replaces the known sessions and keeps the session list on the session it highlighted. A
+    /// delete waiting to be confirmed is dropped when that session leaves the list.
     pub(super) fn replace_sessions(&mut self, sessions: Vec<Session>) {
         let highlighted = (self.state.mode == UiMode::Sessions)
             .then(|| self.state.highlighted_session())
             .flatten();
         self.state.sessions = sessions;
-        if let Some(index) = highlighted.and_then(|id| {
+        if let Some(index) = highlighted.as_ref().and_then(|id| {
             self.state
                 .listed_sessions()
                 .iter()
-                .position(|session| session.id == id)
+                .position(|session| session.id == *id)
         }) {
             self.state.sheet_index = index + usize::from(self.state.offers_new_chat());
+        }
+        if self.state.highlighted_session() != highlighted {
+            self.state.sheet_armed = false;
         }
     }
 

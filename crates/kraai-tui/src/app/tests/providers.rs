@@ -650,13 +650,13 @@ fn toggles_and_the_type_step_in_place_and_models_are_added_and_removed() {
             .iter()
             .map(|model| (model.id.as_str(), model.provider_id.as_str()))
             .collect::<Vec<_>>(),
-        [("small", "local"), ("model-2", "local")]
+        [("small", "local"), ("model-1", "local")]
     );
     assert_eq!(
         sheet(&harness, 70).get(12..).unwrap_or_default(),
         [
-            String::from("  model-2"),
-            String::from("▌ ID              model-2"),
+            String::from("  model-1"),
+            String::from("▌ ID              model-1"),
             String::from("  Context window  unset"),
         ]
     );
@@ -669,7 +669,7 @@ fn toggles_and_the_type_step_in_place_and_models_are_added_and_removed() {
     assert_eq!(
         sheet(&harness, 70).get(13),
         Some(&spaced(
-            "▌ ID              model-2",
+            "▌ ID              model-1",
             "del again to remove",
             70
         ))
@@ -686,7 +686,7 @@ fn toggles_and_the_type_step_in_place_and_models_are_added_and_removed() {
     assert_eq!(document.models.len(), 1);
     assert_eq!(
         sheet(&harness, 70).last().map(String::as_str),
-        Some("  Removed model model-2")
+        Some("  Removed model model-1")
     );
 }
 
@@ -725,4 +725,81 @@ fn a_refused_save_marks_the_row_and_says_why_when_it_is_highlighted() {
         sheet(&harness, 70).get(3).map(String::as_str),
         Some("▌ Edit configuration")
     );
+}
+
+fn highlight(harness: &mut TestHarness, row: &crate::app::provider_config::ConfigRow) {
+    if let Some(index) = harness
+        .app
+        .state
+        .config_rows()
+        .iter()
+        .position(|candidate| candidate == row)
+    {
+        harness.app.state.sheet_index = index;
+    }
+}
+
+fn draft_ids(harness: &TestHarness) -> (Vec<String>, Vec<(String, String)>) {
+    let draft = harness.app.state.settings_draft.clone().unwrap_or_default();
+    (
+        draft
+            .providers
+            .into_iter()
+            .map(|provider| provider.id)
+            .collect(),
+        draft
+            .models
+            .into_iter()
+            .map(|model| (model.id, model.provider_id))
+            .collect(),
+    )
+}
+
+#[test]
+fn a_provider_cannot_take_the_id_of_another_provider() {
+    use crate::app::provider_config::ConfigRow;
+    let mut harness = test_harness();
+    open_config(&mut harness);
+    highlight(&mut harness, &ConfigRow::ProviderId);
+    key(&mut harness, KeyCode::Enter);
+    harness.app.state.sheet_query = String::from("codex");
+    key(&mut harness, KeyCode::Enter);
+    assert_eq!(
+        harness.app.state.sheet_notice.as_deref(),
+        Some("A provider is already named codex")
+    );
+    assert!(saved(&harness).is_empty());
+    assert_eq!(
+        draft_ids(&harness),
+        (
+            vec![String::from("codex"), String::from("local")],
+            vec![(String::from("small"), String::from("local"))]
+        )
+    );
+}
+
+#[test]
+fn a_new_model_takes_the_first_id_its_provider_has_free() {
+    use crate::app::provider_config::ConfigRow;
+    let mut harness = test_harness();
+    open_config(&mut harness);
+    let model_ids = |harness: &TestHarness| {
+        draft_ids(harness)
+            .1
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
+    };
+    for _ in 0..2 {
+        highlight(&mut harness, &ConfigRow::AddModel);
+        key(&mut harness, KeyCode::Enter);
+    }
+    assert_eq!(model_ids(&harness), ["small", "model-1", "model-2"]);
+    highlight(&mut harness, &ConfigRow::ModelId(1));
+    key(&mut harness, KeyCode::Delete);
+    key(&mut harness, KeyCode::Delete);
+    assert_eq!(model_ids(&harness), ["small", "model-2"]);
+    highlight(&mut harness, &ConfigRow::AddModel);
+    key(&mut harness, KeyCode::Enter);
+    assert_eq!(model_ids(&harness), ["small", "model-2", "model-1"]);
 }

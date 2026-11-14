@@ -61,10 +61,12 @@ fn section_label(section: &ToolCallResultSection<'_>) -> String {
     parts.join(" · ")
 }
 
-/// What the expanded chat shows for one script result.
+/// What the expanded chat shows for one script result: the sections of its `output`, then the
+/// `images` it returned, one label a line.
 pub(super) fn script_view<'a>(
     outcome: ScriptExecutionOutcome,
     output: &'a str,
+    images: &'a str,
     source: Option<&'a str>,
 ) -> ScriptView<'a> {
     let parsed = parse_tool_call_result(output);
@@ -88,6 +90,10 @@ pub(super) fn script_view<'a>(
         source,
         sections: sections
             .into_iter()
+            .chain([ScriptSection {
+                label: String::from("images"),
+                text: images,
+            }])
             .filter(|section: &ScriptSection<'_>| !section.text.trim().is_empty())
             .collect(),
     }
@@ -179,11 +185,16 @@ mod tests {
             group_summary([(failed, text)].into_iter()),
             "1 script · 1 failed · 0.1s"
         );
-        let view = script_view(failed, text, None);
+        let view = script_view(failed, text, "", None);
         assert!(view.mark == ScriptMark::Failed);
         assert_eq!(view.summary, "runtime error · 0.1s");
 
-        let view = script_view(PASSED, "<tool_call_result status=\"runtime-error\">", None);
+        let view = script_view(
+            PASSED,
+            "<tool_call_result status=\"runtime-error\">",
+            "",
+            None,
+        );
         assert!(view.mark == ScriptMark::Passed);
         assert_eq!(view.summary, "exit 0");
     }
@@ -239,6 +250,7 @@ mod tests {
             let view = script_view(
                 outcome(status, exit_code),
                 "<tool_call_result elapsed_ms=\"500\"></tool_call_result>",
+                "",
                 None,
             );
             assert_eq!(view.summary, expected);
@@ -263,6 +275,7 @@ mod tests {
         let view = script_view(
             outcome(ScriptExecutionStatus::Completed, Some(2)),
             output,
+            "",
             Some("ls"),
         );
         assert!(view.mark == ScriptMark::Failed);
@@ -288,7 +301,7 @@ mod tests {
         let truncated = "<tool_call_result status=\"completed\" exit_code=\"0\">\n\
 <stdout byte_count=\"40000\" truncated=\"true\">head</stdout>\n\
 </tool_call_result>";
-        let view = script_view(PASSED, truncated, None);
+        let view = script_view(PASSED, truncated, "", None);
         assert!(view.mark == ScriptMark::Passed);
         assert_eq!(
             view.sections.first().map(|section| section.label.as_str()),
@@ -298,7 +311,7 @@ mod tests {
 
     #[test]
     fn view_keeps_text_it_cannot_read_and_drops_blank_output() {
-        let view = script_view(PASSED, "not a result", None);
+        let view = script_view(PASSED, "not a result", "", None);
         assert_eq!(view.summary, "exit 0");
         assert_eq!(view.sections.len(), 1);
         assert_eq!(
@@ -309,6 +322,7 @@ mod tests {
         let cancelled = script_view(
             outcome(ScriptExecutionStatus::Cancelled, None),
             "<tool_call_result status=\"cancelled\">\n</tool_call_result>",
+            "",
             None,
         );
         assert!(cancelled.mark == ScriptMark::Cancelled);

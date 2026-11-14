@@ -292,3 +292,31 @@ fn a_refreshed_session_list_keeps_the_highlight_on_the_same_session() {
         Some(&spaced("▌ Other work  ~/elsewhere", "running   0s", 60))
     );
 }
+
+#[test]
+fn a_refresh_that_drops_the_session_waiting_to_be_deleted_drops_the_delete() {
+    let mut harness = test_harness();
+    with_sessions(&mut harness);
+    harness.app.handle_command("sessions");
+    harness.drain_requests();
+    key(&mut harness, KeyCode::Down);
+    key(&mut harness, KeyCode::Delete);
+    assert!(harness.app.state.sheet_armed);
+
+    let sessions = harness.app.state.sessions.clone();
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Sessions(Ok(sessions.clone())));
+    assert!(harness.app.state.sheet_armed);
+
+    let without_fetch = sessions
+        .into_iter()
+        .filter(|session| session.id.as_str() != "fetch")
+        .collect();
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Sessions(Ok(without_fetch)));
+    assert!(!harness.app.state.sheet_armed);
+    key(&mut harness, KeyCode::Delete);
+    assert!(harness.drain_requests().is_empty());
+}
