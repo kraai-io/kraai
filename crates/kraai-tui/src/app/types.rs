@@ -16,6 +16,13 @@ pub struct StartupOptions {
     pub message: Option<String>,
 }
 
+/// A script the runtime started and has not answered yet.
+pub(super) struct RunningScript {
+    pub(super) started: std::time::Instant,
+    pub(super) timeout: std::time::Duration,
+    pub(super) tail: Vec<kraai_runtime::ScriptOutputLine>,
+}
+
 pub(super) enum SubmissionSource {
     Composer { queued: bool },
     Pending,

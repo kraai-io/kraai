@@ -172,8 +172,11 @@ fn provider_list_waits_for_settings_then_lists_providers_and_a_connect_row() {
     assert_eq!(composer(&harness), "/providers");
     let [_, status, _] = screen_parts(&harness, 80);
     assert_eq!(
-        status.last().map(String::as_str),
-        Some(" tab or ↑↓ select · enter open · del remove · ctrl+r refresh · esc close")
+        status,
+        [
+            " tab or ↑↓ select · enter open · del remove · ctrl+r refresh · esc close",
+            " No model selected  0 tokens  $0.0000",
+        ]
     );
 
     ctrl(&mut harness, 'r');
@@ -379,7 +382,7 @@ fn connecting_lists_the_kinds_of_provider_and_opens_the_new_one() {
     assert_eq!(harness.app.state.sheet_index, 2);
 
     key(&mut harness, KeyCode::Enter);
-    type_text(&mut harness, "compatible");
+    type_text(&mut harness, "chat");
     assert_eq!(
         sheet(&harness, 70).get(1..).unwrap_or_default(),
         [

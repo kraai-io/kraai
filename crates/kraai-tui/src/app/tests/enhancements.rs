@@ -1,19 +1,7 @@
 use super::*;
 use crate::app::{KeyCode, KeyEvent, KeyModifiers, UiMode};
 use kraai_types::{ScriptCall, SessionId};
-use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
-
-fn screen(state: &AppState, width: u16, height: u16) -> String {
-    let area = Rect::new(0, 0, width, height);
-    let mut buffer = Buffer::empty(area);
-    state.render(area, &mut buffer);
-    buffer
-        .content()
-        .chunks(width.max(1) as usize)
-        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+use ratatui::layout::Rect;
 
 #[test]
 fn approval_scroll_reaches_end_and_moves_back_with_metadata_pinned() {
@@ -282,10 +270,6 @@ fn model_search_preserves_order_unicode_and_cross_field_matches() {
         Some("Alpha")
     );
     assert_eq!(harness.app.state.selected_model_id.as_deref(), Some("Z-β"));
-    assert_eq!(
-        harness.app.state.status,
-        "Selected model: Alpha / ÉLAN 模型"
-    );
     assert_eq!(harness.app.state.mode, UiMode::Chat);
 }
 
@@ -397,12 +381,10 @@ final",
     );
     assert!(harness.drain_requests().is_empty());
     harness.app.open_error();
-    harness.app.state.status = String::from("Another notice");
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
     assert!(harness.app.state.last_error.is_none());
-    assert_eq!(harness.app.state.status, "Another notice");
 }
 
 #[test]
@@ -493,19 +475,28 @@ fn animation_and_copy_feedback_expire_without_idle_redraws() {
     assert!(
         !harness
             .app
-            .advance_statusline_animation(now + std::time::Duration::from_millis(119))
+            .advance_statusline_animation(now + std::time::Duration::from_millis(300))
+    );
+    harness.app.state.palette.muted = Some(ratatui::style::Color::Rgb(88, 82, 115));
+    harness.app.state.breath_origin = now;
+    assert!(
+        harness
+            .app
+            .advance_statusline_animation(now + std::time::Duration::from_millis(300))
+    );
+    assert!(
+        !harness
+            .app
+            .advance_statusline_animation(now + std::time::Duration::from_millis(349))
     );
     assert!(
         harness
             .app
-            .advance_statusline_animation(now + std::time::Duration::from_millis(120))
+            .advance_statusline_animation(now + std::time::Duration::from_millis(600))
     );
-    assert_eq!(harness.app.state.statusline_animation_frame, 1);
-    for frame in crate::app::ui::STATUSLINE_STREAMING_FRAMES {
-        assert_eq!(crate::components::display_width(frame), 3);
-    }
+    harness.app.state.palette.muted = None;
     harness.app.state.is_streaming = false;
-    assert!(harness.app.advance_statusline_animation(now));
+    assert!(!harness.app.advance_statusline_animation(now));
     harness.app.state.feedback.completion_until = Some(now + std::time::Duration::from_secs(1));
     harness
         .app
@@ -570,7 +561,7 @@ fn only_newly_finished_turns_show_completion_feedback() -> color_eyre::Result<()
     assert!(
         completed
             .lines()
-            .any(|line| line.starts_with(" Finished in 2s"))
+            .any(|line| line.starts_with(" Finished in 2s  "))
     );
     assert!(!completed.contains("✓"));
     harness.app.state.feedback.completion_until = None;

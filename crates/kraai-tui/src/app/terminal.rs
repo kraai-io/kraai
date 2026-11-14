@@ -294,7 +294,6 @@ impl App {
 
         self.clear_chat_transient_state();
         self.state.ctrl_c_exit_armed = true;
-        self.state.status = String::from("Cleared input. Press Ctrl+C again to exit");
     }
 
     pub(super) fn clear_chat_transient_state(&mut self) {

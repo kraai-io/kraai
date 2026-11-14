@@ -8,7 +8,7 @@ fn configure_refresh(harness: &mut TestHarness) -> color_eyre::Result<()> {
 fn switch_to_other_session(harness: &mut TestHarness) {
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("other")), "other session");
+        .reset_chat_session(Some(SessionId::new("other")));
     harness.app.state.selected_model_options.clear();
 }
 

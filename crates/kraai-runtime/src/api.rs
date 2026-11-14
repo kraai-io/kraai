@@ -216,6 +216,14 @@ impl Session {
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ScriptOutputLine {
+    pub stream: kraai_execution_types::ScriptOutputStream,
+    pub text: String,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingScriptInfo {
     pub execution_id: String,
@@ -320,6 +328,15 @@ pub enum Event {
     ScriptStarted {
         session_id: SessionId,
         call_id: String,
+        /// How long the script may run before it is stopped.
+        timeout_millis: u64,
+    },
+    /// The last lines a running script printed. Sent at most ten times a second while output
+    /// arrives; each one replaces the one before.
+    ScriptOutputTail {
+        session_id: SessionId,
+        call_id: String,
+        lines: Vec<ScriptOutputLine>,
     },
     RequestUsageUpdated {
         session_id: SessionId,
@@ -459,6 +476,7 @@ impl Event {
             Self::TurnCompleted { session_id }
             | Self::ScriptPrepared { session_id, .. }
             | Self::ScriptStarted { session_id, .. }
+            | Self::ScriptOutputTail { session_id, .. }
             | Self::RequestUsageUpdated { session_id, .. }
             | Self::TurnTimingChanged { session_id, .. }
             | Self::SessionError { session_id, .. }

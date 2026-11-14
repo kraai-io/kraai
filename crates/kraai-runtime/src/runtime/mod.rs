@@ -11,6 +11,7 @@ mod nushell_host;
 mod request_usage;
 mod script_environment;
 mod script_execution;
+mod script_output_tail;
 mod script_recovery;
 mod session;
 mod session_maintenance;

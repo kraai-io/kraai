@@ -55,15 +55,6 @@ pub(super) fn configure_optional(harness: &mut TestHarness) -> color_eyre::Resul
     Ok(())
 }
 
-fn screen(state: &AppState, width: u16, height: u16) -> String {
-    use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
-
-    let area = Rect::new(0, 0, width, height);
-    let mut buffer = Buffer::empty(area);
-    state.render(area, &mut buffer);
-    buffer.content.iter().map(|cell| cell.symbol()).collect()
-}
-
 fn active_ids(harness: &TestHarness) -> Vec<String> {
     harness
         .app
@@ -121,7 +112,6 @@ fn arrows_step_through_unset_and_every_choice_and_apply_at_once() -> color_eyre:
     assert!(screen(&harness.app.state, 100, 30).contains("Effort    unset  Low  High"));
     key(&mut harness, KeyCode::Right);
     assert_eq!(value(&harness, "effort"), None);
-    assert_eq!(harness.app.state.status, "Unset effort");
     key(&mut harness, KeyCode::Right);
     assert_eq!(
         value(&harness, "effort"),
@@ -157,7 +147,6 @@ fn delete_unsets_the_highlighted_setting() -> color_eyre::Result<()> {
         open_settings(&mut harness, id)?;
         key(&mut harness, KeyCode::Delete);
         assert_eq!(value(&harness, id), None);
-        assert_eq!(harness.app.state.status, format!("Unset {id}"));
         assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
     }
     Ok(())
@@ -241,7 +230,7 @@ fn off_and_zero_remain_distinct_from_unset() -> color_eyre::Result<()> {
         Some(&ModelOptionValue::Integer(0))
     );
     key(&mut harness, KeyCode::Enter);
-    assert!(screen(&harness.app.state, 100, 30).contains("Model (High, thinking, budget 0)"));
+    assert!(screen(&harness.app.state, 100, 30).contains("Model  High, thinking, budget 0"));
 
     open_settings(&mut harness, "thinking")?;
     type_text(&mut harness, "off");
@@ -295,7 +284,7 @@ fn backspace_and_escape_step_back_through_the_model_list() -> color_eyre::Result
     let mut harness = test_harness();
     configure_optional(&mut harness)?;
     open_settings(&mut harness, "effort")?;
-    assert!(screen(&harness.app.state, 100, 30).contains("/model › Model › "));
+    assert_eq!(composer(&harness), "/model › Model ›");
     key(&mut harness, KeyCode::Backspace);
     assert_eq!(harness.app.state.mode, UiMode::Model);
     ctrl(&mut harness, 's');
@@ -524,9 +513,8 @@ fn a_highlighted_model_starts_on_medium_and_models_never_highlighted_stay_unset(
     fresh.name = "Fresh".into();
     models.push(fresh);
     let row = |harness: &TestHarness, name: &str| {
-        let text: Vec<char> = screen(&harness.app.state, 100, 30).chars().collect();
-        text.chunks(100)
-            .map(|row| row.iter().collect::<String>())
+        screen_rows(&harness.app.state, 100, 30)
+            .into_iter()
             .find(|row| row.contains(name))
             .unwrap_or_default()
             .trim()
@@ -732,8 +720,9 @@ fn missing_options_block_submission_without_selecting_defaults() -> color_eyre::
     harness.app.submit_message("Hello".into());
     assert!(harness.drain_requests().is_empty());
     assert!(harness.app.state.selected_model_options.is_empty());
-    assert!(harness.app.state.status.contains("effort"));
-    assert!(harness.app.state.status.contains("thinking"));
+    let error = harness.app.state.last_error.clone().unwrap_or_default();
+    assert!(error.contains("effort"));
+    assert!(error.contains("thinking"));
     Ok(())
 }
 
@@ -801,7 +790,7 @@ fn session_restore_does_not_overwrite_later_option_edits() -> color_eyre::Result
     configure(&mut harness)?;
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "loaded");
+        .reset_chat_session(Some(SessionId::new("session")));
     let mut snapshot = session_snapshot(None);
     let selected = std::collections::BTreeMap::from([(
         "effort".into(),

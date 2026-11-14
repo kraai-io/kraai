@@ -63,10 +63,10 @@ fn lag_recovery_restores_costs_from_background_sessions() {
     harness.app.state.launched_at = 100;
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "");
+        .reset_chat_session(Some(SessionId::new("session")));
     harness
         .app
-        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged(3));
+        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged);
     harness.drain_requests();
 
     let mut background = session_snapshot_at(10, None);
@@ -106,7 +106,7 @@ fn lag_recovery_restores_costs_from_background_sessions() {
     );
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("background")), "");
+        .reset_chat_session(Some(SessionId::new("background")));
     assert_eq!(harness.app.state.session_cost.unknown, 0);
 }
 
@@ -115,10 +115,10 @@ fn quitting_during_lag_recovery_marks_costs_incomplete() {
     let mut harness = test_harness();
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "");
+        .reset_chat_session(Some(SessionId::new("session")));
     harness
         .app
-        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged(3));
+        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged);
     harness.app.handle_ctrl_c();
     harness.app.handle_ctrl_c();
     assert!(harness.app.state.exit);
@@ -136,7 +136,7 @@ fn successful_snapshots_clear_incomplete_costs_after_lag() {
     let mut harness = test_harness();
     harness
         .app
-        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged(3));
+        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged);
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Sessions(Ok(vec![
@@ -160,7 +160,7 @@ fn usage_events_include_inflight_and_background_requests_before_exit() {
     harness.app.state.launched_at = 100;
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "");
+        .reset_chat_session(Some(SessionId::new("session")));
     for session in ["session", "background"] {
         harness
             .app
@@ -182,7 +182,7 @@ fn usage_events_include_inflight_and_background_requests_before_exit() {
     );
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("background")), "");
+        .reset_chat_session(Some(SessionId::new("background")));
     assert_eq!(harness.app.state.session_cost.unknown, 0);
 }
 
@@ -192,7 +192,7 @@ fn stale_and_duplicate_snapshots_do_not_erase_live_costs() {
     harness.app.state.launched_at = 100;
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "");
+        .reset_chat_session(Some(SessionId::new("session")));
     let pending = pending_request("request");
     let mut completed = pending.clone();
     completed.unpriced_attempts = 1;

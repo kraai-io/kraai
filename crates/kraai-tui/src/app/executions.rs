@@ -3,8 +3,8 @@ use std::time::Duration;
 use kraai_execution_types::{ScriptExecutionOutcome, ScriptExecutionStatus};
 use kraai_script_protocol::{ParsedToolCallResult, ToolCallResultSection, parse_tool_call_result};
 
-use super::duration::format_duration;
 use crate::components::{ScriptMark, ScriptSection, ScriptView};
+use crate::duration::format_duration;
 
 fn mark(outcome: ScriptExecutionOutcome) -> ScriptMark {
     if outcome.succeeded() {
