@@ -103,16 +103,6 @@ pub(crate) fn default_engine() -> EngineState {
     ))
 }
 
-fn apply_variable_deletions(engine_state: &mut EngineState, stack: &mut Stack) {
-    for var_id in stack.deletions.drain(..) {
-        if let Some(active_id) = engine_state.scope.active_overlays.last()
-            && let Some((_, overlay)) = engine_state.scope.overlays.get_mut(active_id.get())
-        {
-            overlay.vars.retain(|_, id| *id != var_id);
-        }
-    }
-}
-
 fn configure_startup_paths(
     engine_state: &mut EngineState,
     startup: NushellStartup,

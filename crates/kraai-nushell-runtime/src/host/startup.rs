@@ -75,7 +75,7 @@ fn evaluate_startup(
             &block,
             PipelineData::empty(),
         )?;
-        super::apply_variable_deletions(engine_state, stack);
+        engine_state.merge_deletions(stack);
         let no_newline = matches!(&pipeline.body, PipelineData::ByteStream(..));
         pipeline
             .body

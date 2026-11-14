@@ -92,7 +92,7 @@ fn evaluate_source(
     for block in blocks {
         let pipeline =
             nu_engine::eval_block::<WithoutDebug>(engine, stack, &block, PipelineData::empty())?;
-        super::apply_variable_deletions(engine, stack);
+        engine.merge_deletions(stack);
         super::output::emit(sink, engine, stack, pipeline.body)?;
         if nu_experimental::PIPE_FAIL.get() {
             nu_protocol::process::check_exit_status_future(pipeline.exit)?;
