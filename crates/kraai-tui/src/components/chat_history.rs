@@ -258,11 +258,7 @@ impl<'a> ChatHistory<'a> {
                     )
                 }
                 kraai_types::AssistantItem::ScriptCall(ScriptCall { call_id, input, .. }) => {
-                    Self::build_script_card_lines(
-                        &normalize_terminal_text(input),
-                        &card(call_id.as_str()),
-                        width,
-                    )
+                    Self::build_script_card_lines(input, &card(call_id.as_str()), width)
                 }
             };
             if block.is_empty() {

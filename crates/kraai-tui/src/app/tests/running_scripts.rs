@@ -215,3 +215,40 @@ fn a_result_a_finished_turn_or_another_session_ends_the_running_card() {
         .reset_session_state(Some(SessionId::new("another")));
     assert!(harness.app.state.running_scripts.is_empty());
 }
+
+#[test]
+fn a_finished_turn_redraws_the_cards_it_stops() {
+    let mut harness = session_harness();
+    started(&mut harness, "session", "call");
+    let epoch = harness.app.state.cards_epoch;
+    harness.app.handle_runtime_event(Event::TurnCompleted {
+        session_id: SessionId::new("session"),
+    });
+    assert!(harness.app.state.running_scripts.is_empty());
+    assert_ne!(harness.app.state.cards_epoch, epoch);
+}
+
+#[test]
+fn a_snapshot_that_runs_no_script_drops_the_running_cards() {
+    for (activity, keeps) in [
+        (kraai_runtime::SessionActivity::ExecutingScript, true),
+        (kraai_runtime::SessionActivity::Idle, false),
+    ] {
+        let mut harness = session_harness();
+        started(&mut harness, "session", "call");
+        let mut snapshot = super::session_snapshot_at(1, None);
+        snapshot.activity = activity;
+        harness
+            .app
+            .handle_runtime_response(super::RuntimeResponse::SessionSnapshot {
+                model_save_id: 0,
+                session_id: SessionId::new("session"),
+                result: Box::new(Ok(snapshot)),
+            });
+        assert_eq!(
+            harness.app.state.running_scripts.contains_key("call"),
+            keeps,
+            "{activity:?}"
+        );
+    }
+}

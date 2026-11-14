@@ -336,3 +336,16 @@ fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
     assert_eq!(harness.app.state.input, "hello");
     assert!(harness.app.state.pending_messages.is_empty());
 }
+
+#[test]
+fn a_decision_clears_the_error_a_refused_one_left() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
+    harness.app.state.pending_script = Some(pending_script("execution"));
+    harness.app.enter_script_decision_phase();
+    harness
+        .app
+        .set_error(String::from("Failed to approve script"));
+    harness.app.confirm_current_script_action();
+    assert!(harness.app.state.last_error.is_none());
+}

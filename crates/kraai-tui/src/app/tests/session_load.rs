@@ -94,7 +94,7 @@ fn current_load_success_still_opens_and_synchronizes_the_session() {
 #[test]
 fn current_load_failure_keeps_existing_error_messages() {
     for (result, error) in [
-        (Ok(false), None),
+        (Ok(false), Some("Session not found")),
         (
             Err(kraai_runtime::RuntimeError::unavailable("load failed")),
             Some("Failed to load session: load failed"),

@@ -33,11 +33,7 @@ impl App {
                         .map(|error| format!("Copy failed: {error}"));
                 }
             }
-            KeyCode::Char('d') if key.modifiers.is_empty() => {
-                self.state.last_error = None;
-                self.state.error_open = false;
-                self.state.error_scroll.set(0);
-            }
+            KeyCode::Char('d') if key.modifiers.is_empty() => self.clear_error(),
             _ => {}
         }
         true

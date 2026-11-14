@@ -28,7 +28,7 @@ impl App {
         match event {
             Event::TurnCompleted { session_id } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
-                    self.state.running_scripts.clear();
+                    self.clear_running_scripts();
                 }
                 self.request(RuntimeRequest::GetSessionSnapshot { session_id });
             }

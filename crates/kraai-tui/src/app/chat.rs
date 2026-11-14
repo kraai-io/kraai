@@ -10,6 +10,12 @@ impl App {
         self.state.turn_cancelled = false;
     }
 
+    pub(super) fn clear_error(&mut self) {
+        self.state.last_error = None;
+        self.state.error_open = false;
+        self.state.error_scroll.set(0);
+    }
+
     pub(super) fn copy_text_to_clipboard(
         &mut self,
         text: &str,
@@ -249,6 +255,7 @@ impl App {
             }
         };
         if self.request(request) == RuntimeRequestDelivery::Delivered {
+            self.clear_error();
             self.state
                 .submitted_script_decisions
                 .entry(session_id)
@@ -304,9 +311,7 @@ impl App {
         self.state.last_session_model = None;
         self.restore_pending_session_model();
         self.state.current_tip_id = None;
-        self.state.last_error = None;
-        self.state.error_open = false;
-        self.state.error_scroll.set(0);
+        self.clear_error();
         self.state.chat_history.clear();
         self.state.approval_scroll.set(0);
         self.state.approval_expanded = false;
@@ -403,9 +408,7 @@ impl App {
         }
         let display_text = message.display_text().into_owned();
 
-        self.state.last_error = None;
-        self.state.error_open = false;
-        self.state.error_scroll.set(0);
+        self.clear_error();
         let content_key = display_text.trim().to_string();
         let visible_count = self.visible_user_message_count(&content_key);
         let optimistic_same_count = self
@@ -498,6 +501,14 @@ impl App {
 
     pub(super) fn invalidate_script_cards(&mut self) {
         self.state.cards_epoch = self.state.cards_epoch.wrapping_add(1);
+    }
+
+    /// Forgets every running script and redraws the cards that showed one.
+    pub(super) fn clear_running_scripts(&mut self) {
+        if !self.state.running_scripts.is_empty() {
+            self.state.running_scripts.clear();
+            self.invalidate_script_cards();
+        }
     }
 
     pub(super) fn reconcile_optimistic_messages(&mut self) {

@@ -360,6 +360,12 @@ impl App {
                         self.apply_agent_profiles_state(snapshot.profiles);
                         self.state.is_streaming =
                             matches!(snapshot.activity, kraai_runtime::SessionActivity::Streaming);
+                        if !matches!(
+                            snapshot.activity,
+                            kraai_runtime::SessionActivity::ExecutingScript
+                        ) {
+                            self.clear_running_scripts();
+                        }
                         self.state.script_phase = match snapshot.activity {
                             kraai_runtime::SessionActivity::AwaitingApproval => {
                                 ScriptPhase::AwaitingApproval
@@ -421,7 +427,7 @@ impl App {
                         self.reset_chat_session(Some(session_id));
                         self.request_sync();
                     }
-                    Ok(false) => {}
+                    Ok(false) => self.set_error(String::from("Session not found")),
                     Err(err) => {
                         self.set_error(format!("Failed to load session: {err}"));
                     }

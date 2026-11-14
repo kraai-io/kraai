@@ -99,8 +99,11 @@ const STDERR_RAIL: &str = "   ┆ ";
 const CUT: &str = "…";
 
 /// The source as the user reads it: without the metadata header and the blank lines around it.
-fn shown_source(source: &str) -> &str {
-    split_script_header(source).1.trim_end()
+/// The header comes off before the text is made safe to draw, so a carriage return still ends it.
+fn shown_source(source: &str) -> String {
+    normalize_terminal_text(split_script_header(source).1)
+        .trim_end()
+        .to_owned()
 }
 
 impl ChatHistory<'_> {
@@ -159,7 +162,7 @@ impl ChatHistory<'_> {
         }
         Self::push_wrapped_lines(
             &mut lines,
-            shown_source(source),
+            &shown_source(source),
             width,
             Style::default().fg(Color::White),
             INDENT,
@@ -235,7 +238,7 @@ impl ChatHistory<'_> {
         match view.source {
             Some(source) => Self::push_wrapped_lines(
                 &mut lines,
-                shown_source(&normalize_terminal_text(source)),
+                &shown_source(source),
                 width,
                 Style::default().fg(Color::White),
                 INDENT,
@@ -515,6 +518,7 @@ mod tests {
             ),
             ("# timeout=5m", vec![]),
             ("# list files\nls", vec!["   # list files", "   ls"]),
+            ("# timeout=1sec\rls", vec!["   ls"]),
             ("", vec![]),
         ] {
             let lines = ChatHistory::build_script_card_lines(source, &ScriptCard::Writing, 80);
@@ -554,6 +558,20 @@ mod tests {
                 .and_then(|line| line.spans.first())
                 .map(|span| span.style.fg),
             Some(Some(theme::MUTED))
+        );
+    }
+
+    #[test]
+    fn a_header_ended_by_a_carriage_return_keeps_the_script_under_it() {
+        let view = ScriptView {
+            mark: ScriptMark::Passed,
+            summary: String::from("0.1s"),
+            source: Some("# timeout=1sec\rls"),
+            sections: Vec::new(),
+        };
+        assert_eq!(
+            text(&ChatHistory::build_script_lines(&view, 24)),
+            [" ✓ 0.1s", "   ls"]
         );
     }
 
