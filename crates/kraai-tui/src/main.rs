@@ -16,6 +16,7 @@ mod terminal_features;
 mod terminal_loss;
 #[cfg(all(test, unix))]
 mod terminal_session_tests;
+mod theme;
 
 struct TerminalSessionGuard {
     active: bool,

@@ -12,6 +12,7 @@ use unicode_segmentation::UnicodeSegmentation;
 pub struct TextInput<'a> {
     input: Cow<'a, str>,
     cursor: usize,
+    prefix_len: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +33,17 @@ impl<'a> TextInput<'a> {
         Self {
             input: normalize_terminal_text(input),
             cursor: normalized_cursor(input, cursor),
+            prefix_len: 0,
+        }
+    }
+
+    /// Shows `prefix` in the accent colour ahead of the editable text.
+    pub fn with_prefix(prefix: &str, input: &str, cursor: usize) -> TextInput<'static> {
+        let prefix = normalize_terminal_text(prefix);
+        TextInput {
+            cursor: prefix.len() + normalized_cursor(input, cursor),
+            prefix_len: prefix.len(),
+            input: Cow::Owned(format!("{prefix}{}", normalize_terminal_text(input))),
         }
     }
 
@@ -260,13 +272,15 @@ impl<'a> Widget for TextInput<'a> {
         for (i, segment) in lines.iter().skip(offset).take(visible).enumerate() {
             let y = area.y + V_PADDING.min(area.height.saturating_sub(1)) + i as u16;
             if y < area.y + area.height {
-                buf.set_stringn(
-                    area.x + H_PADDING,
-                    y,
-                    segment.text(&self.input),
-                    area.width.saturating_sub(H_PADDING * 2) as usize,
-                    INPUT_STYLE,
-                );
+                let width = area.width.saturating_sub(H_PADDING * 2) as usize;
+                let x = area.x + H_PADDING;
+                buf.set_stringn(x, y, segment.text(&self.input), width, INPUT_STYLE);
+                let prefix_end = segment.rendered_end.min(self.prefix_len);
+                let prefix = self
+                    .input
+                    .get(segment.start..prefix_end)
+                    .unwrap_or_default();
+                buf.set_stringn(x, y, prefix, width, INPUT_STYLE.fg(crate::theme::ACCENT));
             }
         }
     }
@@ -456,6 +470,20 @@ mod tests {
         widget.render(area, &mut buffer);
         assert_eq!(buffer[(3, 4)].symbol(), "👩‍💻");
         assert_eq!(buffer[(3, 5)].symbol(), " ");
+    }
+
+    #[test]
+    fn prefix_shifts_the_cursor_and_takes_the_accent_colour() {
+        let area = Rect::new(0, 0, 20, 3);
+        let widget = TextInput::with_prefix("/model ", "son", 3);
+        assert_eq!(widget.get_cursor_position(area), (11, 1));
+        let mut buffer = Buffer::empty(area);
+        widget.render(area, &mut buffer);
+        let row: String = (1..11).map(|x| buffer[(x, 1)].symbol()).collect();
+        assert_eq!(row, "/model son");
+        assert_eq!(buffer[(1, 1)].fg, crate::theme::ACCENT);
+        assert_eq!(buffer[(7, 1)].fg, crate::theme::ACCENT);
+        assert_eq!(buffer[(8, 1)].fg, Color::Reset);
     }
 
     #[test]

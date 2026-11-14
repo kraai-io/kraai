@@ -25,7 +25,7 @@ pub fn reasoning_effort_option(
         }
     };
     option(
-        "reasoning_effort",
+        kraai_types::REASONING_EFFORT_OPTION_ID,
         "Reasoning effort",
         Some(path),
         ModelOptionKind::Choice {

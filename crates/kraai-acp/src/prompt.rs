@@ -37,39 +37,24 @@ pub(crate) async fn run(
         .await
         .map_err(error::runtime)?
         .map(MessageId::new);
-    match commands::parse(&request.prompt)? {
-        Some(commands::Command::Option {
-            id: option_id,
-            value,
-        }) => {
-            let mut publication = crate::config_updates::lock(&turn.session).await;
-            crate::config::set_model_option(runtime, &id, &option_id, &value).await?;
-            let config = crate::config::options(runtime, &id).await?;
-            crate::config::notify(&connection, request.session_id, config.clone())?;
-            *publication.current = Some(config);
-            return Ok(command_response());
-        }
-        Some(commands::Command::Undo) => {
-            commands::undo(runtime, &id, &connection).await?;
-            return Ok(command_response());
-        }
-        None => {
-            let message = content::prompt(runtime, request.prompt).await?;
-            if cancelled.is_cancelled() {
-                return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
-            }
-            runtime
-                .send_content(
-                    id.clone(),
-                    message,
-                    model.model,
-                    model.provider,
-                    model.options,
-                )
-                .await
-                .map_err(error::runtime)?;
-        }
+    if commands::is_undo(&request.prompt)? {
+        commands::undo(runtime, &id, &connection).await?;
+        return Ok(command_response());
     }
+    let message = content::prompt(runtime, request.prompt).await?;
+    if cancelled.is_cancelled() {
+        return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
+    }
+    runtime
+        .send_content(
+            id.clone(),
+            message,
+            model.model,
+            model.provider,
+            model.options,
+        )
+        .await
+        .map_err(error::runtime)?;
     finish_prompt(
         runtime,
         &mut events,

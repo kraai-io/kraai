@@ -10,7 +10,6 @@ use kraai_types::{
 use crate::components::{ChatHistory, RenderedLine};
 
 use super::state::AppState;
-use super::types::UiMode;
 
 impl AppState {
     pub(super) fn chat_max_scroll(&self) -> usize {
@@ -86,14 +85,9 @@ impl AppState {
         let mut next_entries: HashMap<String, CachedMessageRender> = HashMap::new();
         let mut sections = Vec::new();
         let mut total_lines = 0_usize;
-        let mut execution_offsets = HashMap::new();
 
         let projected: Vec<_> = rendered_messages
             .iter()
-            .filter(|msg| {
-                self.mode != UiMode::Executions
-                    || matches!(msg.content, ConversationItem::ScriptResult { .. })
-            })
             .map(|msg| without_completed_calls(msg, &completed))
             .filter(|msg| {
                 !matches!(&msg.content, ConversationItem::Assistant { .. })
@@ -101,7 +95,7 @@ impl AppState {
             })
             .collect();
         for group in projected.chunk_by(|left, right| {
-            self.mode != UiMode::Executions
+            !self.scripts_expanded
                 && matches!(left.content, ConversationItem::ScriptResult { .. })
                 && matches!(right.content, ConversationItem::ScriptResult { .. })
         }) {
@@ -110,7 +104,7 @@ impl AppState {
             };
             let key = msg.id.as_str().to_string();
             let mut fingerprint;
-            let grouped = self.mode != UiMode::Executions
+            let grouped = !self.scripts_expanded
                 && matches!(msg.content, ConversationItem::ScriptResult { .. });
             let lines = if grouped {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -121,45 +115,35 @@ impl AppState {
                 fingerprint = hasher.finish();
                 match prior_entries.remove(&key) {
                     Some(entry) if entry.fingerprint == fingerprint => entry.lines,
-                    _ => Arc::new(ChatHistory::build_execution_lines(
-                        &super::executions::group_summary(
-                            group.iter().map(|message| message.display_text()),
-                        ),
-                        None,
-                        "",
-                        false,
-                        false,
+                    _ => Arc::new(ChatHistory::build_script_group_lines(
+                        &super::executions::group_summary(group.iter().filter_map(|message| {
+                            match &message.content {
+                                ConversationItem::ScriptResult {
+                                    outcome, output, ..
+                                } => Some((*outcome, output.text_only())),
+                                _ => None,
+                            }
+                        })),
                         width,
                     )),
                 }
             } else if let ConversationItem::ScriptResult {
-                call_id, output, ..
+                call_id,
+                output,
+                outcome,
             } = &msg.content
             {
                 fingerprint = message_fingerprint(msg);
-                let output = output.display_text();
-                let expanded = self
-                    .execution_expanded
-                    .get(call_id.as_str())
-                    .copied()
-                    .unwrap_or(false);
-                execution_offsets.insert(
-                    call_id.to_string(),
-                    total_lines.saturating_add(usize::from(!sections.is_empty())),
-                );
+                let images = output.image_labels().collect::<Vec<_>>().join("\n");
+                let output = output.text_only();
                 let source = sources.get(call_id.as_str()).copied();
-                let selected = self.selected_execution.as_deref() == Some(call_id.as_str());
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                (fingerprint, source, expanded, selected).hash(&mut hasher);
+                (fingerprint, source).hash(&mut hasher);
                 fingerprint = hasher.finish();
                 match prior_entries.remove(&key) {
                     Some(entry) if entry.fingerprint == fingerprint => entry.lines,
-                    _ => Arc::new(ChatHistory::build_execution_lines(
-                        &super::executions::result_summary(&output),
-                        source,
-                        &output,
-                        expanded,
-                        selected,
+                    _ => Arc::new(ChatHistory::build_script_lines(
+                        &super::executions::script_view(*outcome, &output, &images, source),
                         width,
                     )),
                 }
@@ -189,7 +173,6 @@ impl AppState {
             next_entries.insert(key, CachedMessageRender { fingerprint, lines });
         }
 
-        cache.execution_offsets = execution_offsets;
         cache.sections = sections;
         cache.total_lines = total_lines;
         cache.message_cache = next_entries;
@@ -200,7 +183,6 @@ impl AppState {
 
 #[derive(Default)]
 pub(super) struct ChatRenderCache {
-    pub(super) execution_offsets: HashMap<String, usize>,
     pub(super) width: u16,
     pub(super) epoch: u64,
     pub(super) sections: Vec<Arc<Vec<RenderedLine>>>,
@@ -314,6 +296,9 @@ fn message_fingerprint(msg: &Message) -> u64 {
         MessageStatus::Cancelled => 2u8.hash(&mut hasher),
     }
     msg.display_text().hash(&mut hasher);
+    if let ConversationItem::ScriptResult { outcome, .. } = &msg.content {
+        (outcome.status.as_str(), outcome.exit_code).hash(&mut hasher);
+    }
     hasher.finish()
 }
 

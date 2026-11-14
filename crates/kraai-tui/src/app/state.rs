@@ -11,9 +11,8 @@ use kraai_types::{Message, MessageContent, MessageId, SessionId};
 use super::auth::ProviderAuthStatus;
 use super::chat_render::ChatRenderCache;
 use super::types::{
-    ActiveSettingsEditor, ExitUsageTotals, OptimisticMessage, PendingSubmit,
-    ProvidersAdvancedFocus, ProvidersView, ScriptApprovalAction, ScriptPhase, SettingsFocus,
-    UiMode,
+    ExitUsageTotals, OptimisticMessage, PendingSubmit, ProvidersView, ScriptApprovalAction,
+    ScriptPhase, UiMode,
 };
 
 pub(super) struct AppState {
@@ -25,13 +24,21 @@ pub(super) struct AppState {
     pub(super) cost_recovery_list_pending: bool,
     pub(super) cost_recovery_sessions: std::collections::BTreeSet<SessionId>,
     pub(super) exit: bool,
-    pub(super) editor_requested: bool,
-    pub(super) menu_search: String,
-    pub(super) help_scroll: Cell<u16>,
+    /// Text typed while a sheet owns the composer; the message draft stays in `input`.
+    pub(super) sheet_query: String,
+    pub(super) sheet_index: usize,
+    pub(super) sheet_scroll: Cell<usize>,
+    pub(super) sheet_notice: Option<String>,
+    /// The highlighted row was asked to delete something and waits for the key a second time.
+    pub(super) sheet_armed: bool,
+    /// What the last key press did, shown under the rows of a sheet.
+    pub(super) sheet_feedback: Option<String>,
+    pub(super) model_settings: Option<super::model_options::ModelSettingsTarget>,
+    /// What the command list stays filtered by while its rows are walked into the composer.
+    pub(super) command_filter: Option<String>,
     pub(super) approval_scroll: Cell<usize>,
     pub(super) approval_expanded: bool,
-    pub(super) execution_expanded: HashMap<String, bool>,
-    pub(super) selected_execution: Option<String>,
+    pub(super) scripts_expanded: bool,
     pub(super) input: String,
     pub(super) draft_images: super::draft_images::DraftImages,
     pub(super) next_image_request_id: u64,
@@ -77,46 +84,35 @@ pub(super) struct AppState {
     pub(super) session_model_saves: HashMap<SessionId, super::session_model::SessionModelSave>,
     pub(super) next_model_save_id: u64,
     pub(super) selected_model_options: kraai_types::ModelOptionValues,
-    pub(super) option_menu_index: usize,
-    pub(super) option_choice_index: usize,
-    pub(super) option_editor: Option<super::model_options::ModelOptionEditor>,
-    pub(super) option_editor_input: String,
-    pub(super) option_editor_error: Option<String>,
+    /// Option values last chosen for each provider and model.
+    pub(super) remembered_model_options:
+        BTreeMap<String, BTreeMap<String, kraai_types::ModelOptionValues>>,
     pub(super) context_usage: Option<RuntimeSessionContextUsage>,
     pub(super) pending_script: Option<PendingScriptInfo>,
     pub(super) submitted_script_decisions: BTreeMap<SessionId, BTreeSet<String>>,
     pub(super) sessions: Vec<Session>,
     pub(super) current_session_id: Option<SessionId>,
     pub(super) current_tip_id: Option<String>,
-    pub(super) agent_menu_index: usize,
-    pub(super) model_menu_index: usize,
-    pub(super) sessions_menu_index: usize,
+    /// Where Kraai runs, as sessions record it. Empty when it is unknown.
+    pub(super) workspace_dir: String,
+    pub(super) home_dir: String,
     pub(super) script_approval_action: ScriptApprovalAction,
     pub(super) script_phase: ScriptPhase,
-    pub(super) command_completion_prefix: Option<String>,
-    pub(super) command_completion_index: usize,
     pub(super) command_popup_dismissed: bool,
     pub(super) settings_draft: Option<SettingsDocument>,
     pub(super) settings_errors: HashMap<String, String>,
-    pub(super) settings_focus: SettingsFocus,
+    /// The place in the settings of the provider whose sheet is open.
     pub(super) settings_provider_index: usize,
-    pub(super) settings_model_index: usize,
-    pub(super) settings_provider_field_index: usize,
-    pub(super) settings_model_field_index: usize,
-    pub(super) settings_editor: Option<ActiveSettingsEditor>,
-    pub(super) settings_editor_input: String,
-    pub(super) settings_delete_armed: bool,
     pub(super) providers_view: ProvidersView,
-    pub(super) providers_advanced_focus: ProvidersAdvancedFocus,
-    pub(super) connect_provider_search: String,
-    pub(super) connect_provider_index: usize,
+    /// The configuration row whose value the composer is typing.
+    pub(super) config_editing: Option<super::provider_config::ConfigRow>,
     /// Sign-in state of each provider type that signs in with an account.
     pub(super) provider_auth: HashMap<String, ProviderAuthStatus>,
     pub(super) mcp_auth: BTreeMap<String, kraai_runtime::McpAuthStatus>,
     pub(super) mcp_browser_intent: BTreeMap<String, super::mcp_auth::BrowserIntent>,
     pub(super) next_mcp_login_request: u64,
-    pub(super) mcp_scroll: Cell<usize>,
-    pub(super) mcp_selected: Option<String>,
+    /// The server whose sheet is open. The server list shows while there is none.
+    pub(super) mcp_open: Option<String>,
     pub(super) mcp_loaded: bool,
     pub(super) mcp_feedback: BTreeMap<String, String>,
     pub(super) mcp_error: Option<String>,
@@ -142,13 +138,17 @@ impl Default for AppState {
                 .try_into()
                 .unwrap_or(u64::MAX),
             exit: false,
-            editor_requested: false,
-            menu_search: String::new(),
-            help_scroll: Cell::new(0),
+            sheet_query: String::new(),
+            sheet_index: 0,
+            sheet_scroll: Cell::new(0),
+            sheet_notice: None,
+            sheet_armed: false,
+            sheet_feedback: None,
+            model_settings: None,
+            command_filter: None,
             approval_scroll: Cell::new(0),
             approval_expanded: false,
-            execution_expanded: HashMap::new(),
-            selected_execution: None,
+            scripts_expanded: false,
             input: String::new(),
             draft_images: super::draft_images::DraftImages::default(),
             next_image_request_id: 1,
@@ -170,7 +170,7 @@ impl Default for AppState {
             auto_scroll: true,
             config_loaded: false,
             mode: UiMode::Chat,
-            status: String::from("Type /help for commands"),
+            status: String::from("Type / for commands"),
             last_error: None,
             error_open: false,
             error_scroll: Cell::new(0),
@@ -194,45 +194,28 @@ impl Default for AppState {
             session_model_saves: HashMap::new(),
             next_model_save_id: 0,
             selected_model_options: Default::default(),
-            option_menu_index: 0,
-            option_choice_index: 0,
-            option_editor: None,
-            option_editor_input: String::new(),
-            option_editor_error: None,
+            remembered_model_options: BTreeMap::new(),
             context_usage: None,
             pending_script: None,
             submitted_script_decisions: BTreeMap::new(),
             sessions: Vec::new(),
             current_session_id: None,
             current_tip_id: None,
-            agent_menu_index: 0,
-            model_menu_index: 0,
-            sessions_menu_index: 0,
+            workspace_dir: String::new(),
+            home_dir: String::new(),
             script_approval_action: ScriptApprovalAction::Allow,
             script_phase: ScriptPhase::Idle,
-            command_completion_prefix: None,
-            command_completion_index: 0,
             command_popup_dismissed: false,
             settings_draft: None,
             settings_errors: HashMap::new(),
-            settings_focus: SettingsFocus::ProviderList,
             settings_provider_index: 0,
-            settings_model_index: 0,
-            settings_provider_field_index: 0,
-            settings_model_field_index: 0,
-            settings_editor: None,
-            settings_editor_input: String::new(),
-            settings_delete_armed: false,
             providers_view: ProvidersView::List,
-            providers_advanced_focus: ProvidersAdvancedFocus::ProviderFields,
-            connect_provider_search: String::new(),
-            connect_provider_index: 0,
+            config_editing: None,
             provider_auth: HashMap::new(),
             mcp_auth: BTreeMap::new(),
             mcp_browser_intent: Default::default(),
             next_mcp_login_request: 0,
-            mcp_scroll: Cell::new(0),
-            mcp_selected: None,
+            mcp_open: None,
             mcp_loaded: false,
             mcp_feedback: BTreeMap::new(),
             mcp_error: None,
@@ -253,14 +236,34 @@ impl AppState {
                 super::WorkspacePreferences::default()
             });
 
+        let selected_model_options = workspace_preferences
+            .provider_id
+            .as_ref()
+            .zip(workspace_preferences.model_id.as_ref())
+            .and_then(|(provider, model)| {
+                workspace_preferences
+                    .model_options
+                    .get(provider)?
+                    .get(model)
+            })
+            .cloned()
+            .unwrap_or_default();
+
         Self {
             selected_provider_id: workspace_preferences.provider_id,
             selected_model_id: workspace_preferences.model_id,
-            selected_model_options: workspace_preferences.options,
+            selected_model_options,
+            remembered_model_options: workspace_preferences.model_options,
             selected_profile_id: startup_options
                 .agent_profile_id
                 .clone()
                 .or(workspace_preferences.agent_profile_id),
+            workspace_dir: super::workspace_preferences::current_workspace()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            home_dir: std::env::home_dir()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
             ..Self::default()
         }
     }

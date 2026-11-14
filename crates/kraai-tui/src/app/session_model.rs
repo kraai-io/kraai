@@ -20,6 +20,7 @@ struct ModelSaveAttempt {
 impl App {
     pub(super) fn save_model_selection(&mut self) {
         self.reconcile_model_options();
+        self.remember_model_options();
         self.save_workspace_preferences();
         let Some(session_id) = self.state.current_session_id.clone() else {
             return;
@@ -254,6 +255,7 @@ impl App {
             return;
         }
         if let Some(selection) = &snapshot.session.selected_model {
+            self.remember_model_options();
             self.state.selected_provider_id = Some(selection.provider_id.to_string());
             self.state.selected_model_id = Some(selection.model_id.to_string());
             self.state.selected_model_options = selection.options.clone();

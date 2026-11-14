@@ -10,30 +10,7 @@ use tokio::net::{TcpListener, TcpStream};
 use super::store::FileStore;
 use crate::OAuthConfig;
 
-pub(super) fn validate_url(value: &str, allow_loopback: bool) -> Result<url::Url, String> {
-    let url = url::Url::parse(value).map_err(|error| error.to_string())?;
-    let local = url.host_str().is_some_and(|host| {
-        host == "localhost"
-            || host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback())
-            || host == "[::1]"
-    });
-    if url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-        || !(url.scheme() == "https" || allow_loopback && local && url.scheme() == "http")
-    {
-        return Err(String::from(
-            "OAuth requires HTTPS, except for a local HTTP server on loopback",
-        ));
-    }
-    Ok(url)
-}
-
 pub(super) async fn manager(url: &str, store: FileStore) -> Result<AuthorizationManager, String> {
-    validate_url(url, true)?;
     let client = kraai_io::http::client_builder(
         kraai_io::http::HttpTimeouts {
             request: Some(Duration::from_secs(30)),
@@ -74,20 +51,8 @@ pub(super) async fn manager(url: &str, store: FileStore) -> Result<Authorization
     if !resolution.source.is_discovered() {
         return Err(String::from("MCP server did not advertise OAuth metadata"));
     }
-    let allow_loopback = url::Url::parse(url).is_ok_and(|url| url.scheme() == "http");
-    for endpoint in [
-        Some(&resolution.metadata.authorization_endpoint),
-        Some(&resolution.metadata.token_endpoint),
-        resolution.metadata.registration_endpoint.as_ref(),
-        resolution.metadata.issuer.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        validate_url(endpoint, allow_loopback)?;
-    }
-    if let Some(url) = &resolution.metadata.registration_endpoint {
-        let _ = endpoint.set(validate_url(url, allow_loopback)?);
+    if let Some(registration) = &resolution.metadata.registration_endpoint {
+        let _ = endpoint.set(url::Url::parse(registration).map_err(|error| error.to_string())?);
     }
     manager.set_metadata(resolution.metadata);
     Ok(manager)

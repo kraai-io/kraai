@@ -1,70 +1,126 @@
-use super::*;
+use std::time::Duration;
 
-fn result_fields(output: &str) -> (&str, Option<&str>, Option<u64>) {
-    let header = output
-        .strip_prefix("<tool_call_result ")
-        .and_then(|text| text.split_once('>').map(|(header, _)| header));
-    let attribute = |name: &str| {
-        header.and_then(|header| {
-            header.split_whitespace().find_map(|part| {
-                part.strip_prefix(name)
-                    .and_then(|value| value.strip_prefix("=\""))
-                    .and_then(|value| value.strip_suffix('"'))
-            })
-        })
-    };
-    let status = attribute("status").unwrap_or("unknown");
-    let exit = attribute("exit_code");
-    let elapsed = attribute("elapsed_ms").and_then(|value| value.parse::<u64>().ok());
-    (status, exit, elapsed)
+use kraai_execution_types::{ScriptExecutionOutcome, ScriptExecutionStatus};
+use kraai_script_protocol::{ParsedToolCallResult, ToolCallResultSection, parse_tool_call_result};
+
+use super::duration::format_duration;
+use crate::components::{ScriptMark, ScriptSection, ScriptView};
+
+fn mark(outcome: ScriptExecutionOutcome) -> ScriptMark {
+    if outcome.succeeded() {
+        ScriptMark::Passed
+    } else if outcome.status == ScriptExecutionStatus::Cancelled {
+        ScriptMark::Cancelled
+    } else {
+        ScriptMark::Failed
+    }
 }
 
-pub(super) fn result_summary(output: &str) -> String {
-    let (status, exit, elapsed) = result_fields(output);
-    let mut summary = if status == "completed" {
-        format!("exit {}", exit.unwrap_or("unknown"))
-    } else if status == "cancelled" {
-        String::from("cancelled")
-    } else {
-        match exit {
-            Some(exit) => format!("{status} · exit {exit}"),
-            None => status.to_string(),
+/// The run time, which only the rendered result records.
+fn elapsed_millis(parsed: Option<&ParsedToolCallResult<'_>>) -> Option<u64> {
+    parsed?.attribute("elapsed_ms")?.parse().ok()
+}
+
+fn summary(outcome: ScriptExecutionOutcome, elapsed: Option<u64>) -> String {
+    let mut summary = match (outcome.status, outcome.exit_code) {
+        (ScriptExecutionStatus::Cancelled, _) => String::from("cancelled"),
+        (ScriptExecutionStatus::Completed, Some(code)) => format!("exit {code}"),
+        (ScriptExecutionStatus::Completed, None) => String::from("no exit code"),
+        (status, code) => {
+            let status = status.as_str().replace('-', " ");
+            match code {
+                Some(code) => format!("{status} · exit {code}"),
+                None => status,
+            }
         }
     };
     if let Some(elapsed) = elapsed {
         summary.push_str(&format!(
             " · {}",
-            super::duration::format_duration(Duration::from_millis(elapsed))
+            format_duration(Duration::from_millis(elapsed))
         ));
     }
     summary
 }
 
-pub(super) fn group_summary(outputs: impl Iterator<Item = impl AsRef<str>>) -> String {
+fn section_label(section: &ToolCallResultSection<'_>) -> String {
+    let mut parts = Vec::new();
+    if section.attribute("encoding") == Some("binary") {
+        parts.push(String::from("binary"));
+    }
+    if let Some(bytes) = section.attribute("byte_count") {
+        parts.push(format!("{bytes} bytes"));
+    }
+    if let Some(path) = section.attribute("full_output") {
+        parts.push(format!("full output in {path}"));
+    }
+    if section.name.is_empty() || (section.name == "stdout" && parts.is_empty()) {
+        return String::new();
+    }
+    parts.insert(0, section.name.to_owned());
+    parts.join(" · ")
+}
+
+/// What the expanded chat shows for one script result: the sections of its `output`, then the
+/// `images` it returned, one label a line.
+pub(super) fn script_view<'a>(
+    outcome: ScriptExecutionOutcome,
+    output: &'a str,
+    images: &'a str,
+    source: Option<&'a str>,
+) -> ScriptView<'a> {
+    let parsed = parse_tool_call_result(output);
+    let sections = match &parsed {
+        Some(parsed) => parsed
+            .sections
+            .iter()
+            .map(|section| ScriptSection {
+                label: section_label(section),
+                text: section.text,
+            })
+            .collect(),
+        None => vec![ScriptSection {
+            label: String::new(),
+            text: output,
+        }],
+    };
+    ScriptView {
+        mark: mark(outcome),
+        summary: summary(outcome, elapsed_millis(parsed.as_ref())),
+        source,
+        sections: sections
+            .into_iter()
+            .chain([ScriptSection {
+                label: String::from("images"),
+                text: images,
+            }])
+            .filter(|section: &ScriptSection<'_>| !section.text.trim().is_empty())
+            .collect(),
+    }
+}
+
+pub(super) fn group_summary(
+    results: impl Iterator<Item = (ScriptExecutionOutcome, impl AsRef<str>)>,
+) -> String {
     let mut count = 0;
     let mut failed = 0;
     let mut cancelled = 0;
-    let mut unknown = 0;
     let mut elapsed = Some(0u64);
-    for output in outputs {
+    for (outcome, output) in results {
         count += 1;
-        let (status, exit, duration) = result_fields(output.as_ref());
-        match (status, exit) {
-            ("completed", Some("0")) => {}
-            ("cancelled", _) => cancelled += 1,
-            ("unknown", _) | ("completed", None) => unknown += 1,
-            _ => failed += 1,
+        match mark(outcome) {
+            ScriptMark::Passed => {}
+            ScriptMark::Failed => failed += 1,
+            ScriptMark::Cancelled => cancelled += 1,
         }
         elapsed = elapsed
-            .zip(duration)
+            .zip(elapsed_millis(
+                parse_tool_call_result(output.as_ref()).as_ref(),
+            ))
             .and_then(|(total, next)| total.checked_add(next));
     }
     let mut summary = format!("{count} {}", if count == 1 { "script" } else { "scripts" });
-    for (count, label) in [
-        (failed, "failed"),
-        (cancelled, "cancelled"),
-        (unknown, "unknown"),
-    ] {
+    for (count, label) in [(failed, "failed"), (cancelled, "cancelled")] {
         if count > 0 {
             summary.push_str(&format!(" · {count} {label}"));
         }
@@ -72,181 +128,205 @@ pub(super) fn group_summary(outputs: impl Iterator<Item = impl AsRef<str>>) -> S
     if let Some(elapsed) = elapsed {
         summary.push_str(&format!(
             " · {}",
-            super::duration::format_duration(Duration::from_millis(elapsed))
+            format_duration(Duration::from_millis(elapsed))
         ));
     }
     summary
 }
 
-impl App {
-    pub(super) fn open_executions(&mut self) {
-        self.state.mode = UiMode::Executions;
-        self.state.selected_execution = None;
-        self.state.ctrl_c_exit_armed = false;
-        self.invalidate_chat_cache();
-        self.select_execution(false);
-    }
-
-    pub(super) fn close_executions(&mut self) {
-        self.state.execution_expanded.clear();
-        self.state.selected_execution = None;
-        self.state.mode = UiMode::Chat;
-        self.state.auto_scroll = true;
-        self.invalidate_chat_cache();
-    }
-
-    pub(super) fn handle_execution_key_event(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc | KeyCode::F(6) | KeyCode::Char('q') => self.close_executions(),
-            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => self.close_executions(),
-            KeyCode::Up => self.select_execution(false),
-            KeyCode::Down => self.select_execution(true),
-            KeyCode::Enter => self.toggle_execution(),
-            KeyCode::PageUp => self.page_chat(false),
-            KeyCode::PageDown => self.page_chat(true),
-            KeyCode::Home => self.scroll_chat_to_top(),
-            KeyCode::End => self.scroll_chat_to_bottom(),
-            _ => {}
-        }
-    }
-
-    pub(super) fn select_execution(&mut self, forward: bool) {
-        let ids: Vec<String> = self
-            .state
-            .rendered_messages()
-            .iter()
-            .filter_map(|message| match &message.content {
-                ConversationItem::ScriptResult { call_id, .. } => Some(call_id.to_string()),
-                _ => None,
-            })
-            .collect();
-        if ids.is_empty() {
-            if self.state.selected_execution.take().is_some() {
-                self.invalidate_chat_cache();
-            }
-            return;
-        }
-        let index = self
-            .state
-            .selected_execution
-            .as_ref()
-            .and_then(|selected| ids.iter().position(|id| id == selected));
-        let next = match index {
-            Some(index) if forward => (index + 1) % ids.len(),
-            Some(index) => (index + ids.len() - 1) % ids.len(),
-            None => ids.len() - 1,
-        };
-        self.state.selected_execution = ids.get(next).cloned();
-        self.invalidate_chat_cache();
-        self.reveal_selected_execution();
-    }
-
-    pub(super) fn toggle_execution(&mut self) {
-        let selection_visible = self.state.selected_execution.as_ref().is_some_and(|selected| {
-            self.state.rendered_messages().iter().any(|message| {
-                matches!(&message.content, ConversationItem::ScriptResult { call_id, .. } if call_id.as_str() == selected)
-            })
-        });
-        if !selection_visible {
-            self.select_execution(false);
-        }
-        let Some(id) = self.state.selected_execution.clone() else {
-            return;
-        };
-        let expanded = self.state.execution_expanded.entry(id).or_insert(false);
-        *expanded = !*expanded;
-        self.invalidate_chat_cache();
-        self.reveal_selected_execution();
-    }
-
-    fn reveal_selected_execution(&mut self) {
-        let width = self.state.chat_render_cache.borrow().width;
-        self.state.refresh_chat_render_cache(width);
-        let offset = self.state.selected_execution.as_ref().and_then(|id| {
-            self.state
-                .chat_render_cache
-                .borrow()
-                .execution_offsets
-                .get(id)
-                .copied()
-        });
-        if let Some(offset) = offset {
-            self.state.auto_scroll = false;
-            self.state.scroll = offset.min(self.state.chat_max_scroll());
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{group_summary, result_summary};
+    use kraai_execution_types::{ScriptExecutionOutcome, ScriptExecutionStatus};
+
+    use super::{group_summary, script_view};
+    use crate::components::ScriptMark;
+
+    const fn outcome(
+        status: ScriptExecutionStatus,
+        exit_code: Option<i32>,
+    ) -> ScriptExecutionOutcome {
+        ScriptExecutionOutcome { status, exit_code }
+    }
+
+    const PASSED: ScriptExecutionOutcome = outcome(ScriptExecutionStatus::Completed, Some(0));
 
     #[test]
-    fn groups_count_each_result_category_and_sum_durations() {
-        let outputs = [
-            "<tool_call_result status=\"completed\" exit_code=\"0\" elapsed_ms=\"100\">",
-            "<tool_call_result status=\"completed\" exit_code=\"2\" elapsed_ms=\"200\">",
-            "<tool_call_result status=\"timed-out\" elapsed_ms=\"300\">",
-            "<tool_call_result status=\"cancelled\" elapsed_ms=\"400\">",
-            "<tool_call_result status=\"unknown\" elapsed_ms=\"500\">",
-            "<tool_call_result status=\"completed\" elapsed_ms=\"600\">",
+    fn groups_count_failures_and_cancellations_and_sum_durations() {
+        let results = [
+            (PASSED, "<tool_call_result elapsed_ms=\"100\">"),
+            (
+                outcome(ScriptExecutionStatus::Completed, Some(2)),
+                "<tool_call_result elapsed_ms=\"200\">",
+            ),
+            (
+                outcome(ScriptExecutionStatus::TimedOut, None),
+                "<tool_call_result elapsed_ms=\"300\">",
+            ),
+            (
+                outcome(ScriptExecutionStatus::Cancelled, None),
+                "<tool_call_result elapsed_ms=\"400\">",
+            ),
+            (
+                outcome(ScriptExecutionStatus::Completed, None),
+                "<tool_call_result elapsed_ms=\"500\">",
+            ),
         ];
         assert_eq!(
-            group_summary(outputs.into_iter()),
-            "6 scripts · 2 failed · 1 cancelled · 2 unknown · 2.1s"
+            group_summary(results.into_iter()),
+            "5 scripts · 3 failed · 1 cancelled · 1.5s"
         );
+    }
+
+    #[test]
+    fn the_structured_outcome_wins_over_what_the_text_claims() {
+        let failed = outcome(ScriptExecutionStatus::RuntimeError, None);
+        let text = "<tool_call_result status=\"completed\" exit_code=\"0\" elapsed_ms=\"100\">";
+        assert_eq!(
+            group_summary([(failed, text)].into_iter()),
+            "1 script · 1 failed · 0.1s"
+        );
+        let view = script_view(failed, text, "", None);
+        assert!(view.mark == ScriptMark::Failed);
+        assert_eq!(view.summary, "runtime error · 0.1s");
+
+        let view = script_view(
+            PASSED,
+            "<tool_call_result status=\"runtime-error\">",
+            "",
+            None,
+        );
+        assert!(view.mark == ScriptMark::Passed);
+        assert_eq!(view.summary, "exit 0");
     }
 
     #[test]
     fn groups_do_not_report_partial_or_overflowed_durations() {
-        let valid = "<tool_call_result status=\"completed\" exit_code=\"0\" elapsed_ms=\"100\">";
-        for duration in [
-            "",
-            " elapsed_ms=\"invalid\"",
-            " elapsed_ms=\"-1\"",
-            " elapsed_ms=\"18446744073709551615\"",
+        let valid = "<tool_call_result elapsed_ms=\"100\">";
+        for other in [
+            "<tool_call_result>",
+            "<tool_call_result elapsed_ms=\"invalid\">",
+            "<tool_call_result elapsed_ms=\"-1\">",
+            "<tool_call_result elapsed_ms=\"18446744073709551615\">",
+            "not a result",
         ] {
-            let other =
-                format!("<tool_call_result status=\"completed\" exit_code=\"0\"{duration}>");
-            assert_eq!(
-                group_summary([valid, other.as_str()].into_iter()),
-                "2 scripts"
-            );
-            assert_eq!(
-                group_summary([other.as_str(), valid].into_iter()),
-                "2 scripts"
-            );
+            for results in [[valid, other], [other, valid]] {
+                assert_eq!(
+                    group_summary(results.into_iter().map(|output| (PASSED, output))),
+                    "2 scripts"
+                );
+            }
         }
-    }
-
-    #[test]
-    fn groups_handle_single_unknown_and_zero_duration_results() {
         assert_eq!(
-            group_summary(["not an XML result"].into_iter()),
-            "1 script · 1 unknown"
-        );
-        assert_eq!(
-            group_summary(
-                ["<tool_call_result status=\"completed\" exit_code=\"0\" elapsed_ms=\"0\">"]
-                    .into_iter()
-            ),
+            group_summary([(PASSED, "<tool_call_result elapsed_ms=\"0\">")].into_iter()),
             "1 script · 0s"
         );
     }
 
     #[test]
     fn summaries_show_exit_or_cancellation_without_redundant_labels() {
-        for (status, expected) in [
-            ("completed", "exit 1 · 0.5s"),
-            ("cancelled", "cancelled · 0.5s"),
-            ("timed-out", "timed-out · exit 1 · 0.5s"),
+        for (status, exit_code, expected) in [
+            (ScriptExecutionStatus::Completed, Some(1), "exit 1 · 0.5s"),
+            (
+                ScriptExecutionStatus::Completed,
+                None,
+                "no exit code · 0.5s",
+            ),
+            (
+                ScriptExecutionStatus::Cancelled,
+                Some(1),
+                "cancelled · 0.5s",
+            ),
+            (
+                ScriptExecutionStatus::TimedOut,
+                Some(1),
+                "timed out · exit 1 · 0.5s",
+            ),
+            (
+                ScriptExecutionStatus::FailedToStart,
+                None,
+                "failed to start · 0.5s",
+            ),
         ] {
-            assert_eq!(
-                result_summary(&format!(
-                    "<tool_call_result status=\"{status}\" exit_code=\"1\" elapsed_ms=\"500\"></tool_call_result>"
-                )),
-                expected
+            let view = script_view(
+                outcome(status, exit_code),
+                "<tool_call_result elapsed_ms=\"500\"></tool_call_result>",
+                "",
+                None,
+            );
+            assert_eq!(view.summary, expected);
+            assert!(
+                view.mark
+                    == if status == ScriptExecutionStatus::Cancelled {
+                        ScriptMark::Cancelled
+                    } else {
+                        ScriptMark::Failed
+                    }
             );
         }
+    }
+
+    #[test]
+    fn view_names_channels_only_when_that_adds_something() {
+        let output = "<tool_call_result status=\"completed\" exit_code=\"2\" elapsed_ms=\"500\">\n\
+<notice>rewrote find</notice>\n\
+<stdout>plain\n</stdout>\n\
+<stderr encoding=\"binary\" byte_count=\"9\" full_output=\"/tmp/err\">kept</stderr>\n\
+</tool_call_result>";
+        let view = script_view(
+            outcome(ScriptExecutionStatus::Completed, Some(2)),
+            output,
+            "",
+            Some("ls"),
+        );
+        assert!(view.mark == ScriptMark::Failed);
+        assert_eq!(view.summary, "exit 2 · 0.5s");
+        assert_eq!(view.source, Some("ls"));
+        let sections: Vec<_> = view
+            .sections
+            .iter()
+            .map(|section| (section.label.as_str(), section.text))
+            .collect();
+        assert_eq!(
+            sections,
+            [
+                ("notice", "rewrote find"),
+                ("", "plain\n"),
+                (
+                    "stderr · binary · 9 bytes · full output in /tmp/err",
+                    "kept"
+                ),
+            ]
+        );
+
+        let truncated = "<tool_call_result status=\"completed\" exit_code=\"0\">\n\
+<stdout byte_count=\"40000\" truncated=\"true\">head</stdout>\n\
+</tool_call_result>";
+        let view = script_view(PASSED, truncated, "", None);
+        assert!(view.mark == ScriptMark::Passed);
+        assert_eq!(
+            view.sections.first().map(|section| section.label.as_str()),
+            Some("stdout · 40000 bytes")
+        );
+    }
+
+    #[test]
+    fn view_keeps_text_it_cannot_read_and_drops_blank_output() {
+        let view = script_view(PASSED, "not a result", "", None);
+        assert_eq!(view.summary, "exit 0");
+        assert_eq!(view.sections.len(), 1);
+        assert_eq!(
+            view.sections.first().map(|section| section.text),
+            Some("not a result")
+        );
+
+        let cancelled = script_view(
+            outcome(ScriptExecutionStatus::Cancelled, None),
+            "<tool_call_result status=\"cancelled\">\n</tool_call_result>",
+            "",
+            None,
+        );
+        assert!(cancelled.mark == ScriptMark::Cancelled);
+        assert_eq!(cancelled.summary, "cancelled");
+        assert!(cancelled.sections.is_empty());
     }
 }

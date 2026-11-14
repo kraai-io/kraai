@@ -12,10 +12,7 @@ impl App {
         }
         let mut changed = false;
         let batch_started = Instant::now();
-        while !self.state.editor_requested
-            && !self.state.exit
-            && batch_started.elapsed() < TERMINAL_EVENT_BATCH_BUDGET
-        {
+        while !self.state.exit && batch_started.elapsed() < TERMINAL_EVENT_BATCH_BUDGET {
             let Ok(event) = self.input.receiver().try_recv() else {
                 break;
             };
@@ -69,7 +66,7 @@ impl App {
     }
 
     fn handle_input_event(&mut self, event: CrosstermEvent) -> bool {
-        if self.state.editor_requested || self.state.exit {
+        if self.state.exit {
             return false;
         }
         match event {
@@ -100,21 +97,7 @@ impl App {
             }
             return;
         }
-        if self.state.mode == UiMode::Help {
-            match mouse_event.kind {
-                MouseEventKind::ScrollUp => self
-                    .state
-                    .help_scroll
-                    .set(self.state.help_scroll.get().saturating_sub(3)),
-                MouseEventKind::ScrollDown => self
-                    .state
-                    .help_scroll
-                    .set(self.state.help_scroll.get().saturating_add(3)),
-                _ => {}
-            }
-            return;
-        }
-        if !matches!(self.state.mode, UiMode::Chat | UiMode::Executions) {
+        if self.state.mode != UiMode::Chat {
             return;
         }
 
@@ -147,11 +130,6 @@ impl App {
         if self.handle_error_key(key_event) {
             return;
         }
-        if self.state.mode == UiMode::Executions {
-            self.handle_execution_key_event(key_event);
-            return;
-        }
-
         if self.state.mode == UiMode::Chat && self.state.has_local_script_approval() {
             if matches!(key_event.code, KeyCode::Esc) {
                 return;
@@ -163,7 +141,7 @@ impl App {
         if matches!(key_event.code, KeyCode::Esc) {
             if self.state.mode == UiMode::Chat && self.command_popup_visible() {
                 self.state.command_popup_dismissed = true;
-                self.reset_completion_cycle();
+                self.reset_command_selection();
                 return;
             }
             if self.state.mode == UiMode::Chat
@@ -178,45 +156,24 @@ impl App {
                 }
                 return;
             }
-            if self.state.mode == UiMode::ProvidersMenu {
-                self.handle_providers_escape();
-                return;
+            match self.state.mode {
+                UiMode::Providers => self.close_providers_level(),
+                UiMode::Model => self.close_sheet(),
+                UiMode::ModelSettings => self.close_model_settings(),
+                UiMode::Mcp => self.close_mcp_level(),
+                _ => self.close_sheet(),
             }
-            self.state.mode = UiMode::Chat;
             return;
         }
 
         match self.state.mode {
             UiMode::Chat => self.handle_chat_key_event(key_event),
-            UiMode::Executions => self.handle_execution_key_event(key_event),
-            UiMode::AgentMenu => self.handle_agent_menu_key_event(key_event),
-            UiMode::ModelMenu => self.handle_model_menu_key_event(key_event),
-            UiMode::ModelOptionsMenu => self.handle_model_options_key_event(key_event),
-            UiMode::ProvidersMenu => self.handle_providers_key_event(key_event),
+            UiMode::Agent => self.handle_agent_key_event(key_event),
+            UiMode::Model => self.handle_model_key_event(key_event),
+            UiMode::ModelSettings => self.handle_model_settings_key_event(key_event),
+            UiMode::Providers => self.handle_providers_key_event(key_event),
             UiMode::Mcp => self.handle_mcp_key_event(key_event),
-            UiMode::SessionsMenu => self.handle_sessions_menu_key_event(key_event),
-            UiMode::Help => match key_event.code {
-                KeyCode::Enter | KeyCode::Char('q') => self.state.mode = UiMode::Chat,
-                KeyCode::Up => self
-                    .state
-                    .help_scroll
-                    .set(self.state.help_scroll.get().saturating_sub(1)),
-                KeyCode::Down => self
-                    .state
-                    .help_scroll
-                    .set(self.state.help_scroll.get().saturating_add(1)),
-                KeyCode::PageUp => self
-                    .state
-                    .help_scroll
-                    .set(self.state.help_scroll.get().saturating_sub(10)),
-                KeyCode::PageDown => self
-                    .state
-                    .help_scroll
-                    .set(self.state.help_scroll.get().saturating_add(10)),
-                KeyCode::Home => self.state.help_scroll.set(0),
-                KeyCode::End => self.state.help_scroll.set(u16::MAX),
-                _ => {}
-            },
+            UiMode::Sessions => self.handle_sessions_key_event(key_event),
         }
     }
 
@@ -230,33 +187,34 @@ impl App {
         if self.handle_composer_shortcut(key_event) {
             return;
         }
-        if key_event.code == KeyCode::F(6) {
-            self.open_executions();
+        if key_event.code == KeyCode::Char('o') && key_event.modifiers == KeyModifiers::CONTROL {
+            self.state.scripts_expanded = !self.state.scripts_expanded;
+            self.invalidate_chat_cache();
+            return;
+        }
+        if self.handle_command_list_key(key_event) {
             return;
         }
 
         match key_event.code {
             KeyCode::Enter => {
+                self.reset_command_selection();
                 if key_event.modifiers.contains(KeyModifiers::SHIFT) {
                     self.insert_input_char('\n');
-                    self.reset_completion_cycle();
-                } else if !self.execute_current_command_suggestion() {
-                    self.reset_completion_cycle();
+                } else {
                     self.handle_submit();
                 }
             }
-            KeyCode::Tab => {
-                self.cycle_command_suggestion(true);
-            }
-            KeyCode::BackTab => {
-                self.cycle_command_suggestion(false);
-            }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c)
+                if !key_event
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 self.insert_input_char(c);
                 if active_command_prefix(&self.state.input).is_none() {
                     self.state.command_popup_dismissed = false;
                 }
-                self.reset_completion_cycle();
+                self.reset_command_selection();
             }
             KeyCode::Delete => self.delete_input_char(),
             KeyCode::Backspace => {
@@ -264,22 +222,10 @@ impl App {
                 if active_command_prefix(&self.state.input).is_none() {
                     self.state.command_popup_dismissed = false;
                 }
-                self.reset_completion_cycle();
+                self.reset_command_selection();
             }
-            KeyCode::Up => {
-                if active_command_prefix(&self.state.input).is_some() {
-                    self.cycle_command_suggestion(false);
-                } else {
-                    self.handle_input_up();
-                }
-            }
-            KeyCode::Down => {
-                if active_command_prefix(&self.state.input).is_some() {
-                    self.cycle_command_suggestion(true);
-                } else {
-                    self.handle_input_down();
-                }
-            }
+            KeyCode::Up => self.handle_input_up(),
+            KeyCode::Down => self.handle_input_down(),
             KeyCode::Left => {
                 self.move_input_cursor_left();
             }
@@ -306,17 +252,29 @@ impl App {
         if self.state.error_open && self.state.last_error.is_some() {
             return;
         }
-        if matches!(self.state.mode, UiMode::ModelMenu | UiMode::SessionsMenu) {
-            self.state
-                .menu_search
-                .extend(text.chars().filter(|ch| !ch.is_control()));
-            self.state.reset_menu_selection();
-            return;
+        self.state.sheet_armed = false;
+        match self.state.mode {
+            UiMode::Agent | UiMode::Mcp | UiMode::Model | UiMode::Sessions => {
+                self.paste_into_sheet_query(&text);
+                self.state.reset_sheet_selection();
+                return;
+            }
+            UiMode::ModelSettings => {
+                self.paste_into_sheet_query(&text);
+                return;
+            }
+            UiMode::Providers if self.state.providers_view == ProvidersView::Config => {
+                self.paste_into_provider_config(&text);
+                return;
+            }
+            UiMode::Providers => {
+                self.paste_into_sheet_query(&text);
+                self.state.reset_sheet_selection();
+                return;
+            }
+            UiMode::Chat => {}
         }
-        if self.state.mode != UiMode::Chat
-            || self.state.has_local_script_approval()
-            || text.is_empty()
-        {
+        if self.state.has_local_script_approval() || text.is_empty() {
             return;
         }
 
@@ -325,7 +283,7 @@ impl App {
         if active_command_prefix(&self.state.input).is_none() {
             self.state.command_popup_dismissed = false;
         }
-        self.reset_completion_cycle();
+        self.reset_command_selection();
     }
 
     pub(super) fn handle_ctrl_c(&mut self) {
@@ -342,194 +300,7 @@ impl App {
     pub(super) fn clear_chat_transient_state(&mut self) {
         self.clear_message_draft();
         self.state.command_popup_dismissed = false;
-        self.reset_completion_cycle();
-    }
-
-    pub(super) fn reset_completion_cycle(&mut self) {
-        self.state.command_completion_prefix = None;
-        self.state.command_completion_index = 0;
-    }
-
-    pub(super) fn cycle_command_suggestion(&mut self, forward: bool) {
-        if self.state.command_popup_dismissed {
-            return;
-        }
-        let Some(prefix) = active_command_prefix(&self.state.input) else {
-            return;
-        };
-        let matches = slash_command_matches(prefix);
-        if matches.is_empty() {
-            self.state.status = format!("No command matches '/{prefix}'");
-            return;
-        }
-
-        let next_index = if self.state.command_completion_prefix.as_deref() == Some(prefix) {
-            if forward {
-                (self.state.command_completion_index + 1) % matches.len()
-            } else if self.state.command_completion_index == 0 {
-                matches.len() - 1
-            } else {
-                self.state.command_completion_index - 1
-            }
-        } else if forward {
-            usize::from(matches.len() > 1)
-        } else {
-            matches.len() - 1
-        };
-
-        self.state.command_completion_prefix = Some(prefix.to_string());
-        self.state.command_completion_index = next_index;
-    }
-
-    pub(super) fn execute_current_command_suggestion(&mut self) -> bool {
-        if self.state.command_popup_dismissed || self.state.draft_images.len() != 0 {
-            return false;
-        }
-        let Some(prefix) = active_command_prefix(&self.state.input) else {
-            return false;
-        };
-        let matches = slash_command_matches(prefix);
-        if matches.is_empty() {
-            return false;
-        }
-
-        let selected_idx = if self.state.command_completion_prefix.as_deref() == Some(prefix) {
-            self.state.command_completion_index.min(matches.len() - 1)
-        } else {
-            0
-        };
-
-        let Some((command, _)) = matches.get(selected_idx) else {
-            return false;
-        };
-        self.clear_message_draft();
-        self.state.command_popup_dismissed = false;
-        self.reset_completion_cycle();
-        self.handle_command(command);
-        true
-    }
-
-    pub(super) fn command_popup_visible(&self) -> bool {
-        if self.state.command_popup_dismissed {
-            return false;
-        }
-
-        active_command_prefix(&self.state.input)
-            .map(slash_command_matches)
-            .is_some_and(|matches| !matches.is_empty())
-    }
-
-    pub(super) fn handle_model_menu_key_event(&mut self, key_event: KeyEvent) {
-        if self.handle_menu_search(key_event) {
-            return;
-        }
-        let models = self.state.filtered_models();
-        let len = models.len();
-
-        match key_event.code {
-            KeyCode::Up if len > 0 => {
-                self.state.model_menu_index =
-                    model_menu_previous_index(self.state.model_menu_index, len);
-            }
-            KeyCode::Down if len > 0 => {
-                self.state.model_menu_index =
-                    model_menu_next_index(self.state.model_menu_index, len);
-            }
-            KeyCode::Enter => {
-                let selected = models
-                    .get(self.state.model_menu_index)
-                    .map(|(provider, model)| {
-                        (
-                            (*provider).to_owned(),
-                            model.id.clone(),
-                            format!("Selected model: {} / {}", provider, model.name),
-                        )
-                    });
-                if let Some((provider_id, model_id, status)) = selected {
-                    self.state.selected_provider_id = Some(provider_id);
-                    self.state.selected_model_id = Some(model_id);
-                    self.state.status = status;
-                    self.save_model_selection();
-                    self.state.mode = UiMode::Chat;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub(super) fn handle_agent_menu_key_event(&mut self, key_event: KeyEvent) {
-        let len = self.state.agent_profiles.len();
-
-        match key_event.code {
-            KeyCode::Up if len > 0 => {
-                self.state.agent_menu_index =
-                    model_menu_previous_index(self.state.agent_menu_index, len);
-            }
-            KeyCode::Down if len > 0 => {
-                self.state.agent_menu_index =
-                    model_menu_next_index(self.state.agent_menu_index, len);
-            }
-            KeyCode::Enter => {
-                if self.state.turn_blocks_user_commands() {
-                    self.state.status =
-                        String::from("Cannot change agent while the current turn is active");
-                    self.state.mode = UiMode::Chat;
-                    return;
-                }
-                if let Some(profile) = self.state.agent_profiles.get(self.state.agent_menu_index) {
-                    if let Some(session_id) = self.state.current_session_id.clone() {
-                        self.request(RuntimeRequest::SetSessionProfile {
-                            session_id,
-                            profile_id: profile.id.clone(),
-                        });
-                    } else {
-                        self.state.selected_profile_id = Some(profile.id.clone());
-                        self.state.status = format!("Selected agent: {}", profile.id);
-                        self.save_workspace_preferences();
-                        self.state.mode = UiMode::Chat;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub(super) fn handle_sessions_menu_key_event(&mut self, key_event: KeyEvent) {
-        if self.handle_menu_search(key_event) {
-            return;
-        }
-        let sessions = self.state.filtered_sessions();
-        let total = sessions.len() + 1;
-
-        match key_event.code {
-            KeyCode::Up if total > 0 => {
-                self.state.sessions_menu_index =
-                    (self.state.sessions_menu_index + total - 1) % total;
-            }
-            KeyCode::Down if total > 0 => {
-                self.state.sessions_menu_index = (self.state.sessions_menu_index + 1) % total;
-            }
-            KeyCode::Enter => {
-                if self.state.sessions_menu_index == 0 {
-                    self.start_new_chat();
-                } else if let Some(session) =
-                    sessions.get(self.state.sessions_menu_index.saturating_sub(1))
-                {
-                    self.load_session(session.id.clone());
-                }
-            }
-            KeyCode::Delete => {
-                if self.state.sessions_menu_index > 0
-                    && let Some(session) =
-                        sessions.get(self.state.sessions_menu_index.saturating_sub(1))
-                {
-                    self.request(RuntimeRequest::DeleteSession {
-                        session_id: session.id.clone(),
-                    });
-                }
-            }
-            _ => {}
-        }
+        self.reset_command_selection();
     }
 
     pub(super) fn handle_script_approval_key_event(&mut self, key_event: KeyEvent) {
@@ -556,33 +327,6 @@ impl App {
             KeyCode::Home => self.state.approval_scroll.set(0),
             KeyCode::End => self.state.approval_scroll.set(usize::MAX),
             KeyCode::Char('f') => self.state.approval_expanded = !self.state.approval_expanded,
-            _ => {}
-        }
-    }
-
-    pub(super) fn handle_providers_key_event(&mut self, key_event: KeyEvent) {
-        if self.state.settings_editor.is_some() {
-            self.handle_settings_editor_key_event(key_event);
-            return;
-        }
-
-        match self.state.providers_view {
-            ProvidersView::List => self.handle_provider_list_key_event(key_event),
-            ProvidersView::Connect => self.handle_connect_provider_key_event(key_event),
-            ProvidersView::Detail => self.handle_provider_detail_key_event(key_event),
-            ProvidersView::Advanced => self.handle_advanced_provider_key_event(key_event),
-        }
-    }
-
-    pub(super) fn handle_settings_editor_key_event(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Enter => self.commit_settings_editor(),
-            KeyCode::Backspace => {
-                self.state.settings_editor_input.pop();
-            }
-            KeyCode::Char(c) => {
-                self.state.settings_editor_input.push(c);
-            }
             _ => {}
         }
     }

@@ -5,6 +5,7 @@
 
 use kraai_types::{ModelOptionValue, ModelOptionValues, ModelSelection, SessionId};
 
+use super::model_options::set as set_option;
 use super::*;
 
 mod creation;
@@ -81,18 +82,23 @@ fn options(effort: &str, thinking: bool, budget: Option<i64>) -> ModelOptionValu
 fn option_picker_saves_partial_choices_before_any_message() -> color_eyre::Result<()> {
     let mut harness = test_harness();
     configure(&mut harness)?;
-    harness.app.open_model_options();
+    harness.app.handle_command("model");
+    harness.app.handle_key_event(super::super::KeyEvent::new(
+        super::super::KeyCode::Char('s'),
+        super::super::KeyModifiers::CONTROL,
+    ));
+    harness.drain_requests();
     for code in [
-        super::super::KeyCode::Enter,
-        super::super::KeyCode::Down,
+        super::super::KeyCode::Char('h'),
+        super::super::KeyCode::Char('i'),
+        super::super::KeyCode::Char('g'),
+        super::super::KeyCode::Char('h'),
         super::super::KeyCode::Enter,
     ] {
-        harness
-            .app
-            .handle_model_options_key_event(super::super::KeyEvent::new(
-                code,
-                super::super::KeyModifiers::NONE,
-            ));
+        harness.app.handle_key_event(super::super::KeyEvent::new(
+            code,
+            super::super::KeyModifiers::NONE,
+        ));
     }
     let requests = harness.drain_requests();
     assert!(
@@ -109,9 +115,7 @@ fn clearing_an_optional_parent_saves_the_map_without_its_dependents() -> color_e
     let mut harness = test_harness();
     configure(&mut harness)?;
     super::model_options::configure_optional(&mut harness)?;
-    harness
-        .app
-        .handle_option_command(vec!["thinking", "--clear"]);
+    set_option(&mut harness, "thinking", "").map_err(color_eyre::eyre::Error::msg)?;
     let expected =
         ModelOptionValues::from([("effort".into(), ModelOptionValue::Choice("high".into()))]);
     assert_eq!(harness.app.state.selected_model_options, expected);
@@ -139,20 +143,26 @@ fn model_picker_saves_the_complete_typed_selection() -> color_eyre::Result<()> {
     second.id = "second".into();
     models.push(second);
     let values = options("high", true, Some(50));
-    harness.app.state.selected_model_options = values.clone();
-    harness.app.state.model_menu_index = harness
+    harness.app.state.selected_model_options = options("low", false, None);
+    harness
+        .app
+        .state
+        .remembered_model_options
+        .entry("provider".into())
+        .or_default()
+        .insert("second".into(), values.clone());
+    harness.app.state.mode = super::super::UiMode::Model;
+    harness.app.state.sheet_index = harness
         .app
         .state
         .filtered_models()
         .iter()
         .position(|(_, model)| model.id == "second")
         .ok_or_else(|| color_eyre::eyre::eyre!("missing second model"))?;
-    harness
-        .app
-        .handle_model_menu_key_event(super::super::KeyEvent::new(
-            super::super::KeyCode::Enter,
-            super::super::KeyModifiers::NONE,
-        ));
+    harness.app.handle_key_event(super::super::KeyEvent::new(
+        super::super::KeyCode::Enter,
+        super::super::KeyModifiers::NONE,
+    ));
     assert!(
         matches!(saves(&harness).as_slice(), [(session, _, selection)]
         if session.as_str() == "session" && selection.model_id.as_str() == "second" && selection.options == values)
@@ -165,19 +175,13 @@ fn rapid_edits_coalesce_and_stale_responses_preserve_the_latest_selection() -> c
 {
     let mut harness = test_harness();
     configure(&mut harness)?;
-    harness
-        .app
-        .set_model_option("effort", "high")
-        .map_err(color_eyre::eyre::Error::msg)?;
+    set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
     let (_, first_id, first) = saves(&harness)
         .into_iter()
         .next()
         .ok_or_else(|| color_eyre::eyre::eyre!("missing first save"))?;
     for (id, value) in [("effort", "low"), ("thinking", "true"), ("budget", "50")] {
-        harness
-            .app
-            .set_model_option(id, value)
-            .map_err(color_eyre::eyre::Error::msg)?;
+        set_option(&mut harness, id, value).map_err(color_eyre::eyre::Error::msg)?;
     }
     assert!(saves(&harness).is_empty());
     let desired = options("low", true, Some(50));
@@ -227,10 +231,7 @@ fn active_and_queued_turns_defer_saves_and_retain_submitted_options() -> color_e
     active.session.profile_locked = true;
     snapshot(&mut harness, &SessionId::new("session"), 0, active);
     harness.app.submit_message("queued".into());
-    harness
-        .app
-        .set_model_option("effort", "low")
-        .map_err(color_eyre::eyre::Error::msg)?;
+    set_option(&mut harness, "effort", "low").map_err(color_eyre::eyre::Error::msg)?;
     assert!(harness.drain_requests().iter().any(|request| matches!(request, RuntimeRequest::SendMessage { options, .. } if options == &submitted)));
     harness
         .app
@@ -263,10 +264,7 @@ fn session_switches_keep_deferred_saves_and_ignore_background_acknowledgements()
     active.session.is_running = true;
     active.activity = SessionActivity::Streaming;
     snapshot(&mut harness, &SessionId::new("session"), 0, active);
-    harness
-        .app
-        .set_model_option("effort", "high")
-        .map_err(color_eyre::eyre::Error::msg)?;
+    set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
     assert!(saves(&harness).is_empty());
     harness
         .app
@@ -308,10 +306,7 @@ fn admission_failure_refreshes_idle_state_and_flushes_deferred_edits() -> color_
     configure(&mut harness)?;
     harness.app.state.selected_model_options = options("high", false, None);
     harness.app.submit_message("message".into());
-    harness
-        .app
-        .set_model_option("effort", "low")
-        .map_err(color_eyre::eyre::Error::msg)?;
+    set_option(&mut harness, "effort", "low").map_err(color_eyre::eyre::Error::msg)?;
     assert!(saves(&harness).is_empty());
     harness
         .app
@@ -336,10 +331,7 @@ fn admission_failure_refreshes_idle_state_and_flushes_deferred_edits() -> color_
 fn transient_save_errors_retry_during_session_reconciliation() -> color_eyre::Result<()> {
     let mut harness = test_harness();
     configure(&mut harness)?;
-    harness
-        .app
-        .set_model_option("effort", "high")
-        .map_err(color_eyre::eyre::Error::msg)?;
+    set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
     let (_, first_id, desired) = saves(&harness)
         .into_iter()
         .next()

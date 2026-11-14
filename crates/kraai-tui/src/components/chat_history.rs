@@ -10,7 +10,11 @@ use std::sync::Arc;
 use super::{display_width, fitting_prefix, normalize_terminal_text};
 
 mod markdown;
+mod scripts;
 mod wrapping;
+
+pub(crate) use scripts::{ScriptMark, ScriptSection, ScriptView};
+pub(crate) use wrapping::wrap_words;
 
 const MESSAGE_GUTTER_WIDTH: usize = 3;
 
@@ -329,44 +333,6 @@ impl<'a> ChatHistory<'a> {
                 line
             })
             .collect()
-    }
-
-    pub(crate) fn build_execution_lines(
-        summary: &str,
-        source: Option<&str>,
-        output: &str,
-        expanded: bool,
-        selected: bool,
-        width: u16,
-    ) -> Vec<RenderedLine> {
-        let style = Style::default().fg(if selected {
-            Color::Cyan
-        } else {
-            Color::DarkGray
-        });
-        let marker = if expanded { "⌄" } else { " " };
-        let mut lines =
-            Self::wrap_with_prefix(&format!("{marker} {summary}  [F6]"), width as usize, "", "")
-                .into_iter()
-                .map(|line| Self::single_span_line(line, style))
-                .collect::<Vec<_>>();
-        if expanded {
-            for (label, text) in [
-                ("Source", source.unwrap_or("Source unavailable")),
-                ("Output", output),
-            ] {
-                lines.push(Self::single_span_line(label.to_string(), style));
-                for line in Self::wrap_with_prefix(
-                    &normalize_terminal_text(text),
-                    width as usize,
-                    "  ",
-                    "  ",
-                ) {
-                    lines.push(Self::single_span_line(line, Style::default()));
-                }
-            }
-        }
-        lines
     }
 
     pub(crate) fn build_message_lines(msg: &Message, width: u16) -> Vec<RenderedLine> {
@@ -935,7 +901,7 @@ mod tests {
         let has_colored_inline_code = lines[0]
             .spans
             .iter()
-            .any(|span| span.text == "beta" && span.style.fg == Some(markdown::ACCENT));
+            .any(|span| span.text == "beta" && span.style.fg == Some(crate::theme::ACCENT));
         assert!(has_colored_inline_code);
     }
 

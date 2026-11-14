@@ -118,19 +118,6 @@ impl App {
             needs_redraw |= prior_style != self.state.cursor_preferences.style;
             needs_redraw |= prior_muted != self.state.palette.muted;
             cursor_override.apply(self.state.cursor_preferences.style)?;
-            if self.state.editor_requested {
-                self.input.stop();
-                let edited = self.open_composer_editor(terminal, cursor_override);
-                self.input.start()?;
-                if let Err(error) = edited {
-                    if self.state.exit {
-                        return Err(error);
-                    }
-                    self.set_error(format!("Editor error: {error}"));
-                }
-                cursor.update(Instant::now(), true);
-                needs_redraw = true;
-            }
             let blink_changed = cursor.update(Instant::now(), input_changed)
                 && self.state.composer_cursor_enabled()
                 && self.state.cursor_preferences.custom_blink();
@@ -145,7 +132,7 @@ impl App {
 
             terminal.draw(|frame| {
                 let area = frame.area();
-                if matches!(self.state.mode, UiMode::Chat | UiMode::Executions) {
+                if self.state.mode == UiMode::Chat {
                     let [chat_area, _, _] = ui::chat_layout(&self.state, area);
                     self.state.refresh_chat_render_cache(chat_area.width);
                     self.update_chat_viewport(chat_area.height);
@@ -154,20 +141,16 @@ impl App {
                 frame.render_widget(&self.state, area);
 
                 cursor.position = None;
+                let [_, _, input_area] = ui::chat_layout(&self.state, area);
                 if self.state.mode == UiMode::Chat {
-                    let [_, _, input_area] = ui::chat_layout(&self.state, area);
                     self.state.input_width = input_area.width;
-
-                    if self.state.composer_cursor_enabled()
-                        && input_area.width > 0
-                        && input_area.height > 0
-                    {
-                        cursor.position = Some(
-                            TextInput::new(&self.state.input, self.state.input_cursor)
-                                .get_cursor_position(input_area)
-                                .into(),
-                        );
-                    }
+                }
+                if self.state.composer_cursor_enabled()
+                    && input_area.width > 0
+                    && input_area.height > 0
+                {
+                    cursor.position =
+                        Some(self.state.composer().get_cursor_position(input_area).into());
                 }
                 if let Some(position) = cursor.position
                     && (!self.state.cursor_preferences.custom_blink() || cursor.visible)

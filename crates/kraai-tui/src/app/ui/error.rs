@@ -1,6 +1,6 @@
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Block, Borders, Clear, Paragraph, Widget},
@@ -10,6 +10,22 @@ use crate::components::{ChatHistory, normalize_terminal_text};
 
 use super::AppState;
 
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let [_, row, _] = Layout::vertical([
+        Constraint::Length(area.height.saturating_sub(height) / 2),
+        Constraint::Length(height),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+    let [_, popup, _] = Layout::horizontal([
+        Constraint::Length(area.width.saturating_sub(width) / 2),
+        Constraint::Length(width),
+        Constraint::Min(0),
+    ])
+    .areas(row);
+    popup
+}
+
 pub(super) fn render_error(state: &AppState, area: Rect, buf: &mut Buffer) {
     if !state.error_open {
         return;
@@ -17,7 +33,7 @@ pub(super) fn render_error(state: &AppState, area: Rect, buf: &mut Buffer) {
     let Some(error) = &state.last_error else {
         return;
     };
-    let popup = super::centered_rect(
+    let popup = centered_rect(
         area.width.saturating_sub(4).max(area.width.min(20)),
         area.height.saturating_sub(2).max(area.height.min(5)),
         area,

@@ -71,10 +71,7 @@ fn edits_during_creation_survive_initial_snapshots_and_save_after_the_turn()
             harness.app.state.selected_provider_id = Some("other-provider".into());
             harness.app.state.selected_model_id = Some("other-model".into());
         }
-        harness
-            .app
-            .set_model_option("effort", "high")
-            .map_err(color_eyre::eyre::Error::msg)?;
+        set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
         let desired = ModelSelection {
             provider_id: kraai_types::ProviderId::new(if change_model {
                 "other-provider"
@@ -123,10 +120,7 @@ fn edits_during_creation_survive_initial_snapshots_and_save_after_the_turn()
 fn creation_edits_save_after_initial_admission_fails() -> color_eyre::Result<()> {
     let mut harness = test_harness();
     let (creation_id, submitted) = submit_first(&mut harness)?;
-    harness
-        .app
-        .set_model_option("effort", "high")
-        .map_err(color_eyre::eyre::Error::msg)?;
+    set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
     created(&mut harness, creation_id, &submitted);
     harness
         .app

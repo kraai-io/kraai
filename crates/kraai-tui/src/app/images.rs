@@ -122,6 +122,7 @@ impl App {
 
     pub(super) fn replace_input_range(&mut self, range: std::ops::Range<usize>, text: &str) {
         self.reset_input_history_navigation();
+        self.state.command_filter = None;
         self.state.input_cursor =
             self.state
                 .draft_images
