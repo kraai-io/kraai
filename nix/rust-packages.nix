@@ -143,7 +143,7 @@
 
     cargoArtifacts = import ./cargo-artifacts.nix {
       inherit lib;
-      inherit (pkgs) runCommand;
+      inherit (pkgs) formats runCommand;
       root = ../.;
       manifest = cargoToml;
     };

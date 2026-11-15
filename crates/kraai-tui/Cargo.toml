@@ -52,3 +52,6 @@ rustix = { workspace = true, features = ["process", "stdio"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { workspace = true, features = ["pty"] }
+
+[lints]
+workspace = true

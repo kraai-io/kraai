@@ -30,3 +30,6 @@ tempfile.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]
 nix = { workspace = true, features = ["fs"] }
+
+[lints]
+workspace = true

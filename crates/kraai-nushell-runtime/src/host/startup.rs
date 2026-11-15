@@ -1,3 +1,4 @@
+use std::mem::DropGuard;
 use std::sync::atomic::Ordering;
 
 use nu_protocol::debugger::WithoutDebug;
@@ -8,20 +9,6 @@ use nu_protocol::{PipelineData, ShellError, Span};
 use super::HostError;
 use crate::request::HostRequest;
 
-struct StartupReporting(bool);
-
-impl StartupReporting {
-    fn silence() -> Self {
-        Self(SUPPRESS_REPORTING.swap(true, Ordering::Relaxed))
-    }
-}
-
-impl Drop for StartupReporting {
-    fn drop(&mut self) {
-        SUPPRESS_REPORTING.store(self.0, Ordering::Relaxed);
-    }
-}
-
 pub(super) fn load_startup_files(
     request: &HostRequest,
     engine_state: &mut EngineState,
@@ -30,7 +17,10 @@ pub(super) fn load_startup_files(
     if request.startup_files.is_empty() {
         return Ok(());
     }
-    let _reporting = StartupReporting::silence();
+    let _reporting = DropGuard::new(
+        SUPPRESS_REPORTING.swap(true, Ordering::Relaxed),
+        |previous| SUPPRESS_REPORTING.store(previous, Ordering::Relaxed),
+    );
     for file in &request.startup_files {
         let previous_file = engine_state.file.replace(file.path.clone());
         let result = evaluate_startup(

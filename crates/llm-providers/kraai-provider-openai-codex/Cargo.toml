@@ -29,3 +29,6 @@ urlencoding = { workspace = true }
 [dev-dependencies]
 kraai-test-support = { workspace = true }
 ulid = { workspace = true }
+
+[lints]
+workspace = true

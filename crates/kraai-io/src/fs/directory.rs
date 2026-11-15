@@ -83,7 +83,7 @@ fn directory_chain(anchor: &Path, path: &Path) -> io::Result<Vec<PathBuf>> {
     let anchor = nonempty_path(anchor);
     let path = nonempty_path(path);
     let relative = if anchor == Path::new(".") && !path.is_absolute() {
-        path.strip_prefix(".").unwrap_or(path)
+        path.trim_prefix(".")
     } else {
         path.strip_prefix(anchor).map_err(|error| {
             io::Error::new(

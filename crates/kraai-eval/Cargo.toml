@@ -39,3 +39,6 @@ webbrowser = { workspace = true }
 
 [dev-dependencies]
 kraai-test-support = { workspace = true }
+
+[lints]
+workspace = true

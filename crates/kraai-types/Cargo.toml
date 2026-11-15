@@ -17,3 +17,6 @@ typescript = ["dep:ts-rs", "kraai-execution-types/typescript"]
 [dependencies.ts-rs]
 optional = true
 workspace = true
+
+[lints]
+workspace = true
