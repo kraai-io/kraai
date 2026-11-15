@@ -2,7 +2,7 @@ use kraai_types::{ChatRole, Message, ScriptCall};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     widgets::Widget,
 };
 use std::sync::Arc;
@@ -13,7 +13,9 @@ mod markdown;
 mod scripts;
 mod wrapping;
 
-pub(crate) use scripts::{ScriptMark, ScriptSection, ScriptView};
+pub(crate) use scripts::{
+    RunningCard, ScriptCard, ScriptMark, ScriptSection, ScriptView, running_dot,
+};
 pub(crate) use wrapping::wrap_words;
 
 const MESSAGE_GUTTER_WIDTH: usize = 3;
@@ -231,24 +233,14 @@ impl<'a> ChatHistory<'a> {
         }
     }
 
-    fn render_script_card(source: &str, width: usize) -> Vec<RenderedLine> {
-        let mut lines = Vec::new();
-        let header_style = Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD);
-        let body_style = Style::default().fg(Color::White);
-
-        Self::push_wrapped_lines(&mut lines, "Nushell", width, header_style, "", "");
-        Self::push_wrapped_lines(&mut lines, source.trim_end(), width, body_style, "  ", "  ");
-        lines
-    }
-
     fn render_assistant_message(
         items: &[kraai_types::AssistantItem],
         width: usize,
+        card: &dyn Fn(&str) -> ScriptCard,
     ) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
         let style = Style::default().fg(Color::White);
+        let mut marker = Some('•');
         for item in items {
             let block = match item {
                 kraai_types::AssistantItem::Reasoning { .. } => continue,
@@ -256,22 +248,36 @@ impl<'a> ChatHistory<'a> {
                     if text.trim().is_empty() {
                         continue;
                     }
-                    markdown::render_message(&normalize_terminal_text(text), width, style)
+                    Self::add_message_gutter(
+                        markdown::render_message(
+                            &normalize_terminal_text(text),
+                            width.saturating_sub(MESSAGE_GUTTER_WIDTH),
+                            style,
+                        ),
+                        marker,
+                    )
                 }
-                kraai_types::AssistantItem::ScriptCall(ScriptCall { input, .. }) => {
-                    Self::render_script_card(&normalize_terminal_text(input), width)
+                kraai_types::AssistantItem::ScriptCall(ScriptCall { call_id, input, .. }) => {
+                    Self::build_script_card_lines(input, &card(call_id.as_str()), width)
                 }
             };
-            markdown::append_block(&mut lines, block, style);
+            if block.is_empty() {
+                continue;
+            }
+            if !lines.is_empty() {
+                lines.push(Self::single_span_line(Self::gutter_prefix(None), style));
+            }
+            lines.extend(block);
+            marker = None;
         }
         if lines.is_empty() {
-            lines.push(Self::single_span_line(String::new(), style));
+            lines.push(Self::single_span_line(Self::gutter_prefix(marker), style));
         }
         lines
     }
 
     fn build_rendered_lines(&self, width: u16) -> Vec<RenderedLine> {
-        Self::build_lines(self.messages, width)
+        Self::build_lines(self.messages, width, &|_| ScriptCard::Waiting)
     }
 
     pub(crate) fn separator_line() -> RenderedLine {
@@ -303,7 +309,7 @@ impl<'a> ChatHistory<'a> {
         }
     }
 
-    fn add_message_gutter(lines: Vec<RenderedLine>, marker: char) -> Vec<RenderedLine> {
+    fn add_message_gutter(lines: Vec<RenderedLine>, marker: Option<char>) -> Vec<RenderedLine> {
         if lines.is_empty() {
             return lines;
         }
@@ -317,11 +323,7 @@ impl<'a> ChatHistory<'a> {
             .into_iter()
             .enumerate()
             .map(|(idx, mut line)| {
-                let prefix = if idx == marker_idx {
-                    Self::gutter_prefix(Some(marker))
-                } else {
-                    Self::gutter_prefix(None)
-                };
+                let prefix = Self::gutter_prefix(marker.filter(|_| idx == marker_idx));
                 let prefix_style = Self::line_prefix_style(&line);
                 line.spans.insert(
                     0,
@@ -335,7 +337,12 @@ impl<'a> ChatHistory<'a> {
             .collect()
     }
 
-    pub(crate) fn build_message_lines(msg: &Message, width: u16) -> Vec<RenderedLine> {
+    /// The lines of one message. `card` says where each of its unanswered script calls stands.
+    pub(crate) fn build_message_lines(
+        msg: &Message,
+        width: u16,
+        card: &dyn Fn(&str) -> ScriptCard,
+    ) -> Vec<RenderedLine> {
         let width = width as usize;
         if msg.role() == ChatRole::System {
             return Vec::new();
@@ -378,7 +385,7 @@ impl<'a> ChatHistory<'a> {
                 let kraai_types::ConversationItem::Assistant { items } = &msg.content else {
                     return Vec::new();
                 };
-                Self::add_message_gutter(Self::render_assistant_message(items, content_width), '•')
+                Self::render_assistant_message(items, width, card)
             }
             ChatRole::ToolCallResult => Self::add_message_gutter(
                 markdown::render_message(
@@ -386,16 +393,20 @@ impl<'a> ChatHistory<'a> {
                     content_width,
                     Style::default().fg(Color::White),
                 ),
-                '•',
+                Some('•'),
             ),
             ChatRole::System => Vec::new(),
         }
     }
 
-    pub(crate) fn build_lines(messages: &[&Message], width: u16) -> Vec<RenderedLine> {
+    pub(crate) fn build_lines(
+        messages: &[&Message],
+        width: u16,
+        card: &dyn Fn(&str) -> ScriptCard,
+    ) -> Vec<RenderedLine> {
         let mut rendered = Vec::new();
         for msg in messages {
-            let mut message_lines = Self::build_message_lines(msg, width);
+            let mut message_lines = Self::build_message_lines(msg, width, card);
             if message_lines.is_empty() {
                 continue;
             }
@@ -688,7 +699,7 @@ mod tests {
     #[test]
     fn keeps_wide_markdown_graphemes_within_narrow_chat_width() {
         let assistant = message("1", ChatRole::Assistant, "> 你");
-        let lines = ChatHistory::build_message_lines(&assistant, 6);
+        let lines = ChatHistory::build_message_lines(&assistant, 6, &|_| ScriptCard::Waiting);
 
         assert!(
             lines
@@ -757,7 +768,8 @@ mod tests {
         let lines = history.build_rendered_lines(120);
 
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
-        assert!(rendered.iter().any(|line| *line == " • Nushell"));
+        assert_eq!(rendered.first().map(String::as_str), Some(" · not started"));
+        assert!(!rendered.iter().any(|line| line.contains("timeout=")));
         assert!(
             rendered
                 .iter()
@@ -779,9 +791,8 @@ mod tests {
             [
                 " • before",
                 "   ",
-                "   Nushell",
-                "     # timeout=1sec",
-                "     ls",
+                " · not started",
+                "   ls",
                 "   ",
                 "   after",
             ]
@@ -791,7 +802,7 @@ mod tests {
     #[test]
     fn tool_delimiters_inside_scripts_and_prose_are_not_parsed() {
         let script = script_message("", "# timeout=1sec\nprint '</tool_call>'\nprint 'tail'", "");
-        let lines = ChatHistory::build_message_lines(&script, 120);
+        let lines = ChatHistory::build_message_lines(&script, 120, &|_| ScriptCard::Waiting);
         let text = lines
             .iter()
             .map(ChatHistory::line_text)
@@ -804,11 +815,11 @@ mod tests {
             ChatRole::Assistant,
             "Example: <tool_call>hello</tool_call>",
         );
-        let lines = ChatHistory::build_message_lines(&prose, 120);
+        let lines = ChatHistory::build_message_lines(&prose, 120, &|_| ScriptCard::Waiting);
         assert!(
             !lines
                 .iter()
-                .any(|line| ChatHistory::line_text(line).contains("Nushell"))
+                .any(|line| ChatHistory::line_text(line).contains("not started"))
         );
     }
 
@@ -843,7 +854,7 @@ mod tests {
         history.render(area, &mut buffer);
         let row: String = (0..7).map(|x| buffer[(x, 1)].symbol()).collect();
         assert_eq!(row, " hello ");
-        let wrapped = ChatHistory::build_message_lines(&user, 6);
+        let wrapped = ChatHistory::build_message_lines(&user, 6, &|_| ScriptCard::Waiting);
         assert_eq!(
             wrapped
                 .iter()
@@ -924,22 +935,22 @@ mod tests {
         let lines = history.build_rendered_lines(120);
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
-        assert_eq!(rendered.first().map(String::as_str), Some(" • Nushell"));
+        assert_eq!(rendered.first().map(String::as_str), Some(" · not started"));
     }
 
     #[test]
     fn script_cards_trim_outer_blank_lines_without_losing_internal_spacing() {
-        let assistant = script_message("before\n\n", "# timeout=1sec\n\nls\n\n   ", "");
-        let lines = ChatHistory::build_message_lines(&assistant, 80);
+        let assistant = script_message("before\n\n", "# timeout=1sec\n\nls\n\n  pwd\n\n   ", "");
+        let lines = ChatHistory::build_message_lines(&assistant, 80, &|_| ScriptCard::Waiting);
         assert_eq!(
             lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>(),
             [
                 " • before",
                 "   ",
-                "   Nushell",
-                "     # timeout=1sec",
-                "     ",
-                "     ls",
+                " · not started",
+                "   ls",
+                "   ",
+                "     pwd",
             ]
         );
     }
@@ -958,11 +969,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            vec![
-                " • Nushell",
-                "     # timeout=5sec",
-                "     kraai-open-files /tmp/a.txt"
-            ]
+            vec![" · not started", "   kraai-open-files /tmp/a.txt"]
         );
     }
 }

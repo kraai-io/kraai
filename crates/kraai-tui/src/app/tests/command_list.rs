@@ -137,7 +137,6 @@ fn error_is_listed_and_opens_only_while_an_error_waits() {
     type_text(&mut harness, "or");
     key(&mut harness, KeyCode::Enter);
     assert!(!harness.app.state.error_open);
-    assert_eq!(harness.app.state.status, "No error to read");
     assert!(harness.app.state.input.is_empty());
 
     harness.app.set_error(String::from("Stream error: offline"));

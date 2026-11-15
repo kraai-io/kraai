@@ -268,11 +268,6 @@ impl App {
         )?;
         kraai_types::reconcile_model_option_values(&model.options, &mut values);
         fill_starting_effort(model, &mut values);
-        self.state.status = if input.is_empty() {
-            format!("Unset {id}")
-        } else {
-            format!("Selected {id}: {input}")
-        };
         self.store_model_options(provider_id, model_id, values);
         Ok(())
     }

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-pub(super) fn format_duration(duration: Duration) -> String {
+pub(crate) fn format_duration(duration: Duration) -> String {
     let seconds = duration.as_secs();
     let tenths = duration.subsec_millis() / 100;
     let fraction = if tenths == 0 {
@@ -15,6 +15,17 @@ pub(super) fn format_duration(duration: Duration) -> String {
     } else {
         format!("{}h{:02}m", seconds / 3600, (seconds / 60) % 60)
     }
+}
+
+/// A time limit: `format_duration` without the units that are zero, so five minutes is "5m".
+pub(crate) fn format_limit(limit: Duration) -> String {
+    let text = format_duration(limit);
+    for (suffix, unit) in [("m00s", "m"), ("h00m", "h")] {
+        if let Some(head) = text.strip_suffix(suffix) {
+            return format!("{head}{unit}");
+        }
+    }
+    text
 }
 
 #[cfg(test)]
@@ -33,6 +44,20 @@ mod tests {
             (3600000, "1h00m"),
         ] {
             assert_eq!(format_duration(Duration::from_millis(millis)), expected);
+        }
+    }
+
+    #[test]
+    fn limits_drop_the_units_that_are_zero() {
+        for (millis, expected) in [
+            (1500, "1.5s"),
+            (30000, "30s"),
+            (90000, "1m30s"),
+            (300000, "5m"),
+            (3600000, "1h"),
+            (5400000, "1h30m"),
+        ] {
+            assert_eq!(format_limit(Duration::from_millis(millis)), expected);
         }
     }
 }

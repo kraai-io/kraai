@@ -15,7 +15,7 @@ fn configure(harness: &mut TestHarness) -> color_eyre::Result<()> {
     super::model_options::configure(harness)?;
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "loaded");
+        .reset_chat_session(Some(SessionId::new("session")));
     snapshot(
         harness,
         &SessionId::new("session"),
@@ -268,7 +268,7 @@ fn session_switches_keep_deferred_saves_and_ignore_background_acknowledgements()
     assert!(saves(&harness).is_empty());
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("other")), "other session");
+        .reset_chat_session(Some(SessionId::new("other")));
     harness.app.state.selected_model_id = Some("other-model".into());
     harness.app.state.selected_model_options.clear();
     let idle = session_snapshot(None);
@@ -289,7 +289,7 @@ fn session_switches_keep_deferred_saves_and_ignore_background_acknowledgements()
     assert!(harness.app.state.selected_model_options.is_empty());
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "loaded");
+        .reset_chat_session(Some(SessionId::new("session")));
     let mut restored = session_snapshot(None);
     restored.session.selected_model = Some(selection);
     snapshot(&mut harness, &SessionId::new("session"), save_id, restored);

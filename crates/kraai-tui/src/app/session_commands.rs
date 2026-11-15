@@ -24,12 +24,9 @@ impl App {
 
     pub(super) fn submit_message(&mut self, raw_input: String) {
         if self.state.draft_images.pending() {
-            self.state.status = String::from("Wait for the image attachment to finish loading");
             return;
         }
         if raw_input.trim().is_empty() && self.state.draft_images.len() == 0 {
-            let message = String::from("Message cannot be empty");
-            self.state.status = message.clone();
             return;
         }
 
@@ -43,8 +40,6 @@ impl App {
 
         let message = self.compose_message(&raw_input);
         if message.images().count() > kraai_execution_types::image::MAX_IMAGE_ATTACHMENTS {
-            self.state.status =
-                String::from("Too many images. Delete an image chip before sending");
             return;
         }
 
@@ -63,8 +58,6 @@ impl App {
         }
 
         if self.state.pending_submit.is_some() {
-            self.state.status =
-                String::from("Session creation already in progress; message was not sent");
             return;
         }
 
@@ -86,7 +79,6 @@ impl App {
             options: self.state.selected_model_options.clone(),
         });
         self.clear_message_draft();
-        self.state.status = String::from("Creating session");
     }
 
     fn submission_model(&mut self) -> Option<(String, String)> {
@@ -128,7 +120,6 @@ impl App {
     pub(super) fn handle_command(&mut self, command_line: &str) {
         let mut parts = command_line.split_whitespace();
         let Some(command) = parts.next() else {
-            self.state.status = String::from("Empty command");
             return;
         };
 
@@ -165,19 +156,14 @@ impl App {
             }
             "undo" => {
                 let Some(session_id) = self.state.current_session_id.clone() else {
-                    self.state.status = String::from("No session to undo");
                     return;
                 };
                 if self.state.turn_blocks_user_commands() {
-                    self.state.status =
-                        String::from("Cannot undo while the current turn is active");
                     return;
                 }
                 self.request(RuntimeRequest::UndoLastUserMessage { session_id });
             }
-            _ => {
-                self.state.status = format!("Unknown command: /{command}");
-            }
+            _ => {}
         }
     }
 
@@ -256,7 +242,6 @@ impl App {
 
         if let Err(error) = workspace_preferences::save_for_current_workspace(&preferences) {
             tracing::warn!("Failed to save workspace preferences: {error}");
-            self.state.status = format!("Failed saving workspace preferences: {error}");
         }
     }
 
@@ -280,9 +265,6 @@ impl App {
         self.state.profile_locked = state.profile_locked;
         self.state.profile_lock_stale_after_terminal_event = false;
         self.state.highlight_selected_agent();
-        if let Some(warning) = self.state.agent_profile_warnings.first() {
-            self.state.status = format!("Agent profile warning: {}", warning.message);
-        }
     }
 
     pub(super) fn sync_current_session_profile_from_sessions(&mut self) {

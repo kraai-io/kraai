@@ -18,11 +18,14 @@ use kraai_script_protocol::{
 };
 use kraai_types::{MessageId, SessionId, ToolCallId};
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::core::RuntimeCore;
 use super::nushell_host::resolve_nushell_host;
+use super::script_output_tail::OutputTail;
 use super::state_effects::DurableStateEffects;
+use crate::handle::RuntimeEventSender;
 
 #[derive(Clone)]
 pub(crate) struct EffectiveScriptRequest {
@@ -161,14 +164,18 @@ impl RuntimeCore {
         self.send_event(crate::Event::ScriptStarted {
             session_id: request.session_id.clone(),
             call_id: request.call_id.to_string(),
+            timeout_millis: u64::try_from(request.timeout.as_millis()).unwrap_or(u64::MAX),
         });
         let (output_tx, output_rx) = tokio::sync::mpsc::unbounded_channel();
-        let output_store = self.execution_store.clone();
-        let output_execution_id = execution_id.clone();
         let output_task = tokio::spawn(persist_output_events(
-            output_store,
-            output_execution_id,
+            self.execution_store.clone(),
+            execution_id.clone(),
             output_rx,
+            TailSink {
+                events: self.event_tx.clone(),
+                session_id: request.session_id.clone(),
+                call_id: request.call_id.to_string(),
+            },
         ));
 
         let host_path = host.executable.display().to_string();
@@ -239,10 +246,31 @@ impl RuntimeCore {
     }
 }
 
+/// The shortest time between two tails of one script's output.
+const TAIL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Where the last lines of a running script's output go.
+struct TailSink {
+    events: RuntimeEventSender,
+    session_id: SessionId,
+    call_id: String,
+}
+
+impl TailSink {
+    fn send(&self, tail: &OutputTail) {
+        self.events.send(crate::Event::ScriptOutputTail {
+            session_id: self.session_id.clone(),
+            call_id: self.call_id.clone(),
+            lines: tail.lines(),
+        });
+    }
+}
+
 async fn persist_output_events(
     store: Arc<dyn kraai_persistence::ScriptExecutionStore>,
     execution_id: ScriptExecutionId,
     mut events: UnboundedReceiver<OutputEvent>,
+    sink: TailSink,
 ) -> std::result::Result<(), String> {
     let chunk = |event: OutputEvent| {
         let stream = match event.stream {
@@ -252,16 +280,44 @@ async fn persist_output_events(
         (stream, event.bytes)
     };
     let mut first_error = None;
-    while let Some(event) = events.recv().await {
+    let mut tail = OutputTail::default();
+    let mut unsent = false;
+    let mut next_send = Instant::now();
+    loop {
+        let event = if unsent {
+            tokio::select! {
+                event = events.recv() => event,
+                () = tokio::time::sleep_until(next_send) => {
+                    sink.send(&tail);
+                    unsent = false;
+                    next_send = Instant::now() + TAIL_INTERVAL;
+                    continue;
+                }
+            }
+        } else {
+            events.recv().await
+        };
+        let Some(event) = event else {
+            break;
+        };
         // Everything that arrived while the previous batch was being written goes in one write.
         let mut batch = vec![chunk(event)];
         while let Ok(event) = events.try_recv() {
             batch.push(chunk(event));
         }
+        for (stream, bytes) in &batch {
+            tail.push(*stream, bytes);
+        }
+        unsent = true;
         if let Err(error) = store.append_output(&execution_id, batch).await
             && first_error.is_none()
         {
             first_error = Some(error.to_string());
+        }
+        if Instant::now() >= next_send {
+            sink.send(&tail);
+            unsent = false;
+            next_send = Instant::now() + TAIL_INTERVAL;
         }
     }
     first_error.map_or(Ok(()), Err)
@@ -373,6 +429,63 @@ fn completion_from_runtime_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use color_eyre::eyre::ensure;
+
+    #[tokio::test(start_paused = true)]
+    async fn output_reaches_clients_as_a_tail_at_most_ten_times_a_second() -> Result<()> {
+        let directory =
+            std::env::temp_dir().join(format!("kraai-output-tail-{}", ulid::Ulid::generate()));
+        let events = RuntimeEventSender::new(16);
+        let mut received = events.subscribe();
+        let (output, output_rx) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(persist_output_events(
+            Arc::new(kraai_persistence::SqliteScriptExecutionStore::new(
+                &directory,
+            )),
+            ScriptExecutionId::new("execution"),
+            output_rx,
+            TailSink {
+                events: events.clone(),
+                session_id: SessionId::new("session"),
+                call_id: String::from("call"),
+            },
+        ));
+        let line = |text: &str| OutputEvent {
+            stream: OutputStream::Stdout,
+            bytes: format!("{text}\n").into_bytes(),
+        };
+        let mut next_tail = async || -> Result<(Vec<String>, Instant)> {
+            match received.recv().await?.event {
+                crate::Event::ScriptOutputTail {
+                    session_id,
+                    call_id,
+                    lines,
+                } => {
+                    ensure!(session_id.as_str() == "session" && call_id == "call");
+                    Ok((
+                        lines.into_iter().map(|line| line.text).collect(),
+                        Instant::now(),
+                    ))
+                }
+                event => Err(eyre!("unexpected event {event:?}")),
+            }
+        };
+
+        let start = Instant::now();
+        output.send(line("one"))?;
+        ensure!(next_tail().await? == (vec![String::from("one")], start));
+        output.send(line("two"))?;
+        output.send(line("three"))?;
+        let (lines, at) = next_tail().await?;
+        ensure!(lines == ["one", "two", "three"], "{lines:?}");
+        ensure!(at == start + TAIL_INTERVAL);
+
+        drop(output);
+        let _ = task.await?;
+        ensure!(received.try_recv().is_err());
+        let _ = std::fs::remove_dir_all(&directory);
+        Ok(())
+    }
 
     #[test]
     fn incompatible_host_is_an_application_failure() {

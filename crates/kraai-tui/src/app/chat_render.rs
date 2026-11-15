@@ -48,14 +48,73 @@ impl AppState {
     }
 
     pub(super) fn refresh_chat_render_cache(&self, width: u16) {
-        let needs_refresh = {
+        let (stale, cards_stale) = {
             let cache = self.chat_render_cache.borrow();
-            cache.epoch != self.chat_epoch || cache.width != width
+            (
+                cache.epoch != self.chat_epoch || cache.width != width,
+                cache.cards_epoch != self.cards_epoch,
+            )
         };
-        if !needs_refresh {
-            return;
+        if stale || (cards_stale && !self.refresh_script_cards()) {
+            self.rebuild_chat_render_cache(width);
         }
+    }
 
+    /// Rebuilds only the messages whose script cards may have changed. Returns false when a
+    /// card came out empty, which only a full rebuild can lay out.
+    fn refresh_script_cards(&self) -> bool {
+        let mut cache = self.chat_render_cache.borrow_mut();
+        let cache = &mut *cache;
+        for live in &cache.live {
+            let fingerprint = self.card_fingerprint(live.base, &live.message);
+            let Some(entry) = cache.message_cache.get_mut(&live.key) else {
+                continue;
+            };
+            if entry.fingerprint == fingerprint {
+                continue;
+            }
+            let lines = self.build_card_message_lines(&live.message, cache.width);
+            let Some(section) = cache.sections.get_mut(live.section) else {
+                continue;
+            };
+            if lines.is_empty() {
+                return false;
+            }
+            cache.total_lines = cache
+                .total_lines
+                .saturating_sub(section.len())
+                .saturating_add(lines.len());
+            *section = Arc::clone(&lines);
+            *entry = CachedMessageRender { fingerprint, lines };
+        }
+        cache.cards_epoch = self.cards_epoch;
+        true
+    }
+
+    /// Folds the cards of a message's script calls into its fingerprint `base`.
+    fn card_fingerprint(&self, base: u64, msg: &Message) -> u64 {
+        let ConversationItem::Assistant { items } = &msg.content else {
+            return base;
+        };
+        let writing = matches!(msg.status, MessageStatus::Streaming { .. });
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        base.hash(&mut hasher);
+        for item in items {
+            if let AssistantItem::ScriptCall(call) = item {
+                self.script_card(call.call_id.as_str(), writing)
+                    .hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+
+    fn build_card_message_lines(&self, msg: &Message, width: u16) -> Arc<Vec<RenderedLine>> {
+        let writing = matches!(msg.status, MessageStatus::Streaming { .. });
+        let card = |call_id: &str| self.script_card(call_id, writing);
+        Arc::new(ChatHistory::build_message_lines(msg, width, &card))
+    }
+
+    fn rebuild_chat_render_cache(&self, width: u16) {
         let rendered_messages = self.rendered_messages();
         let completed: HashSet<&str> = rendered_messages
             .iter()
@@ -85,6 +144,7 @@ impl AppState {
         let mut next_entries: HashMap<String, CachedMessageRender> = HashMap::new();
         let mut sections = Vec::new();
         let mut total_lines = 0_usize;
+        let mut live = Vec::new();
 
         let projected: Vec<_> = rendered_messages
             .iter()
@@ -104,6 +164,7 @@ impl AppState {
             };
             let key = msg.id.as_str().to_string();
             let mut fingerprint;
+            let mut live_base = None;
             let grouped = !self.scripts_expanded
                 && matches!(msg.content, ConversationItem::ScriptResult { .. });
             let lines = if grouped {
@@ -148,10 +209,14 @@ impl AppState {
                     )),
                 }
             } else {
-                fingerprint = message_fingerprint(msg);
+                let base = message_fingerprint(msg);
+                fingerprint = self.card_fingerprint(base, msg);
+                if has_script_calls(msg) {
+                    live_base = Some(base);
+                }
                 match prior_entries.remove(&key) {
                     Some(entry) if entry.fingerprint == fingerprint => entry.lines,
-                    _ => Arc::new(ChatHistory::build_message_lines(msg, width)),
+                    _ => self.build_card_message_lines(msg, width),
                 }
             };
 
@@ -169,6 +234,14 @@ impl AppState {
             }
 
             total_lines = total_lines.saturating_add(lines.len());
+            if let Some(base) = live_base {
+                live.push(LiveCards {
+                    section: sections.len(),
+                    key: key.clone(),
+                    message: msg.clone().into_owned(),
+                    base,
+                });
+            }
             sections.push(Arc::clone(&lines));
             next_entries.insert(key, CachedMessageRender { fingerprint, lines });
         }
@@ -178,6 +251,8 @@ impl AppState {
         cache.message_cache = next_entries;
         cache.width = width;
         cache.epoch = self.chat_epoch;
+        cache.cards_epoch = self.cards_epoch;
+        cache.live = live;
     }
 }
 
@@ -187,13 +262,30 @@ pub(super) struct ChatRenderCache {
     pub(super) epoch: u64,
     pub(super) sections: Vec<Arc<Vec<RenderedLine>>>,
     pub(super) total_lines: usize,
+    cards_epoch: u64,
     message_cache: HashMap<String, CachedMessageRender>,
     separator: Option<Arc<Vec<RenderedLine>>>,
+    live: Vec<LiveCards>,
 }
 
 struct CachedMessageRender {
     fingerprint: u64,
     lines: Arc<Vec<RenderedLine>>,
+}
+
+/// A drawn message with a script call that has not finished, so its card can change without
+/// the message changing.
+struct LiveCards {
+    section: usize,
+    key: String,
+    message: Message,
+    /// The fingerprint of the message without its cards.
+    base: u64,
+}
+
+fn has_script_calls(message: &Message) -> bool {
+    matches!(&message.content, ConversationItem::Assistant { items }
+        if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall(_))))
 }
 
 fn without_completed_calls<'a>(

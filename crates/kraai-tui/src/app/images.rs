@@ -5,11 +5,9 @@ use kraai_types::SessionId;
 impl App {
     pub(super) fn paste_image(&mut self) {
         if self.state.draft_images.pending() {
-            self.state.status = String::from("An image is still loading");
             return;
         }
         if self.state.draft_images.len() >= MAX_IMAGE_ATTACHMENTS {
-            self.state.status = format!("At most {MAX_IMAGE_ATTACHMENTS} images can be attached");
             return;
         }
         let request_id = self.state.next_image_request_id;
@@ -24,7 +22,6 @@ impl App {
                 request_id,
                 None,
             );
-            self.state.status = String::from("Loading clipboard image");
         }
     }
 
@@ -92,7 +89,6 @@ impl App {
         };
         match result {
             Ok(Some(image)) => {
-                self.state.status = format!("Attached {}×{} image", image.width, image.height);
                 self.state.draft_images.finish(request_id, image);
             }
             Ok(None) | Err(_) => {
@@ -113,8 +109,6 @@ impl App {
                     .renumber(&mut self.state.input, self.state.input_cursor);
                 if let Err(error) = result {
                     self.set_error(format!("Image paste failed: {error}"));
-                } else if self.state.status == "Loading clipboard image" {
-                    self.state.status.clear();
                 }
             }
         }

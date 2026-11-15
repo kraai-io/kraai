@@ -83,7 +83,6 @@ fn delayed_auth_event_cannot_overwrite_a_newer_snapshot_or_status() {
                 ..Default::default()
             },
         )));
-    harness.app.state.status = String::from("Current status");
 
     harness.app.handle_runtime_event_bridge_message(auth_event(
         1,
@@ -96,7 +95,6 @@ fn delayed_auth_event_cannot_overwrite_a_newer_snapshot_or_status() {
         ProviderAuthState::Authenticated
     );
     assert_eq!(auth(&harness.app.state).sequence, 2);
-    assert_eq!(harness.app.state.status, "Current status");
 }
 
 #[test]

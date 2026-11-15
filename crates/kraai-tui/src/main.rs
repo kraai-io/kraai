@@ -11,6 +11,7 @@ mod app;
 #[path = "app/clipboard_image.rs"]
 mod clipboard_image;
 mod components;
+mod duration;
 mod terminal_cursor;
 mod terminal_features;
 mod terminal_loss;

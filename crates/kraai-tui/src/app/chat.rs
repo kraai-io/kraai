@@ -6,8 +6,14 @@ impl App {
         self.state.feedback.completion_until = None;
         self.state.feedback.clear_copy();
         self.state.error_scroll.set(0);
-        self.state.last_error = Some(error.clone());
-        self.state.status = error;
+        self.state.last_error = Some(error);
+        self.state.turn_cancelled = false;
+    }
+
+    pub(super) fn clear_error(&mut self) {
+        self.state.last_error = None;
+        self.state.error_open = false;
+        self.state.error_scroll.set(0);
     }
 
     pub(super) fn copy_text_to_clipboard(
@@ -249,12 +255,12 @@ impl App {
             }
         };
         if self.request(request) == RuntimeRequestDelivery::Delivered {
+            self.clear_error();
             self.state
                 .submitted_script_decisions
                 .entry(session_id)
                 .or_default()
                 .insert(execution_id);
-            self.state.status = String::from("Submitting script decision");
         }
     }
 
@@ -286,11 +292,11 @@ impl App {
         });
     }
 
-    pub(super) fn reset_chat_session(&mut self, session_id: Option<SessionId>, status: &str) {
+    pub(super) fn reset_chat_session(&mut self, session_id: Option<SessionId>) {
         if self.state.current_session_id != session_id {
             self.clear_message_draft();
         }
-        self.reset_session_state(session_id.clone(), status);
+        self.reset_session_state(session_id.clone());
         if let Some(messages) = self.state.failed_messages.remove(&session_id) {
             for message in messages.into_iter().rev() {
                 self.recover_message_draft(message);
@@ -298,16 +304,14 @@ impl App {
         }
     }
 
-    pub(super) fn reset_session_state(&mut self, session_id: Option<SessionId>, status: &str) {
+    pub(super) fn reset_session_state(&mut self, session_id: Option<SessionId>) {
         let has_session = session_id.is_some();
         self.leave_sheet();
         self.state.current_session_id = session_id;
         self.state.last_session_model = None;
         self.restore_pending_session_model();
         self.state.current_tip_id = None;
-        self.state.last_error = None;
-        self.state.error_open = false;
-        self.state.error_scroll.set(0);
+        self.clear_error();
         self.state.chat_history.clear();
         self.state.approval_scroll.set(0);
         self.state.approval_expanded = false;
@@ -315,6 +319,7 @@ impl App {
         self.restore_session_cost();
         self.state.optimistic_messages.clear();
         self.state.pending_script = None;
+        self.state.running_scripts.clear();
         if has_session {
             self.state.agent_profiles.clear();
         }
@@ -331,11 +336,10 @@ impl App {
         self.state.profile_lock_stale_after_terminal_event = false;
         self.state.turn_timer = kraai_runtime::TurnTimer::default();
         self.state.feedback = super::feedback::VisualFeedback::default();
-        self.state.statusline_animation_frame = 0;
         self.last_statusline_animation_tick = None;
         self.state.auto_scroll = true;
         self.state.scroll = 0;
-        self.state.status = status.to_string();
+        self.state.turn_cancelled = false;
         self.invalidate_chat_cache();
         self.clamp_chat_scroll();
     }
@@ -344,7 +348,7 @@ impl App {
         self.clear_message_draft();
         self.state.pending_submit = None;
         self.state.pending_session_load_id = None;
-        self.reset_chat_session(None, "Started new chat");
+        self.reset_chat_session(None);
         self.request(RuntimeRequest::GetAgentProfileCatalog);
     }
 
@@ -404,9 +408,7 @@ impl App {
         }
         let display_text = message.display_text().into_owned();
 
-        self.state.last_error = None;
-        self.state.error_open = false;
-        self.state.error_scroll.set(0);
+        self.clear_error();
         let content_key = display_text.trim().to_string();
         let visible_count = self.visible_user_message_count(&content_key);
         let optimistic_same_count = self
@@ -424,15 +426,13 @@ impl App {
             is_queued,
         });
 
-        if is_queued {
-            self.update_queued_status();
-        } else {
+        if !is_queued {
             self.state.script_phase = ScriptPhase::Idle;
             self.state.profile_lock_stale_after_terminal_event = false;
             self.state.is_streaming = true;
-            self.state.statusline_animation_frame = 0;
+            self.state.breath_origin = Instant::now();
             self.last_statusline_animation_tick = None;
-            self.state.status = format!("Sending with {provider_id}/{model_id}");
+            self.state.turn_cancelled = false;
         }
         self.state.auto_scroll = true;
         self.state.current_tip_id = None;
@@ -444,7 +444,6 @@ impl App {
 
     pub(super) fn request(&mut self, req: RuntimeRequest) -> RuntimeRequestDelivery {
         if !self.runtime_bridge_connected {
-            self.state.status = String::from("Runtime bridge disconnected");
             return RuntimeRequestDelivery::Disconnected;
         }
 
@@ -486,7 +485,6 @@ impl App {
         self.state.profile_locked = false;
         self.state.profile_lock_stale_after_terminal_event = false;
         self.state.script_phase = ScriptPhase::Idle;
-        self.state.statusline_animation_frame = 0;
         self.last_statusline_animation_tick = None;
         self.event_lag_session_resync_pending = false;
         self.event_lag_script_resync_pending = false;
@@ -494,12 +492,23 @@ impl App {
         self.state.turn_timer = kraai_runtime::TurnTimer::default();
         self.state.feedback = super::feedback::VisualFeedback::default();
         self.invalidate_chat_cache();
-        self.state.status = message.clone();
         self.state.exit = true;
     }
 
     pub(super) fn invalidate_chat_cache(&mut self) {
         self.state.chat_epoch = self.state.chat_epoch.wrapping_add(1);
+    }
+
+    pub(super) fn invalidate_script_cards(&mut self) {
+        self.state.cards_epoch = self.state.cards_epoch.wrapping_add(1);
+    }
+
+    /// Forgets every running script and redraws the cards that showed one.
+    pub(super) fn clear_running_scripts(&mut self) {
+        if !self.state.running_scripts.is_empty() {
+            self.state.running_scripts.clear();
+            self.invalidate_script_cards();
+        }
     }
 
     pub(super) fn reconcile_optimistic_messages(&mut self) {
@@ -528,7 +537,6 @@ impl App {
         });
 
         if self.state.optimistic_messages.len() != before_len {
-            self.update_queued_status();
             self.invalidate_chat_cache();
         }
     }
@@ -542,21 +550,6 @@ impl App {
         .filter(|message| message.role() == ChatRole::User)
         .filter(|message| message.display_text().trim() == content_key)
         .count()
-    }
-
-    pub(super) fn update_queued_status(&mut self) {
-        let queued_count = self
-            .state
-            .optimistic_messages
-            .iter()
-            .filter(|message| message.is_queued)
-            .count();
-
-        if queued_count > 0 {
-            self.state.status = format!("Queued message ({queued_count} queued)");
-        } else if self.state.status.starts_with("Queued message (") {
-            self.state.status = String::from("Queued messages sent");
-        }
     }
 
     pub(super) fn remember_submitted_input(&mut self, message: &str) {

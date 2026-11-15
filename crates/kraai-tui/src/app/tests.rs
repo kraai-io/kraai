@@ -153,6 +153,11 @@ fn screen_rows(state: &AppState, width: u16, height: u16) -> Vec<String> {
         .collect()
 }
 
+/// The screen at the given size as one string, with a line break after each row.
+fn screen(state: &AppState, width: u16, height: u16) -> String {
+    screen_rows(state, width, height).join("\n")
+}
+
 /// The screen at the given width, split into the chat, the status line and the composer.
 fn screen_parts(harness: &TestHarness, width: u16) -> [Vec<String>; 3] {
     let area = ratatui::layout::Rect::new(0, 0, width, 40);
@@ -174,13 +179,12 @@ fn sheet(harness: &TestHarness, width: u16) -> Vec<String> {
     chat.get(start..).unwrap_or_default().to_vec()
 }
 
-/// The key hints the status line shows after what Kraai is doing.
+/// The key hints the status line shows while a sheet is open.
 fn hints(harness: &TestHarness) -> String {
     let [_, status, _] = screen_parts(harness, 120);
     status
-        .last()
-        .and_then(|row| row.split_once(" · "))
-        .map(|(_, hints)| hints.to_owned())
+        .first()
+        .map(|row| row.trim().to_owned())
         .unwrap_or_default()
 }
 
@@ -268,6 +272,18 @@ fn session_snapshot_at(
     }
 }
 
+fn retry_scheduled(session: &str) -> Event {
+    Event::ProviderRetryScheduled {
+        session_id: SessionId::new(session),
+        provider_id: String::new(),
+        model_id: String::new(),
+        operation: String::new(),
+        retry_number: 1,
+        delay_seconds: 1,
+        reason: String::new(),
+    }
+}
+
 #[test]
 fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
     let mut harness = test_harness();
@@ -284,27 +300,19 @@ fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
         .app
         .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Event(RuntimeEvent {
             sequence: 9,
-            event: Event::ContextStateChanged {
-                session_id: SessionId::new("other-session"),
-                notifications: vec![String::from("other session event was delivered")],
-            },
+            event: retry_scheduled("other-session"),
         }));
-    assert_eq!(
-        harness.app.state.status,
-        "other session event was delivered"
-    );
+    assert!(harness.app.state.retry_waiting);
+    harness.app.state.retry_waiting = false;
 
     harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
         .app
         .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Event(RuntimeEvent {
             sequence: 10,
-            event: Event::ContextStateChanged {
-                session_id: SessionId::new("session"),
-                notifications: vec![String::from("covered event should be ignored")],
-            },
+            event: retry_scheduled("session"),
         }));
-    assert_ne!(harness.app.state.status, "covered event should be ignored");
+    assert!(!harness.app.state.retry_waiting);
 }
 
 #[test]
@@ -328,7 +336,6 @@ fn snapshot_is_rejected_only_when_a_newer_event_for_its_session_was_applied() {
             result: Box::new(Ok(session_snapshot_at(10, None))),
         });
 
-    assert_eq!(harness.app.state.status, "newer session state");
     assert!(
         !harness
             .app
@@ -365,22 +372,6 @@ fn script_approval_event_enters_single_script_decision_state() {
         harness.app.state.script_approval_action,
         ScriptApprovalAction::Allow
     );
-}
-
-#[test]
-fn foreground_context_state_changes_are_reported_to_the_user() {
-    let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness
-        .app
-        .handle_runtime_event(Event::ContextStateChanged {
-            session_id: SessionId::new("session"),
-            notifications: vec![String::from(
-                "src/removed.rs was automatically unpinned because it no longer exists.",
-            )],
-        });
-
-    assert!(harness.app.state.status.contains("automatically unpinned"));
 }
 
 #[test]
@@ -567,7 +558,7 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
     }))?;
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("other")), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("other")));
     harness.app.handle_runtime_event(Event::TurnTimingChanged {
         session_id: SessionId::new("session"),
         timer,
@@ -578,7 +569,7 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
     );
     harness
         .app
-        .reset_chat_session(Some(SessionId::new("session")), "Session loaded");
+        .reset_chat_session(Some(SessionId::new("session")));
     let mut snapshot = session_snapshot(None);
     snapshot.activity = SessionActivity::Streaming;
     snapshot.session.is_streaming = true;
@@ -623,6 +614,7 @@ mod model_options;
 mod model_selection;
 mod providers;
 mod responsiveness;
+mod running_scripts;
 mod session_model;
 mod sheets;
 #[path = "tests/startup.rs"]

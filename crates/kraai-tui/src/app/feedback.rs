@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use crate::theme;
+
 const FADE_FRAME: Duration = Duration::from_millis(33);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -21,19 +23,13 @@ impl VisualFeedback {
         now: Instant,
         muted: Option<ratatui::style::Color>,
     ) -> ratatui::style::Color {
-        use ratatui::style::Color;
         let Some(until) = self.completion_until else {
-            return Color::DarkGray;
+            return theme::MUTED;
         };
-        let Some(Color::Rgb(r, g, b)) = muted else {
-            return Color::DarkGray;
-        };
-        let remaining = until.saturating_duration_since(now).as_secs_f64().min(1.0);
-        let blend = remaining * remaining * (3.0 - 2.0 * remaining);
-        let channel = |start: u8, end: u8| {
-            (f64::from(end) + (f64::from(start) - f64::from(end)) * blend).round() as u8
-        };
-        Color::Rgb(channel(174, r), channel(184, g), channel(210, b))
+        let remaining = until.saturating_duration_since(now).as_secs_f64();
+        muted
+            .and_then(|muted| theme::mix(muted, theme::ACCENT, theme::ease(remaining)))
+            .unwrap_or(theme::MUTED)
     }
 
     pub(super) fn advance_fade(&mut self, now: Instant) -> bool {
@@ -99,10 +95,7 @@ mod tests {
             ..Default::default()
         };
         let muted = Some(Color::Rgb(88, 82, 115));
-        assert_eq!(
-            feedback.completion_color(now, muted),
-            Color::Rgb(174, 184, 210)
-        );
+        assert_eq!(feedback.completion_color(now, muted), theme::ACCENT);
         assert_eq!(
             feedback.completion_color(now + Duration::from_millis(500), muted),
             Color::Rgb(131, 133, 163)

@@ -18,11 +18,8 @@ mod sheet;
 mod sheets;
 mod status;
 use script_approval::render_script_approval_panel;
-pub(super) use status::format_token_count;
 use status::render_status;
-
-pub(super) const STATUSLINE_STREAMING_FRAMES: [&str; 8] =
-    ["·  ", "·· ", "···", " ··", "  ·", " ··", "···", "·· "];
+pub(super) use status::{activity_text, format_token_count};
 
 pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
     let available = area.height.saturating_sub(footer_height(state, area));

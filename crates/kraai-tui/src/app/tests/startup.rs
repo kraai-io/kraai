@@ -23,7 +23,7 @@ fn initial_config_and_lag_share_one_startup_batch_then_reloads_sync_again() {
     harness.app.handle_runtime_event(Event::ConfigLoaded);
     harness
         .app
-        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged(1));
+        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Lagged);
     assert!(harness.drain_requests().is_empty());
     harness
         .app

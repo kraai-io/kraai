@@ -12,7 +12,7 @@ pub use api::{
     AgentProfileCatalog, CreateSessionRequest, Event, EventCallback, FieldViolation, HistoryPage,
     LoginMethod, Model, PROTOCOL_VERSION, PendingBrowserLogin, PendingDeviceCodeLogin,
     PendingScriptInfo, ProviderAuthStatus, ProviderLoginState, RuntimeError, RuntimeErrorKind,
-    RuntimeEvent, RuntimeResult, RuntimeStartupState, Session, SessionActivity,
+    RuntimeEvent, RuntimeResult, RuntimeStartupState, ScriptOutputLine, Session, SessionActivity,
     SessionContextUsage, SessionSnapshot, SubmitMessageOutcome, WorkspaceState,
 };
 pub use handle::RuntimeHandle;

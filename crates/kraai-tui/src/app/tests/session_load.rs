@@ -65,7 +65,6 @@ fn new_chat_ignores_late_load_success_and_failure() {
         assert!(harness.app.state.current_session_id.is_none());
         assert_eq!(harness.app.state.mode, UiMode::Chat);
         assert_eq!(harness.app.state.input, "new conversation draft");
-        assert_eq!(harness.app.state.status, "Started new chat");
         assert!(harness.app.state.last_error.is_none());
     }
 }
@@ -86,7 +85,6 @@ fn current_load_success_still_opens_and_synchronizes_the_session() {
         harness.app.state.current_session_id,
         Some(session_id.clone())
     );
-    assert_eq!(harness.app.state.status, "Session loaded");
     assert!(harness.drain_requests().iter().any(|request| matches!(
         request,
         RuntimeRequest::GetSessionSnapshot { session_id: requested } if requested == &session_id
@@ -95,11 +93,11 @@ fn current_load_success_still_opens_and_synchronizes_the_session() {
 
 #[test]
 fn current_load_failure_keeps_existing_error_messages() {
-    for (result, status) in [
-        (Ok(false), "Session not found"),
+    for (result, error) in [
+        (Ok(false), Some("Session not found")),
         (
             Err(kraai_runtime::RuntimeError::unavailable("load failed")),
-            "Failed to load session: load failed",
+            Some("Failed to load session: load failed"),
         ),
     ] {
         let mut harness = test_harness();
@@ -112,7 +110,7 @@ fn current_load_failure_keeps_existing_error_messages() {
                 result,
             });
         assert!(harness.app.state.current_session_id.is_none());
-        assert_eq!(harness.app.state.status, status);
+        assert_eq!(harness.app.state.last_error.as_deref(), error);
         assert!(harness.app.state.pending_session_load_id.is_none());
     }
 }

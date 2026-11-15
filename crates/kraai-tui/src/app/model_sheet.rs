@@ -98,16 +98,14 @@ impl App {
 
     /// Switches to a model, bringing back the option values last used with it.
     pub(super) fn select_model(&mut self, provider_id: &str, model_id: &str) {
-        let Some(model) = self.state.find_model(provider_id, model_id) else {
+        if self.state.find_model(provider_id, model_id).is_none() {
             return;
-        };
-        let status = format!("Selected model: {provider_id} / {}", model.name);
+        }
         let values = self.state.model_option_values(provider_id, model_id);
         self.remember_model_options();
         self.state.selected_provider_id = Some(provider_id.to_owned());
         self.state.selected_model_id = Some(model_id.to_owned());
         self.state.selected_model_options = values;
-        self.state.status = status;
         self.save_model_selection();
         self.close_sheet();
     }

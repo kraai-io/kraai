@@ -99,10 +99,13 @@ impl App {
                 Some(Duration::ZERO)
             } else {
                 let fading = self.state.palette.muted.is_some();
-                let animation = self
-                    .state
-                    .runtime_is_active()
-                    .then_some(STATUSLINE_ANIMATION_INTERVAL);
+                let animation = (self.state.runtime_is_active()
+                    || !self.state.running_scripts.is_empty())
+                .then_some(if fading {
+                    crate::theme::BREATH_FRAME
+                } else {
+                    STATUSLINE_ANIMATION_INTERVAL
+                });
                 let blink = (self.state.composer_cursor_enabled()
                     && self.state.cursor_preferences.custom_blink())
                 .then(|| cursor.timeout(now));
@@ -122,6 +125,7 @@ impl App {
                 && self.state.composer_cursor_enabled()
                 && self.state.cursor_preferences.custom_blink();
             needs_redraw |= self.advance_statusline_animation(Instant::now());
+            needs_redraw |= self.advance_script_clock(Instant::now());
 
             if !needs_redraw {
                 if blink_changed {
@@ -281,18 +285,42 @@ impl App {
                     self.handle_runtime_event(event.event);
                 }
             }
-            RuntimeEventBridgeMessage::Lagged(skipped) => {
+            RuntimeEventBridgeMessage::Lagged => {
                 self.state.cost_recovery_list_pending = true;
                 self.event_lag_session_resync_pending = true;
                 self.event_lag_script_resync_pending = true;
                 self.state.retry_waiting = false;
-                self.state.status =
-                    format!("Missed {skipped} runtime event(s); resynchronizing session state");
                 if self.startup_sync != StartupSync::WaitingForRuntime {
                     self.request_sync();
                 }
             }
         }
+    }
+
+    /// Moves the clock running scripts are drawn at, and redraws the chat when a card would
+    /// show something new.
+    pub(super) fn advance_script_clock(&mut self, now: Instant) -> bool {
+        let Some(clock) = self.state.script_clock else {
+            return false;
+        };
+        if self.state.running_scripts.is_empty() {
+            self.state.script_clock = None;
+            return false;
+        }
+        let dot = |at: Instant| running_dot(self.state.breath(at), self.state.palette.muted);
+        let seconds =
+            |at: Instant, started: Instant| at.saturating_duration_since(started).as_secs();
+        let moved = dot(now) != dot(clock)
+            || self
+                .state
+                .running_scripts
+                .values()
+                .any(|script| seconds(now, script.started) != seconds(clock, script.started));
+        if moved {
+            self.state.script_clock = Some(now);
+            self.invalidate_script_cards();
+        }
+        moved
     }
 
     pub(super) fn advance_statusline_animation(&mut self, now: Instant) -> bool {
@@ -301,10 +329,6 @@ impl App {
             expired | (self.state.palette.muted.is_some() && self.state.feedback.advance_fade(now));
         if !self.state.runtime_is_active() {
             self.last_statusline_animation_tick = None;
-            if self.state.statusline_animation_frame != 0 {
-                self.state.statusline_animation_frame = 0;
-                return true;
-            }
             return expired;
         }
 
@@ -313,13 +337,11 @@ impl App {
             return expired;
         };
 
-        if now.duration_since(last_tick) < STATUSLINE_ANIMATION_INTERVAL {
+        if activity_text(&self.state, now) == activity_text(&self.state, last_tick) {
             return expired;
         }
 
         self.last_statusline_animation_tick = Some(now);
-        self.state.statusline_animation_frame =
-            (self.state.statusline_animation_frame + 1) % STATUSLINE_STREAMING_FRAMES.len();
         true
     }
 }

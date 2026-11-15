@@ -54,10 +54,10 @@ fn submitting_a_decision_hides_the_prompt_before_the_reply() {
 
         harness
             .app
-            .reset_chat_session(Some(SessionId::new("other")), "Switched session");
+            .reset_chat_session(Some(SessionId::new("other")));
         harness
             .app
-            .reset_chat_session(Some(SessionId::new("session")), "Switched session");
+            .reset_chat_session(Some(SessionId::new("session")));
         harness
             .app
             .handle_runtime_response(RuntimeResponse::SessionSnapshot {
@@ -117,7 +117,7 @@ fn undelivered_decision_is_not_marked_as_submitted() {
     harness.app.confirm_current_script_action();
 
     assert!(harness.app.state.submitted_script_decisions.is_empty());
-    assert_eq!(harness.app.state.status, "Runtime bridge disconnected");
+    assert!(!harness.app.runtime_bridge_connected);
 }
 
 fn decision_response(
@@ -206,10 +206,6 @@ fn delayed_decision_reply_preserves_a_newer_approval_prompt() {
                 .map(|script| script.execution_id.as_str()),
             Some("current"),
         );
-        assert_eq!(
-            harness.app.state.status,
-            "Script capability approval required"
-        );
         harness.app.confirm_current_script_action();
         assert!(harness.drain_requests().iter().any(|request| matches!(
             request,
@@ -238,7 +234,6 @@ fn delayed_decision_reply_does_not_restart_a_finished_script() {
                 exit_code: Some(0),
             },
         });
-        let status = harness.app.state.status.clone();
 
         harness
             .app
@@ -246,22 +241,12 @@ fn delayed_decision_reply_does_not_restart_a_finished_script() {
 
         assert_eq!(harness.app.state.script_phase, ScriptPhase::Idle);
         assert!(harness.app.state.pending_script.is_none());
-        assert_eq!(harness.app.state.status, status);
     }
 }
 
 #[test]
-fn current_decision_reply_keeps_existing_success_status() {
-    for (action, status) in [
-        (
-            ScriptApprovalAction::Allow,
-            "Executing approved Nushell script",
-        ),
-        (
-            ScriptApprovalAction::Reject,
-            "Script capability escalation denied",
-        ),
-    ] {
+fn current_decision_reply_moves_the_script_on() {
+    for action in [ScriptApprovalAction::Allow, ScriptApprovalAction::Reject] {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(SessionId::new("session"));
         harness.app.state.pending_script = Some(pending_script("current"));
@@ -273,7 +258,6 @@ fn current_decision_reply_keeps_existing_success_status() {
 
         assert_eq!(harness.app.state.script_phase, ScriptPhase::Executing);
         assert!(harness.app.state.pending_script.is_none());
-        assert_eq!(harness.app.state.status, status);
     }
 }
 
@@ -351,4 +335,17 @@ fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
         });
     assert_eq!(harness.app.state.input, "hello");
     assert!(harness.app.state.pending_messages.is_empty());
+}
+
+#[test]
+fn a_decision_clears_the_error_a_refused_one_left() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
+    harness.app.state.pending_script = Some(pending_script("execution"));
+    harness.app.enter_script_decision_phase();
+    harness
+        .app
+        .set_error(String::from("Failed to approve script"));
+    harness.app.confirm_current_script_action();
+    assert!(harness.app.state.last_error.is_none());
 }
