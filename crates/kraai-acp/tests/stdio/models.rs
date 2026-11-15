@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::v1::schema as acp;
 use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
 

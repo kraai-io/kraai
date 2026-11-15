@@ -1,4 +1,4 @@
-use agent_client_protocol::{Result, schema::v1 as acp};
+use agent_client_protocol::{Result, v1::schema as acp};
 use base64::Engine;
 use kraai_runtime::RuntimeHandle;
 use kraai_types::{ContentPart, MessageContent};

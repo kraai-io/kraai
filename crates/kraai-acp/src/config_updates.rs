@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use agent_client_protocol::{Result, schema::v1 as acp};
+use agent_client_protocol::{Result, v1::schema as acp};
 use kraai_runtime::{Event, RuntimeEvent};
 use tokio::sync::{Notify, OwnedMutexGuard, broadcast};
 

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
-use agent_client_protocol::{Result, schema::v1 as acp};
+use agent_client_protocol::{Result, v1::schema as acp};
 use kraai_runtime::{CreateSessionRequest, RuntimeHandle};
 use kraai_types::SessionId;
 use tokio::sync::Mutex;

@@ -6,7 +6,10 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use agent_client_protocol::{Client, ConnectTo, ConnectionTo, Lines, Role, schema::v1 as acp};
+use agent_client_protocol::{
+    Client, ConnectTo, Lines, Role,
+    v1::{ConnectionTo, schema as acp},
+};
 use futures::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, Stream, StreamExt, io::BufReader};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;

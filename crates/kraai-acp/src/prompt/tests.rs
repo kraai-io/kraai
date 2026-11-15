@@ -4,7 +4,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use agent_client_protocol::{Agent, Client, ConnectionTo, Lines};
+use agent_client_protocol::{Agent, Client, Lines, v1::ConnectionTo};
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -93,7 +93,7 @@ provider_id = "mock"
     });
     let transport = Lines::new(sink, stream::pending::<std::io::Result<String>>());
     let (connection_tx, connection_rx) = tokio::sync::oneshot::channel();
-    let _protocol = AbortOnDropHandle::new(tokio::spawn(Agent.builder().connect_with(
+    let _protocol = AbortOnDropHandle::new(tokio::spawn(Agent.v1().connect_with(
         transport,
         async move |connection| {
             connection_tx
