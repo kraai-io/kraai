@@ -131,21 +131,16 @@ async fn empty_undo_and_rejected_commands_do_not_call_the_provider() -> Result<(
             .and_then(Value::as_str)
             .is_some_and(|text| !text.is_empty())
     }));
-    for (id, command, usage) in [
-        (3, "/undo extra", "Usage: /undo"),
-        (4, "/option effort", "Usage: /option <id> <value|--clear>"),
-    ] {
-        let rejected = harness
-            .request(id, "session/prompt", client_prompt(&session, command))
-            .await?;
-        assert_eq!(
-            rejected
-                .last()
-                .and_then(|value| value.pointer("/error/message")),
-            Some(&json!(usage))
-        );
-        assert_eq!(harness.model_requests.load(Ordering::SeqCst), 0);
-    }
+    let rejected = harness
+        .request(3, "session/prompt", client_prompt(&session, "/undo extra"))
+        .await?;
+    assert_eq!(
+        rejected
+            .last()
+            .and_then(|value| value.pointer("/error/message")),
+        Some(&json!("Usage: /undo"))
+    );
+    assert_eq!(harness.model_requests.load(Ordering::SeqCst), 0);
     assert!(harness.provider_payloads.lock().await.is_empty());
     harness.stop().await
 }

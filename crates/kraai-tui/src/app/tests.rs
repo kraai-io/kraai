@@ -40,7 +40,7 @@ fn wheel_scrolling_moves_three_lines_and_resumes_following_at_bottom() {
     assert_eq!(harness.app.state.scroll, 0);
     assert!(!harness.app.state.auto_scroll);
 
-    harness.app.state.mode = super::UiMode::Help;
+    harness.app.state.mode = super::UiMode::Model;
     harness
         .app
         .handle_mouse_event(wheel(MouseEventKind::ScrollDown));
@@ -112,6 +112,93 @@ fn test_harness() -> TestHarness {
         },
         requests_rx,
     }
+}
+
+fn key(harness: &mut TestHarness, code: super::KeyCode) {
+    harness
+        .app
+        .handle_key_event(super::KeyEvent::new(code, super::KeyModifiers::NONE));
+}
+
+fn ctrl(harness: &mut TestHarness, ch: char) {
+    harness.app.handle_key_event(super::KeyEvent::new(
+        super::KeyCode::Char(ch),
+        super::KeyModifiers::CONTROL,
+    ));
+}
+
+fn type_text(harness: &mut TestHarness, text: &str) {
+    for ch in text.chars() {
+        key(harness, super::KeyCode::Char(ch));
+    }
+}
+
+/// The screen at the given size, one string per row with trailing spaces removed.
+fn screen_rows(state: &AppState, width: u16, height: u16) -> Vec<String> {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
+
+    let area = Rect::new(0, 0, width, height);
+    let mut buffer = Buffer::empty(area);
+    state.render(area, &mut buffer);
+    buffer
+        .content()
+        .chunks(usize::from(width.max(1)))
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
+}
+
+/// The screen at the given width, split into the chat, the status line and the composer.
+fn screen_parts(harness: &TestHarness, width: u16) -> [Vec<String>; 3] {
+    let area = ratatui::layout::Rect::new(0, 0, width, 40);
+    let rows = screen_rows(&harness.app.state, width, area.height);
+    crate::app::ui::chat_layout(&harness.app.state, area).map(|part| {
+        rows.get(usize::from(part.y)..usize::from(part.bottom()))
+            .unwrap_or_default()
+            .to_vec()
+    })
+}
+
+/// The rows of the open sheet, from its rule to its last note.
+fn sheet(harness: &TestHarness, width: u16) -> Vec<String> {
+    let [chat, _, _] = screen_parts(harness, width);
+    let start = chat
+        .iter()
+        .position(|row| row.starts_with('─'))
+        .unwrap_or(chat.len());
+    chat.get(start..).unwrap_or_default().to_vec()
+}
+
+/// The key hints the status line shows after what Kraai is doing.
+fn hints(harness: &TestHarness) -> String {
+    let [_, status, _] = screen_parts(harness, 120);
+    status
+        .last()
+        .and_then(|row| row.split_once(" · "))
+        .map(|(_, hints)| hints.to_owned())
+        .unwrap_or_default()
+}
+
+/// What the composer shows, the breadcrumb of a sheet included.
+fn composer(harness: &TestHarness) -> String {
+    let [_, _, composer] = screen_parts(harness, 120);
+    composer
+        .iter()
+        .map(|row| row.trim())
+        .find(|row| !row.is_empty())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// A row whose right side ends one column short of `width`.
+fn spaced(left: &str, right: &str, width: usize) -> String {
+    let used = left.chars().count() + right.chars().count() + 1;
+    format!("{left}{}{right}", " ".repeat(width.saturating_sub(used)))
 }
 
 impl TestHarness {
@@ -518,7 +605,6 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
 mod approval_overflow;
 mod approval_response;
 mod cost;
-mod editor_review;
 mod enhancements;
 mod host_failure;
 mod session_load;
@@ -529,13 +615,16 @@ mod session_load;
 mod snapshot_delivery;
 
 mod auth_response;
+mod command_list;
 mod mcp_auth;
 
 mod images;
 mod model_options;
 mod model_selection;
+mod providers;
 mod responsiveness;
 mod session_model;
+mod sheets;
 #[path = "tests/startup.rs"]
 mod startup;
 mod submission_recovery;

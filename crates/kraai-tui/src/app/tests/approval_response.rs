@@ -352,21 +352,3 @@ fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
     assert_eq!(harness.app.state.input, "hello");
     assert!(harness.app.state.pending_messages.is_empty());
 }
-
-#[test]
-fn foreign_approval_keeps_the_execution_view_open() {
-    let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.state.mode = crate::app::UiMode::Executions;
-    let mut snapshot = super::session_snapshot(None);
-    snapshot.activity = kraai_runtime::SessionActivity::AwaitingApproval;
-    snapshot.session.waiting_for_approval = true;
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-            model_save_id: 0,
-            session_id: SessionId::new("session"),
-            result: Box::new(Ok(snapshot)),
-        });
-    assert_eq!(harness.app.state.mode, crate::app::UiMode::Executions);
-}

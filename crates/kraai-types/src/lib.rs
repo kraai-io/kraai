@@ -8,8 +8,8 @@ pub use model::ModelSelection;
 pub use model_options::{
     ModelOptionBinding, ModelOptionChoice, ModelOptionCondition, ModelOptionDefinition,
     ModelOptionError, ModelOptionKind, ModelOptionValue, ModelOptionValues, ModelRequestPatch,
-    parse_model_option_assignments, reconcile_model_option_values, validate_model_option_values,
-    validate_model_options,
+    REASONING_EFFORT_OPTION_ID, parse_model_option_assignments, reconcile_model_option_values,
+    validate_model_option_values, validate_model_options,
 };
 
 pub use context_state::{

@@ -10,7 +10,7 @@ pub(super) type InputEvent = io::Result<Event>;
 
 /// Forwards terminal input to a channel so the UI loop can wait on input and runtime messages
 /// together. Dropping crossterm's `EventStream` interrupts its pending read, which lets the
-/// reader stop before an external editor takes over the terminal.
+/// reader stop when the app shuts down.
 pub(super) struct TerminalInput {
     tx: Sender<InputEvent>,
     rx: Receiver<InputEvent>,

@@ -10,7 +10,7 @@ use super::{ChatHistory, RenderedLine, RenderedSpan};
 
 mod table;
 
-pub(super) const ACCENT: Color = Color::Rgb(174, 184, 210);
+use crate::theme::ACCENT;
 
 pub(super) fn render_message(content: &str, width: usize, normal: Style) -> Vec<RenderedLine> {
     let Ok(mut root) = markdown::to_mdast(content, &ParseOptions::gfm()) else {

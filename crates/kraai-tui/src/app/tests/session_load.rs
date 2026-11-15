@@ -9,8 +9,8 @@ use crossbeam_channel::unbounded;
 
 fn begin_load(harness: &mut TestHarness) -> (u64, kraai_types::SessionId) {
     harness.app.state.sessions = vec![session_snapshot(None).session];
-    harness.app.state.mode = UiMode::SessionsMenu;
-    harness.app.state.sessions_menu_index = 1;
+    harness.app.state.mode = UiMode::Sessions;
+    harness.app.state.sheet_index = 1;
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -139,7 +139,7 @@ fn only_the_latest_load_can_change_navigation_when_request_ids_wrap() {
             });
         assert!(harness.app.state.current_session_id.is_none());
         assert!(harness.app.state.last_error.is_none());
-        assert_eq!(harness.app.state.mode, UiMode::SessionsMenu);
+        assert_eq!(harness.app.state.mode, UiMode::Sessions);
         assert_eq!(harness.app.state.pending_session_load_id, Some(current_id));
     }
     harness

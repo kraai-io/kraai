@@ -278,11 +278,11 @@ impl App {
                 let status = map_provider_auth_status(status);
                 let settled = pending_auth_target(&status).is_none();
                 if self.apply_provider_auth_status(status)
-                    && self.state.mode == UiMode::ProvidersMenu
-                    && matches!(self.state.providers_view, ProvidersView::Detail)
+                    && self.state.mode == UiMode::Providers
+                    && self.state.providers_view == ProvidersView::Provider
                     && settled
                 {
-                    self.state.status = String::from("Provider sign-in updated");
+                    self.provider_feedback("Sign-in updated");
                 }
             }
             Event::McpAuthUpdated { status } => {

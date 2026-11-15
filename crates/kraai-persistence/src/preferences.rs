@@ -16,7 +16,10 @@ pub struct WorkspacePreferences {
     #[serde(default)]
     pub agent_profile_id: Option<String>,
     #[serde(default)]
-    pub options: kraai_types::ModelOptionValues,
+    pub model_options: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, kraai_types::ModelOptionValues>,
+    >,
 }
 
 pub struct WorkspacePreferencesStore {
@@ -267,7 +270,7 @@ mod tests {
             provider_id: Some(format!("provider-{index}")),
             model_id: Some(format!("model-{}", "x".repeat(index * 256))),
             agent_profile_id: Some(format!("profile-{index}")),
-            options: Default::default(),
+            model_options: Default::default(),
         }
     }
 

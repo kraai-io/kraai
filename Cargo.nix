@@ -11703,6 +11703,10 @@ rec {
             packageId = "kraai-sandbox";
           }
           {
+            name = "kraai-script-protocol";
+            packageId = "kraai-script-protocol";
+          }
+          {
             name = "kraai-types";
             packageId = "kraai-types";
           }
@@ -11732,10 +11736,6 @@ rec {
           {
             name = "signal-hook";
             packageId = "signal-hook 0.4.6";
-          }
-          {
-            name = "tempfile";
-            packageId = "tempfile";
           }
           {
             name = "tokio";
@@ -11770,6 +11770,10 @@ rec {
             packageId = "rustix 1.1.6";
             target = { target, features }: (target."unix" or false);
             features = [ "fs" "net" "pipe" "pty" ];
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
           }
         ];
 

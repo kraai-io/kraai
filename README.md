@@ -82,8 +82,8 @@ nix run github:kraai-io/kraai
 ```
 
 Run it from the directory you want to work in. Add a provider with
-`/providers`, pick a model with `/model`, and type a task. `/help` lists the
-rest.
+`/providers`, pick a model with `/model`, and type a task. Typing `/` lists the
+other commands.
 
 ---
 

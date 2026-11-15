@@ -10,6 +10,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
+use super::super::model_options::option_summary;
 use super::super::{AppState, ScriptPhase};
 use super::STATUSLINE_STREAMING_FRAMES;
 use crate::components::{display_width, fitting_prefix, normalize_terminal_text};
@@ -66,7 +67,7 @@ pub(super) fn render_status(state: &AppState, area: Rect, buf: &mut Buffer) {
         compact
     };
     if let Some(error) = &state.last_error {
-        let preview = format!("F8 error · {}", error.lines().next().unwrap_or("Error"));
+        let preview = format!("/error · {}", error.lines().next().unwrap_or("Error"));
         Paragraph::new(fit(&preview, usize::from(area.width)))
             .style(Style::default().fg(Color::Red))
             .render(Rect::new(area.x, area.y, area.width, 1), buf);
@@ -74,13 +75,13 @@ pub(super) fn render_status(state: &AppState, area: Rect, buf: &mut Buffer) {
             return;
         }
     }
-    let details = if state.mode == super::super::UiMode::Executions {
-        String::from("↑/↓ select · Enter toggle · Esc close")
-    } else {
-        format!("{metadata} · {usage}")
-    };
+    let hints = super::sheets::hints(state);
+    let crowded = hints.as_ref().is_some_and(|hints| {
+        display_width(&activity) + 3 + display_width(hints) > usize::from(area.width)
+    });
+    let details = hints.unwrap_or_else(|| format!("{metadata} · {usage}"));
     render_pair(
-        &activity,
+        if crowded { "" } else { &activity },
         &details,
         Style::default().fg(statusline_activity_color(state)),
         Style::default().fg(Color::DarkGray),
@@ -116,7 +117,7 @@ fn render_pair(
     .render(area, buf);
 }
 
-fn fit(text: &str, width: usize) -> String {
+pub(super) fn fit(text: &str, width: usize) -> String {
     let text = normalize_terminal_text(text).replace(['\n', '\r'], " ");
     if display_width(&text) <= width {
         return text;
@@ -212,22 +213,15 @@ fn statusline_model_label(state: &AppState) -> String {
     let Some(model_id) = state.selected_model_id.as_deref() else {
         return String::from("No model selected");
     };
-    let model_name = state
-        .models_by_provider
-        .get(provider_id)
-        .and_then(|models| models.iter().find(|model| model.id == model_id))
-        .map(|model| model.name.as_str())
-        .unwrap_or(model_id);
-    if state.selected_model_options.is_empty() {
-        return model_name.to_owned();
+    let Some(model) = state.find_model(provider_id, model_id) else {
+        return model_id.to_owned();
+    };
+    let options = option_summary(model, &state.selected_model_options);
+    if options.is_empty() {
+        model.name.clone()
+    } else {
+        format!("{} ({options})", model.name)
     }
-    let options = state
-        .selected_model_options
-        .iter()
-        .map(|(id, value)| format!("{id}={value}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{model_name} ({options})")
 }
 
 fn statusline_agent_label(state: &AppState) -> String {

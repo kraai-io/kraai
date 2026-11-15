@@ -5,42 +5,26 @@ use color_eyre::eyre::Result;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Flex, Layout, Rect},
-    style::{Color, Style},
-    widgets::{Block, Borders, Widget},
+    widgets::Widget,
 };
 
-use crate::components::{ChatHistory, TextInput};
+use crate::components::ChatHistory;
 
 use super::{AppState, UiMode};
 
-mod command_popup;
 mod error;
-mod mcp;
-mod menus;
-mod model_options;
-mod providers;
 mod script_approval;
+mod sheet;
+mod sheets;
 mod status;
-use command_popup::render_command_popup;
-use menus::{render_agent_menu, render_help_menu, render_model_menu, render_sessions_menu};
-use providers::render_providers_menu;
 use script_approval::render_script_approval_panel;
 pub(super) use status::format_token_count;
 use status::render_status;
-
-fn menu_block() -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-}
 
 pub(super) const STATUSLINE_STREAMING_FRAMES: [&str; 8] =
     ["·  ", "·· ", "···", " ··", "  ·", " ··", "···", "·· "];
 
 pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
-    if state.mode == UiMode::Executions {
-        return 0;
-    }
     let available = area.height.saturating_sub(footer_height(state, area));
     if state.mode == UiMode::Chat && state.has_local_script_approval() {
         if state.approval_expanded {
@@ -49,7 +33,8 @@ pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
             12.min(available)
         }
     } else {
-        TextInput::new(&state.input, state.input_cursor)
+        state
+            .composer()
             .get_height(area.width)
             .min(10)
             .min((area.height / 3).max(3))
@@ -95,22 +80,12 @@ impl Widget for &AppState {
         if self.mode == UiMode::Chat && self.has_local_script_approval() {
             render_script_approval_panel(self, input_area, buf);
         } else {
-            TextInput::new(&self.input, self.input_cursor).render(input_area, buf);
+            self.composer().render(input_area, buf);
         }
-        if self.mode == UiMode::Chat && !self.has_local_script_approval() {
-            render_command_popup(self, area, input_area, buf);
+        if let Some(sheet) = sheets::active(self) {
+            sheet::render(&sheet, &self.sheet_scroll, chat_history_area, area, buf);
         }
 
-        match self.mode {
-            UiMode::AgentMenu => render_agent_menu(self, area, buf),
-            UiMode::ModelMenu => render_model_menu(self, area, buf),
-            UiMode::ModelOptionsMenu => model_options::render(self, area, buf),
-            UiMode::ProvidersMenu => render_providers_menu(self, area, buf),
-            UiMode::Mcp => mcp::render_mcp(self, area, buf),
-            UiMode::SessionsMenu => render_sessions_menu(self, area, buf),
-            UiMode::Help => render_help_menu(self, area, buf),
-            UiMode::Chat | UiMode::Executions => {}
-        }
         error::render_error(self, area, buf);
     }
 }
@@ -127,83 +102,7 @@ pub(super) fn copy_via_osc52(text: &str) -> Result<(), String> {
         .map_err(|err| format!("stdout flush failed: {err}"))
 }
 
-pub(super) fn active_command_prefix(input: &str) -> Option<&str> {
-    let cmd = input.strip_prefix('/')?;
-    if cmd.chars().any(char::is_whitespace) {
-        return None;
-    }
-    Some(cmd)
-}
-
-pub(super) fn is_known_slash_command(command_line: &str) -> bool {
-    command_line
-        .split_whitespace()
-        .next()
-        .is_some_and(|command| {
-            super::SLASH_COMMANDS
-                .iter()
-                .any(|(known, _)| *known == command)
-        })
-}
-
-pub(super) fn slash_command_matches(prefix: &str) -> Vec<(&'static str, &'static str)> {
-    super::SLASH_COMMANDS
-        .iter()
-        .copied()
-        .filter(|(command, _)| command.starts_with(prefix))
-        .collect()
-}
-
-pub(super) fn adjust_index(current: usize, len: usize, delta: isize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-
-    if delta.is_negative() {
-        current.saturating_sub(delta.unsigned_abs())
-    } else {
-        (current + delta as usize).min(len - 1)
-    }
-}
-
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let popup = Layout::vertical([
-        Constraint::Length((area.height.saturating_sub(height)) / 2),
-        Constraint::Length(height),
-        Constraint::Min(0),
-    ])
-    .split(area)
-    .get(1)
-    .copied()
-    .unwrap_or(area);
-
-    Layout::horizontal([
-        Constraint::Length((area.width.saturating_sub(width)) / 2),
-        Constraint::Length(width),
-        Constraint::Min(0),
-    ])
-    .split(popup)
-    .get(1)
-    .copied()
-    .unwrap_or(popup)
-}
-
-pub(super) fn menu_scroll_offset(
-    selected_line: usize,
-    total_lines: usize,
-    visible_lines: usize,
-) -> usize {
-    if visible_lines == 0 || total_lines <= visible_lines {
-        return 0;
-    }
-
-    let max_scroll = total_lines - visible_lines;
-    selected_line
-        .saturating_sub(visible_lines.saturating_sub(1))
-        .min(max_scroll)
-}
-
-pub(super) fn model_menu_next_index(current_index: usize, len: usize) -> usize {
+pub(super) fn next_wrapping(current_index: usize, len: usize) -> usize {
     if len == 0 {
         return 0;
     }
@@ -211,18 +110,10 @@ pub(super) fn model_menu_next_index(current_index: usize, len: usize) -> usize {
     (current_index + 1) % len
 }
 
-pub(super) fn model_menu_previous_index(current_index: usize, len: usize) -> usize {
+pub(super) fn previous_wrapping(current_index: usize, len: usize) -> usize {
     if len == 0 {
         return 0;
     }
 
     (current_index + len - 1) % len
-}
-
-fn selection_style(active: bool) -> Style {
-    if active {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default()
-    }
 }

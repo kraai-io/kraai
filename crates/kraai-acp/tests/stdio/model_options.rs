@@ -1,7 +1,7 @@
 use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
 
-use crate::support::{Harness, prompt, text_prompt};
+use crate::support::{Harness, prompt};
 
 async fn configure(harness: &mut Harness, options: &str) -> Result<()> {
     harness.stop().await?;
@@ -132,13 +132,7 @@ async fn optional_controls_clear_and_persist_omission_across_restart() -> Result
     let cleared = set(&mut harness, &session, 22, "processing", "").await?;
     assert_eq!(value(&cleared, "option:processing"), Some(&json!("")));
     assert!(option(&cleared, "option:budget").is_none());
-    let cleared = harness
-        .request(
-            23,
-            "session/prompt",
-            text_prompt(&session, "/option style --clear"),
-        )
-        .await?;
+    let cleared = set(&mut harness, &session, 23, "style", "").await?;
     assert_eq!(value(&cleared, "option:style"), Some(&json!("")));
     let cleared = set(&mut harness, &session, 24, "limit", "").await?;
     assert_eq!(value(&cleared, "option:limit"), Some(&json!("")));

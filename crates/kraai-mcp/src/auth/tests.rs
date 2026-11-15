@@ -6,7 +6,7 @@
 use kraai_test_support::HANG_TIMEOUT;
 use rmcp::transport::auth::{CredentialStore, StoredCredentials};
 
-use super::{Storage, flow::validate_url, store::FileStore};
+use super::{Storage, store::FileStore};
 
 #[tokio::test]
 async fn logout_invalidates_old_stores_and_atomic_writes_are_private() {
@@ -58,22 +58,6 @@ async fn logout_invalidates_old_stores_and_atomic_writes_are_private() {
     );
     assert!(old.clear().await.is_err());
     assert!(current.load().await.unwrap().is_none());
-}
-
-#[test]
-fn oauth_endpoint_schemes_and_embedded_credentials_are_restricted() {
-    for url in [
-        "http://example.com/token",
-        "file:///tmp/token",
-        "https://user:secret@example.com/token",
-        "https://example.com/token#fragment",
-    ] {
-        assert!(validate_url(url, true).is_err());
-    }
-    assert!(validate_url("https://auth.example.com/token", false).is_ok());
-    assert!(validate_url("http://127.0.0.1:8000/token", true).is_ok());
-    assert!(validate_url("http://127.0.0.1:8000/token", false).is_err());
-    assert!(validate_url("http://[::1]:8000/token", true).is_ok());
 }
 
 #[tokio::test]

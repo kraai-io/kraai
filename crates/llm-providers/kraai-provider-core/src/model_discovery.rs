@@ -93,7 +93,7 @@ impl DiscoveredModelOptions {
             options.entry(option.id.clone()).or_insert(option);
         }
         if discovered_toggle {
-            for id in ["reasoning_effort", "reasoning_budget"] {
+            for id in [kraai_types::REASONING_EFFORT_OPTION_ID, "reasoning_budget"] {
                 if !explicit.contains(id)
                     && let Some(definition) = options.get_mut(id)
                 {

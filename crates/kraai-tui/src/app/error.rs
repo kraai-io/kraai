@@ -1,16 +1,17 @@
 use super::{App, KeyCode, KeyEvent, KeyModifiers};
 
 impl App {
-    pub(super) fn handle_error_key(&mut self, key: KeyEvent) -> bool {
-        if self.state.last_error.is_none() {
-            return false;
+    pub(super) fn open_error(&mut self) {
+        if self.state.last_error.is_some() {
+            self.state.error_open = true;
+            self.state.error_scroll.set(0);
+        } else {
+            self.state.status = String::from("No error to read");
         }
-        if !self.state.error_open {
-            if key.code == KeyCode::F(8) {
-                self.state.error_open = true;
-                self.state.error_scroll.set(0);
-                return true;
-            }
+    }
+
+    pub(super) fn handle_error_key(&mut self, key: KeyEvent) -> bool {
+        if self.state.last_error.is_none() || !self.state.error_open {
             return false;
         }
         let scroll = self.state.error_scroll.get();
@@ -18,7 +19,7 @@ impl App {
             KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
                 self.state.error_open = false;
             }
-            KeyCode::Esc | KeyCode::F(8) => self.state.error_open = false,
+            KeyCode::Esc => self.state.error_open = false,
             KeyCode::Up => self.state.error_scroll.set(scroll.saturating_sub(1)),
             KeyCode::Down => self.state.error_scroll.set(scroll.saturating_add(1)),
             KeyCode::PageUp => self.state.error_scroll.set(scroll.saturating_sub(10)),

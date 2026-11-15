@@ -13,7 +13,7 @@ impl App {
         if self.state.draft_images.len() == 0
             && !command_popup_dismissed
             && let Some(command) = raw_input.strip_prefix('/')
-            && (is_known_slash_command(command) || command.trim() == "settings")
+            && is_known_slash_command(command)
         {
             self.handle_command(command.trim());
             return;
@@ -119,7 +119,7 @@ impl App {
                 .map(|error| format!("{}: {}", error.option, error.message))
                 .collect::<Vec<_>>()
                 .join("; ");
-            self.set_error(format!("Choose model options using /option: {message}"));
+            self.set_error(format!("Choose model options in /model: {message}"));
             return None;
         }
         Some((model_id, provider_id))
@@ -128,7 +128,7 @@ impl App {
     pub(super) fn handle_command(&mut self, command_line: &str) {
         let mut parts = command_line.split_whitespace();
         let Some(command) = parts.next() else {
-            self.state.status = String::from("Empty command. Use /help");
+            self.state.status = String::from("Empty command");
             return;
         };
 
@@ -137,42 +137,28 @@ impl App {
                 self.state.exit = true;
             }
             "model" => {
-                self.state.menu_search.clear();
-                self.state.model_menu_index = 0;
-                self.state.mode = UiMode::ModelMenu;
-                self.request(RuntimeRequest::ListModels);
+                self.set_input_text(String::new());
+                self.open_model_sheet(parts.collect::<Vec<_>>().join(" "));
             }
-            "option" => self.handle_option_command(parts.collect()),
+            "error" => {
+                self.set_input_text(String::new());
+                self.open_error();
+            }
             "agent" => {
-                if self.state.turn_blocks_user_commands() {
-                    self.state.status =
-                        String::from("Cannot change agent while the current turn is active");
-                    return;
-                }
-                self.state.mode = UiMode::AgentMenu;
-                if let Some(session_id) = self.state.current_session_id.clone() {
-                    self.request(RuntimeRequest::GetSessionSnapshot { session_id });
-                } else {
-                    self.request(RuntimeRequest::GetAgentProfileCatalog);
-                }
-            }
-            "settings" => {
-                self.state.status = String::from("Unknown command: /settings. Use /providers");
+                self.set_input_text(String::new());
+                self.open_agent_sheet();
             }
             "providers" => {
-                self.state.mode = UiMode::ProvidersMenu;
-                self.state.providers_view = ProvidersView::List;
-                self.state.status = String::from("Loading providers");
-                self.request(RuntimeRequest::ListProviderDefinitions);
-                self.request(RuntimeRequest::GetSettings);
-                self.request(RuntimeRequest::GetProviderAuthStatuses);
+                self.set_input_text(String::new());
+                self.open_providers_sheet();
             }
-            "mcp" => self.handle_mcp_command(parts.collect()),
+            "mcp" => {
+                self.set_input_text(String::new());
+                self.open_mcp_sheet();
+            }
             "sessions" => {
-                self.state.menu_search.clear();
-                self.state.sessions_menu_index = 0;
-                self.state.mode = UiMode::SessionsMenu;
-                self.request(RuntimeRequest::ListSessions);
+                self.set_input_text(String::new());
+                self.open_sessions_sheet();
             }
             "new" => {
                 self.start_new_chat();
@@ -189,12 +175,8 @@ impl App {
                 }
                 self.request(RuntimeRequest::UndoLastUserMessage { session_id });
             }
-            "help" => {
-                self.state.help_scroll.set(0);
-                self.state.mode = UiMode::Help;
-            }
             _ => {
-                self.state.status = format!("Unknown command: /{command}. Use /help");
+                self.state.status = format!("Unknown command: /{command}");
             }
         }
     }
@@ -228,6 +210,7 @@ impl App {
 
     pub(super) fn set_input_text(&mut self, text: String) {
         self.reset_input_history_navigation();
+        self.state.command_filter = None;
         self.state.draft_images = draft_images::DraftImages::default();
         self.state.input = text;
         self.state.input_cursor = self.state.input.len();
@@ -268,7 +251,7 @@ impl App {
             provider_id: self.state.selected_provider_id.clone(),
             model_id: self.state.selected_model_id.clone(),
             agent_profile_id: self.state.selected_profile_id.clone(),
-            options: self.state.selected_model_options.clone(),
+            model_options: self.state.remembered_model_options.clone(),
         };
 
         if let Err(error) = workspace_preferences::save_for_current_workspace(&preferences) {
@@ -296,17 +279,7 @@ impl App {
         self.state.selected_profile_id = state.selected_profile_id;
         self.state.profile_locked = state.profile_locked;
         self.state.profile_lock_stale_after_terminal_event = false;
-        if let Some(selected_profile_id) = self.state.selected_profile_id.as_ref()
-            && let Some(index) = self
-                .state
-                .agent_profiles
-                .iter()
-                .position(|profile| &profile.id == selected_profile_id)
-        {
-            self.state.agent_menu_index = index;
-        } else {
-            self.state.agent_menu_index = 0;
-        }
+        self.state.highlight_selected_agent();
         if let Some(warning) = self.state.agent_profile_warnings.first() {
             self.state.status = format!("Agent profile warning: {}", warning.message);
         }

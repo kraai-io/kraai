@@ -25,26 +25,32 @@ impl App {
             }
             RuntimeResponse::Models(Ok(models)) => {
                 self.state.config_loaded = true;
-                let previous_options = self.state.selected_model_options.clone();
-                let selected = self
-                    .state
-                    .filtered_models()
-                    .get(self.state.model_menu_index)
-                    .map(|(provider, model)| ((*provider).to_owned(), model.id.clone()));
+                let highlighted = (self.state.mode == UiMode::Model)
+                    .then(|| {
+                        self.state
+                            .filtered_models()
+                            .get(self.state.sheet_index)
+                            .map(|(provider, model)| ((*provider).to_owned(), model.id.clone()))
+                    })
+                    .flatten();
+                let setting = self.state.highlighted_model_setting();
                 self.state.models_by_provider = models;
-                let filtered = self.state.filtered_models();
-                let index = selected.map_or(self.state.model_menu_index, |(provider, id)| {
-                    filtered
-                        .iter()
-                        .position(|(candidate, model)| *candidate == provider && model.id == id)
-                        .unwrap_or(0)
-                });
-                self.state.model_menu_index = index.min(filtered.len().saturating_sub(1));
+                if let Some(id) = setting {
+                    self.state.highlight_model_setting(&id);
+                }
+                if self.state.mode == UiMode::Model {
+                    let filtered = self.state.filtered_models();
+                    let index = highlighted.map_or(self.state.sheet_index, |(provider, id)| {
+                        filtered
+                            .iter()
+                            .position(|(candidate, model)| *candidate == provider && model.id == id)
+                            .unwrap_or(0)
+                    });
+                    self.state.sheet_index = index.min(filtered.len().saturating_sub(1));
+                }
                 self.ensure_selected_model();
                 self.reconcile_model_options();
-                if self.state.selected_model_options != previous_options {
-                    self.save_workspace_preferences();
-                }
+                self.settle_highlighted_model();
                 self.reconcile_pending_session_model_options();
                 self.maybe_send_startup_message();
             }
@@ -68,17 +74,7 @@ impl App {
                     if !selected_is_available {
                         self.state.selected_profile_id = Some(catalog.default_profile_id);
                     }
-                    self.state.agent_menu_index = self
-                        .state
-                        .selected_profile_id
-                        .as_ref()
-                        .and_then(|selected| {
-                            self.state
-                                .agent_profiles
-                                .iter()
-                                .position(|profile| &profile.id == selected)
-                        })
-                        .unwrap_or(0);
+                    self.state.highlight_selected_agent();
                     if let Some(warning) = self.state.agent_profile_warnings.first() {
                         self.state.status = format!("Agent profile warning: {}", warning.message);
                     }
@@ -97,23 +93,6 @@ impl App {
             RuntimeResponse::Settings(Ok(settings)) => {
                 self.state.settings_draft = Some(settings);
                 self.state.settings_errors.clear();
-                self.state.settings_focus = SettingsFocus::ProviderList;
-                self.state.settings_provider_index = 0;
-                self.state.settings_model_index = 0;
-                self.state.settings_provider_field_index = 0;
-                self.state.settings_model_field_index = 0;
-                self.state.settings_editor = None;
-                self.state.settings_editor_input.clear();
-                self.state.settings_delete_armed = false;
-                self.state.providers_view = ProvidersView::List;
-                self.state.providers_advanced_focus = ProvidersAdvancedFocus::ProviderFields;
-                self.state.connect_provider_search.clear();
-                self.state.connect_provider_index = 0;
-                if self.state.mode == UiMode::Executions {
-                    self.close_executions();
-                }
-                self.state.mode = UiMode::ProvidersMenu;
-                self.state.status = String::from("Providers loaded");
             }
             RuntimeResponse::Settings(Err(err)) => {
                 self.set_error(format!("Failed loading settings: {err}"));
@@ -139,14 +118,6 @@ impl App {
                         self.apply_mcp_auth_status(status);
                     }
                     self.state.mcp_loaded = true;
-                    if self
-                        .state
-                        .mcp_selected
-                        .as_ref()
-                        .is_none_or(|name| !self.state.mcp_auth.contains_key(name))
-                    {
-                        self.state.mcp_selected = self.state.mcp_auth.keys().next().cloned();
-                    }
                 }
                 Err(error) => self.state.mcp_error = Some(format!("MCP auth failed: {error}")),
             },
@@ -244,10 +215,9 @@ impl App {
                     self.request(RuntimeRequest::GetSessionSnapshot {
                         session_id: session_id.clone(),
                     });
-                    if self.state.mode == UiMode::Executions {
-                        self.close_executions();
+                    if self.state.mode == UiMode::Agent {
+                        self.close_sheet();
                     }
-                    self.state.mode = UiMode::Chat;
                 }
 
                 if self
@@ -330,9 +300,6 @@ impl App {
             }
             RuntimeResponse::SaveSettings(Ok(())) => {
                 self.state.settings_errors.clear();
-                self.state.settings_delete_armed = false;
-                self.state.settings_editor = None;
-                self.state.settings_editor_input.clear();
                 self.state.status = String::from("Providers saved");
                 self.request(RuntimeRequest::ListModels);
             }
@@ -409,11 +376,6 @@ impl App {
                             kraai_runtime::SessionActivity::Idle
                             | kraai_runtime::SessionActivity::Streaming => ScriptPhase::Idle,
                         };
-                        if self.state.mode == UiMode::Executions
-                            && self.state.has_local_script_approval()
-                        {
-                            self.close_executions();
-                        }
                         self.state.profile_locked = snapshot.session.profile_locked;
                         if let Some(existing) = self
                             .state
@@ -477,29 +439,7 @@ impl App {
                 }
             }
             RuntimeResponse::Sessions(Ok(sessions)) => {
-                let selected = self
-                    .state
-                    .sessions_menu_index
-                    .checked_sub(1)
-                    .and_then(|index| {
-                        self.state
-                            .filtered_sessions()
-                            .get(index)
-                            .map(|session| session.id.clone())
-                    });
-                self.state.sessions = sessions;
-                if let Some(id) = selected {
-                    self.state.sessions_menu_index = self
-                        .state
-                        .filtered_sessions()
-                        .iter()
-                        .position(|session| session.id == id)
-                        .map_or(0, |index| index + 1);
-                }
-                self.state.sessions_menu_index = self
-                    .state
-                    .sessions_menu_index
-                    .min(self.state.filtered_sessions().len());
+                self.replace_sessions(sessions);
                 self.sync_current_session_profile_from_sessions();
                 self.refresh_session_model_saves();
                 if self.event_lag_session_resync_pending {

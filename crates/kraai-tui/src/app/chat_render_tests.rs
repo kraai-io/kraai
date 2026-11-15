@@ -108,22 +108,18 @@ fn completed_calls_preserve_mixed_text_pending_calls_and_queued_messages() {
         Some(&original_content),
     );
 
-    state
-        .execution_expanded
-        .insert(String::from("completed"), true);
-    state.chat_epoch += 1;
-    state.refresh_chat_render_cache(100);
-    assert_eq!(rendered_lines(&state), collapsed);
-    state.mode = UiMode::Executions;
+    state.scripts_expanded = true;
     state.chat_epoch += 1;
     state.refresh_chat_render_cache(100);
     let expanded = rendered_lines(&state);
     assert!(expanded.iter().any(|line| line.contains("hidden-source")));
     assert!(expanded.iter().any(|line| line.contains("hidden-output")));
-    assert!(!expanded.iter().any(|line| line.contains("pending-source")));
+    for line in [" • before", "   after", " next question [queued]"] {
+        assert!(expanded.iter().any(|expanded| expanded == line));
+    }
+    assert!(expanded.iter().any(|line| line.contains("pending-source")));
 
-    state.mode = UiMode::Chat;
-    state.execution_expanded.clear();
+    state.scripts_expanded = false;
     state.chat_epoch += 1;
     state.refresh_chat_render_cache(100);
     assert_eq!(rendered_lines(&state), collapsed);
@@ -310,8 +306,7 @@ fn duplicate_completed_call_sources_use_last_item_and_update_cached_result() {
             .map(|message| (message.id.clone(), message))
             .collect(),
         current_tip_id: Some(String::from("result")),
-        mode: UiMode::Executions,
-        execution_expanded: HashMap::from([(String::from("same-call"), true)]),
+        scripts_expanded: true,
         ..AppState::default()
     };
     state.refresh_chat_render_cache(100);
@@ -320,10 +315,6 @@ fn duplicate_completed_call_sources_use_last_item_and_update_cached_result() {
     assert!(!initial.iter().any(|line| line.contains("first-source")));
     assert!(!initial.iter().any(|line| line.contains("second-source")));
     assert_eq!(state.chat_render_cache.borrow().sections.len(), 1);
-    assert_eq!(
-        state.chat_render_cache.borrow().execution_offsets,
-        HashMap::from([(String::from("same-call"), 0)]),
-    );
 
     state.chat_history.insert(
         MessageId::new("second"),
@@ -340,11 +331,6 @@ fn duplicate_completed_call_sources_use_last_item_and_update_cached_result() {
     let updated = rendered_lines(&state);
     assert!(updated.iter().any(|line| line.contains("replaced-source")));
     assert!(!updated.iter().any(|line| line.contains("final-source")));
-
-    state.mode = UiMode::Executions;
-    state.chat_epoch += 1;
-    state.refresh_chat_render_cache(100);
-    assert_eq!(rendered_lines(&state), updated);
 }
 
 #[test]
@@ -387,7 +373,13 @@ fn consecutive_scripts_group_across_hidden_calls_but_not_visible_messages() {
     };
     state.refresh_chat_render_cache(100);
     let lines = rendered_lines(&state);
-    assert_eq!(lines.iter().filter(|line| line.contains("[F6]")).count(), 2);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("[ctrl+o]"))
+            .count(),
+        2
+    );
     assert!(
         lines
             .iter()
@@ -410,12 +402,120 @@ fn consecutive_scripts_group_across_hidden_calls_but_not_visible_messages() {
             .iter()
             .any(|line| line.contains("failed"))
     );
-    state.mode = UiMode::Executions;
+    state.scripts_expanded = true;
     state.chat_epoch += 1;
-    state.execution_expanded.insert(String::from("b"), true);
     state.refresh_chat_render_cache(100);
     let lines = rendered_lines(&state);
-    assert_eq!(lines.iter().filter(|line| line.contains("[F6]")).count(), 3);
+    assert!(!lines.iter().any(|line| line.contains("[ctrl+o]")));
     assert!(lines.iter().any(|line| line.contains("source-b")));
-    assert!(lines.iter().any(|line| line.contains("output-b")));
+    for id in ["a", "b", "c"] {
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(&format!("output-{id}")))
+        );
+    }
+    assert!(lines.iter().any(|line| line.contains("Next step")));
+}
+
+#[test]
+fn a_changed_outcome_redraws_a_script_whose_text_stayed_the_same() {
+    let result = |exit_code| {
+        message(
+            "result",
+            None,
+            ConversationItem::ScriptResult {
+                outcome: kraai_execution_types::ScriptExecutionOutcome {
+                    status: kraai_execution_types::ScriptExecutionStatus::Completed,
+                    exit_code: Some(exit_code),
+                },
+                call_id: ToolCallId::new("call"),
+                output: String::from("<tool_call_result elapsed_ms=\"300\"></tool_call_result>")
+                    .into(),
+            },
+        )
+    };
+    let mut state = AppState {
+        chat_history: [(MessageId::new("result"), result(0))]
+            .into_iter()
+            .collect(),
+        current_tip_id: Some(String::from("result")),
+        ..AppState::default()
+    };
+    for expanded in [false, true] {
+        state.scripts_expanded = expanded;
+        for (exit_code, expected) in [
+            (0, "0.3s"),
+            (3, if expanded { "exit 3" } else { "1 failed" }),
+        ] {
+            state
+                .chat_history
+                .insert(MessageId::new("result"), result(exit_code));
+            state.chat_epoch += 1;
+            state.refresh_chat_render_cache(80);
+            let lines = rendered_lines(&state);
+            assert!(
+                lines.iter().any(|line| line.contains(expected)),
+                "{lines:?}"
+            );
+            assert_eq!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("failed") || line.contains("exit 3")),
+                exit_code != 0,
+                "{lines:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_result_with_images_reads_its_sections_and_lists_the_images_after_them() {
+    let image = kraai_execution_types::ImageAttachment {
+        id: String::from("img"),
+        mime_type: String::from("image/png"),
+        width: 4,
+        height: 3,
+        byte_length: 10,
+    };
+    let result = message(
+        "result",
+        None,
+        ConversationItem::ScriptResult {
+            outcome: kraai_execution_types::ScriptExecutionOutcome {
+                status: kraai_execution_types::ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+            },
+            call_id: ToolCallId::new("call"),
+            output: kraai_types::MessageContent(vec![
+                kraai_types::ContentPart::Text {
+                    text: String::from(
+                        "<tool_call_result elapsed_ms=\"300\">\n<stdout>drew a chart\n</stdout>\n</tool_call_result>",
+                    ),
+                },
+                kraai_types::ContentPart::Image { image },
+            ]),
+        },
+    );
+    let state = AppState {
+        chat_history: [(MessageId::new("result"), result)].into_iter().collect(),
+        current_tip_id: Some(String::from("result")),
+        scripts_expanded: true,
+        ..AppState::default()
+    };
+    state.refresh_chat_render_cache(80);
+    let lines = rendered_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("0.3s")), "{lines:?}");
+    assert!(
+        lines.iter().any(|line| line.contains("drew a chart")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("[Image img: 4×3]")),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("tool_call_result")),
+        "{lines:?}"
+    );
 }

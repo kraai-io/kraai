@@ -41,6 +41,10 @@ impl From<&str> for MessageContent {
     }
 }
 
+fn image_label(image: &ImageAttachment) -> String {
+    format!("[Image {}: {}×{}]", image.id, image.width, image.height)
+}
+
 impl MessageContent {
     pub fn parts(&self) -> &[ContentPart] {
         &self.0
@@ -51,6 +55,11 @@ impl MessageContent {
             ContentPart::Image { image } => Some(image),
             ContentPart::Text { .. } => None,
         })
+    }
+
+    /// The line that stands for each image when the content is shown as text.
+    pub fn image_labels(&self) -> impl Iterator<Item = String> {
+        self.images().map(image_label)
     }
 
     pub fn has_images(&self) -> bool {
@@ -74,9 +83,7 @@ impl MessageContent {
                 .iter()
                 .map(|part| match part {
                     ContentPart::Text { text } => text.clone(),
-                    ContentPart::Image { image } => {
-                        format!("[Image {}: {}×{}]", image.id, image.width, image.height)
-                    }
+                    ContentPart::Image { image } => image_label(image),
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),
