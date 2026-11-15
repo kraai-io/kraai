@@ -17,10 +17,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use agent_client_protocol::{
-    Agent, Result,
-    schema::{ProtocolVersion, v1 as acp},
-};
+use agent_client_protocol::{Agent, Result, schema::ProtocolVersion, v1::schema as acp};
 use config_updates::{ConfigUpdates, PreparedSession};
 use kraai_runtime::RuntimeHandle;
 use kraai_types::SessionId;
@@ -154,7 +151,7 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
     let close = server.clone();
     let cancel = server.clone();
     Agent
-        .builder()
+        .v1()
         .name("kraai")
         .on_close(async move |_cx| {
             for session in close.sessions.lock().await.values() {

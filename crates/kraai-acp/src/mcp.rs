@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use agent_client_protocol::{Result, schema::v1 as acp};
+use agent_client_protocol::{Result, v1::schema as acp};
 use kraai_mcp::{McpConfig, ServerConfig, TransportConfig};
 
 use crate::error;

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use agent_client_protocol::{Result, schema::v1 as acp};
+use agent_client_protocol::{Result, v1::schema as acp};
 use kraai_runtime::{Event, PendingScriptInfo, RuntimeHandle};
 use kraai_types::{AssistantItem, ConversationItem, MessageId, ScriptCall, SessionId};
 use tokio::sync::broadcast;
