@@ -18,7 +18,6 @@ const ROW_COMMANDS: &[&str] = &[
     "each",
     "enumerate",
     "every",
-    "filter",
     "first",
     "get",
     "group-by",

@@ -52,31 +52,24 @@ pub(super) fn emit_drained_statements(ir: &mut IrBlock, emit: DeclId) {
         })
         .collect();
     let length = ir.instructions.len();
-    if drains.is_empty()
-        || ir.spans.len() != length
-        || ir.ast.len() != length
-        || ir.comments.len() != length
-    {
+    if drains.is_empty() || ir.spans.len() != length || ir.comments.len() != length {
         return;
     }
     let shifted = |target: usize| target + drains.partition_point(|&drain| drain < target);
     let mut instructions = Vec::with_capacity(ir.instructions.len() + drains.len());
     let mut spans = Vec::with_capacity(instructions.capacity());
-    let mut ast = Vec::with_capacity(instructions.capacity());
     let mut comments = Vec::with_capacity(instructions.capacity());
     let old = std::mem::take(&mut ir.instructions)
         .into_iter()
         .zip(std::mem::take(&mut ir.spans))
-        .zip(std::mem::take(&mut ir.ast))
         .zip(std::mem::take(&mut ir.comments));
-    for (((mut instruction, span), ast_ref), comment) in old {
+    for ((mut instruction, span), comment) in old {
         if let Instruction::Drain { src } = instruction {
             instructions.push(Instruction::Call {
                 decl_id: emit,
                 src_dst: src,
             });
             spans.push(span);
-            ast.push(ast_ref.clone());
             comments.push(Box::default());
         }
         if let Some(target) = instruction.branch_target() {
@@ -84,12 +77,10 @@ pub(super) fn emit_drained_statements(ir: &mut IrBlock, emit: DeclId) {
         }
         instructions.push(instruction);
         spans.push(span);
-        ast.push(ast_ref);
         comments.push(comment);
     }
     ir.instructions = instructions;
     ir.spans = spans;
-    ir.ast = ast;
     ir.comments = comments;
     for region in &mut ir.scope_regions {
         region.start = shifted(region.start);
