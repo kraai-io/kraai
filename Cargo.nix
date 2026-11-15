@@ -11603,11 +11603,6 @@ rec {
             features = [ "process" "signal" ];
           }
           {
-            name = "rand";
-            packageId = "rand 0.10.3";
-            target = { target, features }: (target."windows" or false);
-          }
-          {
             name = "tokio";
             packageId = "tokio";
             features = [ "full" ];
@@ -11627,6 +11622,11 @@ rec {
           {
             name = "kraai-test-support";
             packageId = "kraai-test-support";
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.10.3";
+            target = { target, features }: (target."windows" or false);
           }
           {
             name = "rustix";

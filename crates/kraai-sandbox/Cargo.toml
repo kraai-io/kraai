@@ -22,7 +22,6 @@ nix = { workspace = true }
 rustix = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-rand = { workspace = true }
 windows-sys = { workspace = true, features = [
   "Wdk_Storage_FileSystem",
   "Win32_Foundation",
@@ -41,6 +40,9 @@ windows-sys = { workspace = true, features = [
   "Win32_UI_Shell",
   "Win32_System_Com",
 ] }
+
+[target.'cfg(windows)'.dev-dependencies]
+rand = { workspace = true }
 
 [lints]
 workspace = true
