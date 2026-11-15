@@ -106,7 +106,7 @@ fn build_runner_bundle(store_root: &Path, artifact_dir: &Path) -> Result<String>
     }
     let archive_roots = roots
         .iter()
-        .map(|root| root.strip_prefix('/').unwrap_or(root))
+        .map(|root| root.trim_prefix('/'))
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(

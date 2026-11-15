@@ -257,7 +257,7 @@ fn is_tag_character(character: char) -> bool {
 
 fn without_newline(line: &str) -> &str {
     line.strip_suffix('\n')
-        .map_or(line, |line| line.strip_suffix('\r').unwrap_or(line))
+        .map_or(line, |line| line.trim_suffix('\r'))
 }
 
 /// A Nushell raw string holding `text` verbatim, with enough `#`s that `text` cannot close it.

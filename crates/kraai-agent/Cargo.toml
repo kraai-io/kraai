@@ -33,3 +33,6 @@ kraai-provider-openai-chat-completions = { workspace = true }
 kraai-test-support = { workspace = true }
 rusqlite.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

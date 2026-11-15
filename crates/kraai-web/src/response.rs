@@ -2,7 +2,7 @@ use kraai_execution_types::WebSearchResponse;
 use serde_json::Value;
 
 pub(super) fn decode(body: &str, max_chars: usize) -> Result<WebSearchResponse, String> {
-    let body = body.strip_prefix('\u{feff}').unwrap_or(body);
+    let body = body.trim_prefix('\u{feff}');
     if body.trim_start().starts_with('{') {
         return decode_message(body, max_chars)?.ok_or_else(missing_result);
     }
@@ -10,10 +10,7 @@ pub(super) fn decode(body: &str, max_chars: usize) -> Result<WebSearchResponse, 
     for event in normalized.split("\n\n") {
         let data = event
             .lines()
-            .filter_map(|line| {
-                line.strip_prefix("data:")
-                    .map(|data| data.strip_prefix(' ').unwrap_or(data))
-            })
+            .filter_map(|line| line.strip_prefix("data:").map(|data| data.trim_prefix(' ')))
             .collect::<Vec<_>>()
             .join("\n");
         if data.is_empty() || data == "[DONE]" {

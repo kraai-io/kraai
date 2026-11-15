@@ -10927,6 +10927,7 @@ rec {
           {
             name = "rustix";
             packageId = "rustix 1.1.6";
+            target = { target, features }: ("linux" == target."os" or null);
             features = [ "fs" "net" "pipe" ];
           }
           {
@@ -11602,17 +11603,6 @@ rec {
             features = [ "process" "signal" ];
           }
           {
-            name = "rand";
-            packageId = "rand 0.10.3";
-            target = { target, features }: (target."windows" or false);
-          }
-          {
-            name = "rustix";
-            packageId = "rustix 1.1.6";
-            target = { target, features }: (target."unix" or false);
-            features = [ "fs" "net" "pipe" ];
-          }
-          {
             name = "tokio";
             packageId = "tokio";
             features = [ "full" ];
@@ -11632,6 +11622,17 @@ rec {
           {
             name = "kraai-test-support";
             packageId = "kraai-test-support";
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.10.3";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 1.1.6";
+            target = { target, features }: ("linux" == target."os" or null);
+            features = [ "fs" "net" "pipe" ];
           }
         ];
 
@@ -11778,6 +11779,7 @@ rec {
           {
             name = "signal-hook";
             packageId = "signal-hook 0.4.6";
+            target = { target, features }: (target."unix" or false);
           }
           {
             name = "tokio";

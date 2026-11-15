@@ -118,8 +118,7 @@ async fn process_line(
     line: &[u8],
     event_data: &mut Option<String>,
 ) -> Result<bool> {
-    let line = line.strip_suffix(b"\n").unwrap_or(line);
-    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let line = line.trim_suffix(b"\n").trim_suffix(b"\r");
 
     if line.is_empty() {
         return flush_event(tx, event_data).await;
@@ -180,6 +179,7 @@ async fn flush_event(
 mod tests {
     use super::*;
     use futures::stream;
+    use std::mem::DropGuard;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::Poll;
@@ -314,16 +314,10 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_receiver_releases_pending_transport() -> Result<()> {
-        struct DropSignal(Arc<AtomicBool>);
-
-        impl Drop for DropSignal {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::Release);
-            }
-        }
-
         let dropped = Arc::new(AtomicBool::new(false));
-        let signal = DropSignal(Arc::clone(&dropped));
+        let signal = DropGuard::new(Arc::clone(&dropped), |dropped| {
+            dropped.store(true, Ordering::Release);
+        });
         let source = stream::poll_fn(move |_| {
             let _ = &signal;
             Poll::<Option<std::result::Result<Vec<u8>, reqwest::Error>>>::Pending

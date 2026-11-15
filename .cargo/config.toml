@@ -11,3 +11,6 @@ rustflags = ["-Zunstable-options", "--jobs-frontend=8"]
 
 [profile.release]
 rustflags = ["-Zlocation-detail=none"]
+
+[registry]
+global-min-publish-age = "7 days"

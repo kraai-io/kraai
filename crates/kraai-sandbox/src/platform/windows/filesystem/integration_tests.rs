@@ -10,7 +10,7 @@ fn local_paths_extended_paths_and_volume_roots_query_the_same_volume()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = std::env::temp_dir().canonicalize()?;
     let extended = temp.to_string_lossy();
-    let ordinary = PathBuf::from(extended.strip_prefix(r"\\?\").unwrap_or(&extended));
+    let ordinary = PathBuf::from(extended.trim_prefix(r"\\?\"));
     let expected = query(&temp)?;
     check(&temp)?;
     let ordinary_volume = query(&ordinary)?;

@@ -8,3 +8,6 @@ version = "0.1.0"
 
 [dependencies]
 kraai-execution-types = { workspace = true }
+
+[lints]
+workspace = true

@@ -32,3 +32,6 @@ image.workspace = true
 kraai-persistence.workspace = true
 kraai-test-support = { workspace = true }
 tempfile.workspace = true
+
+[lints]
+workspace = true

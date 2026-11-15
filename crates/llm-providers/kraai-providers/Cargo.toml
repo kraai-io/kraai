@@ -13,3 +13,6 @@ kraai-provider-core = { workspace = true }
 kraai-provider-openai-chat-completions = { workspace = true }
 kraai-provider-openai-codex = { workspace = true }
 tokio = { workspace = true }
+
+[lints]
+workspace = true

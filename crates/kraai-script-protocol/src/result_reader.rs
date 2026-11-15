@@ -42,8 +42,8 @@ fn attribute<'a>(attributes: &'a [(&str, String)], name: &str) -> Option<&'a str
 #[must_use]
 pub fn parse_tool_call_result(rendered: &str) -> Option<ParsedToolCallResult<'_>> {
     let (attributes, body) = open_tag(rendered, "tool_call_result")?;
-    let body = body.strip_suffix("</tool_call_result>").unwrap_or(body);
-    let mut rest = body.strip_prefix('\n').unwrap_or(body);
+    let body = body.trim_suffix("</tool_call_result>");
+    let mut rest = body.trim_prefix('\n');
     let mut sections = Vec::new();
     for (index, name) in SECTIONS.iter().enumerate() {
         let Some((attributes, content)) = open_tag(rest, name) else {

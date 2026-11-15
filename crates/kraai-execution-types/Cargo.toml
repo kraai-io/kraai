@@ -16,3 +16,6 @@ typescript = ["dep:ts-rs"]
 [dependencies.ts-rs]
 optional = true
 workspace = true
+
+[lints]
+workspace = true

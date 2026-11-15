@@ -1,4 +1,5 @@
 use std::hint::black_box;
+use std::mem::DropGuard;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -161,7 +162,9 @@ fn async_scope_fixture() -> Result<()> {
     let operation = measure_async(async {
         tokio::task::yield_now().await;
         tokio::time::sleep(Duration::from_millis(10)).await;
-        Ok(OutputGuard(dropped.clone()))
+        Ok(DropGuard::new(dropped.clone(), |dropped| {
+            dropped.store(true, Ordering::Relaxed);
+        }))
     });
 
     let setup = measure(|| {
@@ -208,14 +211,6 @@ fn async_scope_fixture() -> Result<()> {
         "operation output was not returned to the caller"
     );
     Ok(())
-}
-
-struct OutputGuard(Arc<AtomicBool>);
-
-impl Drop for OutputGuard {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::Relaxed);
-    }
 }
 
 #[test]

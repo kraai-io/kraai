@@ -139,7 +139,7 @@ impl Catalog {
     fn warning(&mut self, path: &Path, error: impl std::fmt::Display) {
         const LIMIT: usize = 100;
         if self.warnings.len() < LIMIT {
-            let relative = path.strip_prefix(&self.root).unwrap_or(path);
+            let relative = path.trim_prefix(&self.root);
             self.warnings.push(
                 format!("{}: {error}", relative.display())
                     .chars()
@@ -197,11 +197,7 @@ impl Catalog {
     }
 
     fn source_id(&self, path: &Path) -> String {
-        crate::cache::hash_chunks(&[path
-            .strip_prefix(&self.root)
-            .unwrap_or(path)
-            .as_os_str()
-            .as_encoded_bytes()])
+        crate::cache::hash_chunks(&[path.trim_prefix(&self.root).as_os_str().as_encoded_bytes()])
     }
 
     fn insert(&mut self, path: &Path, mut attempt: Attempt) {

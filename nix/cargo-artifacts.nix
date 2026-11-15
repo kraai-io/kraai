@@ -4,11 +4,16 @@
 # rebuilds the workspace members alone.
 {
   lib,
+  formats,
   runCommand,
   root,
   manifest,
 }: let
   memberPaths = manifest.workspace.members;
+  # Stubs use none of their dependencies, so the workspace's unused_dependencies lint would fail them.
+  stubManifest = (formats.toml {}).generate "Cargo.toml" (lib.recursiveUpdate manifest {
+    workspace.lints.cargo.unused_dependencies = "allow";
+  });
   members =
     map (path: let
       memberManifest = lib.importTOML (root + "/${path}/Cargo.toml");
@@ -79,6 +84,7 @@ in {
     cp -r ${manifests} "$out"
     chmod -R u+w "$out"
     cd "$out"
+    cp ${stubManifest} Cargo.toml
     ${lib.concatMapStrings (member: lib.concatMapStrings (writeStub member) member.stubs) members}
   '';
 

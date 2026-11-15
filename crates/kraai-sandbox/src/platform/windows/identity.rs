@@ -130,7 +130,7 @@ impl Identity {
             if result < 0 {
                 return Err(SandboxError::SandboxUnavailable(format!(
                     "unable to delete AppContainer profile '{}': HRESULT {result:#x}",
-                    String::from_utf16_lossy(name.strip_suffix(&[0]).unwrap_or(name))
+                    String::from_utf16_lossy(name.trim_suffix(&[0]))
                 )));
             }
             Ok(())

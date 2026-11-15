@@ -1,3 +1,4 @@
+use std::mem::DropGuard;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kraai_runtime::RuntimeEvent;
@@ -24,17 +25,6 @@ pub struct EventSubscription {
     closed: CancellationToken,
 }
 
-struct PendingRead<'a>(&'a EventSubscription);
-
-impl Drop for PendingRead<'_> {
-    fn drop(&mut self) {
-        if self.0.closed.is_cancelled() {
-            self.0.release_receiver();
-        }
-        self.0.reading.store(false, Ordering::Release);
-    }
-}
-
 impl EventSubscription {
     pub(crate) fn new(
         receiver: broadcast::Receiver<RuntimeEvent>,
@@ -55,7 +45,12 @@ impl EventSubscription {
                     "only one pending next() is allowed: operation would block",
                 )
             })?;
-        let _pending_read = PendingRead(self);
+        let _pending_read = DropGuard::new(self, |subscription| {
+            if subscription.closed.is_cancelled() {
+                subscription.release_receiver();
+            }
+            subscription.reading.store(false, Ordering::Release);
+        });
         let mut receiver = self.receiver.lock().await;
         let Some(events) = receiver.as_mut() else {
             return Ok(EventRead::Closed);
