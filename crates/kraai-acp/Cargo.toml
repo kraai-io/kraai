@@ -4,7 +4,7 @@ license.workspace = true
 name = "kraai-acp"
 publish = false
 rust-version.workspace = true
-version = "0.1.0"
+version.workspace = true
 
 [dependencies]
 agent-client-protocol.workspace = true

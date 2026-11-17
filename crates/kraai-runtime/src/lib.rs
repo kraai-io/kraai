@@ -28,6 +28,11 @@ pub use kraai_types::{
     MessageId, TokenUsage,
 };
 pub use runtime::RuntimeBuilder;
+
+pub const VERSION: &str = match option_env!("KRAAI_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 pub use settings::{FieldValueEntry, ModelSettings, ProviderSettings, SettingsDocument};
 
 /// Runs a hidden runtime subprocess mode when requested by a child Kraai process.

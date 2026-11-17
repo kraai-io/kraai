@@ -1,0 +1,181 @@
+name: Nightly
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/nightly.yml
+permissions:
+  contents: read
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      previous-tag: ${{ steps.plan.outputs.previous-tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: Cargo.toml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          base=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          release="$base-nightly.$(date -u +%Y%m%d).$GITHUB_RUN_NUMBER"
+          previous=$(gh release list --exclude-drafts --limit 100 --json tagName \
+            --jq '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+-nightly\\."))][0] // ""')
+          build=true
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ -n "$previous" ]; then
+            status=$(gh api "repos/$GH_REPO/compare/$previous...$GITHUB_SHA" --jq .status)
+            if [ "$status" != ahead ]; then
+              echo "$GITHUB_SHA is $status relative to $previous, skipping"
+              build=false
+            fi
+          fi
+          {
+            echo "build=$build"
+            echo "version=$release+${GITHUB_SHA::12}"
+            echo "tag=v$release"
+            echo "previous-tag=$previous"
+          } >> "$GITHUB_OUTPUT"
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            exe: .exe
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+            exe: .exe
+    env:
+      TARGET: ${{ matrix.target }}
+      EXE: ${{ matrix.exe }}
+      CROSS: ${{ matrix.cross }}
+      KRAAI_VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          echo "CC_${TARGET//-/_}=musl-gcc" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@f4371d1ec7179bfbd04a82a81e3b3af7f720750f # v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        shell: bash
+        run: cargo build --locked --release --target "$TARGET" -p kraai-tui --bin kraai -p kraai-acp --bin kraai-acp
+      - name: Check binaries
+        shell: bash
+        run: |
+          for bin in kraai kraai-acp; do
+            path="target/$TARGET/release/$bin$EXE"
+            if [ "$CROSS" != true ]; then
+              actual=$("$path" --version)
+              if [ "$actual" != "$bin $KRAAI_VERSION" ]; then
+                echo "::error::$bin --version printed '$actual', expected '$bin $KRAAI_VERSION'"
+                exit 1
+              fi
+            fi
+            if [[ "$TARGET" == *-linux-musl ]]; then
+              description=$(file -b "$path")
+              case "$description" in
+                *"static-pie linked"* | *"statically linked"*) ;;
+                *)
+                  echo "::error::$bin is not statically linked: $description"
+                  exit 1
+                  ;;
+              esac
+            fi
+          done
+      - name: Stage
+        shell: bash
+        run: |
+          dir="dist/kraai-$TARGET"
+          mkdir -p "$dir"
+          cp "target/$TARGET/release/kraai$EXE" "target/$TARGET/release/kraai-acp$EXE" LICENSE "$dir/"
+      - name: Archive
+        if: runner.os != 'Windows'
+        run: tar -C dist -czf "dist/kraai-$TARGET.tar.gz" "kraai-$TARGET"
+      - name: Archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/kraai-$env:TARGET" -DestinationPath "dist/kraai-$env:TARGET.zip"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kraai-${{ matrix.target }}
+          path: dist/kraai-${{ matrix.target }}.*
+          if-no-files-found: error
+  publish:
+    needs: [plan, build]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: kraai-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum kraai-* > SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/kraai-*
+      - name: Publish
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          PREVIOUS_TAG: ${{ needs.plan.outputs.previous-tag }}
+        run: |
+          args=(
+            --prerelease
+            --target "$GITHUB_SHA"
+            --title "Kraai ${TAG#v}"
+            --generate-notes
+            --notes "Built from $GITHUB_SHA. Verify a download with \`gh attestation verify <file> --repo $GH_REPO\`."
+          )
+          if [ -n "$PREVIOUS_TAG" ]; then
+            args+=(--notes-start-tag "$PREVIOUS_TAG")
+          fi
+          gh release create "$TAG" dist/* "${args[@]}"

@@ -61,6 +61,7 @@ impl Drop for TerminalSessionGuard {
 }
 
 #[derive(Debug, Parser)]
+#[command(name = "kraai", version = kraai_runtime::VERSION)]
 struct Cli {
     #[arg(long = "agent-profile", value_name = "ID")]
     agent_profile: Option<String>,

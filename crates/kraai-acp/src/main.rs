@@ -7,7 +7,7 @@ use color_eyre::eyre::{Result, eyre};
 use kraai_runtime::{RuntimeBuilder, RuntimeStartupState};
 
 #[derive(Parser)]
-#[command(version)]
+#[command(version = kraai_runtime::VERSION)]
 struct Cli {
     #[arg(long)]
     provider: Option<String>,
