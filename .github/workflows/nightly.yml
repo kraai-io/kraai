@@ -96,6 +96,7 @@ jobs:
       - uses: Swatinem/rust-cache@f4371d1ec7179bfbd04a82a81e3b3af7f720750f # v2
         with:
           key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
         shell: bash
         run: cargo build --locked --release --target "$TARGET" -p kraai-tui --bin kraai -p kraai-acp --bin kraai-acp
