@@ -4,7 +4,7 @@ license.workspace = true
 name = "kraai-runtime"
 publish = false
 rust-version.workspace = true
-version = "0.1.0"
+version.workspace = true
 
 [dependencies]
 kraai-agent.workspace = true

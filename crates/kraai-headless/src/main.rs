@@ -10,6 +10,7 @@ use kraai_runtime::RuntimeBuilder;
 /// Runs one prompt to completion without a user interface. Writes the assistant's output to
 /// stdout and, when `KRAAI_EVAL_METRICS_PATH` is set, the run's metrics there.
 #[derive(Debug, Parser)]
+#[command(version = kraai_runtime::VERSION)]
 struct Cli {
     #[arg(long, value_name = "ID")]
     provider: String,

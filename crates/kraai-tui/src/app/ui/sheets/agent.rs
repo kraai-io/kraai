@@ -22,6 +22,11 @@ pub(super) fn agents(state: &AppState) -> Sheet {
                 .collect::<Vec<_>>()
                 .join("  "),
         ));
+        if !profile.capabilities.is_unsandboxed()
+            && let Some(warning) = &state.sandbox_warning
+        {
+            notes.push(Note::new(warning, Tone::Danger));
+        }
         notes.push(Note::field(
             "escalation",
             profile.escalation_policy.as_str(),

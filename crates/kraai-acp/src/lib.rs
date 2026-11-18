@@ -177,7 +177,7 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                 })?;
                 responder.respond(
                     acp::InitializeResponse::new(ProtocolVersion::V1)
-                        .agent_info(acp::Implementation::new("kraai", env!("CARGO_PKG_VERSION")))
+                        .agent_info(acp::Implementation::new("kraai", kraai_runtime::VERSION))
                         .agent_capabilities(
                             acp::AgentCapabilities::new()
                                 .load_session(true)

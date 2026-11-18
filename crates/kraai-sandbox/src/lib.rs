@@ -13,6 +13,7 @@ pub use config::{LaunchPlan, PrivateTempConfig};
 pub use error::SandboxError;
 pub use output::{ExecutionOutput, OutputEvent, OutputStream, Termination};
 pub use output_capture::{MAX_CAPTURE_BYTES, OutputCapture};
+pub use platform::availability_warning;
 pub use process::run;
 pub use process_spawn::{spawn_command, spawn_tokio_command};
 

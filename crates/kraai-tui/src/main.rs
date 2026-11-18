@@ -61,6 +61,7 @@ impl Drop for TerminalSessionGuard {
 }
 
 #[derive(Debug, Parser)]
+#[command(name = "kraai", version = kraai_runtime::VERSION)]
 struct Cli {
     #[arg(long = "agent-profile", value_name = "ID")]
     agent_profile: Option<String>,
@@ -98,6 +99,7 @@ fn main() -> Result<()> {
     };
 
     let mut app = App::new(runtime, startup_options);
+    app.set_sandbox_check(kraai_sandbox::availability_warning);
 
     ratatui::crossterm::terminal::enable_raw_mode()?;
     app.request_cursor_preferences();
