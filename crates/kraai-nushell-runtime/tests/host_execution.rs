@@ -407,11 +407,9 @@ async fn transport_descriptor_is_closed_before_external_commands_can_run() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn sandbox_runtime_roots(host: PathBuf) -> Vec<PathBuf> {
     let mut roots = vec![host];
-    for path in ["/nix/store", "/lib", "/lib64", "/usr/lib"] {
-        let path = PathBuf::from(path);
-        if path.exists() {
-            roots.push(path);
-        }
+    let nix_store = PathBuf::from("/nix/store");
+    if nix_store.exists() {
+        roots.push(nix_store);
     }
     roots
 }

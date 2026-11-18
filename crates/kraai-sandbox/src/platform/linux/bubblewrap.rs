@@ -17,6 +17,17 @@ use super::seccomp::restricted_network_seccomp_filter;
 const BWRAP_PROGRAM: &str = "bwrap";
 const BWRAP_PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const BWRAP_SECCOMP_STDIN_FD: &str = "0";
+// Dynamically linked programs need the loader, shared libraries, and timezone data even
+// without host-read, matching what macOS base.sbpl allows. Missing paths are optional.
+const SYSTEM_PATHS: [&str; 7] = [
+    "/lib",
+    "/lib64",
+    "/usr/lib",
+    "/usr/lib64",
+    "/etc/ld.so.cache",
+    "/etc/localtime",
+    "/usr/share/zoneinfo",
+];
 
 type BwrapProbeCache = BTreeMap<(PathBuf, bool), Result<(), String>>;
 
@@ -155,6 +166,10 @@ pub(crate) fn build_bwrap_args(
         push_bind(&mut args, "--bind", Path::new("/"));
     } else if capabilities.contains(SandboxCapability::HostRead) {
         push_bind(&mut args, "--ro-bind", Path::new("/"));
+    } else {
+        for path in SYSTEM_PATHS {
+            push_bind(&mut args, "--ro-bind-try", Path::new(path));
+        }
     }
     args.extend([
         "--proc".into(),

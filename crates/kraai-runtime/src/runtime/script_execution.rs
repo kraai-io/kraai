@@ -190,10 +190,12 @@ impl RuntimeCore {
         plan.host_arguments = host.arguments;
         plan.environment = request.environment;
         plan.runtime_roots = request.runtime_roots;
-        if let Some(host_directory) = plan.host_executable.parent()
-            && !plan.runtime_roots.iter().any(|root| root == host_directory)
+        if !plan
+            .runtime_roots
+            .iter()
+            .any(|root| plan.host_executable.starts_with(root))
         {
-            plan.runtime_roots.push(host_directory.to_path_buf());
+            plan.runtime_roots.push(plan.host_executable.clone());
         }
         plan.active_commands = request.profile.commands;
         plan.mcp = self.agent_manager.session_mcp(&request.session_id);
