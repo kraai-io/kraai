@@ -17,6 +17,15 @@ pub(crate) use seccomp::{
     SeccompInstruction, install_restricted_network_filter, restricted_network_seccomp_program,
 };
 
+const MISSING_BWRAP: &str = "bubblewrap (bwrap) was not found in a trusted PATH directory, so scripts cannot run in the sandbox. Install bubblewrap with your system package manager.";
+
+pub(crate) fn startup_warning() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    bubblewrap::find_bwrap(&cwd, &std::env::temp_dir())
+        .is_none()
+        .then(|| String::from(MISSING_BWRAP))
+}
+
 pub(crate) async fn prepare(
     plan: LaunchPlan,
     private_temp: PrivateTempDir,
@@ -24,12 +33,8 @@ pub(crate) async fn prepare(
     let network_enabled = plan
         .capabilities
         .contains(kraai_execution_types::SandboxCapability::Network);
-    let bwrap =
-        bubblewrap::find_bwrap(&plan.workspace_root, private_temp.path()).ok_or_else(|| {
-            SandboxError::SandboxUnavailable(String::from(
-                "bubblewrap was not found on a trusted PATH entry",
-            ))
-        })?;
+    let bwrap = bubblewrap::find_bwrap(&plan.workspace_root, private_temp.path())
+        .ok_or_else(|| SandboxError::SandboxUnavailable(String::from(MISSING_BWRAP)))?;
     bubblewrap::ensure_bwrap_sandbox_available(&bwrap, network_enabled).await?;
     let seccomp_filter = seccomp::restricted_network_seccomp_filter(
         network_enabled,

@@ -17,6 +17,18 @@ mod windows_filesystem;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 pub(crate) mod macos;
 
+#[must_use]
+pub fn startup_warning() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::startup_warning()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 pub(crate) async fn prepare_command(mut plan: LaunchPlan) -> Result<PreparedCommand, SandboxError> {
     validate_plan(&plan)?;
     #[cfg(windows)]
