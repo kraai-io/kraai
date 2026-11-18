@@ -244,8 +244,6 @@
         ${lib.optionalString (share != null) ''cp -r ${share}/share "$out/"''}
       '';
 
-    # Linux launchers list Kraai with its icon and open it in a terminal. Every size is rendered
-    # from the SVG so small icons stay sharp.
     kraaiDesktopEntry = pkgs.makeDesktopItem {
       name = "kraai";
       desktopName = "Kraai";
