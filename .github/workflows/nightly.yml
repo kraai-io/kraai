@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/nightly.yml
+      - .github/scripts/check-release-binary.sh
 permissions:
   contents: read
 concurrency:
