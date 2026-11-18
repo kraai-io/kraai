@@ -62,6 +62,7 @@ impl App {
             clipboard: None,
             startup_options,
             persist_workspace_preferences: true,
+            sandbox_check: || None,
             startup_message_sent: false,
             startup_sync: StartupSync::WaitingForRuntime,
             state,
@@ -81,8 +82,8 @@ impl App {
         self.state.cursor_preferences.request();
     }
 
-    pub fn set_sandbox_warning(&mut self, warning: Option<String>) {
-        self.state.sandbox_warning = warning;
+    pub fn set_sandbox_check(&mut self, check: fn() -> Option<String>) {
+        self.sandbox_check = check;
     }
 
     pub fn run(

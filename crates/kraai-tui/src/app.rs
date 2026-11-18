@@ -100,6 +100,9 @@ pub struct App {
     startup_options: StartupOptions,
     /// Whether model choices are remembered for the workspace; off in tests.
     persist_workspace_preferences: bool,
+    /// Says why sandboxed scripts cannot run, rerun whenever the agent list opens; reports
+    /// nothing until `main` installs the real check.
+    sandbox_check: fn() -> Option<String>,
     startup_message_sent: bool,
     startup_sync: StartupSync,
     state: AppState,

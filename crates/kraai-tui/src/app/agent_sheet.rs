@@ -36,6 +36,7 @@ impl App {
         if self.state.turn_blocks_user_commands() {
             return;
         }
+        self.state.sandbox_warning = (self.sandbox_check)();
         self.open_sheet(UiMode::Agent);
         self.state.highlight_selected_agent();
         if let Some(session_id) = self.state.current_session_id.clone() {

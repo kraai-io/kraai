@@ -97,6 +97,7 @@ fn test_harness() -> TestHarness {
             clipboard: None,
             startup_options: StartupOptions::default(),
             persist_workspace_preferences: false,
+            sandbox_check: || None,
             startup_message_sent: false,
             startup_sync: super::StartupSync::Complete,
             state: AppState::default(),

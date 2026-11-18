@@ -99,7 +99,7 @@ fn main() -> Result<()> {
     };
 
     let mut app = App::new(runtime, startup_options);
-    app.set_sandbox_warning(kraai_sandbox::availability_warning());
+    app.set_sandbox_check(kraai_sandbox::availability_warning);
 
     ratatui::crossterm::terminal::enable_raw_mode()?;
     app.request_cursor_preferences();
