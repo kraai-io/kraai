@@ -229,6 +229,7 @@
       member,
       binary,
       wrapperArgs,
+      share ? null,
     }: let
       crate = releaseCrates.crates.${member};
     in
@@ -240,11 +241,36 @@
         mkdir -p "$out/bin"
         cp ${crate}/bin/* "$out/bin/"
         wrapProgram "$out/bin/${binary}" ${wrapperArgs}
+        ${lib.optionalString (share != null) ''cp -r ${share}/share "$out/"''}
       '';
 
-    frontendPackage = member: binary:
+    kraaiDesktopEntry = pkgs.makeDesktopItem {
+      name = "kraai";
+      desktopName = "Kraai";
+      comment = "Coding agent harness";
+      exec = "kraai";
+      icon = "kraai";
+      terminal = true;
+      categories = ["Development"];
+    };
+    kraaiDesktopShare = pkgs.runCommand "kraai-desktop-share" {nativeBuildInputs = [pkgs.resvg];} ''
+      icon=${../assets/brand/svg/favicon.svg}
+      hicolor="$out/share/icons/hicolor"
+      install -Dm444 "$icon" "$hicolor/scalable/apps/kraai.svg"
+      for size in 16 24 32 48 64 128 256 512; do
+        mkdir -p "$hicolor/''${size}x$size/apps"
+        resvg -w "$size" -h "$size" "$icon" "$hicolor/''${size}x$size/apps/kraai.png"
+      done
+      install -Dm444 ${kraaiDesktopEntry}/share/applications/kraai.desktop "$out/share/applications/kraai.desktop"
+    '';
+
+    frontendPackage = {
+      member,
+      binary,
+      share ? null,
+    }:
       wrapReleaseBinary {
-        inherit member binary;
+        inherit member binary share;
         wrapperArgs = ''
           --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
           --prefix PATH : ${lib.makeBinPath (
@@ -255,10 +281,26 @@
         '';
       };
 
-    kraai = frontendPackage "kraai-tui" "kraai";
-    kraai-acp = frontendPackage "kraai-acp" "kraai-acp";
-    kraai-headless = frontendPackage "kraai-headless" "kraai-headless";
-    kraai-perf = frontendPackage "kraai-perf" "kraai-perf";
+    kraai = frontendPackage {
+      member = "kraai-tui";
+      binary = "kraai";
+      share =
+        if pkgs.stdenv.hostPlatform.isLinux
+        then kraaiDesktopShare
+        else null;
+    };
+    kraai-acp = frontendPackage {
+      member = "kraai-acp";
+      binary = "kraai-acp";
+    };
+    kraai-headless = frontendPackage {
+      member = "kraai-headless";
+      binary = "kraai-headless";
+    };
+    kraai-perf = frontendPackage {
+      member = "kraai-perf";
+      binary = "kraai-perf";
+    };
 
     kraai-eval = wrapReleaseBinary {
       member = "kraai-eval";
