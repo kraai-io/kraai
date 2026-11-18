@@ -5322,6 +5322,84 @@ rec {
         };
         resolvedDefaultFeatures = [ "std" "use_std" ];
       };
+      "embed-resource" = rec {
+        crateName = "embed-resource";
+        version = "3.0.12";
+        edition = "2021";
+        crateBin = [];
+        sha256 = "17r4794rvg84pwqq02yalqvf85l0hjqh04pydqz6gckybrxlhs31";
+        libName = "embed_resource";
+        license = "MIT";
+        authors = [
+          "наб <nabijaczleweli@nabijaczleweli.xyz>"
+          "Cat Plus Plus <piotrlegnica@piotrl.pl>"
+          "Liigo <liigo@qq.com>"
+          "azyobuzin <azyobuzin@users.sourceforge.jp>"
+          "Peter Atashian <retep998@gmail.com>"
+          "pravic <ehysta@gmail.com>"
+          "Gabriel Majeri <gabriel.majeri6@gmail.com>"
+          "SonnyX"
+          "Johan Andersson <repi@repi.se>"
+          "Jordan Poles <jpdev.noreply@gmail.com>"
+          "MSxDOS <melcodos@gmail.com>"
+          "Jim McGrath <jimmc2@gmail.com>"
+          "roblabla <unfiltered@roblab.la>"
+          "Jasper Bekkers <jasper@traverseresearch.nl>"
+          "Richard Markiewicz <rmarkiewicz@devolutions.net>"
+          "Emerson de Freitas Barcelos <emersonfxbx@gmail.com>"
+          "Li Keqing <me@kaze.ai>"
+          "Alexis Bourget <alexis.bourget@gmail.com>"
+          "Michael Farrell <micolous+git@gmail.com>"
+          "Jacob Okamoto <oko@oko.io>"
+          "Marijn Suijten <marijn@traverseresearch.nl>"
+          "Lucas Nogueira <lucas@tauri.app>"
+          "CharlesChen0823 <yongchen0823@gmail.com>"
+          "Daniel Schaefer <dhs@frame.work>"
+          "Rene Leonhardt"
+          "ssrlive"
+          "Kan-Ru Chen <kanru@kanru.info>"
+          "Tony <legendmastertony@gmail.com>"
+          "Berrysoft <Strawberry_Str@hotmail.com>"
+          "Marcus Ahlberg <marcus.ahlberg@kvaser.com>"
+          "Thomas Eizinger <thomas@eizinger.io>"
+        ];
+        dependencies = [
+          {
+            name = "cc";
+            packageId = "cc";
+          }
+          {
+            name = "memchr";
+            packageId = "memchr";
+            target = { target, features }: (("windows" == target."os" or null) && (!("msvc" == target."env" or null)));
+          }
+          {
+            name = "memchr";
+            packageId = "memchr";
+            target = { target, features }: (!("windows" == target."os" or null));
+          }
+          {
+            name = "rustc_version";
+            packageId = "rustc_version";
+          }
+          {
+            name = "toml";
+            packageId = "toml";
+          }
+          {
+            name = "vswhom";
+            packageId = "vswhom";
+            target = { target, features }: (("windows" == target."os" or null) && ("msvc" == target."env" or null));
+          }
+          {
+            name = "winreg";
+            packageId = "winreg";
+            usesDefaultFeatures = false;
+            target = { target, features }: (("windows" == target."os" or null) && ("msvc" == target."env" or null));
+          }
+        ];
+
+      };
       "encode_unicode" = rec {
         crateName = "encode_unicode";
         version = "1.0.0";
@@ -10056,6 +10134,12 @@ rec {
             packageId = "ulid";
           }
         ];
+        buildDependencies = [
+          {
+            name = "embed-resource";
+            packageId = "embed-resource";
+          }
+        ];
         devDependencies = [
           {
             name = "axum";
@@ -11802,6 +11886,12 @@ rec {
             name = "webbrowser";
             packageId = "webbrowser";
             target = { target, features }: (target."windows" or false);
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "embed-resource";
+            packageId = "embed-resource";
           }
         ];
         devDependencies = [
@@ -27089,6 +27179,54 @@ rec {
         license = "MIT/Apache-2.0";
         authors = [
           "Sergio Benitez <sb@sergio.bz>"
+        ];
+
+      };
+      "vswhom" = rec {
+        crateName = "vswhom";
+        version = "0.1.0";
+        edition = "2015";
+        sha256 = "12v0fjjzxdc3y5c0lcwycfhphz7zf2s06hl5krwhawah0xzrp5xy";
+        license = "MIT";
+        authors = [
+          "nabijaczleweli <nabijaczleweli@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "libc";
+            packageId = "libc";
+            target = { target, features }: ("windows" == target."os" or null);
+          }
+          {
+            name = "vswhom-sys";
+            packageId = "vswhom-sys";
+          }
+        ];
+
+      };
+      "vswhom-sys" = rec {
+        crateName = "vswhom-sys";
+        version = "0.1.3";
+        edition = "2015";
+        sha256 = "0l0i4fijapsybmfckfqh53yqxsg0bm5ikja6vz8ngw0zpm67w1pv";
+        libName = "vswhom_sys";
+        license = "MIT";
+        authors = [
+          "наб <nabijaczleweli@nabijaczleweli.xyz>"
+          "forrestsmithfb <forrest.smith@fb.com>"
+        ];
+        dependencies = [
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "cc";
+            packageId = "cc";
+            target = { target, features }: ("windows" == target."os" or null);
+          }
         ];
 
       };
