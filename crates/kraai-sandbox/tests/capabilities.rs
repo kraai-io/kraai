@@ -57,12 +57,9 @@ impl Fixture {
         );
         plan.runtime_roots
             .extend([executable, self.root.join("runtime")]);
-        #[cfg(unix)]
-        for root in ["/nix/store", "/lib", "/lib64", "/usr/lib"] {
-            let root = PathBuf::from(root);
-            if root.exists() {
-                plan.runtime_roots.push(root);
-            }
+        let nix_store = PathBuf::from("/nix/store");
+        if nix_store.exists() {
+            plan.runtime_roots.push(nix_store);
         }
         plan.args(["--exact", "permission_probe", "--nocapture"]);
         plan.environment
