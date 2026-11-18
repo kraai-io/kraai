@@ -58,10 +58,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-24.04
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
           - target: x86_64-apple-darwin
             os: macos-latest
             cross: true
@@ -78,6 +78,7 @@ jobs:
       EXE: ${{ matrix.exe }}
       CROSS: ${{ matrix.cross }}
       KRAAI_VERSION: ${{ needs.plan.outputs.version }}
+      GLIBC_FLOOR: "2.35"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,12 +88,6 @@ jobs:
         run: |
           rustup toolchain install
           rustup target add "$TARGET"
-      - name: Install musl tools
-        if: contains(matrix.target, 'musl')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
-          echo "CC_${TARGET//-/_}=musl-gcc" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@f4371d1ec7179bfbd04a82a81e3b3af7f720750f # v2
         with:
           key: ${{ matrix.target }}
@@ -112,15 +107,17 @@ jobs:
                 exit 1
               fi
             fi
-            if [[ "$TARGET" == *-linux-musl ]]; then
-              description=$(file -b "$path")
-              case "$description" in
-                *"static-pie linked"* | *"statically linked"*) ;;
-                *)
-                  echo "::error::$bin is not statically linked: $description"
-                  exit 1
-                  ;;
-              esac
+            if [[ "$TARGET" == *-linux-gnu ]]; then
+              needed=$(objdump -T "$path" | grep -o 'GLIBC_[0-9.]*[0-9]' | sed 's/^GLIBC_//' | sort -uV | tail -1)
+              if [ -z "$needed" ]; then
+                echo "::error::$bin has no GLIBC symbol versions"
+                exit 1
+              fi
+              if [ "$(printf '%s\n%s\n' "$needed" "$GLIBC_FLOOR" | sort -V | tail -1)" != "$GLIBC_FLOOR" ]; then
+                echo "::error::$bin needs GLIBC_$needed, newer than the GLIBC_$GLIBC_FLOOR floor"
+                exit 1
+              fi
+              echo "$bin needs GLIBC_$needed (floor $GLIBC_FLOOR)"
             fi
           done
       - name: Stage
