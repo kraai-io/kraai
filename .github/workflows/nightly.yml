@@ -79,6 +79,7 @@ jobs:
       CROSS: ${{ matrix.cross }}
       KRAAI_VERSION: ${{ needs.plan.outputs.version }}
       GLIBC_FLOOR: "2.35"
+      LIBZ_SYS_STATIC: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -99,26 +100,7 @@ jobs:
         shell: bash
         run: |
           for bin in kraai kraai-acp; do
-            path="target/$TARGET/release/$bin$EXE"
-            if [ "$CROSS" != true ]; then
-              actual=$("$path" --version)
-              if [ "$actual" != "$bin $KRAAI_VERSION" ]; then
-                echo "::error::$bin --version printed '$actual', expected '$bin $KRAAI_VERSION'"
-                exit 1
-              fi
-            fi
-            if [[ "$TARGET" == *-linux-gnu ]]; then
-              needed=$(objdump -T "$path" | grep -o 'GLIBC_[0-9.]*[0-9]' | sed 's/^GLIBC_//' | sort -uV | tail -1)
-              if [ -z "$needed" ]; then
-                echo "::error::$bin has no GLIBC symbol versions"
-                exit 1
-              fi
-              if [ "$(printf '%s\n%s\n' "$needed" "$GLIBC_FLOOR" | sort -V | tail -1)" != "$GLIBC_FLOOR" ]; then
-                echo "::error::$bin needs GLIBC_$needed, newer than the GLIBC_$GLIBC_FLOOR floor"
-                exit 1
-              fi
-              echo "$bin needs GLIBC_$needed (floor $GLIBC_FLOOR)"
-            fi
+            .github/scripts/check-release-binary.sh "$bin"
           done
       - name: Stage
         shell: bash
