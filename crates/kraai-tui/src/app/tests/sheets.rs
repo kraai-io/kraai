@@ -31,6 +31,20 @@ fn with_agents(harness: &mut TestHarness) {
     harness.app.state.selected_profile_id = Some("review".into());
 }
 
+fn agent_sheet_with_sandbox_warning(selected: &str) -> Vec<String> {
+    let mut harness = test_harness();
+    with_agents(&mut harness);
+    let mut unsandboxed = agent("loose", "Loose", "Runs anywhere");
+    unsandboxed.capabilities = SandboxCapabilities::new([SandboxCapability::NoSandbox]);
+    harness.app.state.agent_profiles.push(unsandboxed);
+    harness.app.state.selected_profile_id = Some(selected.into());
+    harness
+        .app
+        .set_sandbox_warning(Some(String::from("bwrap is missing")));
+    harness.app.handle_command("agent");
+    sheet(&harness, 50)
+}
+
 fn session(id: &str, title: &str, workspace: &str) -> Session {
     let mut session = session_snapshot(None).session;
     session.id = SessionId::new(id);
@@ -54,6 +68,30 @@ fn with_sessions(harness: &mut TestHarness) {
         waiting,
     ];
     state.current_session_id = Some(SessionId::new("fetch"));
+}
+
+#[test]
+fn agent_sheet_warns_about_a_missing_sandbox_only_under_sandboxed_agents() {
+    let sandboxed = agent_sheet_with_sandbox_warning("review");
+    let sandbox_row = sandboxed
+        .iter()
+        .position(|row| row.starts_with("  sandbox"));
+    let warning_row = sandboxed
+        .iter()
+        .position(|row| row.contains("bwrap is missing"));
+    assert_eq!(warning_row, sandbox_row.map(|row| row + 1));
+
+    let unsandboxed = agent_sheet_with_sandbox_warning("loose");
+    assert!(
+        unsandboxed
+            .iter()
+            .any(|row| row == "  sandbox     no-sandbox")
+    );
+    assert!(
+        !unsandboxed
+            .iter()
+            .any(|row| row.contains("bwrap is missing"))
+    );
 }
 
 #[test]

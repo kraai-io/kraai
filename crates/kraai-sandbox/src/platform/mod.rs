@@ -18,10 +18,10 @@ mod windows_filesystem;
 pub(crate) mod macos;
 
 #[must_use]
-pub fn startup_warning() -> Option<String> {
+pub fn availability_warning() -> Option<String> {
     #[cfg(target_os = "linux")]
     {
-        linux::startup_warning()
+        linux::availability_warning()
     }
     #[cfg(not(target_os = "linux"))]
     {

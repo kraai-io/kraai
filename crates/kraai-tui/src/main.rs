@@ -99,9 +99,7 @@ fn main() -> Result<()> {
     };
 
     let mut app = App::new(runtime, startup_options);
-    if let Some(warning) = kraai_sandbox::startup_warning() {
-        app.show_startup_warning(warning);
-    }
+    app.set_sandbox_warning(kraai_sandbox::availability_warning());
 
     ratatui::crossterm::terminal::enable_raw_mode()?;
     app.request_cursor_preferences();

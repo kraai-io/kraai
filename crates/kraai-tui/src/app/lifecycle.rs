@@ -81,8 +81,8 @@ impl App {
         self.state.cursor_preferences.request();
     }
 
-    pub fn show_startup_warning(&mut self, warning: String) {
-        self.set_error(warning);
+    pub fn set_sandbox_warning(&mut self, warning: Option<String>) {
+        self.state.sandbox_warning = warning;
     }
 
     pub fn run(

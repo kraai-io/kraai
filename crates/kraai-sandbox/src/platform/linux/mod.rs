@@ -17,9 +17,9 @@ pub(crate) use seccomp::{
     SeccompInstruction, install_restricted_network_filter, restricted_network_seccomp_program,
 };
 
-const MISSING_BWRAP: &str = "bubblewrap (bwrap) was not found in a trusted PATH directory, so scripts cannot run in the sandbox. Install bubblewrap with your system package manager.";
+const MISSING_BWRAP: &str = "bubblewrap (bwrap) was not found in a trusted PATH directory, so sandboxed scripts cannot run. Install bubblewrap with your system package manager, or use an agent profile with the no-sandbox capability.";
 
-pub(crate) fn startup_warning() -> Option<String> {
+pub(crate) fn availability_warning() -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
     bubblewrap::find_bwrap(&cwd, &std::env::temp_dir())
         .is_none()
