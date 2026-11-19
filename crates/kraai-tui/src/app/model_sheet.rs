@@ -30,7 +30,7 @@ impl AppState {
 impl App {
     pub(super) fn open_model_sheet(&mut self, query: String) {
         self.open_sheet(UiMode::Model);
-        self.state.sheet_query = query;
+        self.state.sheet_query.set(query);
         if self.state.sheet_query.is_empty()
             && let Some((provider_id, model_id)) = self
                 .state
@@ -65,7 +65,9 @@ impl App {
     fn step_model_sheet(&mut self, key: KeyEvent) {
         self.state.sheet_notice = None;
         let len = self.state.filtered_models().len();
-        if self.filter_sheet(key, "/model") || self.walk_sheet(key, len) {
+        let steps_option =
+            matches!(key.code, KeyCode::Left | KeyCode::Right) && key.modifiers.is_empty();
+        if (!steps_option && self.filter_sheet(key, "/model")) || self.walk_sheet(key, len) {
             return;
         }
         let selected = self

@@ -1,3 +1,4 @@
+use super::line_edit::LineKey;
 use super::*;
 
 impl AppState {
@@ -12,7 +13,7 @@ impl AppState {
     }
 
     pub(super) fn filtered_models(&self) -> Vec<(&str, &Model)> {
-        let query = self.sheet_query.to_lowercase();
+        let query = self.sheet_query.as_str().to_lowercase();
         let mut providers: Vec<_> = self.models_by_provider.iter().collect();
         providers.sort_by_key(|(provider, _)| *provider);
         providers
@@ -51,25 +52,13 @@ impl AppState {
         }
     }
 
-    /// The sheet query as the composer shows it. A secret being typed shows as dots.
-    fn typed_in_sheet(&self) -> std::borrow::Cow<'_, str> {
-        let secret = self
-            .config_editing
-            .as_ref()
-            .is_some_and(|row| self.config_secret(row));
-        if secret {
-            "•".repeat(self.sheet_query.chars().count()).into()
-        } else {
-            self.sheet_query.as_str().into()
-        }
-    }
-
     pub(super) fn composer(&self) -> TextInput<'_> {
         match self.sheet_prefix() {
-            Some(prefix) => {
-                let typed = self.typed_in_sheet();
-                TextInput::with_prefix(&prefix, &typed, typed.len())
-            }
+            Some(prefix) => TextInput::with_prefix(
+                &prefix,
+                self.sheet_query.as_str(),
+                self.sheet_query.cursor(),
+            ),
             None => TextInput::new(&self.input, self.input_cursor),
         }
     }
@@ -121,14 +110,14 @@ impl App {
         self.edit_sheet_filter(key)
     }
 
-    /// Applies a key that edits a sheet's filter and puts the highlight back on the first row.
-    /// False when the key is not an edit.
+    /// Applies a key that edits a sheet's filter or moves its cursor. An edit puts the highlight
+    /// back on the first row. False when the key does neither.
     pub(super) fn edit_sheet_filter(&mut self, key: KeyEvent) -> bool {
-        let edited = self.edit_sheet_query(key);
-        if edited {
+        let handled = self.state.sheet_query.handle_key(key);
+        if handled == Some(LineKey::Edited) {
             self.state.reset_sheet_selection();
         }
-        edited
+        handled.is_some()
     }
 
     /// Moves the highlight through `len` rows with the arrows, Tab and Shift+Tab, wrapping at
@@ -143,28 +132,12 @@ impl App {
         true
     }
 
-    /// Applies a typing key to the sheet query; false when the key is not an edit.
+    /// Applies a key that edits the sheet query or moves its cursor; false when it does neither.
     pub(super) fn edit_sheet_query(&mut self, key: KeyEvent) -> bool {
-        let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
-        let query = &mut self.state.sheet_query;
-        match key.code {
-            KeyCode::Backspace if control || alt => {
-                query.truncate(composer::word_left(query, query.len()))
-            }
-            KeyCode::Char('u') if control => query.clear(),
-            KeyCode::Backspace => {
-                query.pop();
-            }
-            KeyCode::Char(ch) if !control && !alt => query.push(ch),
-            _ => return false,
-        }
-        true
+        self.state.sheet_query.handle_key(key).is_some()
     }
 
     pub(super) fn paste_into_sheet_query(&mut self, text: &str) {
-        self.state
-            .sheet_query
-            .extend(text.chars().filter(|ch| !ch.is_control()));
+        self.state.sheet_query.insert(text);
     }
 }

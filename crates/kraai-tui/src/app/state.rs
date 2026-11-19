@@ -26,7 +26,7 @@ pub(super) struct AppState {
     pub(super) cost_recovery_sessions: std::collections::BTreeSet<SessionId>,
     pub(super) exit: bool,
     /// Text typed while a sheet owns the composer; the message draft stays in `input`.
-    pub(super) sheet_query: String,
+    pub(super) sheet_query: super::line_edit::LineEdit,
     pub(super) sheet_index: usize,
     pub(super) sheet_scroll: Cell<usize>,
     pub(super) sheet_notice: Option<String>,
@@ -152,7 +152,7 @@ impl Default for AppState {
                 .try_into()
                 .unwrap_or(u64::MAX),
             exit: false,
-            sheet_query: String::new(),
+            sheet_query: super::line_edit::LineEdit::default(),
             sheet_index: 0,
             sheet_scroll: Cell::new(0),
             sheet_notice: None,

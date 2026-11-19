@@ -13,7 +13,7 @@ fn rejected_values_show_the_error_in_the_sheet_and_keep_the_text() -> color_eyre
         type_text(&mut harness, typed);
         key(&mut harness, KeyCode::Enter);
         assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
-        assert_eq!(harness.app.state.sheet_query, typed);
+        assert_eq!(harness.app.state.sheet_query.as_str(), typed);
         assert!(harness.drain_requests().is_empty());
         assert!(harness.app.state.selected_model_options.is_empty());
         assert!(
@@ -54,7 +54,7 @@ fn typed_text_must_name_a_listed_choice_even_when_the_option_is_bound_to_the_req
         harness.app.state.sheet_notice.as_deref(),
         Some("Effort has no choice named 7")
     );
-    assert_eq!(harness.app.state.sheet_query, "7");
+    assert_eq!(harness.app.state.sheet_query.as_str(), "7");
     assert_eq!(value(&harness, "effort"), None);
     key(&mut harness, KeyCode::Backspace);
     type_text(&mut harness, "HIGH");
@@ -75,7 +75,7 @@ fn out_of_range_number_shows_the_bounds_in_the_sheet_and_keeps_the_text() -> col
     type_text(&mut harness, "101");
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
-    assert_eq!(harness.app.state.sheet_query, "101");
+    assert_eq!(harness.app.state.sheet_query.as_str(), "101");
     assert_eq!(
         value(&harness, "budget"),
         Some(&ModelOptionValue::Integer(50))

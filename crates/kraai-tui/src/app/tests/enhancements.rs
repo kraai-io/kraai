@@ -250,7 +250,7 @@ fn model_search_preserves_order_unicode_and_cross_field_matches() {
         ("alpha  z", Vec::new()),
         ("missing", Vec::new()),
     ] {
-        harness.app.state.sheet_query = query.to_owned();
+        harness.app.state.sheet_query.set(query.to_owned());
         let actual: Vec<_> = harness
             .app
             .state
@@ -261,7 +261,7 @@ fn model_search_preserves_order_unicode_and_cross_field_matches() {
         assert_eq!(actual, expected, "query: {query}");
     }
     harness.app.state.mode = UiMode::Model;
-    harness.app.state.sheet_query = String::from("Β ÉLAN");
+    harness.app.state.sheet_query.set(String::from("Β ÉLAN"));
     harness
         .app
         .handle_model_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -312,7 +312,7 @@ fn model_refresh_preserves_selection_and_clamps_missing_or_filtered_entries() {
         .handle_runtime_response(RuntimeResponse::Models(Ok(models(&["keep", "other"]))));
     assert_eq!(harness.app.state.sheet_index, 1);
 
-    harness.app.state.sheet_query = String::from("missing");
+    harness.app.state.sheet_query.set(String::from("missing"));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models(&["keep", "other"]))));
@@ -339,10 +339,10 @@ fn model_search_matches_provider_name_and_id_with_empty_results() {
         }],
     );
     for query in ["PROVIDER", "model-id", "display"] {
-        harness.app.state.sheet_query = query.to_string();
+        harness.app.state.sheet_query.set(query.to_string());
         assert_eq!(harness.app.state.filtered_models().len(), 1);
     }
-    harness.app.state.sheet_query = String::from("missing");
+    harness.app.state.sheet_query.set(String::from("missing"));
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));

@@ -509,7 +509,35 @@ fn configuration_is_one_form_edited_in_the_composer() {
 }
 
 #[test]
-fn a_secret_is_pasted_and_saved_without_ever_reaching_the_screen() {
+fn a_config_value_is_edited_where_the_arrows_put_the_cursor() {
+    let mut harness = test_harness();
+    open_config(&mut harness);
+    key(&mut harness, KeyCode::Down);
+    key(&mut harness, KeyCode::Down);
+    key(&mut harness, KeyCode::Enter);
+    for _ in "localhost".chars() {
+        key(&mut harness, KeyCode::Left);
+    }
+    assert!(harness.app.state.config_editing.is_some());
+    let area = ratatui::layout::Rect::new(0, 0, 80, 3);
+    let prefix = "/providers › local › config › Base URL = http://";
+    assert_eq!(
+        harness.app.state.composer().get_cursor_position(area),
+        (1 + prefix.chars().count() as u16, 1)
+    );
+    type_text(&mut harness, "my");
+    key(&mut harness, KeyCode::Home);
+    key(&mut harness, KeyCode::Delete);
+    key(&mut harness, KeyCode::End);
+    type_text(&mut harness, ":8080");
+    assert_eq!(
+        composer(&harness),
+        "/providers › local › config › Base URL = ttp://mylocalhost:8080"
+    );
+}
+
+#[test]
+fn a_secret_shows_in_full_only_while_it_is_edited() {
     let mut harness = test_harness();
     open_providers(&mut harness);
     for definition in &mut harness.app.state.provider_definitions {
@@ -542,12 +570,11 @@ fn a_secret_is_pasted_and_saved_without_ever_reaching_the_screen() {
     harness
         .app
         .handle_paste(String::from("sk-test-1234567890abcd\r\n"));
-    assert_eq!(row(&harness), "▌ API key         22 characters");
+    assert_eq!(row(&harness), "▌ API key         sk-test-1234567890abcd");
     assert_eq!(
         composer(&harness),
-        format!("/providers › local › config › API key = {}", "•".repeat(22))
+        "/providers › local › config › API key = sk-test-1234567890abcd"
     );
-    assert!(!shown(&harness).contains("sk-test"));
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
         saved(&harness).last().and_then(stored),
@@ -561,21 +588,27 @@ fn a_secret_is_pasted_and_saved_without_ever_reaching_the_screen() {
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
         composer(&harness),
-        "/providers › local › config › API key ="
+        "/providers › local › config › API key = sk-test-1234567890abcd"
     );
-    assert_eq!(row(&harness), "▌ API key         ••••••••abcd");
+    assert_eq!(row(&harness), "▌ API key         sk-test-1234567890abcd");
+    key(&mut harness, KeyCode::Esc);
+    assert!(saved(&harness).is_empty());
+    assert!(!shown(&harness).contains("sk-test"));
+
+    key(&mut harness, KeyCode::Enter);
+    ctrl(&mut harness, 'u');
     key(&mut harness, KeyCode::Enter);
     assert!(saved(&harness).is_empty());
     assert_eq!(
         row(&harness),
-        spaced("▌ API key         ••••••••abcd", "enter again to clear", 70)
+        spaced("▌ API key", "enter again to clear", 70)
     );
     assert_eq!(
         hints(&harness),
         "enter clear the saved value · any other key keeps it"
     );
     type_text(&mut harness, "short");
-    assert_eq!(row(&harness), "▌ API key         5 characters");
+    assert_eq!(row(&harness), "▌ API key         short");
     assert_eq!(hints(&harness), "enter save · esc cancel");
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
@@ -585,10 +618,12 @@ fn a_secret_is_pasted_and_saved_without_ever_reaching_the_screen() {
     assert_eq!(row(&harness), "▌ API key         ••••••••");
 
     key(&mut harness, KeyCode::Enter);
+    ctrl(&mut harness, 'u');
     key(&mut harness, KeyCode::Enter);
     key(&mut harness, KeyCode::Esc);
     assert!(!harness.app.state.sheet_armed);
     key(&mut harness, KeyCode::Enter);
+    ctrl(&mut harness, 'u');
     key(&mut harness, KeyCode::Enter);
     key(&mut harness, KeyCode::Enter);
     assert_eq!(saved(&harness).last().map(stored), Some(None));
@@ -765,7 +800,7 @@ fn a_provider_cannot_take_the_id_of_another_provider() {
     open_config(&mut harness);
     highlight(&mut harness, &ConfigRow::ProviderId);
     key(&mut harness, KeyCode::Enter);
-    harness.app.state.sheet_query = String::from("codex");
+    harness.app.state.sheet_query.set(String::from("codex"));
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
         harness.app.state.sheet_notice.as_deref(),

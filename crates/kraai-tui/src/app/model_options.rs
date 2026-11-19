@@ -389,7 +389,7 @@ impl App {
                     self.apply_model_setting(&target, &option.id, "");
                 }
             }
-            KeyCode::Enter if self.state.sheet_query.trim().is_empty() => {
+            KeyCode::Enter if self.state.sheet_query.as_str().trim().is_empty() => {
                 self.select_model(&target.provider_id, &target.model_id)
             }
             KeyCode::Enter => {
@@ -397,7 +397,7 @@ impl App {
                     self.state.sheet_notice = Some(String::from("No setting to change"));
                     return;
                 };
-                let query = self.state.sheet_query.trim().to_owned();
+                let query = self.state.sheet_query.as_str().trim().to_owned();
                 let Some(value) = resolve_option_input(option, &query) else {
                     self.state.sheet_notice = Some(match option.kind {
                         ModelOptionKind::Integer { .. } => {
