@@ -46,7 +46,7 @@ impl LineEdit {
     pub(super) fn insert(&mut self, text: &str) {
         let text: String = text.chars().filter(|ch| !ch.is_control()).collect();
         self.text.insert_str(self.cursor, &text);
-        self.cursor += text.len();
+        self.cursor = self.snap(self.cursor + text.len(), true);
     }
 
     /// Applies an editing or cursor key. Left, Right and Delete act only while there is text for
@@ -95,8 +95,9 @@ impl LineEdit {
         if range.is_empty() {
             return Some(LineKey::Moved);
         }
-        self.cursor = range.start;
+        let start = range.start;
         self.text.replace_range(range, "");
+        self.cursor = self.snap(start, false);
         Some(LineKey::Edited)
     }
 
@@ -119,11 +120,28 @@ impl LineEdit {
     }
 
     fn word_left(&self) -> usize {
-        word_left(&self.text, self.cursor)
+        self.snap(word_left(&self.text, self.cursor), false)
     }
 
     fn word_right(&self) -> usize {
-        word_right(&self.text, self.cursor)
+        self.snap(word_right(&self.text, self.cursor), true)
+    }
+
+    /// `position`, or the nearest grapheme boundary after it when `forward` and before it when
+    /// not. An edit can join the graphemes on either side of the cursor into one, and a word
+    /// boundary can fall before a combining mark.
+    fn snap(&self, position: usize, forward: bool) -> usize {
+        for (start, grapheme) in self.text.grapheme_indices(true) {
+            let end = start + grapheme.len();
+            if position < end {
+                return if position == start || !forward {
+                    start
+                } else {
+                    end
+                };
+            }
+        }
+        self.text.len()
     }
 }
 
@@ -225,6 +243,27 @@ mod tests {
             Some(LineKey::Moved)
         );
         assert_eq!(press(&mut typed, KeyCode::Up, KeyModifiers::NONE), None);
+    }
+
+    #[test]
+    fn the_cursor_stays_between_graphemes_that_an_edit_joins() {
+        let mut family = line("👩👧", "👩".len());
+        family.insert("\u{200d}");
+        assert_eq!(family.cursor(), family.as_str().len());
+        press(&mut family, KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(family.as_str(), "");
+
+        let mut flag = line("\u{1f1fa}x\u{1f1f8}", "\u{1f1fa}x".len());
+        press(&mut flag, KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!((flag.as_str(), flag.cursor()), ("🇺🇸", 0));
+
+        let mut accent = line("a \u{301}b", "a \u{301}b".len());
+        press(&mut accent, KeyCode::Left, KeyModifiers::CONTROL);
+        assert_eq!(accent.cursor(), 1);
+        press(&mut accent, KeyCode::Right, KeyModifiers::CONTROL);
+        assert_eq!(accent.cursor(), accent.as_str().len());
+        press(&mut accent, KeyCode::Backspace, KeyModifiers::CONTROL);
+        assert_eq!((accent.as_str(), accent.cursor()), ("a", 1));
     }
 
     #[test]
