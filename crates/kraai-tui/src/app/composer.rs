@@ -1,3 +1,4 @@
+use super::line_edit::{word_left, word_right};
 use super::*;
 
 impl App {
@@ -49,28 +50,4 @@ impl App {
         };
         self.replace_input_range(cursor.min(boundary)..cursor.max(boundary), "");
     }
-}
-
-pub(super) fn word_left(input: &str, cursor: usize) -> usize {
-    let mut position = cursor;
-    let mut word = false;
-    for (index, ch) in input.get(..cursor).unwrap_or_default().char_indices().rev() {
-        if word && ch.is_whitespace() {
-            break;
-        }
-        word |= !ch.is_whitespace();
-        position = index;
-    }
-    position
-}
-
-fn word_right(input: &str, cursor: usize) -> usize {
-    let mut word = false;
-    for (index, ch) in input.get(cursor..).unwrap_or_default().char_indices() {
-        if word && ch.is_whitespace() {
-            return cursor + index;
-        }
-        word |= !ch.is_whitespace();
-    }
-    input.len()
 }

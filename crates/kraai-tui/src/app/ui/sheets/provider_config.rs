@@ -117,8 +117,7 @@ fn item(state: &AppState, row: &ConfigRow, highlighted: bool) -> SheetItem {
     SheetItem {
         label: state.config_label(row),
         value: match kind {
-            ConfigKind::Text if editing && secret => typed_secret(&state.sheet_query, &stored),
-            ConfigKind::Text if editing => state.sheet_query.clone(),
+            ConfigKind::Text if editing => state.sheet_query.as_str().to_owned(),
             ConfigKind::Text if missing && required => String::from("required"),
             ConfigKind::Text if missing => String::from("unset"),
             ConfigKind::Text if secret => masked(&stored),
@@ -131,16 +130,5 @@ fn item(state: &AppState, row: &ConfigRow, highlighted: bool) -> SheetItem {
         tag: tag.to_owned(),
         tone,
         ..SheetItem::default()
-    }
-}
-
-/// What a secret's row shows while its replacement is typed: how much is typed so far, or what
-/// the row holds while nothing is.
-fn typed_secret(typed: &str, stored: &str) -> String {
-    match typed.chars().count() {
-        0 if stored.is_empty() => String::from("unset"),
-        0 => masked(stored),
-        1 => String::from("1 character"),
-        count => format!("{count} characters"),
     }
 }

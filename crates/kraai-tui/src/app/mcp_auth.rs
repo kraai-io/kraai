@@ -43,7 +43,7 @@ impl McpAction {
 impl AppState {
     /// The servers the server list shows: every server, or the ones the typed text names.
     pub(super) fn listed_mcp_servers(&self) -> Vec<&McpAuthStatus> {
-        let query = self.sheet_query.to_lowercase();
+        let query = self.sheet_query.as_str().to_lowercase();
         self.mcp_auth
             .values()
             .filter(|status| status.server.to_lowercase().contains(&query))
@@ -52,7 +52,7 @@ impl AppState {
 
     /// The actions the open server offers that the typed text names.
     pub(super) fn listed_mcp_actions(&self) -> Vec<McpAction> {
-        let query = self.sheet_query.to_lowercase();
+        let query = self.sheet_query.as_str().to_lowercase();
         self.mcp_open
             .as_ref()
             .and_then(|server| self.mcp_auth.get(server))

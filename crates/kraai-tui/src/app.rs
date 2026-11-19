@@ -35,6 +35,7 @@ mod feedback;
 mod images;
 mod input;
 mod lifecycle;
+mod line_edit;
 mod mcp_auth;
 mod model_options;
 mod model_sheet;

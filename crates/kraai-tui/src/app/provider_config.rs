@@ -144,7 +144,7 @@ impl AppState {
     /// Saving the edit as typed would erase a secret the row holds.
     pub(super) fn edit_clears_secret(&self, row: &ConfigRow) -> bool {
         self.config_secret(row)
-            && self.sheet_query.trim().is_empty()
+            && self.sheet_query.as_str().trim().is_empty()
             && !self.config_value(row).is_empty()
     }
 
@@ -197,15 +197,11 @@ impl App {
                 None => {}
             },
             (KeyCode::Enter, ConfigKind::Text) => {
-                self.state.sheet_query = if self.state.config_secret(&row) {
-                    String::new()
-                } else {
-                    self.state.config_value(&row)
-                };
+                self.state.sheet_query.set(self.state.config_value(&row));
                 self.state.config_editing = Some(row);
             }
             (KeyCode::Char(ch), ConfigKind::Text) if typed => {
-                self.state.sheet_query = ch.to_string();
+                self.state.sheet_query.set(ch.to_string());
                 self.state.config_editing = Some(row);
             }
             (
@@ -255,7 +251,7 @@ impl App {
     }
 
     fn commit_config_edit(&mut self, row: &ConfigRow) {
-        let text = self.state.sheet_query.trim().to_owned();
+        let text = self.state.sheet_query.as_str().trim().to_owned();
         let value = match self.state.config_field(row) {
             Some(field) => match Self::typed_field_value(field, &text) {
                 Ok(value) => value,

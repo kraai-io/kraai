@@ -6,7 +6,7 @@ use super::*;
 impl AppState {
     /// The sessions the session list shows, with the ones from this workspace first.
     pub(super) fn listed_sessions(&self) -> Vec<&Session> {
-        let query = self.sheet_query.to_lowercase();
+        let query = self.sheet_query.as_str().to_lowercase();
         let (here, elsewhere): (Vec<_>, Vec<_>) = self
             .sessions
             .iter()

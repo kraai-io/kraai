@@ -53,7 +53,7 @@ pub(super) fn hints(state: &AppState) -> Option<String> {
                     .nth(state.sheet_index)
                     .is_some_and(|option| matches!(option.kind, ModelOptionKind::Integer { .. }))
             });
-            let enter = if !state.sheet_query.trim().is_empty() {
+            let enter = if !state.sheet_query.as_str().trim().is_empty() {
                 "set"
             } else if state.is_current_model(&target.provider_id, &target.model_id) {
                 "done"

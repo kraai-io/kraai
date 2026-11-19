@@ -89,7 +89,7 @@ impl AppState {
 
     /// The configured providers the provider list shows, each with its place in the settings.
     pub(super) fn listed_providers(&self) -> Vec<(usize, &ProviderSettings)> {
-        let query = self.sheet_query.to_lowercase();
+        let query = self.sheet_query.as_str().to_lowercase();
         self.settings_draft
             .iter()
             .flat_map(|draft| draft.providers.iter().enumerate())
@@ -109,12 +109,12 @@ impl AppState {
         self.settings_draft.is_some()
             && CONNECT_LABEL
                 .to_lowercase()
-                .contains(&self.sheet_query.to_lowercase())
+                .contains(&self.sheet_query.as_str().to_lowercase())
     }
 
     /// The kinds of provider the connect list shows, OpenAI first.
     pub(super) fn listed_provider_definitions(&self) -> Vec<&ProviderDefinition> {
-        let query = self.sheet_query.trim().to_lowercase();
+        let query = self.sheet_query.as_str().trim().to_lowercase();
         let mut definitions: Vec<_> = self
             .provider_definitions
             .iter()
@@ -134,7 +134,7 @@ impl AppState {
             return Vec::new();
         }
         let auth = self.open_provider_auth().map(|auth| auth.state);
-        let query = self.sheet_query.to_lowercase();
+        let query = self.sheet_query.as_str().to_lowercase();
         ProviderAction::offered(auth)
             .iter()
             .copied()
