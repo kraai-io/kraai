@@ -219,23 +219,10 @@ async fn asynchronous_replacement_publishes_complete_file() -> io::Result<()> {
 #[test]
 fn private_writes_get_a_protected_owner_only_acl_on_windows() -> io::Result<()> {
     fn dacl(path: &Path) -> io::Result<String> {
-        let output = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                "(Get-Acl -LiteralPath $env:KRAAI_ACL_PATH).Sddl",
-            ])
-            .env("KRAAI_ACL_PATH", path)
-            .output()?;
-        let sddl = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let sddl = crate::fs::owner_only::dacl_sddl(path)?;
         sddl.split_once("D:")
             .map(|(_, dacl)| dacl.to_owned())
-            .ok_or_else(|| {
-                io::Error::other(format!(
-                    "no DACL in {sddl:?}: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ))
-            })
+            .ok_or_else(|| io::Error::other(format!("no DACL in {sddl:?}")))
     }
 
     let root = tempfile::tempdir()?;

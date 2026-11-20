@@ -136,16 +136,74 @@ fn current_user_sid() -> io::Result<String> {
     if unsafe { ConvertSidToStringSidW(user.User.Sid, &mut text) } == 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: ConvertSidToStringSidW returned a LocalAlloc string that nothing else owns.
+    Ok(unsafe { take_local_string(text) })
+}
+
+/// Returns the SDDL of the DACL on `path`.
+#[cfg(test)]
+pub(super) fn dacl_sddl(path: &Path) -> io::Result<String> {
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+
+    let path = wide_path(path)?;
+    let mut descriptor = ptr::null_mut();
+    // SAFETY: The path is NUL-terminated, and Windows allocates the descriptor freed below.
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    let mut text = ptr::null_mut();
+    // SAFETY: The descriptor is live until the LocalFree below.
+    let converted = unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor,
+            1,
+            DACL_SECURITY_INFORMATION,
+            &mut text,
+            ptr::null_mut(),
+        )
+    };
+    let result = if converted == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        // SAFETY: The conversion returned a LocalAlloc string that nothing else owns.
+        Ok(unsafe { take_local_string(text) })
+    };
+    // SAFETY: GetNamedSecurityInfoW allocated the descriptor with LocalAlloc.
+    unsafe { LocalFree(descriptor) };
+    result
+}
+
+/// Copies a NUL-terminated string that Windows allocated with LocalAlloc, then frees it.
+///
+/// # Safety
+///
+/// `text` must be a NUL-terminated LocalAlloc string that the caller owns.
+unsafe fn take_local_string(text: *mut u16) -> String {
     let mut length = 0;
-    // SAFETY: ConvertSidToStringSidW returned a NUL-terminated string.
+    // SAFETY: The caller guarantees a NUL terminator.
     while unsafe { *text.add(length) } != 0 {
         length += 1;
     }
     // SAFETY: The string has `length` initialized units before its terminator.
     let value = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
-    // SAFETY: Windows allocated the string with LocalAlloc.
+    // SAFETY: The caller owns the LocalAlloc string.
     unsafe { LocalFree(text.cast()) };
-    Ok(value)
+    value
 }
 
 pub(super) fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
