@@ -228,14 +228,19 @@ impl RuntimeCore {
             }
         });
         result?;
-        if let Some(synced) = synced {
-            let failures = synced?.failures;
-            if !failures.is_empty() {
-                return Err(ProviderError::ModelCacheRefreshFailed(failures).into());
-            }
-        }
+        let failures = match synced {
+            Some(synced) => synced?.failures,
+            None => Vec::new(),
+        };
         tracing::info!("Loaded config");
         self.send_event(Event::ConfigLoaded);
+        // Configured models remain usable while the background sync retries an unavailable
+        // provider, so report the refresh failure without preventing startup.
+        if !failures.is_empty() {
+            let error = ProviderError::ModelCacheRefreshFailed(failures);
+            tracing::warn!(%error, "Loaded config without every provider's model list");
+            self.send_service_error(error);
+        }
         Ok(())
     }
 }

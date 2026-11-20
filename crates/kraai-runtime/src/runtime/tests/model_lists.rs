@@ -17,6 +17,67 @@ use crate::runtime::model_lists::unix_millis;
 
 const STALE: i64 = 11 * 60 * 1000;
 
+#[tokio::test]
+async fn startup_succeeds_when_a_provider_cannot_list_its_models() -> Result<()> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request).await;
+            let _ = stream
+                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await;
+        }
+    }));
+    let root = std::env::temp_dir().join(format!(
+        "kraai-runtime-unlisted-{}-{}",
+        std::process::id(),
+        unix_millis()
+    ));
+    tokio::fs::create_dir_all(&root).await?;
+    let config = root.join("providers.toml");
+    tokio::fs::write(
+        &config,
+        format!(
+            "[[provider]]\nid = \"unlisted\"\ntype = \"openai-chat-completions\"\nbase_url = \"http://{address}\"\napi_key = \"test\"\n\n[[model]]\nid = \"configured\"\nprovider_id = \"unlisted\"\n"
+        ),
+    )
+    .await?;
+    let runtime = crate::RuntimeBuilder::new(kraai_providers::DefaultProviders)
+        .storage_root(root.join("state"))
+        .provider_config_path(config)
+        .mcp_config_path(root.join("mcp.toml"))
+        .build_on(&tokio::runtime::Handle::current());
+    let mut events = runtime.subscribe();
+
+    assert_eq!(
+        runtime.wait_for_startup().await?,
+        crate::RuntimeStartupState::ready()
+    );
+    let models = runtime.list_models().await?;
+    let configured: Vec<_> = models
+        .get("unlisted")
+        .ok_or_else(|| eyre!("unlisted provider is missing"))?
+        .iter()
+        .map(|model| model.id.to_string())
+        .collect();
+    assert_eq!(configured, ["configured"]);
+    let reported = loop {
+        match events.recv().await?.event {
+            Event::ServiceError { error } => break error.to_string(),
+            _ => continue,
+        }
+    };
+    assert!(reported.contains("unlisted"), "{reported}");
+
+    runtime.shutdown().await?;
+    drop(server);
+    let _ = tokio::fs::remove_dir_all(&root).await;
+    Ok(())
+}
+
 #[derive(Clone, Default)]
 struct Upstream {
     lists: Arc<AtomicUsize>,
