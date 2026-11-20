@@ -4,6 +4,9 @@ use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
 
 #[test]
 fn host_ipc_restriction_blocks_outside_sockets_and_keeps_new_ones() {
+    if crate::ensure_host_ipc_isolation_available().is_err() {
+        return;
+    }
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",

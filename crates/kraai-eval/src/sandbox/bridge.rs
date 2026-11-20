@@ -12,7 +12,9 @@ use crate::temporary_directory::TemporaryDirectory;
 pub const PROXY_BRIDGE_COMMAND: &str = "sandbox-proxy-bridge";
 const SANDBOX_PROXY_ADDRESS: SocketAddr =
     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 39_217));
+#[cfg(target_os = "linux")]
 const SANDBOX_PROGRAM: &str = "/run/kraai-eval/proxy-bridge";
+#[cfg(target_os = "linux")]
 const SANDBOX_SOCKET_DIR: &str = "/run/kraai-eval/model-proxy";
 const SOCKET_NAME: &str = "proxy.sock";
 #[cfg(unix)]

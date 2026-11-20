@@ -12,7 +12,7 @@ struct RulesetAttr {
     scoped: u64,
 }
 
-pub(super) fn ensure_host_ipc_isolation_available() -> Result<(), SandboxError> {
+pub(crate) fn ensure_host_ipc_isolation_available() -> Result<(), SandboxError> {
     let abi = landlock_abi();
     if abi >= HOST_IPC_ABI {
         return Ok(());

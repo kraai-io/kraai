@@ -15,6 +15,8 @@ pub(crate) use bubblewrap::{
     find_bwrap, run_bwrap_sandbox_probe,
 };
 #[cfg(test)]
+pub(crate) use landlock::ensure_host_ipc_isolation_available;
+#[cfg(test)]
 pub(crate) use seccomp::{
     SeccompInstruction, install_restricted_network_filter, restricted_network_seccomp_program,
 };

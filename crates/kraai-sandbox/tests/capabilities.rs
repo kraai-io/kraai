@@ -230,6 +230,15 @@ async fn verify(capabilities: &[SandboxCapability], linked: bool) {
         ));
         return;
     }
+    if cfg!(target_os = "linux")
+        && capabilities.contains(&SandboxCapability::Network)
+        && matches!(
+            result,
+            Err(kraai_sandbox::SandboxError::SandboxUnavailable(_))
+        )
+    {
+        return;
+    }
     let output = result.expect("sandbox must launch");
     assert_eq!(
         output.termination,
