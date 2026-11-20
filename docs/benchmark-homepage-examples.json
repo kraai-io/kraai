@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "captured_date": "2026-09-29",
+  "repository_commit": "90397ece6dcad24df26ea59fd86ab984043a1e58",
+  "model": "gpt-5.6-sol",
+  "reasoning_effort": "low",
+  "attempts_per_harness_per_task": 1,
+  "max_proxy_requests_per_attempt": 16,
+  "aggregation": {
+    "both_passed_tasks": 3,
+    "kraai_total_tokens": 159626,
+    "codex_total_tokens": 338649,
+    "token_reduction_pct": 52.9,
+    "kraai_estimated_api_equivalent_usd": 0.474348,
+    "codex_estimated_api_equivalent_usd": 0.657655,
+    "cost_reduction_pct": 27.9
+  },
+  "tasks": {
+    "event-stream": {
+      "codex": {
+        "status": "passed",
+        "total_tokens": 125859,
+        "uncached_input_tokens": 33422,
+        "cached_input_tokens": 86400,
+        "output_tokens_excluding_reasoning": 5200,
+        "reasoning_tokens": 837,
+        "model_requests": 9,
+        "mean_input_context_tokens": 13313.6,
+        "peak_input_context_tokens": 17659,
+        "estimated_api_equivalent_usd": 0.288988,
+        "wall_time_ms": 124731,
+        "summary_artifact": "suites/codex-compare16/sha256-038534b037b02cbfb8669279a538ec8c970833d54ae255dc0871a0036e189c5f/gpt-5.6-sol-low/01M3PTSHN7FCN1MNW79YHCZ31J/summary.json"
+      },
+      "kraai": {
+        "status": "passed",
+        "total_tokens": 46866,
+        "uncached_input_tokens": 16591,
+        "cached_input_tokens": 26240,
+        "output_tokens_excluding_reasoning": 2864,
+        "reasoning_tokens": 1171,
+        "model_requests": 8,
+        "mean_input_context_tokens": 5353.9,
+        "peak_input_context_tokens": 7807,
+        "estimated_api_equivalent_usd": 0.15756,
+        "wall_time_ms": 108392,
+        "summary_artifact": "suites/kraai-compare16/sha256-f0aaa64253960d89dfd7526e60d0d735620bd1959f525141beae232df2b0d359/gpt-5.6-sol-low/01M3PTY02TB404DN5226Y7GD4S/summary.json"
+      },
+      "token_reduction_pct": 62.8,
+      "cost_reduction_pct": 45.5,
+      "mean_context_reduction_pct": 59.8
+    },
+    "repository-repair": {
+      "codex": {
+        "status": "passed",
+        "total_tokens": 107680,
+        "uncached_input_tokens": 24641,
+        "cached_input_tokens": 79360,
+        "output_tokens_excluding_reasoning": 2981,
+        "reasoning_tokens": 698,
+        "model_requests": 8,
+        "mean_input_context_tokens": 13000.1,
+        "peak_input_context_tokens": 16463,
+        "estimated_api_equivalent_usd": 0.203888,
+        "wall_time_ms": 100835,
+        "summary_artifact": "suites/codex-compare16/sha256-038534b037b02cbfb8669279a538ec8c970833d54ae255dc0871a0036e189c5f/gpt-5.6-sol-low/01M3PTHVKAH1ZFCZDXNAAF46YY/summary.json"
+      },
+      "kraai": {
+        "status": "passed",
+        "total_tokens": 63425,
+        "uncached_input_tokens": 13458,
+        "cached_input_tokens": 46464,
+        "output_tokens_excluding_reasoning": 2914,
+        "reasoning_tokens": 589,
+        "model_requests": 7,
+        "mean_input_context_tokens": 8560.3,
+        "peak_input_context_tokens": 12294,
+        "estimated_api_equivalent_usd": 0.142478,
+        "wall_time_ms": 83876,
+        "summary_artifact": "suites/kraai-compare16/sha256-f0aaa64253960d89dfd7526e60d0d735620bd1959f525141beae232df2b0d359/gpt-5.6-sol-low/01M3PTNJS0AKFYJV3GGB1TQTJ7/summary.json"
+      },
+      "token_reduction_pct": 41.1,
+      "cost_reduction_pct": 30.1,
+      "mean_context_reduction_pct": 34.2
+    },
+    "dependency-waves": {
+      "codex": {
+        "status": "passed",
+        "total_tokens": 105110,
+        "uncached_input_tokens": 19796,
+        "cached_input_tokens": 82688,
+        "output_tokens_excluding_reasoning": 2249,
+        "reasoning_tokens": 377,
+        "model_requests": 9,
+        "mean_input_context_tokens": 11387.1,
+        "peak_input_context_tokens": 14357,
+        "estimated_api_equivalent_usd": 0.164779,
+        "wall_time_ms": 73647,
+        "summary_artifact": "suites/codex-compare16/sha256-038534b037b02cbfb8669279a538ec8c970833d54ae255dc0871a0036e189c5f/gpt-5.6-sol-low/01M3PTESEJYBQB3DMP9DTFZ6EY/summary.json"
+      },
+      "kraai": {
+        "status": "passed",
+        "total_tokens": 49335,
+        "uncached_input_tokens": 19728,
+        "cached_input_tokens": 25344,
+        "output_tokens_excluding_reasoning": 3948,
+        "reasoning_tokens": 315,
+        "model_requests": 8,
+        "mean_input_context_tokens": 5634.0,
+        "peak_input_context_tokens": 8494,
+        "estimated_api_equivalent_usd": 0.17431,
+        "wall_time_ms": 98199,
+        "summary_artifact": "suites/kraai-compare16/sha256-f0aaa64253960d89dfd7526e60d0d735620bd1959f525141beae232df2b0d359/gpt-5.6-sol-low/01M3PTB2PSKWJHEV40P9RDG7J6/summary.json"
+      },
+      "token_reduction_pct": 53.1,
+      "cost_reduction_pct": -5.8,
+      "mean_context_reduction_pct": 50.5
+    }
+  }
+}

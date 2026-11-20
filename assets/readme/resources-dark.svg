@@ -1,38 +1,45 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="224" viewBox="0 0 900 224" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
-  <title id="title">Idle terminal UI: memory and CPU</title>
-  <desc id="desc">Memory (RSS): Kraai 40 MB, Codex 0.167.0 274 MB, Claude Code 2.1.322 270 MB; CPU, first 30 s: Kraai 0.06 s, Codex 0.167.0 0.87 s, Claude Code 2.1.322 2.9 s; CPU while idle: Kraai 0.02%, Codex 0.167.0 0.8%, Claude Code 2.1.322 0.23%</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="332" viewBox="0 0 900 332" font-family="'SF Pro Display', -apple-system, BlinkMacSystemFont, Inter, 'Segoe UI', sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Idle terminal UI memory and CPU for Kraai, Codex and Claude Code</title>
+  <desc id="desc">6.7× less memory: Kraai 40 MB, Codex 0.167.0 274 MB, Claude Code 2.1.322 270 MB. 14× less CPU at startup: Kraai 0.06 s, Codex 0.167.0 0.87 s, Claude Code 2.1.322 2.9 s. 11× less CPU at idle: Kraai 0.02%, Codex 0.167.0 0.8%, Claude Code 2.1.322 0.23%.</desc>
+  <defs><linearGradient id="kraai" x1="0" y1="0" x2="1" y2="0"><stop offset="0.00" stop-color="#5b6cff"/><stop offset="0.50" stop-color="#9a7bff"/><stop offset="1.00" stop-color="#e38cff"/></linearGradient><linearGradient id="kraai-text" x1="0" y1="0" x2="1" y2="1"><stop offset="0.00" stop-color="#5b6cff"/><stop offset="0.50" stop-color="#9a7bff"/><stop offset="1.00" stop-color="#e38cff"/></linearGradient><radialGradient id="halo" cx="0.5" cy="0" r="0.8"><stop offset="0" stop-color="#7b6cff" stop-opacity="0.22"/><stop offset="1" stop-color="#7b6cff" stop-opacity="0"/></radialGradient><filter id="glow" x="-30%" y="-150%" width="160%" height="400%"><feGaussianBlur stdDeviation="9"/></filter></defs>
   <g style="font-variant-numeric: tabular-nums">
-  <text x="16.0" y="28.0" font-size="16" font-weight="600" fill="#f0f6fc" text-anchor="start">Idle terminal UI: memory and CPU</text>
-  <text x="16.0" y="50.0" font-size="13" font-weight="400" fill="#9198a1" text-anchor="start">Kraai&#x27;s terminal UI uses about a seventh of the memory of Codex or Claude Code.</text>
-  <text x="16.0" y="134.5" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">Kraai</text>
-  <text x="16.0" y="166.5" font-size="13" font-weight="400" fill="#f0f6fc" text-anchor="start">Codex 0.167.0</text>
-  <text x="16.0" y="198.5" font-size="13" font-weight="400" fill="#f0f6fc" text-anchor="start">Claude Code 2.1.322</text>
-  <text x="166.0" y="88.0" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">Memory (RSS)</text>
-  <text x="166.0" y="104.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Lower is better</text>
-  <line x1="166.0" y1="114" x2="166.0" y2="210" stroke="#3d444d" stroke-width="1"/>
-  <path d="M167.0,120.0h20.6a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-20.6z" fill="#3987e5"/>
-  <text x="197.6" y="134.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">40 MB</text>
-  <path d="M167.0,152.0h164.7a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-164.7z" fill="#d95926"/>
-  <text x="341.7" y="166.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">274 MB</text>
-  <path d="M167.0,184.0h162.2a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-162.2z" fill="#199e70"/>
-  <text x="339.2" y="198.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">270 MB</text>
-  <text x="414.7" y="88.0" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">CPU, first 30 s</text>
-  <text x="414.7" y="104.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Lower is better</text>
-  <line x1="414.7" y1="114" x2="414.7" y2="210" stroke="#3d444d" stroke-width="1"/>
-  <path d="M415.7,120.0h1.7a1.7448275862068965,1.7448275862068965 0 0 1 1.7448275862068965,1.7448275862068965v16.5a1.7448275862068965,1.7448275862068965 0 0 1 -1.7448275862068965,1.7448275862068965h-1.7z" fill="#3987e5"/>
-  <text x="425.2" y="134.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">0.06 s</text>
-  <path d="M415.7,152.0h46.6a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-46.6z" fill="#d95926"/>
-  <text x="472.3" y="166.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">0.87 s</text>
-  <path d="M415.7,184.0h164.7a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-164.7z" fill="#199e70"/>
-  <text x="590.3" y="198.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">2.9 s</text>
-  <text x="663.3" y="88.0" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">CPU while idle</text>
-  <text x="663.3" y="104.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Lower is better</text>
-  <line x1="663.3" y1="114" x2="663.3" y2="210" stroke="#3d444d" stroke-width="1"/>
-  <path d="M664.3,120.0h2.1a2.108333333333333,2.108333333333333 0 0 1 2.108333333333333,2.108333333333333v15.8a2.108333333333333,2.108333333333333 0 0 1 -2.108333333333333,2.108333333333333h-2.1z" fill="#3987e5"/>
-  <text x="674.5" y="134.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">0.02%</text>
-  <path d="M664.3,152.0h164.7a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-164.7z" fill="#d95926"/>
-  <text x="839.0" y="166.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">0.8%</text>
-  <path d="M664.3,184.0h44.5a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-44.5z" fill="#199e70"/>
-  <text x="718.8" y="198.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">0.23%</text>
+  <rect x="0.5" y="0.5" width="899" height="331" rx="20" fill="#0a0a0c" stroke="#1f1f24"/>
+  <rect x="0.5" y="0.5" width="899" height="331" rx="20" fill="url(#halo)"/>
+  <text x="44.0" y="104.0" font-size="68" font-weight="700" fill="url(#kraai-text)" letter-spacing="-2.5">6.7×</text>
+  <text x="44.0" y="134.0" font-size="15" font-weight="500" fill="#f5f5f7" letter-spacing="-0.2">less memory</text>
+  <text x="44.0" y="170.0" font-size="12" font-weight="600" fill="#f5f5f7">Kraai</text>
+  <rect x="44.0" y="178.0" width="24.1" height="20" rx="10.0" fill="url(#kraai)" opacity="0.65" filter="url(#glow)"/>
+  <rect x="44.0" y="178.0" width="24.1" height="20" rx="10.0" fill="url(#kraai)"/>
+  <text x="78.1" y="193.0" font-size="14" font-weight="600" fill="#f5f5f7" letter-spacing="-0.2">40 MB</text>
+  <text x="44.0" y="220.0" font-size="12" font-weight="400" fill="#8e8e96">Codex 0.167.0</text>
+  <rect x="44.0" y="228.0" width="165.3" height="20" rx="10.0" fill="#3d3d45"/>
+  <text x="219.3" y="243.0" font-size="14" font-weight="400" fill="#8e8e96" letter-spacing="-0.2">274 MB</text>
+  <text x="44.0" y="270.0" font-size="12" font-weight="400" fill="#8e8e96">Claude Code 2.1.322</text>
+  <rect x="44.0" y="278.0" width="162.9" height="20" rx="10.0" fill="#3d3d45"/>
+  <text x="216.9" y="293.0" font-size="14" font-weight="400" fill="#8e8e96" letter-spacing="-0.2">270 MB</text>
+  <text x="329.3" y="104.0" font-size="68" font-weight="700" fill="url(#kraai-text)" letter-spacing="-2.5">14×</text>
+  <text x="329.3" y="134.0" font-size="15" font-weight="500" fill="#f5f5f7" letter-spacing="-0.2">less CPU at startup</text>
+  <text x="329.3" y="170.0" font-size="12" font-weight="600" fill="#f5f5f7">Kraai</text>
+  <rect x="329.3" y="178.0" width="20.0" height="20" rx="10.0" fill="url(#kraai)" opacity="0.65" filter="url(#glow)"/>
+  <rect x="329.3" y="178.0" width="20.0" height="20" rx="10.0" fill="url(#kraai)"/>
+  <text x="359.3" y="193.0" font-size="14" font-weight="600" fill="#f5f5f7" letter-spacing="-0.2">0.06 s</text>
+  <text x="329.3" y="220.0" font-size="12" font-weight="400" fill="#8e8e96">Codex 0.167.0</text>
+  <rect x="329.3" y="228.0" width="49.6" height="20" rx="10.0" fill="#3d3d45"/>
+  <text x="388.9" y="243.0" font-size="14" font-weight="400" fill="#8e8e96" letter-spacing="-0.2">0.87 s</text>
+  <text x="329.3" y="270.0" font-size="12" font-weight="400" fill="#8e8e96">Claude Code 2.1.322</text>
+  <rect x="329.3" y="278.0" width="165.3" height="20" rx="10.0" fill="#3d3d45"/>
+  <text x="504.7" y="293.0" font-size="14" font-weight="400" fill="#8e8e96" letter-spacing="-0.2">2.9 s</text>
+  <text x="614.7" y="104.0" font-size="68" font-weight="700" fill="url(#kraai-text)" letter-spacing="-2.5">11×</text>
+  <text x="614.7" y="134.0" font-size="15" font-weight="500" fill="#f5f5f7" letter-spacing="-0.2">less CPU at idle</text>
+  <text x="614.7" y="170.0" font-size="12" font-weight="600" fill="#f5f5f7">Kraai</text>
+  <rect x="614.7" y="178.0" width="20.0" height="20" rx="10.0" fill="url(#kraai)" opacity="0.65" filter="url(#glow)"/>
+  <rect x="614.7" y="178.0" width="20.0" height="20" rx="10.0" fill="url(#kraai)"/>
+  <text x="644.7" y="193.0" font-size="14" font-weight="600" fill="#f5f5f7" letter-spacing="-0.2">0.02%</text>
+  <text x="614.7" y="220.0" font-size="12" font-weight="400" fill="#8e8e96">Codex 0.167.0</text>
+  <rect x="614.7" y="228.0" width="165.3" height="20" rx="10.0" fill="#3d3d45"/>
+  <text x="790.0" y="243.0" font-size="14" font-weight="400" fill="#8e8e96" letter-spacing="-0.2">0.8%</text>
+  <text x="614.7" y="270.0" font-size="12" font-weight="400" fill="#8e8e96">Claude Code 2.1.322</text>
+  <rect x="614.7" y="278.0" width="47.5" height="20" rx="10.0" fill="#3d3d45"/>
+  <text x="672.2" y="293.0" font-size="14" font-weight="400" fill="#8e8e96" letter-spacing="-0.2">0.23%</text>
   </g>
 </svg>
