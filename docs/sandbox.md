@@ -48,21 +48,22 @@ double fork, but it cannot drop the Seatbelt profile it inherited. Each run's pr
 allows a Mach lookup of a random name no other run uses. Kraai then asks the sandbox
 which processes allow that lookup, kills them, and repeats until a pass finds none.
 Other runs and unsandboxed processes are not touched. If sandboxed processes are
-still alive after 5 seconds, the execution fails before Kraai undoes changes to
-`.kraai/` or `AGENTS.md`.
+still alive after 5 seconds, Kraai still undoes changes to `.kraai/` or `AGENTS.md`,
+then fails the execution.
 
 Sandboxed scripts cannot change the workspace's `.kraai/` directory or its
 `AGENTS.md`. `.kraai/agents.toml` decides the permissions of later scripts, and
 `AGENTS.md` becomes model instructions on the next turn. On Linux the existing
 entries and the files their symlinks point to are mounted read-only, and on macOS
 Seatbelt denies writes to them. Kraai never creates either entry itself. If a script
-creates one or replaces a symlink, Kraai undoes that after the script exits. Windows
-has no read-only mount, so there Kraai restores only `.kraai/agents.toml` and
-`AGENTS.md` after the run. Changes to other files in `.kraai/` stay on Windows.
-Kraai refuses to run a write-capable sandboxed script when either entry is a symlink
-to a missing path. On Linux and macOS it also refuses when the file has other hard
-links, because the script could write through them. Ask for `no-sandbox` when a script
-needs to edit them.
+creates one or replaces a symlink, Kraai undoes that after the script exits, removing
+a `.kraai/` it created along with everything in it. Windows has no read-only mount, so
+there Kraai restores only `.kraai/agents.toml` and `AGENTS.md` after the run. Changes
+to other files in a `.kraai/` that existed before the run stay on Windows. Kraai
+refuses to run a write-capable sandboxed script when either entry is a symlink to a
+missing path, or a symlink that reaches its target through another symlink. On Linux
+and macOS it also refuses when the file has other hard links, because the script could
+write through them. Ask for `no-sandbox` when a script needs to edit them.
 
 With the `network` capability, scripts still cannot connect to Unix sockets that were
 created outside the sandbox, such as D-Bus, the systemd user manager, SSH and GPG

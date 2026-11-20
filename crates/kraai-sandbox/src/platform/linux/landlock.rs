@@ -37,18 +37,30 @@ pub(crate) fn ensure_host_ipc_isolation_available() -> Result<(), SandboxError> 
 
 /// Denies connections to UNIX sockets created outside this process and its descendants,
 /// once the host holds its trusted IPC connection. Sockets created later stay reachable.
+pub fn restrict_host_ipc_after_startup() -> Result<(), SandboxError> {
+    ensure_host_ipc_isolation_available()?;
+    restrict(
+        LANDLOCK_ACCESS_FS_RESOLVE_UNIX,
+        LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn restrict_only_moves() -> Result<(), SandboxError> {
+    restrict(0, 0)
+}
+
 #[expect(
     unsafe_code,
     reason = "Landlock is configured through raw syscalls with a live attribute struct"
 )]
-pub fn restrict_host_ipc_after_startup() -> Result<(), SandboxError> {
-    ensure_host_ipc_isolation_available()?;
+fn restrict(handled_access_fs: u64, scoped: u64) -> Result<(), SandboxError> {
     let attr = RulesetAttr {
         // Every Landlock ruleset that handles a filesystem right also denies moving and
         // linking files between directories, unless a rule allows it.
-        handled_access_fs: LANDLOCK_ACCESS_FS_RESOLVE_UNIX | LANDLOCK_ACCESS_FS_REFER,
+        handled_access_fs: handled_access_fs | LANDLOCK_ACCESS_FS_REFER,
         handled_access_net: 0,
-        scoped: LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+        scoped,
     };
     // SAFETY: the attribute struct stays alive for the call and its size matches the
     // kernel ABI that defines every field used here.

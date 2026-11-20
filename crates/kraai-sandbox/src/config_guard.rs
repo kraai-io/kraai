@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use kraai_execution_types::{SandboxCapabilities, SandboxCapability};
@@ -39,6 +39,7 @@ static ACTIVE: LazyLock<Mutex<HashMap<PathBuf, (usize, Snapshot)>>> = LazyLock::
 pub(crate) struct ConfigGuard {
     workspace: PathBuf,
     entries: Snapshot,
+    restored: bool,
 }
 
 #[derive(Debug)]
@@ -97,25 +98,42 @@ impl ConfigGuard {
             }
         };
         drop(active);
-        Ok(Self { workspace, entries })
+        Ok(Self {
+            workspace,
+            entries,
+            restored: false,
+        })
     }
 
-    /// Runs after every process of the script has exited.
-    pub(crate) fn restore(&self) -> Result<(), SandboxError> {
-        for entry in self.entries.iter() {
-            entry.restore().map_err(|error| {
+    /// Runs after every process of the script has exited. A guard dropped without this, such
+    /// as when the run is abandoned, restores on drop and ignores errors.
+    pub(crate) fn restore(mut self) -> Result<(), SandboxError> {
+        self.restored = true;
+        restore_entries(&self.entries)
+    }
+}
+
+/// Attempts every entry, so one failure cannot leave another entry changed.
+fn restore_entries(entries: &[GuardedEntry]) -> Result<(), SandboxError> {
+    let mut failure = None;
+    for entry in entries {
+        if let Err(error) = entry.restore() {
+            failure.get_or_insert_with(|| {
                 SandboxError::SandboxUnavailable(format!(
                     "unable to undo a sandboxed change to '{}': {error}",
                     entry.path.display()
                 ))
-            })?;
+            });
         }
-        Ok(())
     }
+    failure.map_or(Ok(()), Err)
 }
 
 impl Drop for ConfigGuard {
     fn drop(&mut self) {
+        if !self.restored {
+            let _ = restore_entries(&self.entries);
+        }
         let mut active = ACTIVE.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((runs, _)) = active.get_mut(&self.workspace) {
             *runs -= 1;
@@ -272,7 +290,7 @@ fn entry_state(path: &Path) -> Result<EntryState, SandboxError> {
         Err(error) => Err(unreadable(error)),
         Ok(metadata) if metadata.file_type().is_symlink() => {
             let target = std::fs::read_link(path).map_err(unreadable)?;
-            path.canonicalize().map_err(|error| {
+            let resolved = path.canonicalize().map_err(|error| {
                 let problem = if error.kind() == io::ErrorKind::NotFound {
                     String::from("does not exist")
                 } else {
@@ -284,12 +302,42 @@ fn entry_state(path: &Path) -> Result<EntryState, SandboxError> {
                     "create the target or remove the link",
                 )
             })?;
+            if !links_directly(path, &target, &resolved) {
+                return Err(unguardable(
+                    path,
+                    &format!(
+                        "is a symlink to '{}', which goes through another symlink",
+                        target.display()
+                    ),
+                    &format!("point the link straight at '{}'", resolved.display()),
+                ));
+            }
             Ok(EntryState::Symlink(target))
         }
         Ok(metadata) => Ok(EntryState::Present {
             directory: metadata.is_dir(),
         }),
     }
+}
+
+/// Protection covers the resolved path, so a script could swap any other link along the way.
+fn links_directly(path: &Path, target: &Path, resolved: &Path) -> bool {
+    let Some(parent) = path.parent().and_then(|parent| parent.canonicalize().ok()) else {
+        return false;
+    };
+    let mut direct = PathBuf::new();
+    for component in parent.join(target).components() {
+        match component {
+            Component::ParentDir => {
+                direct.pop();
+            }
+            Component::CurDir => {}
+            component => direct.push(component),
+        }
+    }
+    direct.ancestors().all(|ancestor| {
+        std::fs::symlink_metadata(ancestor).is_ok_and(|metadata| !metadata.file_type().is_symlink())
+    }) && direct.canonicalize().is_ok_and(|direct| direct == resolved)
 }
 
 fn unguardable(path: &Path, problem: &str, fix: &str) -> SandboxError {
@@ -385,9 +433,31 @@ fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
+/// Lets the owner list and delete every directory below `path`, which a script may have
+/// locked to keep its files from being removed.
+#[cfg(unix)]
+fn unlock_tree(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return;
+    };
+    if !metadata.is_dir() {
+        return;
+    }
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(permissions.mode() | 0o700);
+    let _ = std::fs::set_permissions(path, permissions);
+    for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+        unlock_tree(&entry.path());
+    }
+}
+
 fn remove_entry(path: &Path) -> io::Result<()> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.is_dir() {
+        #[cfg(unix)]
+        unlock_tree(path);
         return std::fs::remove_dir_all(path);
     }
     #[cfg(windows)]

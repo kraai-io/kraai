@@ -36,10 +36,13 @@ pub async fn run(
         execution_started,
     )
     .await;
+    // Restore even when processes outlived termination, because the next run would otherwise
+    // capture the change as the original.
     #[cfg(target_os = "macos")]
-    if let Some(run_marker) = command.run_marker.take() {
-        crate::platform::macos::members::terminate(run_marker).await?;
-    }
+    let terminated = match command.run_marker.take() {
+        Some(run_marker) => crate::platform::macos::members::terminate(run_marker).await,
+        None => Ok(()),
+    };
     #[cfg(windows)]
     let cleanup = command.cleanup().await;
     if let Some(config_guard) = config_guard {
@@ -49,6 +52,8 @@ pub async fn run(
                 SandboxError::Wait(format!("configuration guard failed: {error}"))
             })??;
     }
+    #[cfg(target_os = "macos")]
+    terminated?;
     #[cfg(windows)]
     cleanup?;
     output

@@ -25,7 +25,7 @@ pub use platform::linux::{restrict_host_ipc_after_startup, restrict_network_afte
 use platform::linux::{
     BWRAP_SECCOMP_STDIN_FD, SeccompInstruction, build_bwrap_args, build_bwrap_probe_args,
     bwrap_probe_failure_message, ensure_host_ipc_isolation_available, find_bwrap,
-    restricted_network_seccomp_program, run_bwrap_sandbox_probe,
+    restrict_only_moves, restricted_network_seccomp_program, run_bwrap_sandbox_probe,
 };
 #[cfg(all(test, unix))]
 use process::is_likely_sandbox_denied;

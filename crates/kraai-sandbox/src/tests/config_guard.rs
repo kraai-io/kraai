@@ -273,11 +273,9 @@ fn overlapping_runs_restore_the_first_snapshot() {
     std::fs::write(&instructions, "evil").expect("plant instructions");
     let second = crate::config_guard::ConfigGuard::capture(workspace.path()).expect("capture");
     first.restore().expect("restore first");
-    drop(first);
     std::fs::write(&instructions, "evil").expect("plant again");
     second.restore().expect("restore second");
     assert!(std::fs::symlink_metadata(&instructions).is_err());
-    drop(second);
 
     std::fs::write(&instructions, ORIGINAL).expect("write");
     let third = crate::config_guard::ConfigGuard::capture(workspace.path()).expect("capture");
@@ -310,4 +308,50 @@ done
     };
     assert_eq!(stdout, "");
     assert_eq!(read(&config.join("agents.toml")), ORIGINAL);
+}
+
+#[tokio::test]
+async fn locked_planted_configuration_is_removed_with_everything_else() {
+    let workspace = Workspace::new("config-locked-plant");
+    let Some(_) = workspace
+        .run("mkdir -p .kraai/inner && printf evil > .kraai/agents.toml && chmod 000 .kraai/inner .kraai && printf evil > AGENTS.md")
+        .await
+    else {
+        return;
+    };
+    assert!(std::fs::symlink_metadata(workspace.path().join(".kraai")).is_err());
+    assert!(std::fs::symlink_metadata(workspace.path().join("AGENTS.md")).is_err());
+}
+
+#[tokio::test]
+async fn links_through_other_links_are_rejected() {
+    let workspace = Workspace::new("config-link-chain");
+    if !workspace.sandbox_available().await {
+        return;
+    }
+    std::fs::create_dir(workspace.path().join("real_docs")).expect("create docs");
+    std::fs::write(workspace.path().join("real_docs/agents.md"), ORIGINAL).expect("write");
+    symlink("real_docs", workspace.path().join("docs")).expect("link docs");
+    symlink("docs/agents.md", workspace.path().join("AGENTS.md")).expect("link");
+    let error = run(workspace.plan("true"), CancellationToken::new())
+        .await
+        .expect_err("a link through another link cannot be guarded");
+    assert!(
+        error.to_string().contains("through another symlink"),
+        "{error}"
+    );
+
+    std::fs::remove_file(workspace.path().join("AGENTS.md")).expect("remove link");
+    symlink("real_docs/agents.md", workspace.path().join("AGENTS.md")).expect("link");
+    assert_eq!(workspace.run("true").await.as_deref(), Some(""));
+}
+
+#[test]
+fn abandoned_runs_still_restore() {
+    let workspace = Workspace::new("config-abandoned");
+    let instructions = workspace.path().join("AGENTS.md");
+    let guard = crate::config_guard::ConfigGuard::capture(workspace.path()).expect("capture");
+    std::fs::write(&instructions, "evil").expect("plant instructions");
+    drop(guard);
+    assert!(std::fs::symlink_metadata(&instructions).is_err());
 }
