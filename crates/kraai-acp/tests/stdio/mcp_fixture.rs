@@ -146,6 +146,7 @@ pub fn tool_status(values: &[Value], status: &str) -> bool {
         .any(|value| value.pointer("/params/update/status") == Some(&json!(status)))
 }
 
+#[cfg(unix)]
 pub const STDIO: &str = r#"
 printf '%s\n' "$$" > "$ACP_MCP_PID"
 printf '%s\n' "$PWD" "$ACP_MCP_VALUE" > "$ACP_MCP_RECORD"
