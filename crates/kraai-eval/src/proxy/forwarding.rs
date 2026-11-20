@@ -1,5 +1,6 @@
 use std::io;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use color_eyre::eyre::{Context, Result, bail};
 use futures::{Stream, StreamExt};
@@ -11,6 +12,9 @@ use super::{
     CacheState, DownstreamDelivery, ForwardOutcome, MAX_RESPONSE_BODY_BYTES, ParsedRequest,
     ProxyState, UpstreamCredentials, constant_time_eq,
 };
+
+/// How long one downstream write may wait for a client that stopped reading.
+const DOWNSTREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) fn rejection(
     state: &ProxyState,
@@ -140,13 +144,13 @@ where
     if *delivery == DownstreamDelivery::ClientDisconnected {
         return Ok(());
     }
-    match stream.write_all(bytes).await {
-        Ok(()) => Ok(()),
-        Err(error) if is_client_disconnect(&error) => {
+    match tokio::time::timeout(DOWNSTREAM_WRITE_TIMEOUT, stream.write_all(bytes)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) if !is_client_disconnect(&error) => Err(error.into()),
+        Ok(Err(_)) | Err(_) => {
             *delivery = DownstreamDelivery::ClientDisconnected;
             Ok(())
         }
-        Err(error) => Err(error.into()),
     }
 }
 

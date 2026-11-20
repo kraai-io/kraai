@@ -177,7 +177,7 @@ mod tests {
         ));
         fs::create_dir(&root)?;
         let path = root.join("harness-metrics.json");
-        fs::File::create(&path)?.set_len(1 << 40)?;
+        fs::File::create(&path)?.set_len(MAX_HARNESS_METRICS_BYTES + 1)?;
         let error = load_harness_metrics(&path)
             .err()
             .ok_or_else(|| color_eyre::eyre::eyre!("oversized metrics were accepted"))?;

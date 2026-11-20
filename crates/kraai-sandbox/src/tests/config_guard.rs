@@ -23,9 +23,7 @@ impl Workspace {
         &self.0
     }
 
-    /// Runs `script` with workspace-write and host-read. Returns `None` when this host
-    /// cannot run the sandbox.
-    async fn run(&self, script: &str) -> Option<String> {
+    fn plan(&self, script: &str) -> crate::LaunchPlan {
         let mut plan = shell_plan(
             &self.0,
             script,
@@ -36,13 +34,36 @@ impl Workspace {
             HANG_TIMEOUT,
         );
         plan.executable = plan.executable.canonicalize().expect("resolve shell");
-        match run(plan, CancellationToken::new()).await {
-            Err(SandboxError::SandboxUnavailable(_)) => None,
-            result => {
-                let output = result.expect("run sandbox");
-                Some(String::from_utf8_lossy(&output.stdout).into_owned())
-            }
+        plan
+    }
+
+    /// Returns `false` when this host cannot run the sandbox.
+    async fn sandbox_available(&self) -> bool {
+        let probe = shell_plan(
+            &self.0,
+            "true",
+            capabilities([
+                SandboxCapability::HostRead,
+                SandboxCapability::WorkspaceRead,
+            ]),
+            HANG_TIMEOUT,
+        );
+        !matches!(
+            run(probe, CancellationToken::new()).await,
+            Err(SandboxError::SandboxUnavailable(_))
+        )
+    }
+
+    /// Runs `script` with workspace-write and host-read. Returns `None` when this host
+    /// cannot run the sandbox.
+    async fn run(&self, script: &str) -> Option<String> {
+        if !self.sandbox_available().await {
+            return None;
         }
+        let output = run(self.plan(script), CancellationToken::new())
+            .await
+            .expect("run sandbox");
+        Some(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 }
 
@@ -174,6 +195,7 @@ for attempt in \
     'printf evil > AGENTS.md' \
     'rm -f AGENTS.md' \
     'mv AGENTS.md moved.md' \
+    'ln AGENTS.md alias.md' \
     'ln -sf /etc/passwd AGENTS.md'; do
     if sh -c "$attempt" 2>/dev/null; then printf 'allowed: %s\n' "$attempt"; fi
 done
@@ -216,4 +238,76 @@ async fn missing_instructions_cannot_be_planted() {
         .await
         .expect("sandbox ran before");
     assert!(std::fs::symlink_metadata(workspace.path().join("AGENTS.md")).is_err());
+}
+
+#[tokio::test]
+async fn unresolvable_or_aliased_configuration_is_rejected() {
+    let workspace = Workspace::new("config-unguardable");
+    if !workspace.sandbox_available().await {
+        return;
+    }
+    symlink("docs/planted.md", workspace.path().join("AGENTS.md")).expect("link");
+    let error = run(workspace.plan("true"), CancellationToken::new())
+        .await
+        .expect_err("a dangling instructions link cannot be guarded");
+    assert!(error.to_string().contains("does not exist"), "{error}");
+
+    std::fs::remove_file(workspace.path().join("AGENTS.md")).expect("remove link");
+    std::fs::write(workspace.path().join("AGENTS.md"), ORIGINAL).expect("write");
+    std::fs::hard_link(
+        workspace.path().join("AGENTS.md"),
+        workspace.path().join("editable.md"),
+    )
+    .expect("hard link");
+    let error = run(workspace.plan("true"), CancellationToken::new())
+        .await
+        .expect_err("a hard-linked instructions file cannot be guarded");
+    assert!(error.to_string().contains("hard links"), "{error}");
+}
+
+#[test]
+fn overlapping_runs_restore_the_first_snapshot() {
+    let workspace = Workspace::new("config-overlap");
+    let instructions = workspace.path().join("AGENTS.md");
+    let first = crate::config_guard::ConfigGuard::capture(workspace.path()).expect("capture");
+    std::fs::write(&instructions, "evil").expect("plant instructions");
+    let second = crate::config_guard::ConfigGuard::capture(workspace.path()).expect("capture");
+    first.restore().expect("restore first");
+    drop(first);
+    std::fs::write(&instructions, "evil").expect("plant again");
+    second.restore().expect("restore second");
+    assert!(std::fs::symlink_metadata(&instructions).is_err());
+    drop(second);
+
+    std::fs::write(&instructions, ORIGINAL).expect("write");
+    let third = crate::config_guard::ConfigGuard::capture(workspace.path()).expect("capture");
+    third.restore().expect("restore third");
+    assert_eq!(read(&instructions), ORIGINAL);
+}
+
+#[tokio::test]
+async fn unreadable_configuration_directory_still_runs_and_stays_closed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let workspace = Workspace::new("config-unreadable");
+    let config = workspace.path().join(".kraai");
+    std::fs::create_dir(&config).expect("create config");
+    std::fs::write(config.join("agents.toml"), ORIGINAL).expect("write");
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o000)).expect("lock");
+
+    let script = r#"
+for attempt in \
+    'chmod 755 .kraai' \
+    'mv .kraai .kraai-old' \
+    'rm -rf .kraai'; do
+    if sh -c "$attempt" 2>/dev/null; then printf 'allowed: %s\n' "$attempt"; fi
+done
+"#;
+    let stdout = workspace.run(script).await;
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o755)).expect("unlock");
+    let Some(stdout) = stdout else {
+        return;
+    };
+    assert_eq!(stdout, "");
+    assert_eq!(read(&config.join("agents.toml")), ORIGINAL);
 }

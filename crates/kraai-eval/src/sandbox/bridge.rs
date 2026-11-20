@@ -127,6 +127,7 @@ mod forwarding {
     use std::sync::Arc;
 
     use color_eyre::eyre::{Context, Result};
+    use tokio::io::AsyncWriteExt;
     use tokio::net::{TcpListener, TcpStream, UnixStream};
     use tokio::sync::Semaphore;
 
@@ -171,11 +172,29 @@ mod forwarding {
         }
     }
 
-    async fn forward_connection(mut client: TcpStream, socket: &Path) -> io::Result<()> {
+    /// Relays one connection. It ends once the proxy closes its side, even when the client
+    /// never closes its own, so a lingering client cannot hold a connection slot.
+    pub(super) async fn forward_connection(mut client: TcpStream, socket: &Path) -> io::Result<()> {
         client.set_nodelay(true)?;
         let mut upstream = UnixStream::connect(socket).await?;
-        tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
-        Ok(())
+        let (mut client_read, mut client_write) = client.split();
+        let (mut upstream_read, mut upstream_write) = upstream.split();
+        let request = async {
+            tokio::io::copy(&mut client_read, &mut upstream_write).await?;
+            upstream_write.shutdown().await
+        };
+        let response = async {
+            tokio::io::copy(&mut upstream_read, &mut client_write).await?;
+            client_write.shutdown().await
+        };
+        tokio::pin!(request, response);
+        tokio::select! {
+            result = &mut response => result,
+            result = &mut request => {
+                result?;
+                response.await
+            }
+        }
     }
 
     pub(super) fn exit_code(status: ExitStatus) -> ExitCode {
@@ -197,7 +216,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream, UnixListener};
 
-    use super::forwarding::{exit_code, forward_connections};
+    use super::forwarding::{exit_code, forward_connection, forward_connections};
 
     #[tokio::test]
     async fn forwards_loopback_clients_to_the_proxy_socket() -> Result<()> {
@@ -236,6 +255,38 @@ mod tests {
         std::fs::remove_dir_all(root)?;
         ensure!(
             response == b"pong:ping",
+            "unexpected bridged response {response:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn relay_ends_when_the_proxy_closes_on_a_lingering_client() -> Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("kraai-eval-bridge-{}", ulid::Ulid::generate()));
+        std::fs::create_dir(&root)?;
+        let socket = root.join("proxy.sock");
+        let upstream = UnixListener::bind(&socket)?;
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let mut client = TcpStream::connect(listener.local_addr()?).await?;
+        let (accepted, _) = listener.accept().await?;
+        let exchange = async {
+            let proxy = async {
+                let (mut stream, _) = upstream.accept().await?;
+                stream.write_all(b"done").await?;
+                Ok::<_, color_eyre::Report>(())
+            };
+            let (relay, proxy) = tokio::join!(forward_connection(accepted, &socket), proxy);
+            relay?;
+            proxy?;
+            let mut response = Vec::new();
+            client.read_to_end(&mut response).await?;
+            Ok::<_, color_eyre::Report>(response)
+        };
+        let response = kraai_test_support::hang_guard(exchange).await??;
+        std::fs::remove_dir_all(root)?;
+        ensure!(
+            response == b"done",
             "unexpected bridged response {response:?}"
         );
         Ok(())

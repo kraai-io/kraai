@@ -6,7 +6,7 @@ use kraai_execution_types::SandboxCapability;
 
 use crate::SandboxError;
 use crate::config::LaunchPlan;
-use crate::config_guard::ConfigGuard;
+use crate::config_guard::{self, ConfigGuard};
 use crate::platform::git_worktree::linked_worktree_common_dir;
 
 pub(super) struct SeatbeltCommand {
@@ -128,17 +128,17 @@ pub(super) fn build_args(
     }
 
     if ConfigGuard::applies_to(&plan.capabilities) {
-        let guard = ConfigGuard::capture(&workspace);
-        for entry in guard.entries() {
-            let entry = profile.parameter(entry)?;
+        for entry in config_guard::entry_paths(&workspace) {
+            let entry = profile.parameter(&entry)?;
             profile.push(&format!(
                 "(deny file-write* (require-any (literal {entry}) (subpath {entry})))"
             ));
         }
-        for path in guard.read_only_paths() {
-            let parameter = profile.parameter(path)?;
+        for path in config_guard::read_only_paths(&workspace) {
+            let parameter = profile.parameter(&path)?;
             let filter = if path.is_dir() { "subpath" } else { "literal" };
             profile.push(&format!("(deny file-write* ({filter} {parameter}))"));
+            profile.protect_ancestors(&path)?;
         }
     }
 

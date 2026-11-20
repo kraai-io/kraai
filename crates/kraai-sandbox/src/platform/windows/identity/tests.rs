@@ -56,11 +56,11 @@ fn sweep_deletes_only_profiles_without_a_live_launch() -> Result<(), SandboxErro
     let live = Identity::create()?;
     let stale_moniker = moniker(&stale);
     let live_moniker = moniker(&live);
-    stale.alive = None;
-    let stale_name = std::mem::take(&mut stale.name);
     let listed = monikers()?;
     assert!(listed.contains(&stale_moniker));
     assert!(listed.contains(&live_moniker));
+    stale.alive = None;
+    let stale_name = std::mem::take(&mut stale.name);
     let swept = sweep_stale_profiles();
     let listed = monikers()?;
     if listed.contains(&stale_moniker) {

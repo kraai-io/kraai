@@ -42,6 +42,7 @@ object = { workspace = true }
 
 [dev-dependencies]
 kraai-test-support = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

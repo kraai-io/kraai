@@ -1,6 +1,8 @@
 use crate::error::SandboxError;
 
 const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1 << 0;
+const LANDLOCK_RULE_PATH_BENEATH: u32 = 1;
+const LANDLOCK_ACCESS_FS_REFER: u64 = 1 << 13;
 const LANDLOCK_ACCESS_FS_RESOLVE_UNIX: u64 = 1 << 16;
 const LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
 const HOST_IPC_ABI: i64 = 9;
@@ -10,6 +12,12 @@ struct RulesetAttr {
     handled_access_fs: u64,
     handled_access_net: u64,
     scoped: u64,
+}
+
+#[repr(C, packed)]
+struct PathBeneathAttr {
+    allowed_access: u64,
+    parent_fd: i32,
 }
 
 pub(crate) fn ensure_host_ipc_isolation_available() -> Result<(), SandboxError> {
@@ -36,7 +44,9 @@ pub(crate) fn ensure_host_ipc_isolation_available() -> Result<(), SandboxError> 
 pub fn restrict_host_ipc_after_startup() -> Result<(), SandboxError> {
     ensure_host_ipc_isolation_available()?;
     let attr = RulesetAttr {
-        handled_access_fs: LANDLOCK_ACCESS_FS_RESOLVE_UNIX,
+        // Every Landlock ruleset that handles a filesystem right also denies moving and
+        // linking files between directories, unless a rule allows it.
+        handled_access_fs: LANDLOCK_ACCESS_FS_RESOLVE_UNIX | LANDLOCK_ACCESS_FS_REFER,
         handled_access_net: 0,
         scoped: LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
     };
@@ -58,6 +68,7 @@ pub fn restrict_host_ipc_after_startup() -> Result<(), SandboxError> {
     })?;
     // SAFETY: the kernel returned this descriptor, and nothing else owns it.
     let ruleset = unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(ruleset) };
+    allow_refer_everywhere(&ruleset)?;
     // SAFETY: prctl takes scalar arguments here.
     if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
         return Err(landlock_error("set no_new_privs"));
@@ -72,6 +83,34 @@ pub fn restrict_host_ipc_after_startup() -> Result<(), SandboxError> {
     };
     if result != 0 {
         return Err(landlock_error("enforce Landlock ruleset"));
+    }
+    Ok(())
+}
+
+#[expect(
+    unsafe_code,
+    reason = "Landlock rules are added through a raw syscall with a live attribute struct"
+)]
+fn allow_refer_everywhere(ruleset: &std::os::fd::OwnedFd) -> Result<(), SandboxError> {
+    let root = std::fs::File::open("/").map_err(|error| {
+        SandboxError::SandboxUnavailable(format!("unable to open / for Landlock: {error}"))
+    })?;
+    let rule = PathBeneathAttr {
+        allowed_access: LANDLOCK_ACCESS_FS_REFER,
+        parent_fd: std::os::fd::AsRawFd::as_raw_fd(&root),
+    };
+    // SAFETY: the rule and both descriptors stay alive for the call.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_add_rule,
+            std::os::fd::AsRawFd::as_raw_fd(ruleset),
+            LANDLOCK_RULE_PATH_BENEATH,
+            &rule as *const PathBeneathAttr,
+            0_u32,
+        )
+    };
+    if result != 0 {
+        return Err(landlock_error("allow moving files in the Landlock ruleset"));
     }
     Ok(())
 }

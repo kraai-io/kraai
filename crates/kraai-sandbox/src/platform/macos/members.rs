@@ -3,6 +3,7 @@
     reason = "Seatbelt membership checks and the process table are only exposed by libsystem"
 )]
 
+use std::collections::HashSet;
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::time::{Duration, Instant};
 
@@ -31,8 +32,9 @@ pub(crate) fn terminate_blocking(run_marker: &str) -> Result<(), SandboxError> {
     let marker = c_name(run_marker)?;
     let decoy = c_name(&super::profile::random_mach_name()?)?;
     let deadline = Instant::now() + TERMINATION_TIMEOUT;
+    let mut exited = HashSet::new();
     loop {
-        if kill_members(&marker, &decoy)? == 0 {
+        if kill_members(&marker, &decoy, &mut exited)? {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -49,25 +51,35 @@ fn c_name(name: &str) -> Result<CString, SandboxError> {
     CString::new(name).map_err(|error| SandboxError::Wait(error.to_string()))
 }
 
-fn kill_members(marker: &CStr, decoy: &CStr) -> Result<usize, SandboxError> {
+/// Signals every member and returns whether the pass proved none are left. A listed process that
+/// exits before its membership check may have forked a member this pass never listed, so a
+/// pass only counts once every process that exited during it was already gone before.
+fn kill_members(
+    marker: &CStr,
+    decoy: &CStr,
+    exited: &mut HashSet<libc::pid_t>,
+) -> Result<bool, SandboxError> {
     let own_pid = std::process::id();
-    let mut signalled = 0;
+    let mut settled = true;
     for pid in all_pids()? {
         if pid <= 1 || u32::try_from(pid) == Ok(own_pid) {
             continue;
         }
         let ProcessState::Live(started) = process_state(pid) else {
+            settled &= !exited.insert(pid);
             continue;
         };
-        if !is_member(pid, marker, decoy) {
+        let member = is_member(pid, marker, decoy);
+        if process_state(pid) != ProcessState::Live(started) {
+            settled &= !exited.insert(pid);
             continue;
         }
-        if started.is_some() && process_state(pid) != ProcessState::Live(started) {
+        if !member {
             continue;
         }
         match kill(Pid::from_raw(pid), Signal::SIGKILL) {
-            Ok(()) | Err(Errno::EPERM) => signalled += 1,
-            Err(Errno::ESRCH) => {}
+            Ok(()) | Err(Errno::EPERM) => settled = false,
+            Err(Errno::ESRCH) => settled &= !exited.insert(pid),
             Err(error) => {
                 return Err(SandboxError::Wait(format!(
                     "unable to terminate sandboxed process {pid}: {error}"
@@ -75,7 +87,7 @@ fn kill_members(marker: &CStr, decoy: &CStr) -> Result<usize, SandboxError> {
             }
         }
     }
-    Ok(signalled)
+    Ok(settled)
 }
 
 fn is_member(pid: libc::pid_t, marker: &CStr, decoy: &CStr) -> bool {
@@ -126,6 +138,9 @@ fn all_pids() -> Result<Vec<libc::pid_t>, SandboxError> {
             .map_err(|error| SandboxError::Wait(error.to_string()))?;
         // SAFETY: the buffer holds `bytes` bytes of writable PID slots.
         let count = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+        if count <= 0 {
+            return Err(list_error());
+        }
         let count = usize::try_from(count).map_err(|_overflow| list_error())?;
         if count < slots {
             pids.truncate(count);

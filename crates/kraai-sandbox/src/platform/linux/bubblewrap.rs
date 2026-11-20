@@ -9,7 +9,7 @@ use kraai_execution_types::SandboxCapability;
 use tokio::process::Command;
 
 use crate::config::LaunchPlan;
-use crate::config_guard::ConfigGuard;
+use crate::config_guard::{self, ConfigGuard};
 use crate::error::SandboxError;
 use crate::platform::git_worktree::linked_worktree_common_dir;
 
@@ -241,9 +241,8 @@ pub(crate) fn build_bwrap_args(
                 .chain(git_dir.as_deref())
                 .collect()
         };
-        let guard = ConfigGuard::capture(&resolved_workspace);
-        let protected = guard
-            .read_only_paths()
+        let read_only = config_guard::read_only_paths(&resolved_workspace);
+        let protected = read_only
             .iter()
             .filter_map(|path| {
                 writable_roots

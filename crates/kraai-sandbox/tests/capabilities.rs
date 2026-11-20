@@ -235,8 +235,9 @@ async fn verify(capabilities: &[SandboxCapability], linked: bool) {
     if cfg!(target_os = "linux")
         && capabilities.contains(&SandboxCapability::Network)
         && matches!(
-            result,
-            Err(kraai_sandbox::SandboxError::SandboxUnavailable(_))
+            &result,
+            Err(kraai_sandbox::SandboxError::SandboxUnavailable(message))
+                if message.contains("needs Landlock ABI")
         )
     {
         return;

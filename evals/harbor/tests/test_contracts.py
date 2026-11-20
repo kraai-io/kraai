@@ -174,13 +174,16 @@ class MetricsTests(Fixture):
         )
         self.assertEqual(
             codex_usage(self.root, "runner.stdout.jsonl"),
-            {
-                "total_tokens": 150,
-                "input_tokens": 70,
-                "cache_read_tokens": 50,
-                "output_tokens": 20,
-                "reasoning_tokens": 10,
-            },
+            (
+                {
+                    "total_tokens": 150,
+                    "input_tokens": 70,
+                    "cache_read_tokens": 50,
+                    "output_tokens": 20,
+                    "reasoning_tokens": 10,
+                },
+                True,
+            ),
         )
 
     def test_agent_metrics_symlinks_are_rejected_anywhere_in_the_path(self):
@@ -235,7 +238,7 @@ class MetricsTests(Fixture):
         with self.assertRaisesRegex(ValueError, "byte limit"):
             populate_context(self.root, SimpleNamespace(), self.root / "controller")
 
-    def test_codex_usage_skips_oversized_lines(self):
+    def test_codex_usage_skips_oversized_lines_and_reports_incomplete_usage(self):
         event = {
             "type": "turn.completed",
             "usage": {"input_tokens": 3, "output_tokens": 2},
@@ -244,9 +247,12 @@ class MetricsTests(Fixture):
         with path.open("wb") as stream:
             stream.write(b"x" * (METRICS_LIMIT + 10) + b"\n")
             stream.write(json.dumps(event).encode() + b"\n")
-        self.assertEqual(
-            codex_usage(self.root, "runner.stdout.jsonl")["total_tokens"], 5
-        )
+        usage, complete = codex_usage(self.root, "runner.stdout.jsonl")
+        self.assertEqual(usage["total_tokens"], 5)
+        self.assertFalse(complete)
+        context = SimpleNamespace(metadata=None)
+        populate_context(self.root, context, self.root / "controller")
+        self.assertFalse(context.metadata["kraai_eval"]["usage_complete"])
 
     def test_missing_usage_remains_unknown(self):
         context = SimpleNamespace(

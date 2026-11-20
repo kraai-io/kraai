@@ -40,8 +40,17 @@ fn host_ipc_restriction_child() {
         UnixListener::bind_addr(&abstract_address).expect("outside abstract socket");
     let mut existing = UnixStream::connect(&outside_path).expect("trusted startup connection");
     let (mut peer, _) = outside.accept().expect("accept trusted connection");
+    for directory in ["from", "to"] {
+        std::fs::create_dir(dir.join(directory)).expect("create directory");
+    }
+    std::fs::write(dir.join("from/file"), "moved").expect("write file");
 
     crate::restrict_host_ipc_after_startup().expect("install Landlock ruleset");
+
+    std::fs::rename(dir.join("from/file"), dir.join("to/file"))
+        .expect("files still move between directories");
+    std::fs::hard_link(dir.join("to/file"), dir.join("from/link"))
+        .expect("files still link between directories");
 
     existing
         .write_all(b"ipc")

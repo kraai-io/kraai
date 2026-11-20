@@ -10479,6 +10479,11 @@ rec {
             name = "kraai-test-support";
             packageId = "kraai-test-support";
           }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" "test-util" ];
+          }
         ];
 
       };

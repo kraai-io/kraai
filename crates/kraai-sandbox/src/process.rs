@@ -25,7 +25,8 @@ pub async fn run(
     let process_spawned = plan.process_spawned.take();
     let execution_started = plan.execution_started.take();
     let config_guard = ConfigGuard::applies_to(&plan.capabilities)
-        .then(|| ConfigGuard::capture(&plan.workspace_root));
+        .then(|| ConfigGuard::capture(&plan.workspace_root))
+        .transpose()?;
     let mut command = prepare_command(plan).await?;
     let output = spawn_and_wait(
         &mut command,

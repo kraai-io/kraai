@@ -117,22 +117,27 @@ def _complete_proxy_usage(proxy: dict) -> bool:
     return accounting.get("context", {}).get("samples") == model_requests
 
 
-def _lines(stream: BinaryIO) -> Iterator[bytes]:
+def _lines(stream: BinaryIO) -> Iterator[bytes | None]:
     while line := stream.readline(METRICS_LIMIT + 1):
         if len(line) <= METRICS_LIMIT:
             yield line
             continue
         while line and not line.endswith(b"\n"):
             line = stream.readline(METRICS_LIMIT + 1)
+        yield None
 
 
-def codex_usage(directory: Path, relative: str) -> dict[str, int] | None:
+def codex_usage(directory: Path, relative: str) -> tuple[dict[str, int] | None, bool]:
     result = None
+    complete = True
     stream = _open_scoped(directory, relative)
     if stream is None:
-        return None
+        return None, complete
     with stream:
         for line in _lines(stream):
+            if line is None:
+                complete = False
+                continue
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -161,7 +166,7 @@ def codex_usage(directory: Path, relative: str) -> dict[str, int] | None:
                 result = current
             else:
                 result = {key: result[key] + current[key] for key in result}
-    return result
+    return result, complete
 
 
 def populate_context(logs_dir: Path, context: AgentContext, controller_dir: Path) -> None:
@@ -190,7 +195,7 @@ def populate_context(logs_dir: Path, context: AgentContext, controller_dir: Path
         usage = _normalized_usage(harness_usage)
         metadata["usage_source"] = "harness"
     else:
-        usage = codex_usage(logs_dir, "runner.stdout.jsonl")
+        usage, usage_complete = codex_usage(logs_dir, "runner.stdout.jsonl")
         if usage is not None:
             metadata["usage_source"] = "codex_turn_completed"
     if usage is not None:

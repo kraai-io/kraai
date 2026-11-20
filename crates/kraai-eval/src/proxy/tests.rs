@@ -791,3 +791,24 @@ async fn codex_proxy_keeps_subscription_tokens_outside_client_and_adds_account_h
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[tokio::test(start_paused = true)]
+async fn stalled_client_is_released_as_disconnected() -> Result<()> {
+    let (mut downstream, _unread_peer) = tokio::io::duplex(16);
+    let body = futures::stream::iter(vec![
+        Ok::<_, io::Error>(vec![b'x'; 64]),
+        Ok(b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"total_tokens\":3}}}\n\n".to_vec()),
+    ]);
+    let mut outcome = ForwardOutcome::rejected(200);
+    outcome.delivery = DownstreamDelivery::Complete;
+    relay_response(&mut downstream, &mut outcome, body).await?;
+    ensure!(
+        outcome.delivery == DownstreamDelivery::ClientDisconnected,
+        "a client that stopped reading kept its connection"
+    );
+    ensure!(
+        outcome.body.ends_with(b"\n\n"),
+        "the upstream body was not read to the end"
+    );
+    Ok(())
+}

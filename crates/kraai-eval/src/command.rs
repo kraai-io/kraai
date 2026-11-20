@@ -244,6 +244,7 @@ mod tests {
         })
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn sparse_output_marks_the_output_limit_exceeded() -> Result<()> {
         let truncate = std::env::var_os("PATH")
