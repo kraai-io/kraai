@@ -354,4 +354,15 @@ fn abandoned_runs_still_restore() {
     std::fs::write(&instructions, "evil").expect("plant instructions");
     drop(guard);
     assert!(std::fs::symlink_metadata(&instructions).is_err());
+    let aside = std::fs::read_dir(workspace.path())
+        .expect("list workspace")
+        .flatten()
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("AGENTS.md.sandbox-undone-")
+        })
+        .expect("the undone file is kept beside the original path");
+    assert_eq!(read(&aside.path()), "evil");
 }

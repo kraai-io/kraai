@@ -101,6 +101,8 @@ pub async fn execute(
     let output_marker = Marker::random();
     let startup_files = crate::startup_files(plan.nushell_startup, &plan.environment)
         .map_err(RuntimeError::Startup)?;
+    let startup_restriction =
+        crate::request::StartupRestriction::for_capabilities(&plan.capabilities);
     let host_request = HostRequest {
         protocol_version: HOST_PROTOCOL_VERSION,
         execution_id: execution_id.clone(),
@@ -112,9 +114,7 @@ pub async fn execute(
         startup_files,
         event_secret: secret,
         output_marker: output_marker.clone(),
-        startup_restriction: crate::request::StartupRestriction::for_capabilities(
-            &plan.capabilities,
-        ),
+        startup_restriction,
     };
 
     let private_temp = plan.private_temp.reserve();
@@ -139,6 +139,11 @@ pub async fn execute(
         .map(|(name, value)| (OsString::from(name), OsString::from(value)))
         .collect();
     launch.runtime_roots = plan.runtime_roots;
+    #[cfg(target_os = "linux")]
+    {
+        launch.restricts_host_ipc =
+            startup_restriction == crate::request::StartupRestriction::HostIpc;
+    }
     let (raw_output, raw_output_rx) = tokio::sync::mpsc::channel(RAW_OUTPUT_EVENTS);
     let (output_frames, output_frames_rx) = tokio::sync::mpsc::channel(OUTPUT_FRAMES);
     launch.output_events = Some(raw_output);

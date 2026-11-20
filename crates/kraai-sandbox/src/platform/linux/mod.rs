@@ -39,7 +39,7 @@ pub(crate) async fn prepare(
         .contains(kraai_execution_types::SandboxCapability::Network);
     let bwrap = bubblewrap::find_bwrap(&plan.workspace_root, private_temp.path())
         .ok_or_else(|| SandboxError::SandboxUnavailable(String::from(MISSING_BWRAP)))?;
-    if network_enabled {
+    if network_enabled && plan.restricts_host_ipc {
         landlock::ensure_host_ipc_isolation_available()?;
     }
     bubblewrap::ensure_bwrap_sandbox_available(&bwrap, network_enabled).await?;

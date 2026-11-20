@@ -115,6 +115,11 @@ impl ConfigGuard {
 
 /// Attempts every entry, so one failure cannot leave another entry changed.
 fn restore_entries(entries: &[GuardedEntry]) -> Result<(), SandboxError> {
+    // Seatbelt denies every change to the entries, so anything different was changed outside
+    // the sandbox.
+    if cfg!(target_os = "macos") {
+        return Ok(());
+    }
     let mut failure = None;
     for entry in entries {
         if let Err(error) = entry.restore() {
@@ -268,8 +273,13 @@ impl FileSnapshot {
                 self.location.display()
             )));
         }
-        if read_optional(&self.path)?.as_ref() != Some(contents) {
-            std::fs::write(&self.path, contents)?;
+        match read_optional(&self.path)? {
+            Some(current) if current == *contents => {}
+            Some(_) => {
+                move_aside(&self.path)?;
+                std::fs::write(&self.path, contents)?;
+            }
+            None => std::fs::write(&self.path, contents)?,
         }
         Ok(())
     }
@@ -370,13 +380,13 @@ fn restore_state(path: &Path, state: &EntryState, link_to_directory: bool) -> io
     match state {
         EntryState::Absent => {
             if std::fs::symlink_metadata(path).is_ok() {
-                remove_entry(path)?;
+                move_aside(path)?;
             }
         }
         EntryState::Symlink(target) => {
             if std::fs::read_link(path).ok().as_ref() != Some(target) {
                 if std::fs::symlink_metadata(path).is_ok() {
-                    remove_entry(path)?;
+                    move_aside(path)?;
                 }
                 symlink(target, path, link_to_directory)?;
             }
@@ -386,7 +396,7 @@ fn restore_state(path: &Path, state: &EntryState, link_to_directory: bool) -> io
             if let Ok(metadata) = std::fs::symlink_metadata(path)
                 && (metadata.file_type().is_symlink() || metadata.is_dir() != *directory)
             {
-                remove_entry(path)?;
+                move_aside(path)?;
             }
         }
     }
@@ -433,8 +443,7 @@ fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
-/// Lets the owner list and delete every directory below `path`, which a script may have
-/// locked to keep its files from being removed.
+/// Lets the owner open every directory below `path`, which a script may have locked.
 #[cfg(unix)]
 fn unlock_tree(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -453,16 +462,28 @@ fn unlock_tree(path: &Path) {
     }
 }
 
-fn remove_entry(path: &Path) -> io::Result<()> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if metadata.is_dir() {
-        #[cfg(unix)]
-        unlock_tree(path);
-        return std::fs::remove_dir_all(path);
+/// Renames an entry next to itself instead of deleting it, because the restore cannot tell a
+/// script's change from one made outside the sandbox during the run.
+fn move_aside(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    unlock_tree(path);
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("the entry has no file name"))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    for attempt in 0..100_u32 {
+        let mut aside = name.to_os_string();
+        aside.push(format!(".sandbox-undone-{stamp}-{attempt}"));
+        let aside = path.with_file_name(aside);
+        if std::fs::symlink_metadata(&aside).is_err() {
+            return std::fs::rename(path, aside);
+        }
     }
-    #[cfg(windows)]
-    if metadata.file_type().is_symlink() && std::fs::remove_dir(path).is_ok() {
-        return Ok(());
-    }
-    std::fs::remove_file(path)
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "no free name to move the entry aside",
+    ))
 }

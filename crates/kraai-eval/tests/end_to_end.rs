@@ -164,7 +164,6 @@ command = ["sh", "-c", "read -r actual < answer.txt; [ \"$actual\" = fixed ]"]
         fs::read(&first_attempt)? == saved,
         "a saved attempt was run again"
     );
-    fs::remove_dir_all(root)?;
     Ok(())
 }
 
@@ -453,7 +452,6 @@ timeout_seconds = {timeout}
         !eval.join(attempt(4)).exists(),
         "a launch failure saved an attempt"
     );
-    fs::remove_dir_all(root)?;
     Ok(())
 }
 

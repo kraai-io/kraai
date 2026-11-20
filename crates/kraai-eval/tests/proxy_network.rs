@@ -132,7 +132,6 @@ timeout_seconds = {timeout}
             == Some(1),
         "the proxy did not record the runner request"
     );
-    fs::remove_dir_all(root)?;
     Ok(())
 }
 

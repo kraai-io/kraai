@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use color_eyre::eyre::Result;
@@ -27,8 +27,24 @@ pub fn user_scope_available() -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
-pub fn temporary_directory(name: &str) -> Result<PathBuf> {
+pub struct TemporaryDirectory(PathBuf);
+
+impl std::ops::Deref for TemporaryDirectory {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+pub fn temporary_directory(name: &str) -> Result<TemporaryDirectory> {
     let path = std::env::temp_dir().join(format!("kraai-eval-{name}-{}", ulid::Ulid::generate()));
     fs::create_dir(&path)?;
-    Ok(path)
+    Ok(TemporaryDirectory(path))
 }
