@@ -6,10 +6,13 @@ prose that quotes them, then run `python3 assets/readme/charts.py` from the
 repository root.
 
 Each chart is a row of panels: one large headline number, a short caption, and
-a bar per agent. Kraai's bar and number take the gradient; the others stay grey.
+a bar per agent, labelled with the agent's logo. The charts are monochrome like
+the Kraai brand: Kraai's bar is a bright silver gradient, the others stay grey.
+The Codex and Claude logos in logos/ come from LobeHub's icon set (MIT).
 """
 
 import json
+import re
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
@@ -17,29 +20,38 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = Path(__file__).parent
 CODING_DATA = ROOT / "docs" / "benchmark-homepage-examples.json"
+LOGOS = {
+    "kraai": ROOT / "assets" / "brand" / "svg" / "kraai-symbol-currentColor.svg",
+    "codex": OUTPUT / "logos" / "codex.svg",
+    "claude": OUTPUT / "logos" / "claude.svg",
+}
 
 THEMES = {
     "dark": {
-        "background": "#0a0a0c",
-        "border": "#1f1f24",
-        "halo": "#7b6cff",
-        "halo_opacity": 0.22,
+        "background": "#000000",
+        "border": "#1d1d1f",
+        "halo": "#ffffff",
+        "halo_opacity": 0.08,
         "text": "#f5f5f7",
-        "muted": "#8e8e96",
-        "other": "#3d3d45",
-        "gradient": ["#5b6cff", "#9a7bff", "#e38cff"],
-        "glow": 0.65,
+        "muted": "#86868b",
+        "other": "#333336",
+        "bar": ["#636366", "#c7c7cc", "#ffffff"],
+        "number": ["#ffffff", "#8e8e93"],
+        "glow": "#ffffff",
+        "glow_opacity": 0.3,
     },
     "light": {
-        "background": "#fbfbfd",
+        "background": "#ffffff",
         "border": "#e5e5ea",
-        "halo": "#7b6cff",
-        "halo_opacity": 0.10,
+        "halo": "#000000",
+        "halo_opacity": 0.03,
         "text": "#1d1d1f",
         "muted": "#6e6e73",
-        "other": "#d2d2d7",
-        "gradient": ["#3f4fe6", "#7a52f0", "#c246d6"],
-        "glow": 0.35,
+        "other": "#e3e3e8",
+        "bar": ["#8e8e93", "#3a3a3c", "#1d1d1f"],
+        "number": ["#1d1d1f", "#6e6e73"],
+        "glow": "#000000",
+        "glow_opacity": 0.18,
     },
 }
 
@@ -48,9 +60,10 @@ PAD = 44
 GAP = 44
 FONT = "'SF Pro Display', -apple-system, BlinkMacSystemFont, Inter, 'Segoe UI', sans-serif"
 BAR = 20
-BAR_STEP = 50
-BARS_TOP = 168
+BAR_STEP = 52
+BARS_TOP = 170
 VALUE_ROOM = 76
+LOGO = 18
 
 
 @dataclass
@@ -91,23 +104,36 @@ def pill_bar(x, y, length):
     return f'x="{x:.1f}" y="{y:.1f}" width="{length:.1f}" height="{BAR}" rx="{r}"'
 
 
-def defs(theme: dict) -> str:
-    stops = theme["gradient"]
-    spread = "".join(
-        f'<stop offset="{i / (len(stops) - 1):.2f}" stop-color="{color}"/>' for i, color in enumerate(stops)
+def logo_symbol(tool: str) -> str:
+    """Turns a single-color logo file into a <symbol> that takes the fill of its <use>."""
+    source = LOGOS[tool].read_text(encoding="utf-8")
+    view_box = re.search(r'viewBox="([^"]+)"', source).group(1)
+    inner = source[source.index(">") + 1 : source.rindex("</svg>")]
+    inner = re.sub(r"<title>.*?</title>", "", inner)
+    inner = inner.replace(' fill="currentColor"', "")
+    return f'<symbol id="logo-{tool}" viewBox="{view_box}"><g fill-rule="evenodd">{inner}</g></symbol>'
+
+
+def stops(colors: list[str]) -> str:
+    return "".join(
+        f'<stop offset="{i / (len(colors) - 1):.2f}" stop-color="{color}"/>' for i, color in enumerate(colors)
     )
+
+
+def defs(theme: dict, tools) -> str:
     return (
         "<defs>"
-        f'<linearGradient id="kraai" x1="0" y1="0" x2="1" y2="0">{spread}</linearGradient>'
-        f'<linearGradient id="kraai-text" x1="0" y1="0" x2="1" y2="1">{spread}</linearGradient>'
+        f'<linearGradient id="kraai" x1="0" y1="0" x2="1" y2="0">{stops(theme["bar"])}</linearGradient>'
+        f'<linearGradient id="number" x1="0" y1="0" x2="0" y2="1">{stops(theme["number"])}</linearGradient>'
         '<radialGradient id="halo" cx="0.5" cy="0" r="0.8">'
         f'<stop offset="0" stop-color="{theme["halo"]}" stop-opacity="{theme["halo_opacity"]}"/>'
         f'<stop offset="1" stop-color="{theme["halo"]}" stop-opacity="0"/>'
         "</radialGradient>"
         '<filter id="glow" x="-30%" y="-150%" width="160%" height="400%">'
-        '<feGaussianBlur stdDeviation="9"/>'
+        '<feGaussianBlur stdDeviation="8"/>'
         "</filter>"
-        "</defs>"
+        + "".join(logo_symbol(tool) for tool in tools)
+        + "</defs>"
     )
 
 
@@ -125,23 +151,31 @@ def render(figure: Figure, theme: dict) -> str:
     ]
     for index, panel in enumerate(figure.panels):
         x = PAD + index * (panel_width + GAP)
-        parts.append(text(x, 104, panel.headline, 68, "url(#kraai-text)", 700, -2.5))
+        parts.append(text(x, 104, panel.headline, 68, "url(#number)", 700, -2.5))
         parts.append(text(x, 134, panel.caption, 15, theme["text"], 500, -0.2))
         maximum = panel.maximum or max(bar.value for bar in panel.bars)
         for b, bar in enumerate(panel.bars):
             y = BARS_TOP + b * BAR_STEP
             kraai = bar.tool == "kraai"
             name_color = theme["text"] if kraai else theme["muted"]
-            parts.append(text(x, y + 2, figure.tool_names[bar.tool], 12, name_color, 600 if kraai else 400))
+            parts.append(
+                f'<use href="#logo-{bar.tool}" x="{x:.1f}" y="{y - LOGO + 5:.1f}" '
+                f'width="{LOGO}" height="{LOGO}" fill="{name_color}"/>'
+            )
+            parts.append(
+                text(x + LOGO + 7, y + 2, figure.tool_names[bar.tool], 13, name_color, 600 if kraai else 400)
+            )
             length = max(bar_room * bar.value / maximum, BAR)
-            shape = pill_bar(x, y + 10, length)
+            shape = pill_bar(x, y + 12, length)
             if kraai:
-                parts.append(f'<rect {shape} fill="url(#kraai)" opacity="{theme["glow"]}" filter="url(#glow)"/>')
+                parts.append(
+                    f'<rect {shape} fill="{theme["glow"]}" opacity="{theme["glow_opacity"]}" filter="url(#glow)"/>'
+                )
                 parts.append(f'<rect {shape} fill="url(#kraai)"/>')
             else:
                 parts.append(f'<rect {shape} fill="{theme["other"]}"/>')
             parts.append(
-                text(x + length + 10, y + 25, bar.label, 14, name_color, 600 if kraai else 400, -0.2)
+                text(x + length + 10, y + 27, bar.label, 14, name_color, 600 if kraai else 400, -0.2)
             )
 
     description = " ".join(
@@ -156,7 +190,7 @@ def render(figure: Figure, theme: dict) -> str:
         f'viewBox="0 0 {WIDTH} {height}" font-family="{FONT}" role="img" aria-labelledby="title desc">\n'
         f'  <title id="title">{escape(figure.title)}</title>\n'
         f'  <desc id="desc">{escape(description)}</desc>\n'
-        f"  {defs(theme)}\n"
+        f"  {defs(theme, figure.tool_names)}\n"
         f'  <g style="font-variant-numeric: tabular-nums">\n  {body}\n  </g>\n</svg>\n'
     )
 
