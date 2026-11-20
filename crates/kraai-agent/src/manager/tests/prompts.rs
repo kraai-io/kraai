@@ -5,6 +5,71 @@ use kraai_execution_types::{CommandInvocationId, ScriptExecutionId};
 use kraai_types::{ContextStateMutation, PinnedFileScope};
 use ulid::Ulid;
 
+#[tokio::test]
+async fn discovery_warnings_are_reported_once_until_they_change() -> Result<()> {
+    let (manager, data_dir) = test_manager().await;
+    let workspace_dir = test_dir("discovery-warnings");
+    let skill_path = workspace_dir.join(".agents/skills/broken/SKILL.md");
+    tokio::fs::create_dir_all(skill_path.parent().expect("skill directory")).await?;
+    let invalid = "---\nname: broken\ndescription: \"\"\n---\n";
+    tokio::fs::write(&skill_path, invalid).await?;
+    let session_id = manager.create_session().await?;
+    manager
+        .set_workspace_dir(&session_id, workspace_dir.clone())
+        .await?;
+    let skipped = |request: &PendingStreamRequest| {
+        request
+            .context_notifications
+            .iter()
+            .filter(|notification| {
+                notification.starts_with("Skipped skill") && notification.contains("broken")
+            })
+            .count()
+    };
+
+    let first = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("first").into(),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+            Default::default(),
+        )
+        .await?;
+    assert_eq!(skipped(&first), 1);
+    manager.complete_message(&first.message_id).await?;
+
+    let repeated = manager
+        .prepare_continuation_stream(&session_id)
+        .await?
+        .expect("continuation");
+    assert_eq!(skipped(&repeated), 0);
+    manager.complete_message(&repeated.message_id).await?;
+
+    tokio::fs::write(
+        &skill_path,
+        "---\nname: broken\ndescription: Fixed.\n---\n",
+    )
+    .await?;
+    let fixed = manager
+        .prepare_continuation_stream(&session_id)
+        .await?
+        .expect("continuation");
+    assert_eq!(skipped(&fixed), 0);
+    manager.complete_message(&fixed.message_id).await?;
+
+    tokio::fs::write(&skill_path, invalid).await?;
+    let broken_again = manager
+        .prepare_continuation_stream(&session_id)
+        .await?
+        .expect("continuation");
+    assert_eq!(skipped(&broken_again), 1);
+
+    let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
+    cleanup_dir(data_dir).await;
+    Ok(())
+}
+
 fn request_prefix(request: &PendingStreamRequest) -> &str {
     request
         .provider_request

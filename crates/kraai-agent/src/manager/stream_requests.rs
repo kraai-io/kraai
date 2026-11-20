@@ -129,7 +129,7 @@ impl AgentManager {
             .ok_or_else(|| {
                 kraai_provider_core::ProviderError::ProviderNotFound(provider_id.clone())
             })?;
-        let mut system_prompt = self
+        let system_prompt = self
             .build_turn_system_prompt(session_id, &profile, &workspace_dir)
             .await?;
 
@@ -152,7 +152,6 @@ impl AgentManager {
             )
             .await?;
 
-        system_prompt.context_notifications.extend(notifications);
         let stream_id = StreamId::new(Ulid::generate());
         let generation = Some(MessageGeneration {
             provider_id: provider_id.clone(),
@@ -171,6 +170,14 @@ impl AgentManager {
             )
             .await?;
 
+        // Mark the warnings only after all fallible preparation has completed, so a failed
+        // request cannot consume a warning before a client sees it.
+        let warnings = system_prompt.discovery_warnings;
+        let mut context_notifications = match lock(&self.session_states).get_mut(session_id) {
+            Some(state) => state.take_unreported_discovery_warnings(warnings),
+            None => warnings,
+        };
+        context_notifications.extend(notifications);
         Ok(Some(PendingStreamRequest {
             message_id: assistant_msg_id,
             provider_id,
@@ -178,7 +185,7 @@ impl AgentManager {
             provider_request,
             context_compaction,
             compact_first,
-            context_notifications: system_prompt.context_notifications,
+            context_notifications,
         }))
     }
 }

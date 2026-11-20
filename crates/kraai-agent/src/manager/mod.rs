@@ -126,6 +126,8 @@ struct SessionRuntimeState {
     last_provider: Option<ProviderId>,
     last_options: ModelOptionValues,
     active_turn_profile: Option<Arc<AgentProfile>>,
+    /// Discovery runs before every model request; retain warnings already sent to this session.
+    reported_discovery_warnings: Vec<String>,
 }
 
 impl SessionRuntimeState {
@@ -137,7 +139,19 @@ impl SessionRuntimeState {
             last_provider: None,
             last_options: ModelOptionValues::new(),
             active_turn_profile: None,
+            reported_discovery_warnings: Vec::new(),
         }
+    }
+
+    /// Return only warnings that are new or have reappeared since the last discovery pass.
+    fn take_unreported_discovery_warnings(&mut self, warnings: Vec<String>) -> Vec<String> {
+        let unreported = warnings
+            .iter()
+            .filter(|warning| !self.reported_discovery_warnings.contains(warning))
+            .cloned()
+            .collect();
+        self.reported_discovery_warnings = warnings;
+        unreported
     }
 
     fn effective_workspace_dir(&self) -> PathBuf {

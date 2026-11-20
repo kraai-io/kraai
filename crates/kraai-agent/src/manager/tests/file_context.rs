@@ -50,7 +50,7 @@ async fn request(manager: &AgentManager, session: &SessionId) -> Result<Provider
             &prompts::TurnSystemPrompt {
                 prefix: "instructions".into(),
                 instructions: Vec::new(),
-                context_notifications: vec![],
+                discovery_warnings: vec![],
             },
             None,
             None,

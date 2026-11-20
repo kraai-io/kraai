@@ -28,7 +28,8 @@ pub(super) struct TurnSystemPrompt {
     /// Sections that may change during a session; they are placed in the conversation like
     /// pinned files so a change does not rewrite the stable prefix.
     pub(super) instructions: Vec<InstructionSection>,
-    pub(super) context_notifications: Vec<String>,
+    /// Current skill and MCP discovery warnings, including warnings already reported.
+    pub(super) discovery_warnings: Vec<String>,
 }
 
 impl AgentManager {
@@ -111,7 +112,7 @@ impl AgentManager {
         Ok(TurnSystemPrompt {
             prefix,
             instructions,
-            context_notifications: skills.warnings.into_iter().chain(mcp.warnings).collect(),
+            discovery_warnings: skills.warnings.into_iter().chain(mcp.warnings).collect(),
         })
     }
 
