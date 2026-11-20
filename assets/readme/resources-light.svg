@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="254" viewBox="0 0 900 254" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="224" viewBox="0 0 900 224" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">Idle terminal UI: memory and CPU</title>
   <desc id="desc">Memory (RSS): Kraai 40 MB, Codex 0.167.0 274 MB, Claude Code 2.1.322 270 MB; CPU, first 30 s: Kraai 0.06 s, Codex 0.167.0 0.87 s, Claude Code 2.1.322 2.9 s; CPU while idle: Kraai 0.02%, Codex 0.167.0 0.8%, Claude Code 2.1.322 0.23%</desc>
   <g style="font-variant-numeric: tabular-nums">
@@ -34,6 +34,5 @@
   <text x="839.0" y="166.5" font-size="12" font-weight="400" fill="#1f2328" text-anchor="start">0.8%</text>
   <path d="M664.3,184.0h44.5a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-44.5z" fill="#1baf7a"/>
   <text x="718.8" y="198.5" font-size="12" font-weight="400" fill="#1f2328" text-anchor="start">0.23%</text>
-  <text x="16.0" y="240.0" font-size="11" font-weight="400" fill="#59636e" text-anchor="start">Median of three runs on Linux in a 200×50 tmux pane. Only each agent&#x27;s own processes count; MCP servers are left out.</text>
   </g>
 </svg>
