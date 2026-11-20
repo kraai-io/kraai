@@ -7,7 +7,7 @@ fn prompt(prefix: &str) -> prompts::TurnSystemPrompt {
     prompts::TurnSystemPrompt {
         prefix: prefix.to_string(),
         instructions: Vec::new(),
-        context_notifications: Vec::new(),
+        discovery_warnings: Vec::new(),
     }
 }
 
