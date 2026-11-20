@@ -223,14 +223,19 @@ fn private_writes_get_a_protected_owner_only_acl_on_windows() -> io::Result<()> 
             .args([
                 "-NoProfile",
                 "-Command",
-                "(Get-Acl -LiteralPath $args[0]).Sddl",
+                "(Get-Acl -LiteralPath $env:KRAAI_ACL_PATH).Sddl",
             ])
-            .arg(path)
+            .env("KRAAI_ACL_PATH", path)
             .output()?;
         let sddl = String::from_utf8_lossy(&output.stdout).trim().to_owned();
         sddl.split_once("D:")
             .map(|(_, dacl)| dacl.to_owned())
-            .ok_or_else(|| io::Error::other(format!("no DACL in {sddl:?}")))
+            .ok_or_else(|| {
+                io::Error::other(format!(
+                    "no DACL in {sddl:?}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ))
+            })
     }
 
     let root = tempfile::tempdir()?;
