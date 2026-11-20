@@ -39,6 +39,12 @@ Current priorities, in order:
 Kraai and Codex on the same 20 Terminal-Bench 4 tasks, both running
 `gpt-6-astra` at low reasoning effort:
 
+<!-- The charts mirror the tables below. Regenerate them with `python3 assets/readme/charts.py`. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/terminal-bench-dark.svg">
+  <img alt="Bar charts comparing Kraai and Codex 0.151.0 on 20 Terminal-Bench 4 tasks: tasks passed 90% vs 94%, input tokens per trial 486k vs 1.63M, output tokens per trial 6.7k vs 13.2k, cost per trial $1.20 vs $2.96." src="assets/readme/terminal-bench-light.svg" width="900">
+</picture>
+
 | | Passed | Input tokens / trial | Output tokens / trial | Cost / trial |
 | --- | --- | --- | --- | --- |
 | Kraai | 36 / 40 | 486k | 6.7k | $1.20 |
@@ -59,6 +65,11 @@ estimate at API prices ($10/M input, $1/M cached input, $50/M output).
 ## CPU and memory
 
 Each agent's terminal UI, started fresh in the same repo and left idle:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/resources-dark.svg">
+  <img alt="Bar charts comparing idle terminal UIs: memory 40 MB for Kraai, 274 MB for Codex 0.167.0 and 270 MB for Claude Code 2.1.322; CPU in the first 30 seconds 0.06 s, 0.87 s and 2.9 s; CPU while idle 0.02%, 0.8% and 0.23%." src="assets/readme/resources-light.svg" width="900">
+</picture>
 
 | | Memory (RSS) | CPU, first 30 s | CPU while idle |
 | --- | --- | --- | --- |

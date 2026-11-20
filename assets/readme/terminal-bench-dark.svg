@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="222" viewBox="0 0 900 222" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Terminal-Bench 4: 20 tasks, gpt-6-astra at low reasoning</title>
+  <desc id="desc">Tasks passed: Kraai 90%, Codex 0.151.0 94%; Input tokens / trial: Kraai 486k, Codex 0.151.0 1.63M; Output tokens / trial: Kraai 6.7k, Codex 0.151.0 13.2k; Cost / trial: Kraai $1.20, Codex 0.151.0 $2.96</desc>
+  <g style="font-variant-numeric: tabular-nums">
+  <text x="16.0" y="28.0" font-size="16" font-weight="600" fill="#f0f6fc" text-anchor="start">Terminal-Bench 4: 20 tasks, gpt-6-astra at low reasoning</text>
+  <text x="16.0" y="50.0" font-size="13" font-weight="400" fill="#9198a1" text-anchor="start">Kraai passes about as many tasks while reading 70% fewer input tokens, writing half the output, at 40% of the cost.</text>
+  <text x="16.0" y="134.5" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">Kraai</text>
+  <text x="16.0" y="166.5" font-size="13" font-weight="400" fill="#f0f6fc" text-anchor="start">Codex 0.151.0</text>
+  <text x="166.0" y="88.0" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">Tasks passed</text>
+  <text x="166.0" y="104.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Higher is better</text>
+  <line x1="166.0" y1="114" x2="166.0" y2="178" stroke="#3d444d" stroke-width="1"/>
+  <path d="M167.0,120.0h91.9a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-91.9z" fill="#3987e5"/>
+  <text x="268.9" y="134.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">90%</text>
+  <path d="M167.0,152.0h96.1a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-96.1z" fill="#d95926"/>
+  <text x="273.1" y="166.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">94%</text>
+  <text x="352.5" y="88.0" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">Input tokens / trial</text>
+  <text x="352.5" y="104.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Lower is better</text>
+  <line x1="352.5" y1="114" x2="352.5" y2="178" stroke="#3d444d" stroke-width="1"/>
+  <path d="M353.5,120.0h27.8a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-27.8z" fill="#3987e5"/>
+  <text x="391.3" y="134.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">486k</text>
+  <path d="M353.5,152.0h102.5a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-102.5z" fill="#d95926"/>
+  <text x="466.0" y="166.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">1.63M</text>
+  <text x="539.0" y="88.0" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">Output tokens / trial</text>
+  <text x="539.0" y="104.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Lower is better</text>
+  <line x1="539.0" y1="114" x2="539.0" y2="178" stroke="#3d444d" stroke-width="1"/>
+  <path d="M540.0,120.0h50.1a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-50.1z" fill="#3987e5"/>
+  <text x="600.1" y="134.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">6.7k</text>
+  <path d="M540.0,152.0h102.5a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-102.5z" fill="#d95926"/>
+  <text x="652.5" y="166.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">13.2k</text>
+  <text x="725.5" y="88.0" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">Cost / trial</text>
+  <text x="725.5" y="104.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Lower is better</text>
+  <line x1="725.5" y1="114" x2="725.5" y2="178" stroke="#3d444d" stroke-width="1"/>
+  <path d="M726.5,120.0h39.2a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-39.2z" fill="#3987e5"/>
+  <text x="775.7" y="134.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">$1.20</text>
+  <path d="M726.5,152.0h102.5a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-102.5z" fill="#d95926"/>
+  <text x="839.0" y="166.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">$2.96</text>
+  <text x="16.0" y="208.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">The 20 tasks Codex finds easiest. Kraai ran each task twice; Codex numbers come from its published leaderboard run.</text>
+  </g>
+</svg>

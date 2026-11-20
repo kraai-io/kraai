@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="254" viewBox="0 0 900 254" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Idle terminal UI: memory and CPU</title>
+  <desc id="desc">Memory (RSS): Kraai 40 MB, Codex 0.167.0 274 MB, Claude Code 2.1.322 270 MB; CPU, first 30 s: Kraai 0.06 s, Codex 0.167.0 0.87 s, Claude Code 2.1.322 2.9 s; CPU while idle: Kraai 0.02%, Codex 0.167.0 0.8%, Claude Code 2.1.322 0.23%</desc>
+  <g style="font-variant-numeric: tabular-nums">
+  <text x="16.0" y="28.0" font-size="16" font-weight="600" fill="#f0f6fc" text-anchor="start">Idle terminal UI: memory and CPU</text>
+  <text x="16.0" y="50.0" font-size="13" font-weight="400" fill="#9198a1" text-anchor="start">Kraai&#x27;s terminal UI uses about a seventh of the memory of Codex or Claude Code.</text>
+  <text x="16.0" y="134.5" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">Kraai</text>
+  <text x="16.0" y="166.5" font-size="13" font-weight="400" fill="#f0f6fc" text-anchor="start">Codex 0.167.0</text>
+  <text x="16.0" y="198.5" font-size="13" font-weight="400" fill="#f0f6fc" text-anchor="start">Claude Code 2.1.322</text>
+  <text x="166.0" y="88.0" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">Memory (RSS)</text>
+  <text x="166.0" y="104.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Lower is better</text>
+  <line x1="166.0" y1="114" x2="166.0" y2="210" stroke="#3d444d" stroke-width="1"/>
+  <path d="M167.0,120.0h20.6a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-20.6z" fill="#3987e5"/>
+  <text x="197.6" y="134.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">40 MB</text>
+  <path d="M167.0,152.0h164.7a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-164.7z" fill="#d95926"/>
+  <text x="341.7" y="166.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">274 MB</text>
+  <path d="M167.0,184.0h162.2a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-162.2z" fill="#199e70"/>
+  <text x="339.2" y="198.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">270 MB</text>
+  <text x="414.7" y="88.0" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">CPU, first 30 s</text>
+  <text x="414.7" y="104.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Lower is better</text>
+  <line x1="414.7" y1="114" x2="414.7" y2="210" stroke="#3d444d" stroke-width="1"/>
+  <path d="M415.7,120.0h1.7a1.7448275862068965,1.7448275862068965 0 0 1 1.7448275862068965,1.7448275862068965v16.5a1.7448275862068965,1.7448275862068965 0 0 1 -1.7448275862068965,1.7448275862068965h-1.7z" fill="#3987e5"/>
+  <text x="425.2" y="134.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">0.06 s</text>
+  <path d="M415.7,152.0h46.6a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-46.6z" fill="#d95926"/>
+  <text x="472.3" y="166.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">0.87 s</text>
+  <path d="M415.7,184.0h164.7a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-164.7z" fill="#199e70"/>
+  <text x="590.3" y="198.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">2.9 s</text>
+  <text x="663.3" y="88.0" font-size="13" font-weight="600" fill="#f0f6fc" text-anchor="start">CPU while idle</text>
+  <text x="663.3" y="104.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Lower is better</text>
+  <line x1="663.3" y1="114" x2="663.3" y2="210" stroke="#3d444d" stroke-width="1"/>
+  <path d="M664.3,120.0h2.1a2.108333333333333,2.108333333333333 0 0 1 2.108333333333333,2.108333333333333v15.8a2.108333333333333,2.108333333333333 0 0 1 -2.108333333333333,2.108333333333333h-2.1z" fill="#3987e5"/>
+  <text x="674.5" y="134.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">0.02%</text>
+  <path d="M664.3,152.0h164.7a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-164.7z" fill="#d95926"/>
+  <text x="839.0" y="166.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">0.8%</text>
+  <path d="M664.3,184.0h44.5a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-44.5z" fill="#199e70"/>
+  <text x="718.8" y="198.5" font-size="12" font-weight="400" fill="#f0f6fc" text-anchor="start">0.23%</text>
+  <text x="16.0" y="240.0" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Median of three runs on Linux in a 200×50 tmux pane. Only each agent&#x27;s own processes count; MCP servers are left out.</text>
+  </g>
+</svg>
