@@ -10,7 +10,7 @@ permissions:
   contents: read
 concurrency:
   group: sandbox-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 jobs:
   test:
     strategy:
@@ -27,6 +27,7 @@ jobs:
       - uses: Swatinem/rust-cache@f4371d1ec7179bfbd04a82a81e3b3af7f720750f
         with:
           cache-on-failure: true
+          add-rust-environment-hash-key: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:

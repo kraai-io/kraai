@@ -93,6 +93,7 @@ jobs:
       - uses: Swatinem/rust-cache@f4371d1ec7179bfbd04a82a81e3b3af7f720750f # v2
         with:
           key: ${{ matrix.target }}
+          add-rust-environment-hash-key: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
         shell: bash
