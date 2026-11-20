@@ -45,9 +45,11 @@ pub fn run_host_process() -> i32 {
         }
     };
     #[cfg(target_os = "linux")]
-    if request.restrict_network
-        && let Err(error) = kraai_sandbox::restrict_network_after_startup()
-    {
+    if let Err(error) = match request.startup_restriction {
+        request::StartupRestriction::None => Ok(()),
+        request::StartupRestriction::Network => kraai_sandbox::restrict_network_after_startup(),
+        request::StartupRestriction::HostIpc => kraai_sandbox::restrict_host_ipc_after_startup(),
+    } {
         report_host_error(error);
         return 70;
     }

@@ -1,4 +1,5 @@
 mod failures;
+mod limits;
 mod routing;
 
 use super::forwarding::relay_response;
@@ -92,7 +93,7 @@ async fn parse_raw_request(raw: &[u8]) -> Result<ParsedRequest> {
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::credentials::codex_allowed_paths;
-use super::request::{MAX_HEADER_BYTES, find_header_end};
+use super::request::{MAX_HEADER_BYTES, find_header_end, read_request};
 use super::*;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -101,6 +102,7 @@ use kraai_provider_openai_codex::{OpenAiCodexAuthController, OpenAiCodexAuthCont
 use kraai_test_support::http;
 use reqwest::header::HeaderValue;
 use tokio::io::AsyncReadExt;
+use tokio::net::TcpStream;
 
 #[tokio::test]
 async fn listener_failure_drains_tasks_and_records_failed_requests() -> Result<()> {
@@ -125,6 +127,7 @@ async fn listener_failure_drains_tasks_and_records_failed_requests() -> Result<(
         client: Client::builder().redirect(Policy::none()).build()?,
         log: Arc::new(Mutex::new(File::create(root.join("proxy.events.jsonl"))?)),
         max_requests: 1,
+        limits: ConnectionLimits::default(),
         request_count: AtomicU64::new(0),
         started_requests: AtomicU64::new(0),
         metrics: Arc::clone(&metrics),
@@ -149,7 +152,12 @@ async fn listener_failure_drains_tasks_and_records_failed_requests() -> Result<(
         let mut upstream_ready = upstream_ready.clone();
         async move {
             if first {
-                listener.lock().await.accept().await
+                listener
+                    .lock()
+                    .await
+                    .accept()
+                    .await
+                    .map(|(stream, _)| stream)
             } else {
                 upstream_ready
                     .wait_for(|ready| *ready)
@@ -245,7 +253,7 @@ async fn proxy_injects_real_credential_streams_and_rejects_unallowed_requests() 
     fs::create_dir(&root)?;
     let log_path = root.join("proxy.events.jsonl");
     let proxy = ModelProxy::start(ProxyServerConfig {
-        listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        listen: ProxyListen::loopback(),
         upstream: format!("http://{upstream_address}"),
         credentials: UpstreamCredentials::OpenAiApiKey {
             credential: String::from("real-secret"),
@@ -257,6 +265,7 @@ async fn proxy_injects_real_credential_streams_and_rejects_unallowed_requests() 
         log_path: log_path.clone(),
         max_requests: 1,
         shutdown_drain_timeout: kraai_test_support::HANG_TIMEOUT,
+        limits: ConnectionLimits::default(),
     })?;
     let client = Client::new();
 
@@ -369,7 +378,7 @@ async fn finish_drains_in_flight_response_before_snapshotting_metrics() -> Resul
     fs::create_dir(&root)?;
     let log_path = root.join("proxy.events.jsonl");
     let proxy = ModelProxy::start(ProxyServerConfig {
-        listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        listen: ProxyListen::loopback(),
         upstream: format!("http://{upstream_address}"),
         credentials: UpstreamCredentials::OpenAiApiKey {
             credential: String::from("real-secret"),
@@ -381,6 +390,7 @@ async fn finish_drains_in_flight_response_before_snapshotting_metrics() -> Resul
         log_path: log_path.clone(),
         max_requests: 1,
         shutdown_drain_timeout: kraai_test_support::HANG_TIMEOUT,
+        limits: ConnectionLimits::default(),
     })?;
     let mut downstream = std::net::TcpStream::connect(proxy.address)?;
     downstream.write_all(
@@ -437,7 +447,7 @@ async fn rejected_requests_cannot_hide_model_calls_aborted_during_shutdown() -> 
     ));
     fs::create_dir(&root)?;
     let proxy = ModelProxy::start(ProxyServerConfig {
-        listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        listen: ProxyListen::loopback(),
         upstream: format!("http://{upstream_address}"),
         credentials: UpstreamCredentials::OpenAiApiKey {
             credential: String::from("real-secret"),
@@ -449,6 +459,7 @@ async fn rejected_requests_cannot_hide_model_calls_aborted_during_shutdown() -> 
         log_path: root.join("proxy.events.jsonl"),
         max_requests: 2,
         shutdown_drain_timeout: Duration::from_millis(50),
+        limits: ConnectionLimits::default(),
     })?;
     let client = Client::new();
     let rejected = client
@@ -510,7 +521,7 @@ async fn accounting_errors_preserve_measured_proxy_metrics() -> Result<()> {
         fs::create_dir(&root)?;
         let log_path = root.join("proxy.events.jsonl");
         let mut proxy = ModelProxy::start(ProxyServerConfig {
-            listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            listen: ProxyListen::loopback(),
             upstream: String::from("http://proxy-test.invalid"),
             credentials: UpstreamCredentials::OpenAiApiKey {
                 credential: String::from("real-secret"),
@@ -522,6 +533,7 @@ async fn accounting_errors_preserve_measured_proxy_metrics() -> Result<()> {
             log_path: log_path.clone(),
             max_requests: 1,
             shutdown_drain_timeout: kraai_test_support::HANG_TIMEOUT,
+            limits: ConnectionLimits::default(),
         })?;
         let rejected = Client::new()
             .get(format!("http://{}/v1/models", proxy.address))
@@ -570,6 +582,7 @@ async fn client_disconnect_still_records_usage_metrics_and_event() -> Result<()>
         client: Client::builder().redirect(Policy::none()).build()?,
         log: Arc::new(Mutex::new(File::create(&log_path)?)),
         max_requests: 1,
+        limits: ConnectionLimits::default(),
         request_count: AtomicU64::new(0),
         started_requests: AtomicU64::new(0),
         metrics: Arc::clone(&metrics),
@@ -742,7 +755,7 @@ async fn codex_proxy_keeps_subscription_tokens_outside_client_and_adds_account_h
     )?;
     let log_path = root.join("proxy.events.jsonl");
     let proxy = ModelProxy::start(ProxyServerConfig {
-        listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        listen: ProxyListen::loopback(),
         upstream: format!("http://{upstream_address}"),
         credentials: UpstreamCredentials::Codex {
             controller,
@@ -754,6 +767,7 @@ async fn codex_proxy_keeps_subscription_tokens_outside_client_and_adds_account_h
         log_path: log_path.clone(),
         max_requests: 1,
         shutdown_drain_timeout: kraai_test_support::HANG_TIMEOUT,
+        limits: ConnectionLimits::default(),
     })?;
     let response = Client::new()
         .post(format!("{}/codex/responses", proxy.base_url()))

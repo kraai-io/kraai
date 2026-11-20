@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 mod config;
+mod config_guard;
 mod error;
 mod output;
 mod output_capture;
@@ -18,7 +19,7 @@ pub use process::run;
 pub use process_spawn::{spawn_command, spawn_tokio_command};
 
 #[cfg(target_os = "linux")]
-pub use platform::linux::restrict_network_after_startup;
+pub use platform::linux::{restrict_host_ipc_after_startup, restrict_network_after_startup};
 
 #[cfg(all(test, target_os = "linux"))]
 use platform::linux::{

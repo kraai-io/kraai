@@ -12,19 +12,12 @@ use super::{
     ProxyState, UpstreamCredentials, constant_time_eq,
 };
 
-pub(super) async fn forward_request<W>(
-    stream: &mut W,
+pub(super) fn rejection(
     state: &ProxyState,
     request: &ParsedRequest,
-    outcome: &mut ForwardOutcome,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
+) -> Option<(u16, &'static str)> {
     if !state.allowed_paths.contains(&request.path) {
-        *outcome = ForwardOutcome::rejected(404);
-        write_error(stream, 404, "Not Found").await?;
-        return Ok(());
+        return Some((404, "Not Found"));
     }
     let authorized = request
         .headers
@@ -37,16 +30,24 @@ where
             )
         });
     if !authorized {
-        *outcome = ForwardOutcome::rejected(401);
-        write_error(stream, 401, "Unauthorized").await?;
-        return Ok(());
+        return Some((401, "Unauthorized"));
     }
+    if !matches!(request.method.as_str(), "GET" | "POST") {
+        return Some((405, "Method Not Allowed"));
+    }
+    None
+}
+
+pub(super) async fn forward_request<W>(
+    stream: &mut W,
+    state: &ProxyState,
+    request: &ParsedRequest,
+    outcome: &mut ForwardOutcome,
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
     let method = Method::from_bytes(request.method.as_bytes())?;
-    if !matches!(method, Method::GET | Method::POST) {
-        *outcome = ForwardOutcome::rejected(405);
-        write_error(stream, 405, "Method Not Allowed").await?;
-        return Ok(());
-    }
     if state.request_count.fetch_add(1, Ordering::Relaxed) >= state.max_requests {
         *outcome = ForwardOutcome::rejected(429);
         write_error(stream, 429, "Proxy Request Limit Exceeded").await?;

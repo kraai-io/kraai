@@ -112,10 +112,9 @@ pub async fn execute(
         startup_files,
         event_secret: secret,
         output_marker: output_marker.clone(),
-        restrict_network: !plan.capabilities.is_unsandboxed()
-            && !plan
-                .capabilities
-                .contains(kraai_execution_types::SandboxCapability::Network),
+        startup_restriction: crate::request::StartupRestriction::for_capabilities(
+            &plan.capabilities,
+        ),
     };
 
     let private_temp = plan.private_temp.reserve();
@@ -251,7 +250,10 @@ pub async fn execute(
                         let Some(started) = started else {
                             return std::future::pending::<()>().await;
                         };
-                        tokio::time::sleep_until(started + timeout).await;
+                        match started.checked_add(timeout) {
+                            Some(deadline) => tokio::time::sleep_until(deadline).await,
+                            None => std::future::pending::<()>().await,
+                        }
                     };
                     tokio::select! {
                         biased;

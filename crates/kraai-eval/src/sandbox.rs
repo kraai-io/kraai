@@ -2,8 +2,6 @@ use std::collections::BTreeMap;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(target_os = "linux")]
-use std::process::Command;
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, bail};
@@ -13,12 +11,20 @@ use crate::command::CommandOutcome;
 #[cfg(target_os = "linux")]
 use crate::command::run_trusted;
 
+mod bridge;
+#[cfg(target_os = "linux")]
+mod closure;
+
+pub(crate) use bridge::{BridgeMount, ProxyBridge};
+pub use bridge::{PROXY_BRIDGE_COMMAND, ProxyBridgeRequest, run_proxy_bridge};
+
 #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
 pub(crate) struct SandboxRequest {
     pub command: Vec<String>,
     pub workspace: PathBuf,
     pub timeout: Duration,
     pub network: NetworkPolicy,
+    pub proxy_bridge: Option<BridgeMount>,
     pub environment: BTreeMap<String, String>,
     pub extra_programs: Vec<PathBuf>,
     pub cargo_home: Option<PathBuf>,
@@ -297,7 +303,14 @@ fn build_args(request: &SandboxRequest) -> Result<Vec<String>> {
     executable_roots.dedup();
     let mut closure_roots = Vec::new();
     for program in &executable_roots {
-        closure_roots.extend(nix_runtime_closure(program)?);
+        closure_roots.extend(closure::runtime_roots(program)?);
+    }
+    if let Some(bridge) = &request.proxy_bridge {
+        if request.network != NetworkPolicy::Disabled {
+            bail!("the model proxy bridge only runs in a sandbox without network access");
+        }
+        closure_roots.extend(closure::linked_roots(&bridge.program)?);
+        args.extend(bridge.bind_args()?);
     }
     closure_roots.sort();
     closure_roots.dedup();
@@ -337,6 +350,9 @@ fn build_args(request: &SandboxRequest) -> Result<Vec<String>> {
         String::from("/workspace"),
         String::from("--"),
     ]);
+    if request.proxy_bridge.is_some() {
+        args.extend(BridgeMount::command_prefix());
+    }
     args.push(mounted_runner);
     args.extend(
         request
@@ -346,40 +362,6 @@ fn build_args(request: &SandboxRequest) -> Result<Vec<String>> {
             .map(|arg| arg.replace(&workspace.to_string_lossy().to_string(), "/workspace")),
     );
     Ok(args)
-}
-
-#[cfg(target_os = "linux")]
-fn nix_runtime_closure(program: &Path) -> Result<Vec<PathBuf>> {
-    if !program.starts_with("/nix/store") {
-        return Ok(Vec::new());
-    }
-    let nix_store = find_program("nix-store").ok_or_else(|| {
-        color_eyre::eyre::eyre!("nix-store is required to isolate a Nix runner closure")
-    })?;
-    let output = Command::new(nix_store)
-        .args(["--query", "--requisites"])
-        .arg(program)
-        .output()?;
-    if !output.status.success() {
-        bail!(
-            "failed to resolve runner Nix closure: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let mut roots = String::from_utf8(output.stdout)?
-        .lines()
-        .map(PathBuf::from)
-        .collect::<Vec<_>>();
-    if roots.is_empty()
-        || roots
-            .iter()
-            .any(|root| !root.starts_with("/nix/store") || !root.exists())
-    {
-        bail!("nix-store returned an invalid runner closure");
-    }
-    roots.sort();
-    roots.dedup();
-    Ok(roots)
 }
 
 #[cfg(target_os = "linux")]
@@ -452,6 +434,7 @@ mod tests {
             workspace: workspace.clone(),
             timeout: kraai_test_support::HANG_TIMEOUT,
             network: NetworkPolicy::Disabled,
+            proxy_bridge: None,
             environment: BTreeMap::new(),
             extra_programs: ["find", "xargs", "ls"]
                 .into_iter()
@@ -495,6 +478,7 @@ mod tests {
             workspace: workspace.clone(),
             timeout: kraai_test_support::HANG_TIMEOUT,
             network: NetworkPolicy::Disabled,
+            proxy_bridge: None,
             environment: BTreeMap::from([(
                 String::from("EVAL_PROXY_TOKEN"),
                 String::from("short-lived"),
@@ -536,6 +520,7 @@ mod tests {
             workspace: workspace.clone(),
             timeout: kraai_test_support::HANG_TIMEOUT,
             network: NetworkPolicy::Disabled,
+            proxy_bridge: None,
             environment: BTreeMap::new(),
             extra_programs: Vec::new(),
             cargo_home: None,
@@ -575,6 +560,7 @@ mod tests {
             workspace: workspace.clone(),
             timeout: kraai_test_support::HANG_TIMEOUT,
             network: NetworkPolicy::Disabled,
+            proxy_bridge: None,
             environment: BTreeMap::new(),
             extra_programs: Vec::new(),
             cargo_home: None,
@@ -599,6 +585,116 @@ mod tests {
             "sandbox stderr artifact was not persisted"
         );
         fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    fn runner_args(
+        network: NetworkPolicy,
+        proxy_bridge: Option<BridgeMount>,
+    ) -> Result<Option<Result<Vec<String>>>> {
+        let Some(shell) = find_program("sh") else {
+            return Ok(None);
+        };
+        if find_program("bwrap").is_none() {
+            return Ok(None);
+        }
+        let workspace = std::env::temp_dir().join(format!(
+            "kraai-eval-sandbox-network-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir_all(&workspace)?;
+        let args = build_args(&SandboxRequest {
+            command: vec![
+                shell.to_string_lossy().into_owned(),
+                String::from("-c"),
+                String::from("true"),
+            ],
+            workspace: workspace.clone(),
+            timeout: kraai_test_support::HANG_TIMEOUT,
+            network,
+            proxy_bridge,
+            environment: BTreeMap::new(),
+            extra_programs: Vec::new(),
+            cargo_home: None,
+            metrics_output: None,
+            script_executions_dir: None,
+            resource_limits: None,
+        });
+        fs::remove_dir_all(workspace)?;
+        Ok(Some(args))
+    }
+
+    fn sandboxed_command(args: &[String]) -> Result<&[String]> {
+        let separator = args
+            .iter()
+            .position(|arg| arg == "--")
+            .ok_or_else(|| color_eyre::eyre::eyre!("bwrap arguments have no command"))?;
+        Ok(args.get(separator + 1..).unwrap_or_default())
+    }
+
+    #[test]
+    fn disabled_network_reaches_only_the_model_proxy_bridge() -> Result<()> {
+        let Some(shell) = find_program("sh") else {
+            return Ok(());
+        };
+        let bridge = ProxyBridge::create(&shell)?;
+        let Some(args) = runner_args(NetworkPolicy::Disabled, Some(bridge.mount()))? else {
+            return Ok(());
+        };
+        let args = args?;
+        let binds = bridge.mount().bind_args()?;
+        let prefix = BridgeMount::command_prefix();
+        let command = sandboxed_command(&args)?;
+        ensure!(
+            args.iter().any(|arg| arg == "--unshare-net"),
+            "the runner shares the host network"
+        );
+        ensure!(
+            !args.iter().any(|arg| arg == "/etc/resolv.conf"),
+            "the offline runner received host name resolution"
+        );
+        ensure!(
+            args.windows(binds.len()).any(|window| window == binds),
+            "the bridge program or proxy socket directory is not mounted"
+        );
+        ensure!(
+            command.starts_with(&prefix)
+                && command
+                    .get(prefix.len())
+                    .is_some_and(|program| program.starts_with("/runner/")),
+            "the runner does not start behind the proxy bridge: {command:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn enabled_network_runs_the_runner_on_the_host_network() -> Result<()> {
+        let Some(args) = runner_args(NetworkPolicy::Enabled, None)? else {
+            return Ok(());
+        };
+        let args = args?;
+        let command = sandboxed_command(&args)?;
+        ensure!(
+            !args.iter().any(|arg| arg == "--unshare-net"),
+            "the networked runner lost host network access"
+        );
+        ensure!(
+            command
+                .first()
+                .is_some_and(|program| program.starts_with("/runner/")),
+            "the networked runner was wrapped: {command:?}"
+        );
+        let Some(shell) = find_program("sh") else {
+            return Ok(());
+        };
+        let bridge = ProxyBridge::create(&shell)?;
+        let Some(bridged) = runner_args(NetworkPolicy::Enabled, Some(bridge.mount()))? else {
+            return Ok(());
+        };
+        ensure!(
+            bridged.is_err(),
+            "the proxy bridge was accepted for a networked runner"
+        );
         Ok(())
     }
 }

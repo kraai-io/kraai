@@ -26,6 +26,7 @@ kraai-provider-openai-chat-completions = { workspace = true }
 kraai-provider-openai-codex = { workspace = true }
 kraai-sandbox = { workspace = true }
 kraai-types = { workspace = true }
+object = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -50,6 +50,7 @@ pub use records::{
     ControllerFailure, ProcessRecord, ProxyRecord, RunResult, RunStatus, SandboxRecord,
 };
 pub use runner::{RunRequest, run};
+pub use sandbox::{PROXY_BRIDGE_COMMAND, ProxyBridgeRequest, run_proxy_bridge};
 
 #[cfg(test)]
 fn eval_assets_directory() -> std::path::PathBuf {

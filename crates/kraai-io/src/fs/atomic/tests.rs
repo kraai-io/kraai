@@ -95,11 +95,19 @@ fn private_temporary_file_is_restricted_before_writing_credentials() -> io::Resu
     use std::os::unix::fs::PermissionsExt;
 
     let root = tempfile::tempdir()?;
-    let path = root.path().join("temporary");
-    let file = open_temporary(&path, &WriteMode::Private)?;
-    assert_eq!(file.metadata()?.permissions().mode() & 0o777, 0o600);
-    assert_eq!(file.metadata()?.len(), 0);
-    assert_eq!(path.metadata()?.permissions().mode() & 0o777, 0o600);
+    for (name, mode) in [
+        ("private", WriteMode::Private),
+        (
+            "preserved",
+            WriteMode::Preserve(Permissions::from_mode(0o644)),
+        ),
+    ] {
+        let path = root.path().join(name);
+        let file = open_temporary(&path, &mode)?;
+        assert_eq!(file.metadata()?.permissions().mode() & 0o777, 0o600);
+        assert_eq!(file.metadata()?.len(), 0);
+        assert_eq!(path.metadata()?.permissions().mode() & 0o777, 0o600);
+    }
     Ok(())
 }
 
@@ -204,5 +212,37 @@ async fn asynchronous_replacement_publishes_complete_file() -> io::Result<()> {
         .await?
         .into_result()?;
     assert_eq!(fs::read(nested)?, b"nested");
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn private_writes_get_a_protected_owner_only_acl_on_windows() -> io::Result<()> {
+    fn dacl(path: &Path) -> io::Result<String> {
+        let output = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(Get-Acl -LiteralPath $args[0]).Sddl",
+            ])
+            .arg(path)
+            .output()?;
+        let sddl = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        sddl.split_once("D:")
+            .map(|(_, dacl)| dacl.to_owned())
+            .ok_or_else(|| io::Error::other(format!("no DACL in {sddl:?}")))
+    }
+
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("private/credentials");
+    atomic_replace_private_in(root.path(), &path, b"secret")?.into_result()?;
+    atomic_replace_private(&path, b"new secret")?.into_result()?;
+    assert_eq!(fs::read(&path)?, b"new secret");
+    for (entry, flags) in [(root.path().join("private"), "OICI"), (path, "")] {
+        let dacl = dacl(&entry)?;
+        assert!(dacl.starts_with("P"), "{dacl} inherits from its parent");
+        assert_eq!(dacl.matches("(A;").count(), 2, "{dacl} has extra grants");
+        assert!(dacl.contains(&format!("(A;{flags};FA;;;SY)")), "{dacl}");
+    }
     Ok(())
 }

@@ -3208,6 +3208,7 @@ dependencies = [
  "kraai-sandbox",
  "kraai-test-support",
  "kraai-types",
+ "object",
  "reqwest",
  "serde",
  "serde_json",
@@ -3519,11 +3520,13 @@ name = "kraai-sandbox"
 version = "0.1.0"
 dependencies = [
  "kraai-execution-types",
+ "kraai-io",
  "kraai-test-support",
  "libc",
  "nix 0.31.3",
  "rand 0.10.3",
  "rustix 1.1.6",
+ "sha2 0.11.1",
  "tokio",
  "tokio-util",
  "windows-sys 0.61.2",

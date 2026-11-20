@@ -1,3 +1,5 @@
+#[path = "macos/escape.rs"]
+mod escape;
 #[path = "macos/sysctl.rs"]
 mod sysctl;
 
@@ -262,6 +264,12 @@ async fn network_capability_and_private_ipc_paths_are_enforced() {
         let denied_path = private_path.join("denied.sock");
         let private_listener = UnixListener::bind(&allowed_path).expect("private IPC listener");
         let denied_listener = UnixListener::bind(&denied_path).expect("unlisted Unix listener");
+        let host_path = PathBuf::from(format!(
+            "/tmp/kraai-host-{}-{network_allowed}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&host_path);
+        let host_listener = UnixListener::bind(&host_path).expect("host Unix listener");
         let tcp_listener = TcpListener::bind("127.0.0.1:0").expect("host TCP listener");
         let mut granted = vec![SandboxCapability::WorkspaceRead];
         if network_allowed {
@@ -314,6 +322,10 @@ async fn network_capability_and_private_ipc_paths_are_enforced() {
             .insert("KRAAI_PRIVATE_SOCKET".into(), allowed_path.into_os_string());
         plan.environment
             .insert("KRAAI_UNLISTED_SOCKET".into(), denied_path.into_os_string());
+        plan.environment.insert(
+            "KRAAI_HOST_SOCKET".into(),
+            host_path.clone().into_os_string(),
+        );
         successful_run(plan).await;
         private_listener
             .set_nonblocking(true)
@@ -327,6 +339,8 @@ async fn network_capability_and_private_ipc_paths_are_enforced() {
         assert_eq!(&bytes, b"ipc");
         assert!(!private_path.exists(), "private IPC temp survives exit");
         drop(denied_listener);
+        drop(host_listener);
+        let _ = std::fs::remove_file(host_path);
     }
 }
 
@@ -342,6 +356,13 @@ fn network_probe_child() {
     let tcp = TcpStream::connect_timeout(&address, HANG_TIMEOUT);
     let unlisted = UnixStream::connect(
         std::env::var_os("KRAAI_UNLISTED_SOCKET").expect("unlisted Unix probe path"),
+    );
+    let host =
+        UnixStream::connect(std::env::var_os("KRAAI_HOST_SOCKET").expect("host Unix probe path"))
+            .expect_err("sandbox must deny host Unix sockets");
+    assert!(
+        matches!(host.raw_os_error(), Some(libc::EPERM | libc::EACCES)),
+        "expected sandbox permission denial, got {host}"
     );
     if mode == "enabled" {
         tcp.expect("network capability permits TCP");

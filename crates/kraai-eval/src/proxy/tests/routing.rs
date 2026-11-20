@@ -109,7 +109,7 @@ async fn exercise_routing_round_trip(log_path: PathBuf) -> Result<()> {
     });
 
     let proxy = ModelProxy::start(ProxyServerConfig {
-        listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        listen: ProxyListen::loopback(),
         upstream: format!("http://{upstream_address}"),
         credentials: UpstreamCredentials::OpenAiApiKey {
             credential: String::from("upstream-secret"),
@@ -121,6 +121,7 @@ async fn exercise_routing_round_trip(log_path: PathBuf) -> Result<()> {
         log_path: log_path.clone(),
         max_requests: 2,
         shutdown_drain_timeout: kraai_test_support::HANG_TIMEOUT,
+        limits: ConnectionLimits::default(),
     })?;
     let client = Client::builder()
         .timeout(kraai_test_support::HANG_TIMEOUT)

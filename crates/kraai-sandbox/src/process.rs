@@ -11,6 +11,7 @@ use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{LaunchPlan, PreparedCommand};
+use crate::config_guard::ConfigGuard;
 use crate::error::SandboxError;
 use crate::output::{ExecutionOutput, OutputEvent, OutputStream, Termination};
 use crate::output_capture::OutputCapture;
@@ -23,6 +24,8 @@ pub async fn run(
     let timeout = plan.timeout;
     let process_spawned = plan.process_spawned.take();
     let execution_started = plan.execution_started.take();
+    let config_guard = ConfigGuard::applies_to(&plan.capabilities)
+        .then(|| ConfigGuard::capture(&plan.workspace_root));
     let mut command = prepare_command(plan).await?;
     let output = spawn_and_wait(
         &mut command,
@@ -32,8 +35,21 @@ pub async fn run(
         execution_started,
     )
     .await;
+    #[cfg(target_os = "macos")]
+    if let Some(run_marker) = command.run_marker.take() {
+        crate::platform::macos::members::terminate(run_marker).await?;
+    }
     #[cfg(windows)]
-    command.cleanup().await?;
+    let cleanup = command.cleanup().await;
+    if let Some(config_guard) = config_guard {
+        tokio::task::spawn_blocking(move || config_guard.restore())
+            .await
+            .map_err(|error| {
+                SandboxError::Wait(format!("configuration guard failed: {error}"))
+            })??;
+    }
+    #[cfg(windows)]
+    cleanup?;
     output
 }
 
@@ -53,6 +69,8 @@ async fn spawn_and_wait(
     let _private_temp = &command.private_temp;
     #[cfg(unix)]
     let mut process_group = process_group::ProcessGroup::new(child.id())?;
+    #[cfg(target_os = "macos")]
+    process_group.track_run(command.run_marker.clone());
     #[cfg(not(unix))]
     let mut process_group = ();
     let stdout = child.stdout.take().ok_or_else(|| {
@@ -89,7 +107,10 @@ async fn spawn_and_wait(
             },
             None => timeout_start,
         };
-        tokio::time::sleep_until(started + timeout).await;
+        match started.checked_add(timeout) {
+            Some(deadline) => tokio::time::sleep_until(deadline).await,
+            None => std::future::pending::<()>().await,
+        }
     };
     tokio::pin!(deadline);
     let mut termination = tokio::select! {
@@ -97,6 +118,8 @@ async fn spawn_and_wait(
             let status = status.map_err(|error| SandboxError::Wait(error.to_string()))?;
             #[cfg(unix)]
             process_group.kill()?;
+            #[cfg(target_os = "macos")]
+            process_group.kill_detached().await?;
             Termination::Exited { code: status.code() }
         }
         () = &mut deadline => {
@@ -282,6 +305,8 @@ async fn terminate_process_tree(
         .kill()
         .await
         .map_err(|error| SandboxError::Wait(error.to_string()))?;
+    #[cfg(target_os = "macos")]
+    process_group.kill_detached().await?;
     Ok(())
 }
 

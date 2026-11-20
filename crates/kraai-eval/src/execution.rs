@@ -92,10 +92,29 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
         None
     };
     set_progress(request, "starting credential proxy");
+    let proxy_bridge = match (&request.model_proxy, &task.runner.network) {
+        (Some(_), NetworkPolicy::Disabled) => {
+            let program = request.proxy_bridge.as_deref().ok_or_else(|| {
+                color_eyre::eyre::eyre!(
+                    "a model proxy for a task without network access needs a proxy bridge program"
+                )
+            })?;
+            Some(sandbox::ProxyBridge::create(program)?)
+        }
+        _ => None,
+    };
     let proxy = request
         .model_proxy
         .as_ref()
-        .map(|config| config.start(artifact_dir.join("proxy.events.jsonl")))
+        .map(|config| {
+            config.start(
+                artifact_dir.join("proxy.events.jsonl"),
+                proxy_bridge.as_ref().map_or_else(
+                    proxy::ProxyListen::loopback,
+                    sandbox::ProxyBridge::proxy_listen,
+                ),
+            )
+        })
         .transpose()?;
     let proxy_url = proxy.as_ref().map(proxy::ModelProxy::base_url);
     let provider_config_relative = if let Some(config) = provider_config {
@@ -134,11 +153,6 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
         "runner_started",
         serde_json::json!({"command": runner_command}),
     )?;
-    let runner_network = if proxy.is_some() {
-        NetworkPolicy::Enabled
-    } else {
-        task.runner.network.clone()
-    };
     set_progress(request, "running harness");
     let mut runner_environment = proxy.as_ref().map_or_else(
         std::collections::BTreeMap::new,
@@ -154,7 +168,8 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
         command: runner_command.clone(),
         workspace: agent_workspace.clone(),
         timeout: Duration::from_secs(task.runner.timeout_seconds),
-        network: runner_network.clone(),
+        network: task.runner.network.clone(),
+        proxy_bridge: proxy_bridge.as_ref().map(sandbox::ProxyBridge::mount),
         environment: runner_environment,
         extra_programs: rust_environment
             .map(|environment| environment.programs.clone())
@@ -225,6 +240,7 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
                 workspace: grading_workspace.clone(),
                 timeout: Duration::from_secs(command.timeout_seconds),
                 network: NetworkPolicy::Disabled,
+                proxy_bridge: None,
                 environment: std::collections::BTreeMap::new(),
                 extra_programs: rust_environment
                     .map(|environment| environment.programs.clone())
@@ -267,7 +283,7 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
         grader_sha256: grader_sha256.to_owned(),
         sandbox: SandboxRecord {
             backend: String::from("bubblewrap+systemd-cgroup-v2"),
-            network: runner_network,
+            network: task.runner.network.clone(),
             environment_cleared: true,
             max_memory_bytes: task.runner.max_memory_bytes,
             max_processes: task.runner.max_processes,

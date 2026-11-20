@@ -61,6 +61,7 @@ pub fn validate_task(path: &Path) -> Result<TaskValidation> {
                 workspace: workspace.to_path_buf(),
                 timeout: Duration::from_secs(command.timeout_seconds),
                 network: NetworkPolicy::Disabled,
+                proxy_bridge: None,
                 environment: std::collections::BTreeMap::new(),
                 extra_programs: rust
                     .as_ref()

@@ -15,7 +15,50 @@ pub(super) struct ParsedRequest {
     pub(super) body: Bytes,
 }
 
+pub(super) struct RequestHead {
+    pub(super) request: ParsedRequest,
+    content_length: usize,
+    buffered: Vec<u8>,
+}
+
+impl RequestHead {
+    fn missing_body_bytes(&self) -> u64 {
+        self.content_length.saturating_sub(self.buffered.len()) as u64
+    }
+
+    pub(super) async fn read_body(
+        mut self,
+        stream: &mut (impl AsyncRead + Unpin),
+    ) -> Result<ParsedRequest> {
+        let missing = self.missing_body_bytes();
+        let mut body = self.buffered;
+        body.truncate(self.content_length);
+        stream.take(missing).read_to_end(&mut body).await?;
+        if body.len() < self.content_length {
+            bail!("proxy client disconnected before request body completed");
+        }
+        self.request.body = body.into();
+        Ok(self.request)
+    }
+
+    pub(super) async fn discard_body(&self, stream: &mut (impl AsyncRead + Unpin)) -> Result<()> {
+        tokio::io::copy(
+            &mut stream.take(self.missing_body_bytes()),
+            &mut tokio::io::sink(),
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 pub(super) async fn read_request(stream: &mut (impl AsyncRead + Unpin)) -> Result<ParsedRequest> {
+    read_request_head(stream).await?.read_body(stream).await
+}
+
+pub(super) async fn read_request_head(
+    stream: &mut (impl AsyncRead + Unpin),
+) -> Result<RequestHead> {
     let mut bytes = Vec::new();
     let header_end = loop {
         if bytes.len() >= MAX_HEADER_BYTES {
@@ -93,26 +136,17 @@ pub(super) async fn read_request(stream: &mut (impl AsyncRead + Unpin)) -> Resul
         }
         headers.push((name, value));
     }
-    let body_start = header_end.saturating_add(4);
-    let mut body = bytes.get(body_start..).unwrap_or_default().to_vec();
-    if body.len() > content_length {
-        body.truncate(content_length);
-    }
-    if body.len() < content_length {
-        let missing = content_length - body.len();
-        let start = body.len();
-        body.resize(content_length, 0);
-        stream
-            .read_exact(body.get_mut(start..).unwrap_or_default())
-            .await?;
-        debug_assert_eq!(missing, content_length - start);
-    }
-    Ok(ParsedRequest {
-        method,
-        target,
-        path,
-        headers,
-        body: body.into(),
+    bytes.drain(..header_end.saturating_add(4).min(bytes.len()));
+    Ok(RequestHead {
+        request: ParsedRequest {
+            method,
+            target,
+            path,
+            headers,
+            body: Bytes::new(),
+        },
+        content_length,
+        buffered: bytes,
     })
 }
 

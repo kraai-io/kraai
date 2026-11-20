@@ -15,6 +15,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ,
 };
 
+use super::identity::Sid;
 use crate::SandboxError;
 
 const MAX_ACL_ENTRIES: usize = 65_536;
@@ -27,23 +28,13 @@ pub(super) enum Access {
 
 #[derive(Debug)]
 pub(super) struct Grants {
-    sid: Vec<u32>,
+    sid: Sid,
     files: Vec<File>,
     roots: Vec<PathBuf>,
 }
 
 impl Grants {
-    pub(super) fn new(bytes: Vec<u8>) -> Self {
-        let sid = bytes
-            .chunks(4)
-            .map(|chunk| {
-                let mut word = [0_u8; 4];
-                for (destination, source) in word.iter_mut().zip(chunk) {
-                    *destination = *source;
-                }
-                u32::from_ne_bytes(word)
-            })
-            .collect();
+    pub(super) fn new(sid: Sid) -> Self {
         Self {
             sid,
             files: Vec::new(),
@@ -53,41 +44,6 @@ impl Grants {
 
     pub(super) fn grant(&mut self, path: &Path, access: Access) -> Result<(), SandboxError> {
         self.grant_with_limit(path, access, MAX_ACL_ENTRIES)
-    }
-
-    /// Grants `access` below `path` for good: skipped when `path` already carries the inheritable
-    /// entry, and not revoked at cleanup. Files created later inherit the entry. `path` is granted
-    /// after everything below it, so its entry marks a completed walk.
-    pub(super) fn grant_persistent(
-        &mut self,
-        path: &Path,
-        access: Access,
-    ) -> Result<(), SandboxError> {
-        let _lock = super::mutation_lock::Lock::acquire()?;
-        let root =
-            handle::open_by_id(&open(path)?).map_err(|error| failure(path, &error.to_string()))?;
-        if mutation::grants(&root, &self.sid, access)? {
-            return Ok(());
-        }
-        let mut entries = 0;
-        let mut walked_root = None;
-        visit_tree(path, |file| {
-            if entries >= MAX_ACL_ENTRIES {
-                return Err(entry_limit(path, MAX_ACL_ENTRIES));
-            }
-            entries += 1;
-            handle::ensure_single_link(&file).map_err(|error| failure(path, &error.to_string()))?;
-            if walked_root.is_none() {
-                walked_root = Some(file);
-                return Ok(());
-            }
-            mutation::update(&file, &self.sid, Some(access))
-                .map_err(|error| failure(path, &error.to_string()))
-        })?;
-        let walked_root =
-            walked_root.ok_or_else(|| failure(path, "sandbox root was not visited"))?;
-        mutation::update(&walked_root, &self.sid, Some(access))
-            .map_err(|error| failure(path, &error.to_string()))
     }
 
     fn grant_with_limit(
@@ -143,6 +99,36 @@ impl Drop for Grants {
             let _ = self.cleanup();
         }
     }
+}
+
+/// Grants `sid` `access` below `path` for good: skipped when `path` already carries the
+/// inheritable entry, and not revoked at cleanup. Files created later inherit the entry. `path`
+/// is granted after everything below it, so its entry marks a completed walk.
+pub(super) fn grant_persistent(path: &Path, sid: &Sid, access: Access) -> Result<(), SandboxError> {
+    let _lock = super::mutation_lock::Lock::acquire()?;
+    let root =
+        handle::open_by_id(&open(path)?).map_err(|error| failure(path, &error.to_string()))?;
+    if mutation::grants(&root, sid, access)? {
+        return Ok(());
+    }
+    let mut entries = 0;
+    let mut walked_root = None;
+    visit_tree(path, |file| {
+        if entries >= MAX_ACL_ENTRIES {
+            return Err(entry_limit(path, MAX_ACL_ENTRIES));
+        }
+        entries += 1;
+        handle::ensure_single_link(&file).map_err(|error| failure(path, &error.to_string()))?;
+        if walked_root.is_none() {
+            walked_root = Some(file);
+            return Ok(());
+        }
+        mutation::update(&file, sid, Some(access))
+            .map_err(|error| failure(path, &error.to_string()))
+    })?;
+    let walked_root = walked_root.ok_or_else(|| failure(path, "sandbox root was not visited"))?;
+    mutation::update(&walked_root, sid, Some(access))
+        .map_err(|error| failure(path, &error.to_string()))
 }
 
 fn visit_tree(

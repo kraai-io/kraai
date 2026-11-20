@@ -123,6 +123,8 @@ pub(crate) struct PreparedCommand {
     pub(crate) private_ipc_handles: Vec<std::os::windows::io::OwnedHandle>,
     #[cfg(target_os = "linux")]
     pub(crate) seccomp_filter: Option<std::fs::File>,
+    #[cfg(target_os = "macos")]
+    pub(crate) run_marker: Option<String>,
 }
 
 impl PreparedCommand {
@@ -155,6 +157,8 @@ impl PreparedCommand {
             private_ipc_handles,
             #[cfg(target_os = "linux")]
             seccomp_filter: None,
+            #[cfg(target_os = "macos")]
+            run_marker: None,
         }
     }
 }

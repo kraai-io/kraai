@@ -14,6 +14,7 @@ fn fixture() -> Result<(PathBuf, ProxyState, ParsedRequest)> {
         client: Client::builder().redirect(Policy::none()).build()?,
         log: Arc::new(Mutex::new(File::create(root.join("proxy.events.jsonl"))?)),
         max_requests: 1,
+        limits: ConnectionLimits::default(),
         request_count: AtomicU64::new(0),
         started_requests: AtomicU64::new(0),
         metrics: Arc::new(Mutex::new(ProxyMetrics::default())),

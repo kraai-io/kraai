@@ -70,6 +70,7 @@ pub(super) fn run(
         })
         .transpose()?;
     let model_proxy = profile.model_proxy(provider_config.as_ref())?;
+    let proxy_bridge = std::env::current_exe()?;
     let progress = ProgressReporter::new();
     let display = ProgressDisplay::start(progress.clone());
     let model_label = harness.model_label();
@@ -91,6 +92,7 @@ pub(super) fn run(
                 artifact_path: task_dir.join(format!("attempt-{attempt}")),
                 staging_dir: staging.clone(),
                 model_proxy: model_proxy.clone(),
+                proxy_bridge: Some(proxy_bridge.clone()),
                 kraai_provider_config: provider_config.clone(),
                 progress: Some(progress.clone()),
             });

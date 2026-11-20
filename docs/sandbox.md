@@ -14,10 +14,17 @@ Windows has two limitations:
   remain blocked. This differs from Linux and macOS.
 
 Runtime roots on Windows must permit Kraai to update their access-control entries.
-Each workspace gets one AppContainer identity per access level. Its grants on the
-workspace and runtime roots are inheritable and kept, so only the first run in a
-workspace walks its files; files moved in later with their own explicit permissions
-are not covered.
+Every launch runs in its own AppContainer, created for that launch and deleted
+when it ends. Its private temporary directory is granted to that AppContainer
+alone, so concurrent launches can't read each other's temporary files.
+Access to the workspace, the linked worktree's Git directory and runtime roots
+goes to capabilities derived from each path and access level instead. Those
+entries are inheritable and kept, so only the first launch that uses a path walks
+its files. A launch only carries the capabilities for the paths its own policy
+grants, so entries left on other paths give it nothing. Files moved in later with
+their own explicit permissions are not covered.
+Kraai deletes AppContainer profiles left behind by launches that crashed the next
+time it starts a sandbox.
 `no-sandbox` disables sandbox enforcement; Kraai never selects it automatically
 when a capability is unsupported.
 
@@ -35,7 +42,28 @@ Move the workspace to a supported filesystem and update it through
 `RuntimeHandle::set_workspace_dir`, or start a new session from the new
 directory.
 
-On macOS, Kraai terminates the execution's process group on completion, timeout,
-cancellation, or dropped execution. Processes that deliberately detach into another
-process group or session can survive. Seatbelt filesystem and network restrictions
-remain attached to those processes.
+On macOS, Kraai kills the execution's process group on completion, timeout,
+cancellation, or dropped execution. A process can leave that group with `setsid` or a
+double fork, but it cannot drop the Seatbelt profile it inherited. Each run's profile
+allows a Mach lookup of a random name no other run uses. Kraai then asks the sandbox
+which processes allow that lookup, kills them, and repeats until a pass finds none.
+Other runs and unsandboxed processes are not touched. If sandboxed processes are
+still alive after 5 seconds, the execution fails before Kraai undoes changes to
+`.kraai/` or `AGENTS.md`.
+
+Sandboxed scripts cannot change the workspace's `.kraai/` directory or its
+`AGENTS.md`. `.kraai/agents.toml` decides the permissions of later scripts, and
+`AGENTS.md` becomes model instructions on the next turn. On Linux the existing
+entries and the files their symlinks point to are mounted read-only, and on macOS
+Seatbelt denies writes to them. Kraai never creates either entry itself. If a script
+creates one or replaces a symlink, Kraai undoes that after the script exits. Windows
+has no read-only mount, so Kraai also restores `.kraai/agents.toml` and `AGENTS.md`
+there. Ask for `no-sandbox` when a script needs to edit them.
+
+With the `network` capability, scripts still cannot connect to Unix sockets that were
+created outside the sandbox, such as D-Bus, the systemd user manager, SSH and GPG
+agents, Docker, or the Nix daemon. Sockets the script creates itself keep working.
+On Linux this uses Landlock ABI 9 or newer; on older kernels Kraai refuses to run
+network scripts in the sandbox, and only `no-sandbox` can reach the network. On
+macOS only sockets inside the private temporary directory, a writable workspace, and
+the DNS resolver are reachable.

@@ -63,7 +63,7 @@ fn acl_setup_does_not_require_file_content_access() -> Result<(), Box<dyn std::e
         File::open(&file).err().map(|error| error.kind()),
         Some(std::io::ErrorKind::PermissionDenied)
     );
-    let mut grants = Grants::new(identity.sid.bytes());
+    let mut grants = Grants::new(identity.sid.clone());
     for access in [Access::Read, Access::Write] {
         grants.grant(&root, access)?;
         assert_eq!(grants.files.len(), 2);
@@ -90,7 +90,7 @@ fn hard_link_grants_are_rejected_before_mutation() -> Result<(), Box<dyn std::er
     let link = workspace.join("link");
     std::fs::write(&external, b"host data")?;
     std::fs::hard_link(&external, &link)?;
-    let mut grants = Grants::new(identity.sid.bytes());
+    let mut grants = Grants::new(identity.sid.clone());
     for access in [Access::Read, Access::Write] {
         let result = grants.grant(&link, access);
         assert!(
@@ -145,7 +145,7 @@ fn retained_grants_allow_renaming_existing_directories() -> Result<(), Box<dyn s
     let moved = root.join("moved");
     std::fs::create_dir_all(original.join("nested"))?;
     std::fs::write(original.join("nested/file"), b"content")?;
-    let mut grants = Grants::new(identity.sid.bytes());
+    let mut grants = Grants::new(identity.sid.clone());
     grants.grant(&original, Access::Write)?;
     std::fs::rename(&original, &moved)?;
     std::fs::rename(moved.join("nested"), moved.join("renamed"))?;
@@ -168,7 +168,7 @@ fn entry_limit_preserves_cleanup_of_partial_grants() -> Result<(), Box<dyn std::
     for name in ["one", "two", "three"] {
         std::fs::write(root.join(name), b"content")?;
     }
-    let mut grants = Grants::new(identity.sid.bytes());
+    let mut grants = Grants::new(identity.sid.clone());
     let result = grants.grant_with_limit(&root, Access::Read, 2);
     assert!(
         matches!(result, Err(SandboxError::SandboxUnavailable(message)) if message.contains("ACL entry limit (2) exceeded"))
@@ -182,6 +182,13 @@ fn entry_limit_preserves_cleanup_of_partial_grants() -> Result<(), Box<dyn std::
     Ok(())
 }
 
+fn test_capability() -> Result<Sid, Box<dyn std::error::Error>> {
+    super::super::identity::capability(&format!("kraai.test.{:032x}", rand::random::<u128>()))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Windows returned no capability SID".into())
+}
+
 #[test]
 #[expect(
     clippy::panic_in_result_fn,
@@ -190,6 +197,7 @@ fn entry_limit_preserves_cleanup_of_partial_grants() -> Result<(), Box<dyn std::
 fn persistent_grants_are_applied_once_and_kept() -> Result<(), Box<dyn std::error::Error>> {
     let _fixtures = lock_fixtures()?;
     let identity = super::super::identity::Identity::create()?;
+    let capability = test_capability()?;
     let root = std::env::temp_dir().join(format!(
         "kraai-acl-persistent-{:032x}",
         rand::random::<u128>()
@@ -199,29 +207,34 @@ fn persistent_grants_are_applied_once_and_kept() -> Result<(), Box<dyn std::erro
     let pinned = || -> Result<File, Box<dyn std::error::Error>> {
         Ok(super::handle::open_by_id(&super::open(&root)?)?)
     };
-    let mut grants = Grants::new(identity.sid.bytes());
     assert!(!super::mutation::grants(
         &pinned()?,
-        &grants.sid,
+        &capability,
         Access::Read
     )?);
-    grants.grant_persistent(&root, Access::Read)?;
-    assert!(grants.files.is_empty());
+    grant_persistent(&root, &capability, Access::Read)?;
     assert!(super::mutation::grants(
         &pinned()?,
-        &grants.sid,
+        &capability,
         Access::Read
     )?);
     assert!(!super::mutation::grants(
         &pinned()?,
-        &grants.sid,
+        &capability,
         Access::Write
     )?);
-    grants.grant_persistent(&root, Access::Read)?;
+    assert!(!super::mutation::grants(
+        &pinned()?,
+        &identity.sid,
+        Access::Read
+    )?);
+    grant_persistent(&root, &capability, Access::Read)?;
+    let mut grants = Grants::new(identity.sid.clone());
+    grants.grant(&root, Access::Read)?;
     grants.cleanup()?;
     assert!(super::mutation::grants(
         &pinned()?,
-        &grants.sid,
+        &capability,
         Access::Read
     )?);
     std::fs::remove_dir_all(root)?;
@@ -235,7 +248,7 @@ fn persistent_grants_are_applied_once_and_kept() -> Result<(), Box<dyn std::erro
 )]
 fn failed_persistent_grant_leaves_the_root_unmarked() -> Result<(), Box<dyn std::error::Error>> {
     let _fixtures = lock_fixtures()?;
-    let identity = super::super::identity::Identity::create()?;
+    let capability = test_capability()?;
     let root = std::env::temp_dir().join(format!(
         "kraai-acl-persistent-failure-{:032x}",
         rand::random::<u128>()
@@ -250,21 +263,20 @@ fn failed_persistent_grant_leaves_the_root_unmarked() -> Result<(), Box<dyn std:
     let pinned = || -> Result<File, Box<dyn std::error::Error>> {
         Ok(super::handle::open_by_id(&super::open(&workspace)?)?)
     };
-    let mut grants = Grants::new(identity.sid.bytes());
-    let result = grants.grant_persistent(&workspace, Access::Read);
+    let result = grant_persistent(&workspace, &capability, Access::Read);
     assert!(
         matches!(result, Err(SandboxError::SandboxUnavailable(message)) if message.contains("multiple hard links"))
     );
     assert!(!super::mutation::grants(
         &pinned()?,
-        &grants.sid,
+        &capability,
         Access::Read
     )?);
     std::fs::remove_file(link)?;
-    grants.grant_persistent(&workspace, Access::Read)?;
+    grant_persistent(&workspace, &capability, Access::Read)?;
     assert!(super::mutation::grants(
         &pinned()?,
-        &grants.sid,
+        &capability,
         Access::Read
     )?);
     std::fs::remove_dir_all(root)?;

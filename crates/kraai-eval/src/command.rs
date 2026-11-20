@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Context, Result, bail};
+use kraai_io::read::read_prefix;
 
 use crate::temporary_directory::TemporaryDirectory;
 
@@ -105,13 +106,15 @@ fn run_trusted_with_environment_inheritance(
             thread::sleep(Duration::from_millis(10));
         };
         let duration = started.elapsed();
+        let (stdout, stderr, truncated) =
+            read_captured_output(&stdout_path, &stderr_path, MAX_CAPTURED_OUTPUT_BYTES)?;
         Ok(CommandOutcome {
             command: command.to_vec(),
             exit_code: status.code(),
-            stdout: fs::read(stdout_path)?,
-            stderr: fs::read(stderr_path)?,
+            stdout,
+            stderr,
             timed_out,
-            output_limit_exceeded,
+            output_limit_exceeded: output_limit_exceeded || truncated,
             duration,
         })
     })
@@ -205,6 +208,79 @@ mod tests {
         );
         Ok(())
     }
+
+    const SPARSE_BYTES: u64 = 1 << 40;
+
+    #[test]
+    fn captured_output_reads_share_one_limit_regardless_of_sparse_file_size() -> Result<()> {
+        with_temporary_log_root(|root| {
+            let stdout = root.join("stdout");
+            let stderr = root.join("stderr");
+            fs::write(&stdout, b"out")?;
+            fs::write(&stderr, b"err")?;
+            ensure!(
+                read_captured_output(&stdout, &stderr, 6)?
+                    == (b"out".to_vec(), b"err".to_vec(), false)
+            );
+            ensure!(
+                read_captured_output(&stdout, &stderr, 5)?
+                    == (b"out".to_vec(), b"er".to_vec(), true)
+            );
+
+            File::options()
+                .write(true)
+                .open(&stderr)?
+                .set_len(SPARSE_BYTES)?;
+            let (out, err, truncated) = read_captured_output(&stdout, &stderr, 1024)?;
+            ensure!(out == b"out" && err.len() == 1021 && truncated);
+
+            File::options()
+                .write(true)
+                .open(&stdout)?
+                .set_len(SPARSE_BYTES)?;
+            let (out, err, truncated) = read_captured_output(&stdout, &stderr, 1024)?;
+            ensure!(out.len() == 1024 && err.is_empty() && truncated);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn sparse_output_marks_the_output_limit_exceeded() -> Result<()> {
+        let truncate = std::env::var_os("PATH")
+            .and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|directory| directory.join("truncate"))
+                    .find(|candidate| candidate.is_file())
+            })
+            .ok_or_else(|| color_eyre::eyre::eyre!("test requires truncate"))?;
+        let command = vec![
+            truncate.to_string_lossy().into_owned(),
+            String::from("-s"),
+            SPARSE_BYTES.to_string(),
+            String::from("/dev/stdout"),
+        ];
+
+        let outcome = run_trusted(&command, Path::new("/"), kraai_test_support::HANG_TIMEOUT)?;
+
+        ensure!(outcome.output_limit_exceeded && !outcome.success());
+        ensure!(outcome.stdout.len() as u64 <= MAX_CAPTURED_OUTPUT_BYTES);
+        Ok(())
+    }
+}
+
+fn read_captured_output(
+    stdout: &Path,
+    stderr: &Path,
+    limit: u64,
+) -> Result<(Vec<u8>, Vec<u8>, bool)> {
+    let stdout = read_prefix(File::open(stdout)?, limit)?;
+    let remaining = limit.saturating_sub(stdout.bytes.len() as u64);
+    let stderr = read_prefix(File::open(stderr)?, remaining)?;
+    Ok((
+        stdout.bytes,
+        stderr.bytes,
+        stdout.truncated || stderr.truncated,
+    ))
 }
 
 fn file_size(path: &Path) -> u64 {

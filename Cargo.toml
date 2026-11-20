@@ -148,6 +148,11 @@ nu-engine = "=0.117.0"
 nu-experimental = "=0.117.0"
 nu-parser = "=0.117.0"
 nu-protocol = "=0.117.0"
+object = { version = "0.37.3", default-features = false, features = [
+  "elf",
+  "read_core",
+  "std",
+] }
 rand = "0.10.2"
 ratatui = { version = "0.30.2", features = [
   "all-widgets",

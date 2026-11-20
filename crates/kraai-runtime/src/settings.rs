@@ -101,7 +101,7 @@ pub(crate) async fn write_settings_document(
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     kraai_io::fs::create_dir_all_async(directory).await?;
-    kraai_io::fs::atomic_replace_async(path, toml_string.as_bytes())
+    kraai_io::fs::atomic_replace_private_async(path, toml_string.as_bytes())
         .await?
         .into_result()
         .map_err(Into::into)

@@ -36,9 +36,10 @@ pub fn serve_model_proxy(request: ProxyServiceRequest) -> Result<()> {
         fs::set_permissions(&request.state_dir, fs::Permissions::from_mode(0o700))?;
     }
     let state_dir = request.state_dir.canonicalize()?;
-    let proxy = request
-        .model_proxy
-        .start_at(state_dir.join("proxy.events.jsonl"), request.listen_address)?;
+    let proxy = request.model_proxy.start(
+        state_dir.join("proxy.events.jsonl"),
+        super::ProxyListen::Tcp(request.listen_address),
+    )?;
     let mut identity = serde_json::to_value(proxy.record())?;
     if let Some(identity) = identity.as_object_mut() {
         identity.remove("credential_fingerprint");

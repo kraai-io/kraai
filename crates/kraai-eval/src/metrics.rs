@@ -2,13 +2,18 @@ use std::fs;
 use std::path::Path;
 
 use color_eyre::eyre::{Context, Result, bail};
+use kraai_io::read::{ReadLimitError, read_bounded};
 use serde::{Deserialize, Serialize};
 
 pub use kraai_headless::{HarnessMetrics, UsageMetrics};
 
+const MAX_HARNESS_METRICS_BYTES: u64 = 8 * 1024 * 1024;
+
 pub(crate) fn load_harness_metrics(path: &Path) -> Result<Option<HarnessMetrics>> {
-    let contents =
-        fs::read(path).wrap_err_with(|| format!("read harness metrics {}", path.display()))?;
+    let contents = fs::File::open(path)
+        .map_err(ReadLimitError::from)
+        .and_then(|file| read_bounded(file, MAX_HARNESS_METRICS_BYTES))
+        .wrap_err_with(|| format!("read harness metrics {}", path.display()))?;
     if contents.iter().all(u8::is_ascii_whitespace) {
         return Ok(None);
     }
@@ -161,6 +166,28 @@ mod tests {
         color_eyre::eyre::ensure!(metrics.request_costs_complete);
         color_eyre::eyre::ensure!(serde_json::to_value(&metrics)? == emitted);
         fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_sparse_metrics_past_the_limit_without_reading_them() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "kraai-eval-sparse-metrics-{}",
+            ulid::Ulid::generate()
+        ));
+        fs::create_dir(&root)?;
+        let path = root.join("harness-metrics.json");
+        fs::File::create(&path)?.set_len(1 << 40)?;
+        let error = load_harness_metrics(&path)
+            .err()
+            .ok_or_else(|| color_eyre::eyre::eyre!("oversized metrics were accepted"))?;
+        fs::remove_dir_all(root)?;
+        color_eyre::eyre::ensure!(matches!(
+            error.downcast_ref::<ReadLimitError>(),
+            Some(ReadLimitError::Exceeded {
+                limit: MAX_HARNESS_METRICS_BYTES
+            })
+        ));
         Ok(())
     }
 }
