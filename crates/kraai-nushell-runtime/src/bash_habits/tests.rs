@@ -1,4 +1,4 @@
-use super::{BashRewrite, rewrite_bash_habits};
+use super::rewrite_bash_habits;
 use crate::StartupFile;
 
 fn rewrite(script: &str) -> Option<String> {
@@ -251,7 +251,7 @@ fn routed_programs_report_the_caret() {
     let rewrite = rewrite_bash_habits("find . -name x", &every_command(), &[]);
     assert_eq!(
         rewrite,
-        Some(BashRewrite {
+        Some(super::BashRewrite {
             source: String::from("^find . -name x"),
             changes: vec![String::from("`find` → `^find`")],
         })

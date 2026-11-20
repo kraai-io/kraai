@@ -135,13 +135,15 @@ fn permission_probe() {
         );
     }
     for name in [".git", ".jj", ".kraai", ".agents", ".codex"] {
+        let guarded = cfg!(target_os = "macos") && name == ".kraai" && !enabled("UNSANDBOXED");
+        let writable = enabled("WRITE") && !guarded;
         if std::path::Path::new(name).is_file() {
             assert_eq!(
                 std::fs::write(name, "updated control file").is_ok(),
-                enabled("WRITE"),
+                writable,
                 "{name}: update file"
             );
-            if !enabled("WRITE") {
+            if !writable {
                 continue;
             }
             std::fs::remove_file(name).expect("remove existing control file");
@@ -149,24 +151,24 @@ fn permission_probe() {
         if !std::path::Path::new(name).exists() {
             assert_eq!(
                 std::fs::write(name, "new control file").is_ok(),
-                enabled("WRITE"),
+                writable,
                 "{name}: create file"
             );
-            if enabled("WRITE") {
+            if writable {
                 std::fs::remove_file(name).expect("remove control file");
             }
             assert_eq!(
                 std::fs::create_dir(name).is_ok(),
-                enabled("WRITE"),
+                writable,
                 "{name}: create directory"
             );
         }
         assert_eq!(
             std::fs::write(std::path::Path::new(name).join("new"), "content").is_ok(),
-            enabled("WRITE"),
+            writable,
             "{name}: write content"
         );
-        if enabled("WRITE") {
+        if writable {
             let renamed = format!("moved-{name}");
             std::fs::rename(name, &renamed).expect("rename control directory");
             std::fs::remove_dir_all(renamed).expect("remove control directory");

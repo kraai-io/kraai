@@ -70,9 +70,14 @@ async fn successful_run(plan: LaunchPlan) -> ExecutionOutput {
 }
 
 #[tokio::test]
-async fn timeout_bounds_detached_output_capture() {
+async fn detached_output_holders_end_with_the_script() {
     for mode in ["both", "stderr"] {
-        super::process::detached_output(mode, SandboxCapability::WorkspaceWrite, false).await;
+        super::process::detached_output(
+            mode,
+            SandboxCapability::WorkspaceWrite,
+            Termination::Exited { code: Some(0) },
+        )
+        .await;
     }
 }
 
