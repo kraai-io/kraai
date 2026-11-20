@@ -5,10 +5,10 @@
   </picture>
 </p>
 
-Kraai is a next-gen (coding) harness.
+Kraai is a lightweight, cost-efficient AI agent harness.
 
-It keeps the model's context minimal: a short system prompt, a few tools, and
-nothing the model doesn't need.
+It gets there with a short system prompt, a few tools, and intentional context
+management, not with tricks that make the model worse.
 
 ---
 
@@ -39,25 +39,18 @@ Current priorities, in order:
 Kraai and Codex on the same 20 Terminal-Bench 4 tasks, both running
 `gpt-6-astra` at low reasoning effort:
 
-<!-- The charts mirror the tables below. Regenerate them with `python3 assets/readme/charts.py`. -->
+<!-- The chart numbers live in assets/readme/charts.py. Regenerate the charts with `python3 assets/readme/charts.py`. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/terminal-bench-dark.svg">
   <img alt="Bar charts comparing Kraai and Codex 0.151.0 on 20 Terminal-Bench 4 tasks: tasks passed 90% vs 94%, input tokens per trial 486k vs 1.63M, output tokens per trial 6.7k vs 13.2k, cost per trial $1.20 vs $2.96." src="assets/readme/terminal-bench-light.svg" width="900">
 </picture>
 
-| | Passed | Input tokens / trial | Output tokens / trial | Cost / trial |
-| --- | --- | --- | --- | --- |
-| Kraai | 36 / 40 | 486k | 6.7k | $1.20 |
-| Codex 0.151.0 | 94 / 100 | 1.63M | 13.2k | $2.96 |
+These are the 20 tasks Codex finds easiest, so they say nothing about the hard
+half of the benchmark. Codex passes 94% of them but only 51% of all 66.
 
-Kraai passes about as many tasks while reading 70% fewer input tokens and
-writing half the output, for 40% of the cost.
-
-Some caveats. These are the 20 tasks Codex finds easiest, so the subset says
-nothing about the hard half of the benchmark. Codex passes 94% of them but 51%
-of all 66. Kraai ran each task twice. The Codex numbers come from
-its [published leaderboard run](https://hub.harborframework.com/jobs/a538f69d-7756-444a-9dfe-43a0ab10b3a8),
-filtered to the same tasks. Input tokens include cache reads, and cost is an
+Kraai ran each task twice and passed 36 of 40 trials. The Codex numbers are 94
+of 100 trials from its [published leaderboard run](https://hub.harborframework.com/jobs/a538f69d-7756-444a-9dfe-43a0ab10b3a8),
+filtered to the same tasks. Input tokens include cache reads. Cost is an
 estimate at API prices ($10/M input, $1/M cached input, $50/M output).
 
 ---
@@ -71,15 +64,9 @@ Each agent's terminal UI, started fresh in the same repo and left idle:
   <img alt="Bar charts comparing idle terminal UIs: memory 40 MB for Kraai, 274 MB for Codex 0.167.0 and 270 MB for Claude Code 2.1.322; CPU in the first 30 seconds 0.06 s, 0.87 s and 2.9 s; CPU while idle 0.02%, 0.8% and 0.23%." src="assets/readme/resources-light.svg" width="900">
 </picture>
 
-| | Memory (RSS) | CPU, first 30 s | CPU while idle |
-| --- | --- | --- | --- |
-| Kraai | 40 MB | 0.06 s | 0.02% |
-| Codex 0.167.0 | 274 MB | 0.87 s | 0.8% |
-| Claude Code 2.1.322 | 270 MB | 2.9 s | 0.23% |
-
-Each number is the median of three runs on Linux, in a 200×50 tmux pane, with
-the idle CPU measured over 60 seconds. Only each agent's own processes count;
-MCP servers it starts are left out.
+Each number is the median of three runs on Linux in a 200×50 tmux pane, with
+idle CPU measured over 60 seconds. Only each agent's own processes count, not
+the MCP servers it starts.
 
 ---
 
@@ -109,8 +96,8 @@ Run `just check` before pushing.
 `kraai-eval` runs an agent on a benchmark and grades the result. The in-house
 benchmark's tasks in `evals/tasks` are Git repos with hidden tests the agent
 never sees. Terminal-Bench 4 runs through [Harbor](https://harborframework.com).
-Every model request goes through a local proxy that records its tokens. It
-needs Linux, plus Docker for Terminal-Bench.
+Every model request goes through a local proxy that records its tokens.
+`kraai-eval` needs Linux, plus Docker for Terminal-Bench.
 
 ```sh
 just eval run in-house --model gpt-6-astra --reasoning low --tasks 3 --attempts 5 --price-input 10 --price-output 50 --price-cache-read 1

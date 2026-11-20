@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="222" viewBox="0 0 900 222" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="192" viewBox="0 0 900 192" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">Terminal-Bench 4: 20 tasks, gpt-6-astra at low reasoning</title>
   <desc id="desc">Tasks passed: Kraai 90%, Codex 0.151.0 94%; Input tokens / trial: Kraai 486k, Codex 0.151.0 1.63M; Output tokens / trial: Kraai 6.7k, Codex 0.151.0 13.2k; Cost / trial: Kraai $1.20, Codex 0.151.0 $2.96</desc>
   <g style="font-variant-numeric: tabular-nums">
@@ -34,6 +34,5 @@
   <text x="775.7" y="134.5" font-size="12" font-weight="400" fill="#1f2328" text-anchor="start">$1.20</text>
   <path d="M726.5,152.0h102.5a4,4 0 0 1 4,4v12.0a4,4 0 0 1 -4,4h-102.5z" fill="#eb6834"/>
   <text x="839.0" y="166.5" font-size="12" font-weight="400" fill="#1f2328" text-anchor="start">$2.96</text>
-  <text x="16.0" y="208.0" font-size="11" font-weight="400" fill="#59636e" text-anchor="start">The 20 tasks Codex finds easiest. Kraai ran each task twice; Codex numbers come from its published leaderboard run.</text>
   </g>
 </svg>

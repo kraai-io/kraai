@@ -1,6 +1,7 @@
 """Draws the README benchmark charts as light and dark SVGs.
 
-The numbers mirror the tables in README.md; update both together, then run
+The README charts read their numbers only from this file. After a new run,
+edit them, update any README prose that quotes them, then run
 `python3 assets/readme/charts.py` from the repository root.
 """
 
@@ -52,7 +53,6 @@ class Figure:
     name: str
     title: str
     summary: str
-    note: str
     rows: list[Row]
     panels: list[Panel]
 
@@ -63,8 +63,6 @@ FIGURES = [
         title="Terminal-Bench 4: 20 tasks, gpt-6-astra at low reasoning",
         summary="Kraai passes about as many tasks while reading 70% fewer input tokens, "
         "writing half the output, at 40% of the cost.",
-        note="The 20 tasks Codex finds easiest. Kraai ran each task twice; Codex numbers "
-        "come from its published leaderboard run.",
         rows=[Row("Kraai", "Kraai"), Row("Codex", "Codex 0.151.0")],
         panels=[
             Panel("Tasks passed", "Higher is better", [36 / 40, 94 / 100], ["90%", "94%"], 1),
@@ -77,8 +75,6 @@ FIGURES = [
         name="resources",
         title="Idle terminal UI: memory and CPU",
         summary="Kraai's terminal UI uses about a seventh of the memory of Codex or Claude Code.",
-        note="Median of three runs on Linux in a 200×50 tmux pane. Only each agent's own "
-        "processes count; MCP servers are left out.",
         rows=[
             Row("Kraai", "Kraai"),
             Row("Codex", "Codex 0.167.0"),
@@ -126,8 +122,7 @@ def render(figure: Figure, theme: dict[str, str]) -> str:
     bar_room = panel_width - VALUE_ROOM
     bars_top = 120
     bars_height = len(figure.rows) * BAR + (len(figure.rows) - 1) * BAR_GAP
-    note_y = bars_top + bars_height + 36
-    height = note_y + 14
+    height = bars_top + bars_height + 20
 
     parts = [
         text(PAD, 28, figure.title, 16, theme["text"], 600),
@@ -153,7 +148,6 @@ def render(figure: Figure, theme: dict[str, str]) -> str:
             parts.append(f'<path d="{bar_path(x + 1, y, length)}" fill="{theme[row.tool]}"/>')
             parts.append(text(x + 1 + max(length, 2) + 6, y + BAR / 2 + 4.5, label, 12, theme["text"]))
 
-    parts.append(text(PAD, note_y, figure.note, 11, theme["muted"]))
     description = "; ".join(
         f"{panel.title}: "
         + ", ".join(f"{row.label} {label}" for row, label in zip(figure.rows, panel.labels))
