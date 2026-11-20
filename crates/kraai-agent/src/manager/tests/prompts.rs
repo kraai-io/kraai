@@ -46,11 +46,7 @@ async fn discovery_warnings_are_reported_once_until_they_change() -> Result<()> 
     assert_eq!(skipped(&repeated), 0);
     manager.complete_message(&repeated.message_id).await?;
 
-    tokio::fs::write(
-        &skill_path,
-        "---\nname: broken\ndescription: Fixed.\n---\n",
-    )
-    .await?;
+    tokio::fs::write(&skill_path, "---\nname: broken\ndescription: Fixed.\n---\n").await?;
     let fixed = manager
         .prepare_continuation_stream(&session_id)
         .await?
