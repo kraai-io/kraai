@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "left": {
+    "suite_id": "01M3PTNJS0AKFYJV3GGB1TQTJ7",
+    "harness_name": "kraai-compare16",
+    "runner_version": "sha256:f0aaa64253960d89dfd7526e60d0d735620bd1959f525141beae232df2b0d359",
+    "model_label": "gpt-5.6-sol-low"
+  },
+  "right": {
+    "suite_id": "01M3PTHVKAH1ZFCZDXNAAF46YY",
+    "harness_name": "codex-compare16",
+    "runner_version": "sha256:038534b037b02cbfb8669279a538ec8c970833d54ae255dc0871a0036e189c5f",
+    "model_label": "gpt-5.6-sol-low"
+  },
+  "paired_runs": 1,
+  "evaluated_pairs": 1,
+  "invalid_pairs": 0,
+  "left_passed": 1,
+  "right_passed": 1,
+  "left_success_rate": 1.0,
+  "right_success_rate": 1.0,
+  "left_wins": 0,
+  "right_wins": 0,
+  "ties": 1,
+  "wall_time_ms": {
+    "samples": 1,
+    "left_total": 83876,
+    "right_total": 100835,
+    "left_mean": 83876.0,
+    "right_mean": 100835.0
+  },
+  "runner_time_ms": {
+    "samples": 1,
+    "left_total": 82856,
+    "right_total": 100280,
+    "left_mean": 82856.0,
+    "right_mean": 100280.0
+  },
+  "total_tokens": {
+    "samples": 1,
+    "left_total": 63425,
+    "right_total": 107680,
+    "left_mean": 63425.0,
+    "right_mean": 107680.0
+  },
+  "usage": {
+    "uncached_input_tokens": {
+      "samples": 1,
+      "left_total": 13458,
+      "right_total": 24641,
+      "left_mean": 13458.0,
+      "right_mean": 24641.0
+    },
+    "cache_read_tokens": {
+      "samples": 1,
+      "left_total": 46464,
+      "right_total": 79360,
+      "left_mean": 46464.0,
+      "right_mean": 79360.0
+    },
+    "output_tokens": {
+      "samples": 1,
+      "left_total": 2914,
+      "right_total": 2981,
+      "left_mean": 2914.0,
+      "right_mean": 2981.0
+    },
+    "reasoning_tokens": {
+      "samples": 1,
+      "left_total": 589,
+      "right_total": 698,
+      "left_mean": 589.0,
+      "right_mean": 698.0
+    },
+    "proxy_requests": {
+      "samples": 1,
+      "left_total": 8,
+      "right_total": 8,
+      "left_mean": 8.0,
+      "right_mean": 8.0
+    }
+  },
+  "request_metrics": {
+    "estimated_cost_nanousd": {
+      "samples": 1,
+      "left_total": 142477600,
+      "right_total": 203888000,
+      "left_mean": 142477600.0,
+      "right_mean": 203888000.0
+    },
+    "cost_basis_mismatches": 0,
+    "peak_context_tokens": {
+      "samples": 1,
+      "left_total": 12294,
+      "right_total": 16463,
+      "left_mean": 12294.0,
+      "right_mean": 16463.0
+    },
+    "last_context_tokens": {
+      "samples": 1,
+      "left_total": 12294,
+      "right_total": 16463,
+      "left_mean": 12294.0,
+      "right_mean": 16463.0
+    },
+    "context_paired_runs": 1,
+    "left_input_tokens": 59922,
+    "right_input_tokens": 104001,
+    "left_context_requests": 7,
+    "right_context_requests": 8,
+    "left_mean_context_tokens": 8560.285714285714,
+    "right_mean_context_tokens": 13000.125
+  },
+  "both_passed": 1,
+  "both_passed_efficiency": {
+    "wall_time_ms": {
+      "samples": 1,
+      "left_total": 83876,
+      "right_total": 100835,
+      "left_mean": 83876.0,
+      "right_mean": 100835.0
+    },
+    "runner_time_ms": {
+      "samples": 1,
+      "left_total": 82856,
+      "right_total": 100280,
+      "left_mean": 82856.0,
+      "right_mean": 100280.0
+    },
+    "total_tokens": {
+      "samples": 1,
+      "left_total": 63425,
+      "right_total": 107680,
+      "left_mean": 63425.0,
+      "right_mean": 107680.0
+    },
+    "usage": {
+      "uncached_input_tokens": {
+        "samples": 1,
+        "left_total": 13458,
+        "right_total": 24641,
+        "left_mean": 13458.0,
+        "right_mean": 24641.0
+      },
+      "cache_read_tokens": {
+        "samples": 1,
+        "left_total": 46464,
+        "right_total": 79360,
+        "left_mean": 46464.0,
+        "right_mean": 79360.0
+      },
+      "output_tokens": {
+        "samples": 1,
+        "left_total": 2914,
+        "right_total": 2981,
+        "left_mean": 2914.0,
+        "right_mean": 2981.0
+      },
+      "reasoning_tokens": {
+        "samples": 1,
+        "left_total": 589,
+        "right_total": 698,
+        "left_mean": 589.0,
+        "right_mean": 698.0
+      },
+      "proxy_requests": {
+        "samples": 1,
+        "left_total": 8,
+        "right_total": 8,
+        "left_mean": 8.0,
+        "right_mean": 8.0
+      }
+    },
+    "request_metrics": {
+      "estimated_cost_nanousd": {
+        "samples": 1,
+        "left_total": 142477600,
+        "right_total": 203888000,
+        "left_mean": 142477600.0,
+        "right_mean": 203888000.0
+      },
+      "cost_basis_mismatches": 0,
+      "peak_context_tokens": {
+        "samples": 1,
+        "left_total": 12294,
+        "right_total": 16463,
+        "left_mean": 12294.0,
+        "right_mean": 16463.0
+      },
+      "last_context_tokens": {
+        "samples": 1,
+        "left_total": 12294,
+        "right_total": 16463,
+        "left_mean": 12294.0,
+        "right_mean": 16463.0
+      },
+      "context_paired_runs": 1,
+      "left_input_tokens": 59922,
+      "right_input_tokens": 104001,
+      "left_context_requests": 7,
+      "right_context_requests": 8,
+      "left_mean_context_tokens": 8560.285714285714,
+      "right_mean_context_tokens": 13000.125
+    }
+  },
+  "runs": [
+    {
+      "task_id": "repository-repair",
+      "attempt": 0,
+      "left_status": "passed",
+      "right_status": "passed",
+      "outcome": "tie"
+    }
+  ]
+}

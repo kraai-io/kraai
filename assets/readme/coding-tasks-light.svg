@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="282" viewBox="0 0 900 282" font-family="'SF Pro Display', -apple-system, BlinkMacSystemFont, Inter, 'Segoe UI', sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Kraai and Codex CLI on three coding tasks both passed</title>
+  <desc id="desc">53% fewer tokens: Kraai 159.6k, Codex CLI 0.159.0 338.6k. 28% lower estimated cost: Kraai $0.47, Codex CLI 0.159.0 $0.66.</desc>
+  <defs><linearGradient id="kraai" x1="0" y1="0" x2="1" y2="0"><stop offset="0.00" stop-color="#3f4fe6"/><stop offset="0.50" stop-color="#7a52f0"/><stop offset="1.00" stop-color="#c246d6"/></linearGradient><linearGradient id="kraai-text" x1="0" y1="0" x2="1" y2="1"><stop offset="0.00" stop-color="#3f4fe6"/><stop offset="0.50" stop-color="#7a52f0"/><stop offset="1.00" stop-color="#c246d6"/></linearGradient><radialGradient id="halo" cx="0.5" cy="0" r="0.8"><stop offset="0" stop-color="#7b6cff" stop-opacity="0.1"/><stop offset="1" stop-color="#7b6cff" stop-opacity="0"/></radialGradient><filter id="glow" x="-30%" y="-150%" width="160%" height="400%"><feGaussianBlur stdDeviation="9"/></filter></defs>
+  <g style="font-variant-numeric: tabular-nums">
+  <rect x="0.5" y="0.5" width="899" height="281" rx="20" fill="#fbfbfd" stroke="#e5e5ea"/>
+  <rect x="0.5" y="0.5" width="899" height="281" rx="20" fill="url(#halo)"/>
+  <text x="44.0" y="104.0" font-size="68" font-weight="700" fill="url(#kraai-text)" letter-spacing="-2.5">53%</text>
+  <text x="44.0" y="134.0" font-size="15" font-weight="500" fill="#1d1d1f" letter-spacing="-0.2">fewer tokens</text>
+  <text x="44.0" y="170.0" font-size="12" font-weight="600" fill="#1d1d1f">Kraai</text>
+  <rect x="44.0" y="178.0" width="145.2" height="20" rx="10.0" fill="url(#kraai)" opacity="0.35" filter="url(#glow)"/>
+  <rect x="44.0" y="178.0" width="145.2" height="20" rx="10.0" fill="url(#kraai)"/>
+  <text x="199.2" y="193.0" font-size="14" font-weight="600" fill="#1d1d1f" letter-spacing="-0.2">159.6k</text>
+  <text x="44.0" y="220.0" font-size="12" font-weight="400" fill="#6e6e73">Codex CLI 0.159.0</text>
+  <rect x="44.0" y="228.0" width="308.0" height="20" rx="10.0" fill="#d2d2d7"/>
+  <text x="362.0" y="243.0" font-size="14" font-weight="400" fill="#6e6e73" letter-spacing="-0.2">338.6k</text>
+  <text x="472.0" y="104.0" font-size="68" font-weight="700" fill="url(#kraai-text)" letter-spacing="-2.5">28%</text>
+  <text x="472.0" y="134.0" font-size="15" font-weight="500" fill="#1d1d1f" letter-spacing="-0.2">lower estimated cost</text>
+  <text x="472.0" y="170.0" font-size="12" font-weight="600" fill="#1d1d1f">Kraai</text>
+  <rect x="472.0" y="178.0" width="222.2" height="20" rx="10.0" fill="url(#kraai)" opacity="0.35" filter="url(#glow)"/>
+  <rect x="472.0" y="178.0" width="222.2" height="20" rx="10.0" fill="url(#kraai)"/>
+  <text x="704.2" y="193.0" font-size="14" font-weight="600" fill="#1d1d1f" letter-spacing="-0.2">$0.47</text>
+  <text x="472.0" y="220.0" font-size="12" font-weight="400" fill="#6e6e73">Codex CLI 0.159.0</text>
+  <rect x="472.0" y="228.0" width="308.0" height="20" rx="10.0" fill="#d2d2d7"/>
+  <text x="790.0" y="243.0" font-size="14" font-weight="400" fill="#6e6e73" letter-spacing="-0.2">$0.66</text>
+  </g>
+</svg>
