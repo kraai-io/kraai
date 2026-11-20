@@ -5,10 +5,10 @@
   </picture>
 </p>
 
-Kraai is a next-gen (coding) harness.
+Kraai is a lightweight, cost-efficient AI agent harness.
 
-It keeps the model's context minimal: a short system prompt, a few tools, and
-nothing the model doesn't need.
+It gets there with a short system prompt, a few tools, and intentional context
+management, not with tricks that make the model worse.
 
 ---
 
@@ -96,8 +96,8 @@ Run `just check` before pushing.
 `kraai-eval` runs an agent on a benchmark and grades the result. The in-house
 benchmark's tasks in `evals/tasks` are Git repos with hidden tests the agent
 never sees. Terminal-Bench 4 runs through [Harbor](https://harborframework.com).
-Every model request goes through a local proxy that records its tokens. It
-needs Linux, plus Docker for Terminal-Bench.
+Every model request goes through a local proxy that records its tokens.
+`kraai-eval` needs Linux, plus Docker for Terminal-Bench.
 
 ```sh
 just eval run in-house --model gpt-6-astra --reasoning low --tasks 3 --attempts 5 --price-input 10 --price-output 50 --price-cache-read 1
