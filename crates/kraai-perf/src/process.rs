@@ -109,6 +109,7 @@ pub(crate) fn read_error(path: &Path) -> Result<String> {
 
 struct Worker {
     child: Child,
+    #[cfg_attr(not(unix), expect(dead_code))]
     termination_grace: Duration,
 }
 

@@ -10427,6 +10427,7 @@ rec {
             name = "object";
             packageId = "object";
             usesDefaultFeatures = false;
+            target = { target, features }: ("linux" == target."os" or null);
             features = [ "elf" "read_core" "std" ];
           }
           {

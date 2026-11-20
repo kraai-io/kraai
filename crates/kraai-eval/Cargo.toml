@@ -26,7 +26,6 @@ kraai-provider-openai-chat-completions = { workspace = true }
 kraai-provider-openai-codex = { workspace = true }
 kraai-sandbox = { workspace = true }
 kraai-types = { workspace = true }
-object = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -37,6 +36,9 @@ toml = { workspace = true }
 ulid = { workspace = true }
 unicode-width = { workspace = true }
 webbrowser = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+object = { workspace = true }
 
 [dev-dependencies]
 kraai-test-support = { workspace = true }
