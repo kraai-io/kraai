@@ -24,6 +24,5 @@ export function wordmark(className: string): string {
   return decorative(kraaiWordmark, className);
 }
 
-export function symbol(className: string): string {
-  return decorative(kraaiSymbol, className);
-}
+/** The Kraai symbol's SVG source, for drawing it some other way. */
+export const kraaiSymbolSource = kraaiSymbol;

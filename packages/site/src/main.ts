@@ -1,24 +1,18 @@
 import "@fontsource-variable/inter";
 import "./style.css";
-import { renderFigure } from "./charts.ts";
-import { symbol, wordmark } from "./logos.ts";
-import { startMotion } from "./motion.ts";
+import { renderNumbers } from "./charts.ts";
+import { mountDither, shapeFromSvg } from "./dither.ts";
 import { setUpDownloads } from "./downloads.ts";
-import { codingTasks, resources, terminalBench, type Figure } from "./stats.ts";
+import { kraaiSymbolSource, wordmark } from "./logos.ts";
+import { startMotion } from "./motion.ts";
+import { figures } from "./stats.ts";
 
-const FIGURES: Record<string, Figure> = { resources, codingTasks, terminalBench };
+for (const slot of document.querySelectorAll<HTMLElement>("[data-wordmark]")) slot.innerHTML = wordmark("wordmark");
+document.querySelector("[data-numbers]")?.insertAdjacentHTML("beforeend", renderNumbers(figures));
 
-for (const slot of document.querySelectorAll<HTMLElement>("[data-wordmark]")) slot.innerHTML = wordmark("wordmark-svg");
-for (const slot of document.querySelectorAll<HTMLElement>("[data-symbol]")) slot.innerHTML = symbol("symbol-svg");
-
-for (const card of document.querySelectorAll<HTMLElement>("[data-figure]")) {
-  const figure = FIGURES[card.dataset.figure ?? ""];
-  if (!figure) continue;
-  const html = renderFigure(figure);
-  const caption = card.querySelector("figcaption");
-  if (caption) caption.insertAdjacentHTML("beforebegin", html);
-  else card.insertAdjacentHTML("beforeend", html);
-}
+const canvas = document.querySelector<HTMLCanvasElement>("[data-dither]");
+const hero = document.querySelector<HTMLElement>("[data-hero]");
+if (canvas && hero) mountDither(canvas, shapeFromSvg(kraaiSymbolSource), hero);
 
 setUpTheme();
 setUpDownloads();
