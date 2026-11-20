@@ -93,7 +93,8 @@ fn prepare_inner(
     if let Some(git_dir) = &git_dir {
         filesystem::check(git_dir)?;
     }
-    let identity = Identity::for_workspace(&plan.workspace_root, writable)?;
+    identity::sweep_stale_profiles_once();
+    let identity = Identity::create()?;
     let mut capabilities = identity::capability("registryRead")?;
     if plan.capabilities.contains(SandboxCapability::Network) {
         for name in [
@@ -105,21 +106,27 @@ fn prepare_inner(
             capabilities.extend(identity::capability(name)?);
         }
     }
-    let mut grants = Grants::new(identity.sid.bytes());
-    for root in runtime_roots {
-        grants.grant_persistent(&root, Access::Read)?;
+    let workspace_access = if writable {
+        Access::Write
+    } else {
+        Access::Read
+    };
+    let persistent = runtime_roots
+        .iter()
+        .map(|root| ("root", root.as_path(), Access::Read))
+        .chain([("ws", plan.workspace_root.as_path(), workspace_access)])
+        .chain(
+            git_dir
+                .as_deref()
+                .map(|git_dir| ("git", git_dir, Access::Write)),
+        );
+    for (kind, path, access) in persistent {
+        for sid in identity::path_capability(kind, path, access)? {
+            acl::grant_persistent(path, &sid, access)?;
+            capabilities.push(sid);
+        }
     }
-    grants.grant_persistent(
-        &plan.workspace_root,
-        if writable {
-            Access::Write
-        } else {
-            Access::Read
-        },
-    )?;
-    if let Some(git_dir) = &git_dir {
-        grants.grant_persistent(git_dir, Access::Write)?;
-    }
+    let mut grants = Grants::new(identity.sid.clone());
     grants.grant(&temp_path, Access::Write)?;
     plan.environment
         .retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("LOCALAPPDATA"));

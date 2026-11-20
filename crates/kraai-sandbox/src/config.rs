@@ -27,6 +27,11 @@ pub struct LaunchPlan {
     pub private_ipc_connect_descriptors: Vec<std::os::fd::RawFd>,
     #[cfg(unix)]
     pub private_ipc_connect_paths: Vec<PathBuf>,
+    /// The executable calls [`crate::restrict_host_ipc_after_startup`] once it holds its host
+    /// connection, so a Linux network plan keeps it away from host Unix sockets. Without
+    /// it, the plan can reach host sockets that its mounts expose.
+    #[cfg(target_os = "linux")]
+    pub restricts_host_ipc: bool,
 }
 
 impl LaunchPlan {
@@ -54,6 +59,8 @@ impl LaunchPlan {
             private_ipc_connect_descriptors: Vec::new(),
             #[cfg(unix)]
             private_ipc_connect_paths: Vec::new(),
+            #[cfg(target_os = "linux")]
+            restricts_host_ipc: false,
         }
     }
 
@@ -123,6 +130,8 @@ pub(crate) struct PreparedCommand {
     pub(crate) private_ipc_handles: Vec<std::os::windows::io::OwnedHandle>,
     #[cfg(target_os = "linux")]
     pub(crate) seccomp_filter: Option<std::fs::File>,
+    #[cfg(target_os = "macos")]
+    pub(crate) run_marker: Option<String>,
 }
 
 impl PreparedCommand {
@@ -155,6 +164,8 @@ impl PreparedCommand {
             private_ipc_handles,
             #[cfg(target_os = "linux")]
             seccomp_filter: None,
+            #[cfg(target_os = "macos")]
+            run_marker: None,
         }
     }
 }

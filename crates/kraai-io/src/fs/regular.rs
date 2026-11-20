@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::Path;
 
@@ -79,21 +79,33 @@ pub fn read_regular_text_file(path: &Path) -> io::Result<String> {
 }
 
 pub fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    optional(fs::read(path))
+    optional(
+        open_regular_file(path, FinalSymlinkPolicy::Follow).and_then(|mut file| {
+            let mut contents = Vec::new();
+            file.read_to_end(&mut contents)?;
+            Ok(contents)
+        }),
+    )
 }
 
 pub fn read_optional_text(path: &Path) -> io::Result<Option<String>> {
-    optional(fs::read_to_string(path))
+    optional(read_regular_text_file(path))
 }
 
 #[cfg(feature = "async")]
 pub async fn read_optional_async(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    optional(tokio::fs::read(path).await)
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || read_optional(&path))
+        .await
+        .map_err(io::Error::other)?
 }
 
 #[cfg(feature = "async")]
 pub async fn read_optional_text_async(path: &Path) -> io::Result<Option<String>> {
-    optional(tokio::fs::read_to_string(path).await)
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || read_optional_text(&path))
+        .await
+        .map_err(io::Error::other)?
 }
 
 fn optional<T>(result: io::Result<T>) -> io::Result<Option<T>> {
@@ -111,6 +123,7 @@ fn optional<T>(result: io::Result<T>) -> io::Result<Option<T>> {
 )]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn optional_reads_only_treat_missing_paths_as_absent() {
@@ -129,6 +142,31 @@ mod tests {
         assert_eq!(
             read_regular_text_file(&path).unwrap_err().kind(),
             io::ErrorKind::InvalidData
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn optional_reads_follow_symlinks_but_reject_special_files() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("real"), b"inside").unwrap();
+        symlink("real", root.path().join("link")).unwrap();
+        assert_eq!(
+            read_optional_text(&root.path().join("link")).unwrap(),
+            Some(String::from("inside"))
+        );
+        symlink("/dev/zero", root.path().join("zero")).unwrap();
+        assert_eq!(
+            read_optional(&root.path().join("zero")).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        let fifo = root.path().join("fifo");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+        assert_eq!(
+            read_optional_text(&fifo).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
         );
     }
 

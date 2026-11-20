@@ -19,6 +19,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     DELETE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
 };
 
+use super::super::identity::Sid;
 use super::Access;
 
 use crate::SandboxError;
@@ -30,7 +31,7 @@ impl Drop for Allocation {
     }
 }
 
-pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result<(), SandboxError> {
+pub(super) fn update(file: &File, sid: &Sid, access: Option<Access>) -> Result<(), SandboxError> {
     let mut dacl = ptr::null_mut();
     let mut descriptor = ptr::null_mut();
     let result = unsafe {
@@ -67,7 +68,7 @@ pub(super) fn update(file: &File, sid: &[u32], access: Option<Access>) -> Result
                 MultipleTrusteeOperation: 0,
                 TrusteeForm: TRUSTEE_IS_SID,
                 TrusteeType: TRUSTEE_IS_UNKNOWN,
-                ptstrName: sid.as_ptr().cast_mut().cast(),
+                ptstrName: sid.as_ptr().cast(),
             },
         };
         let entries = [entry];
@@ -153,7 +154,7 @@ fn mask(access: Access) -> u32 {
 }
 
 /// Whether `file` already has an inheritable entry allowing `sid` at least `access`.
-pub(super) fn grants(file: &File, sid: &[u32], access: Access) -> Result<bool, SandboxError> {
+pub(super) fn grants(file: &File, sid: &Sid, access: Access) -> Result<bool, SandboxError> {
     let mut dacl = ptr::null_mut();
     let mut descriptor = ptr::null_mut();
     let result = unsafe {
@@ -212,7 +213,7 @@ pub(super) fn grants(file: &File, sid: &[u32], access: Access) -> Result<bool, S
         let ace_sid = unsafe { ace.cast::<u8>().add(8) }.cast();
         if granted & needed == needed
             && unsafe { IsValidSid(ace_sid) } != 0
-            && unsafe { EqualSid(ace_sid, sid.as_ptr().cast_mut().cast()) } != 0
+            && unsafe { EqualSid(ace_sid, sid.as_ptr()) } != 0
         {
             return Ok(true);
         }
@@ -220,7 +221,7 @@ pub(super) fn grants(file: &File, sid: &[u32], access: Access) -> Result<bool, S
     Ok(false)
 }
 
-fn without_sid(dacl: *mut ACL, sid: &[u32]) -> Result<(Vec<u32>, bool), SandboxError> {
+fn without_sid(dacl: *mut ACL, sid: &Sid) -> Result<(Vec<u32>, bool), SandboxError> {
     let mut info = ACL_SIZE_INFORMATION::default();
     if unsafe {
         GetAclInformation(
@@ -256,7 +257,7 @@ fn without_sid(dacl: *mut ACL, sid: &[u32]) -> Result<(Vec<u32>, bool), SandboxE
             if unsafe { IsValidSid(ace_sid) } == 0 {
                 return Err(error("validate DACL entry SID"));
             }
-            if unsafe { EqualSid(ace_sid, sid.as_ptr().cast_mut().cast()) } != 0 {
+            if unsafe { EqualSid(ace_sid, sid.as_ptr()) } != 0 {
                 if unsafe { DeleteAce(copy, index) } == 0 {
                     return Err(error("remove sandbox DACL entry"));
                 }

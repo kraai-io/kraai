@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from fixtures import Fixture
 from kraai_harbor.archive import validate_bundle
-from kraai_harbor.metrics import codex_usage, populate_context
+from kraai_harbor.metrics import METRICS_LIMIT, codex_usage, populate_context
 from kraai_harbor.proxy import TrialProxy
 from kraai_harbor.run import build_command, validate_requested_tasks
 from kraai_harbor.spec import RunnerSpec
@@ -173,15 +173,86 @@ class MetricsTests(Fixture):
             + "\n"
         )
         self.assertEqual(
-            codex_usage(path),
-            {
-                "total_tokens": 150,
-                "input_tokens": 70,
-                "cache_read_tokens": 50,
-                "output_tokens": 20,
-                "reasoning_tokens": 10,
-            },
+            codex_usage(self.root, "runner.stdout.jsonl"),
+            (
+                {
+                    "total_tokens": 150,
+                    "input_tokens": 70,
+                    "cache_read_tokens": 50,
+                    "output_tokens": 20,
+                    "reasoning_tokens": 10,
+                },
+                True,
+            ),
         )
+
+    def test_agent_metrics_symlinks_are_rejected_anywhere_in_the_path(self):
+        logs = self.root / "logs"
+        logs.mkdir()
+        secret = self.root / "secret.json"
+        secret.write_text(json.dumps({"usage": {"total_tokens": 1}, "secret": "x"}))
+        (logs / "kraai-metrics.json").symlink_to(secret)
+        with self.assertRaises(OSError):
+            populate_context(logs, SimpleNamespace(), self.root / "controller")
+        (logs / "kraai-metrics.json").unlink()
+        (logs / "kraai-metrics.json").mkdir()
+        with self.assertRaisesRegex(ValueError, "regular file"):
+            populate_context(logs, SimpleNamespace(), self.root / "controller")
+        linked = self.root / "linked-logs"
+        linked.symlink_to(self.root)
+        with self.assertRaises(OSError):
+            populate_context(linked, SimpleNamespace(), self.root / "controller")
+        (self.root / "runner.stdout.jsonl").symlink_to(secret)
+        with self.assertRaises(OSError):
+            codex_usage(self.root, "runner.stdout.jsonl")
+        with self.assertRaisesRegex(ValueError, "Invalid artifact path"):
+            codex_usage(self.root, "../secret.json")
+
+    def test_agent_metrics_keep_only_known_fields_and_respect_the_size_limit(self):
+        usage = {
+            "total_tokens": 3,
+            "input_tokens": 2,
+            "cache_read_tokens": 0,
+            "output_tokens": 1,
+            "reasoning_tokens": 0,
+        }
+        (self.root / "kraai-metrics.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "turns": "many",
+                    "request_costs": {"leak": "x" * 1024},
+                    "usage": dict(usage, leaked="secret", cache_write_tokens=-1),
+                }
+            )
+        )
+        context = SimpleNamespace()
+        populate_context(self.root, context, self.root / "controller")
+        self.assertEqual(
+            context.metadata["kraai_eval"]["harness"],
+            {"schema_version": 1, "usage": usage},
+        )
+        self.assertEqual(context.n_input_tokens, 2)
+        with (self.root / "kraai-metrics.json").open("r+b") as stream:
+            stream.truncate(64 * 1024 * 1024 * 1024)
+        with self.assertRaisesRegex(ValueError, "byte limit"):
+            populate_context(self.root, SimpleNamespace(), self.root / "controller")
+
+    def test_codex_usage_skips_oversized_lines_and_reports_incomplete_usage(self):
+        event = {
+            "type": "turn.completed",
+            "usage": {"input_tokens": 3, "output_tokens": 2},
+        }
+        path = self.root / "runner.stdout.jsonl"
+        with path.open("wb") as stream:
+            stream.write(b"x" * (METRICS_LIMIT + 10) + b"\n")
+            stream.write(json.dumps(event).encode() + b"\n")
+        usage, complete = codex_usage(self.root, "runner.stdout.jsonl")
+        self.assertEqual(usage["total_tokens"], 5)
+        self.assertFalse(complete)
+        context = SimpleNamespace(metadata=None)
+        populate_context(self.root, context, self.root / "controller")
+        self.assertFalse(context.metadata["kraai_eval"]["usage_complete"])
 
     def test_missing_usage_remains_unknown(self):
         context = SimpleNamespace(

@@ -37,8 +37,12 @@ ulid = { workspace = true }
 unicode-width = { workspace = true }
 webbrowser = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+object = { workspace = true }
+
 [dev-dependencies]
 kraai-test-support = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

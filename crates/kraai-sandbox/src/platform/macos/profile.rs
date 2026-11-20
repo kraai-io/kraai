@@ -6,15 +6,26 @@ use kraai_execution_types::SandboxCapability;
 
 use crate::SandboxError;
 use crate::config::LaunchPlan;
+use crate::config_guard::{self, ConfigGuard};
 use crate::platform::git_worktree::linked_worktree_common_dir;
+
+pub(super) struct SeatbeltCommand {
+    pub(super) args: Vec<OsString>,
+    pub(super) run_marker: String,
+}
 
 pub(super) fn build_args(
     plan: &LaunchPlan,
     private_temp: &Path,
-) -> Result<Vec<OsString>, SandboxError> {
+) -> Result<SeatbeltCommand, SandboxError> {
     let workspace = resolve(&plan.workspace_root)?;
     let private_temp = resolve(private_temp)?;
     let mut profile = Profile::new();
+    let run_marker = random_mach_name()?;
+    let run_parameter = profile.named_parameter("KRAAI_RUN", &run_marker);
+    profile.push(&format!(
+        "(allow mach-lookup (global-name {run_parameter}))"
+    ));
     let workspace_filter = profile.path_filter(&workspace, workspace.is_dir())?;
     let temp_filter = profile.path_filter(&private_temp, true)?;
     let git_dir = plan
@@ -77,6 +88,26 @@ pub(super) fn build_args(
 
     if plan.capabilities.contains(SandboxCapability::Network) {
         profile.push(include_str!("network.sbpl"));
+        let workspace_writable = plan
+            .capabilities
+            .contains(SandboxCapability::WorkspaceWrite)
+            || plan.capabilities.contains(SandboxCapability::HostWrite);
+        for directory in [
+            Some(private_temp.as_path()),
+            workspace_writable.then_some(workspace.as_path()),
+            git_dir.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let parameter = profile.parameter(directory)?;
+            profile.push(&format!(
+                "(allow network-bind (local unix-socket (subpath {parameter})))"
+            ));
+            profile.push(&format!(
+                "(allow network-outbound (remote unix-socket (subpath {parameter})))"
+            ));
+        }
     } else {
         for path in &plan.private_ipc_connect_paths {
             if !path.is_absolute() {
@@ -96,6 +127,21 @@ pub(super) fn build_args(
         }
     }
 
+    if ConfigGuard::applies_to(&plan.capabilities) {
+        for entry in config_guard::entry_paths(&workspace) {
+            let entry = profile.parameter(&entry)?;
+            profile.push(&format!(
+                "(deny file-write* (require-any (literal {entry}) (subpath {entry})))"
+            ));
+        }
+        for path in config_guard::read_only_paths(&workspace) {
+            let parameter = profile.parameter(&path)?;
+            let filter = if path.is_dir() { "subpath" } else { "literal" };
+            profile.push(&format!("(deny file-write* ({filter} {parameter}))"));
+            profile.protect_ancestors(&path)?;
+        }
+    }
+
     profile.protect_directory(&workspace)?;
     profile.protect_directory(&private_temp)?;
     if let Some(git_dir) = &git_dir {
@@ -107,7 +153,23 @@ pub(super) fn build_args(
     args.push("--".into());
     args.push(plan.executable.as_os_str().to_owned());
     args.extend(plan.args.iter().cloned());
-    Ok(args)
+    Ok(SeatbeltCommand { args, run_marker })
+}
+
+pub(super) fn random_mach_name() -> Result<String, SandboxError> {
+    use std::fmt::Write;
+
+    let mut bytes = [0_u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut source| std::io::Read::read_exact(&mut source, &mut bytes))
+        .map_err(|error| {
+            SandboxError::SandboxUnavailable(format!("cannot generate a run marker: {error}"))
+        })?;
+    let mut name = String::from("dev.kraai.run.");
+    for byte in bytes {
+        let _ = write!(name, "{byte:02x}");
+    }
+    Ok(name)
 }
 
 struct Profile {
@@ -136,8 +198,12 @@ impl Profile {
             .filter(|value| !value.contains('\0'))
             .ok_or_else(|| unavailable(path, "Seatbelt paths must be UTF-8 without NUL bytes"))?;
         let name = format!("PATH_{}", self.parameters.len());
+        Ok(self.named_parameter(&name, value))
+    }
+
+    fn named_parameter(&mut self, name: &str, value: &str) -> String {
         self.parameters.push(format!("-D{name}={value}").into());
-        Ok(format!("(param \"{name}\")"))
+        format!("(param \"{name}\")")
     }
 
     fn path_filter(&mut self, path: &Path, directory: bool) -> Result<String, SandboxError> {

@@ -63,6 +63,17 @@ fn create_directories_with_sync(
     if !fs::metadata(nonempty_path(anchor))?.is_dir() {
         return Err(io::ErrorKind::NotADirectory.into());
     }
+    #[cfg(windows)]
+    if private {
+        for directory in directories.iter().skip(1) {
+            match super::owner_only::create_private_dir(directory) {
+                Err(error)
+                    if error.kind() == io::ErrorKind::AlreadyExists
+                        && fs::metadata(directory)?.is_dir() => {}
+                result => result?,
+            }
+        }
+    }
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
@@ -70,7 +81,7 @@ fn create_directories_with_sync(
         use std::os::unix::fs::DirBuilderExt;
         builder.mode(0o700);
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     let _ = private;
     builder.create(nonempty_path(path))?;
     for directory in directories.iter().rev() {

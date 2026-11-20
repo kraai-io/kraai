@@ -1,10 +1,11 @@
 use std::io;
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use windows_sys::Win32::Storage::FileSystem::{
     MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
 };
+
+use crate::fs::owner_only::wide_path;
 
 #[expect(
     unsafe_code,
@@ -29,16 +30,4 @@ pub(super) fn rename(
         return Err(io::Error::last_os_error());
     }
     Ok(())
-}
-
-fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
-    let mut path: Vec<u16> = path.as_os_str().encode_wide().collect();
-    if path.contains(&0) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "path contains NUL",
-        ));
-    }
-    path.push(0);
-    Ok(path)
 }

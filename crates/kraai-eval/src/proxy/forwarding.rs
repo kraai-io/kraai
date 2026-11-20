@@ -1,5 +1,6 @@
 use std::io;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use color_eyre::eyre::{Context, Result, bail};
 use futures::{Stream, StreamExt};
@@ -12,19 +13,15 @@ use super::{
     ProxyState, UpstreamCredentials, constant_time_eq,
 };
 
-pub(super) async fn forward_request<W>(
-    stream: &mut W,
+/// How long one downstream write may wait for a client that stopped reading.
+const DOWNSTREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(60);
+
+pub(super) fn rejection(
     state: &ProxyState,
     request: &ParsedRequest,
-    outcome: &mut ForwardOutcome,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
+) -> Option<(u16, &'static str)> {
     if !state.allowed_paths.contains(&request.path) {
-        *outcome = ForwardOutcome::rejected(404);
-        write_error(stream, 404, "Not Found").await?;
-        return Ok(());
+        return Some((404, "Not Found"));
     }
     let authorized = request
         .headers
@@ -37,16 +34,24 @@ where
             )
         });
     if !authorized {
-        *outcome = ForwardOutcome::rejected(401);
-        write_error(stream, 401, "Unauthorized").await?;
-        return Ok(());
+        return Some((401, "Unauthorized"));
     }
+    if !matches!(request.method.as_str(), "GET" | "POST") {
+        return Some((405, "Method Not Allowed"));
+    }
+    None
+}
+
+pub(super) async fn forward_request<W>(
+    stream: &mut W,
+    state: &ProxyState,
+    request: &ParsedRequest,
+    outcome: &mut ForwardOutcome,
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
     let method = Method::from_bytes(request.method.as_bytes())?;
-    if !matches!(method, Method::GET | Method::POST) {
-        *outcome = ForwardOutcome::rejected(405);
-        write_error(stream, 405, "Method Not Allowed").await?;
-        return Ok(());
-    }
     if state.request_count.fetch_add(1, Ordering::Relaxed) >= state.max_requests {
         *outcome = ForwardOutcome::rejected(429);
         write_error(stream, 429, "Proxy Request Limit Exceeded").await?;
@@ -139,13 +144,13 @@ where
     if *delivery == DownstreamDelivery::ClientDisconnected {
         return Ok(());
     }
-    match stream.write_all(bytes).await {
-        Ok(()) => Ok(()),
-        Err(error) if is_client_disconnect(&error) => {
+    match tokio::time::timeout(DOWNSTREAM_WRITE_TIMEOUT, stream.write_all(bytes)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) if !is_client_disconnect(&error) => Err(error.into()),
+        Ok(Err(_)) | Err(_) => {
             *delivery = DownstreamDelivery::ClientDisconnected;
             Ok(())
         }
-        Err(error) => Err(error.into()),
     }
 }
 

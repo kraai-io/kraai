@@ -46,7 +46,7 @@ fn paths_are_parameters_and_command_arguments_are_preserved() {
     plan.workspace_root = workspace.clone();
     plan.args = vec!["-c".into(), "printf '%s' '$HOME'".into()];
 
-    let args = build_args(&plan, &private_temp).expect("build policy");
+    let args = build_args(&plan, &private_temp).expect("build policy").args;
 
     assert!(source(&args).starts_with("(version 1)\n(deny default)"));
     assert!(!source(&args).contains("(allow default)"));
@@ -70,7 +70,7 @@ fn host_access_requires_the_corresponding_capability() {
         SandboxCapability::HostWrite,
     ] {
         let (_root, plan, private_temp) = fixture(&[capability]);
-        let args = build_args(&plan, &private_temp).expect("build policy");
+        let args = build_args(&plan, &private_temp).expect("build policy").args;
         assert_eq!(
             source(&args).contains("(allow file-read* file-map-executable)"),
             capability != SandboxCapability::WorkspaceRead
@@ -86,8 +86,8 @@ fn host_access_requires_the_corresponding_capability() {
 #[test]
 fn workspace_write_allows_all_workspace_paths() {
     let (_root, plan, private_temp) = fixture(&[SandboxCapability::WorkspaceWrite]);
-    let args = build_args(&plan, &private_temp).expect("build policy");
-    assert!(!source(&args).contains("(deny file-write*"));
+    let args = build_args(&plan, &private_temp).expect("build policy").args;
+    assert!(!source(&args).contains("(deny file-write* (require-all"));
     assert!(source(&args).contains("(allow file-write* (require-any"));
 }
 
@@ -97,7 +97,7 @@ fn runtime_files_are_literal_and_stay_read_only_with_host_write() {
     let runtime = root.path().join("runtime");
     std::fs::write(&runtime, "runtime").expect("create runtime file");
     plan.runtime_roots.push(runtime.clone());
-    let args = build_args(&plan, &private_temp).expect("build policy");
+    let args = build_args(&plan, &private_temp).expect("build policy").args;
     let parameters = parameters_for(&args, &runtime.canonicalize().expect("canonical runtime"));
     assert!(!parameters.is_empty());
     for parameter in parameters {
@@ -114,8 +114,8 @@ fn runtime_root_inside_workspace_does_not_override_workspace_write() {
     let runtime = plan.workspace_root.join("target");
     std::fs::create_dir(&runtime).expect("create runtime directory");
     plan.runtime_roots.push(runtime);
-    let args = build_args(&plan, &private_temp).expect("build policy");
-    assert!(!source(&args).contains("(deny file-write*"));
+    let args = build_args(&plan, &private_temp).expect("build policy").args;
+    assert!(!source(&args).contains("(deny file-write* (require-all"));
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn network_access_is_explicit_and_private_ipc_is_limited_to_one_path() {
     let socket = private_temp.join("host.sock");
     let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind socket");
     plan.private_ipc_connect_paths.push(socket.clone());
-    let args = build_args(&plan, &private_temp).expect("build policy");
+    let args = build_args(&plan, &private_temp).expect("build policy").args;
     assert!(!source(&args).contains("(allow network*)"));
     assert!(source(&args).contains("(allow system-socket (socket-domain AF_UNIX))"));
     let parameters = parameters_for(&args, &socket.canonicalize().expect("canonical socket"));
@@ -137,8 +137,30 @@ fn network_access_is_explicit_and_private_ipc_is_limited_to_one_path() {
 
     plan.capabilities =
         SandboxCapabilities::new([SandboxCapability::WorkspaceRead, SandboxCapability::Network]);
-    let args = build_args(&plan, &private_temp).expect("network policy");
-    assert!(source(&args).contains("(allow network*)"));
+    let args = build_args(&plan, &private_temp)
+        .expect("network policy")
+        .args;
+    assert!(!source(&args).contains("(allow network*)"));
+    assert!(source(&args).contains("(allow network-outbound (remote ip \"*:*\"))"));
+    let temp_parameters =
+        parameters_for(&args, &private_temp.canonicalize().expect("canonical temp"));
+    assert!(
+        temp_parameters
+            .iter()
+            .any(|parameter| source(&args).contains(&format!(
+                "(allow network-outbound (remote unix-socket (subpath {parameter})))"
+            )))
+    );
+    let workspace_parameters = parameters_for(
+        &args,
+        &plan
+            .workspace_root
+            .canonicalize()
+            .expect("canonical workspace"),
+    );
+    assert!(!workspace_parameters.iter().any(|parameter| {
+        source(&args).contains(&format!("(remote unix-socket (subpath {parameter}))"))
+    }));
     assert!(source(&args).contains("com.apple.SystemConfiguration.DNSConfiguration"));
 }
 
@@ -171,7 +193,7 @@ fn sysctl_access_is_limited_to_runtime_information() {
         vec![SandboxCapability::HostWrite, SandboxCapability::Network],
     ] {
         let (_root, plan, private_temp) = fixture(&capabilities);
-        let args = build_args(&plan, &private_temp).expect("build policy");
+        let args = build_args(&plan, &private_temp).expect("build policy").args;
         let policy = source(&args);
         assert!(!policy.contains("(allow sysctl-read)"));
         assert!(policy.contains("(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))"));
@@ -203,7 +225,9 @@ fn workspace_write_allows_linked_worktree_common_dir_over_runtime_roots() {
                 .expect("fixture base")
                 .to_path_buf(),
         );
-        let args = build_args(&plan, private_temp.path()).expect("build policy");
+        let args = build_args(&plan, private_temp.path())
+            .expect("build policy")
+            .args;
         let policy = source(&args);
         let parameters = parameters_for(&args, &worktree.common_dir);
         if !writable {
@@ -213,5 +237,76 @@ fn workspace_write_allows_linked_worktree_common_dir_over_runtime_roots() {
         let filter = format!("(require-any (literal {0}) (subpath {0}))", parameters[0]);
         assert!(policy.contains(&format!("(allow file-read* file-write* {filter})")));
         assert!(policy.contains(&format!("(require-not {filter})")));
+    }
+}
+
+#[test]
+fn kraai_configuration_is_write_protected_only_for_writable_workspaces() {
+    let (_root, plan, private_temp) = fixture(&[SandboxCapability::WorkspaceRead]);
+    let args = build_args(&plan, &private_temp)
+        .expect("read-only policy")
+        .args;
+    let workspace = plan
+        .workspace_root
+        .canonicalize()
+        .expect("canonical workspace");
+    assert!(parameters_for(&args, &workspace.join(".kraai")).is_empty());
+    assert!(parameters_for(&args, &workspace.join("AGENTS.md")).is_empty());
+
+    let (_root, plan, private_temp) = fixture(&[SandboxCapability::WorkspaceWrite]);
+    let workspace = plan
+        .workspace_root
+        .canonicalize()
+        .expect("canonical workspace");
+    std::fs::create_dir_all(workspace.join("shared")).expect("create shared");
+    std::fs::write(workspace.join("shared/agents.toml"), "").expect("write profiles");
+    std::fs::create_dir(workspace.join(".kraai")).expect("create config");
+    std::os::unix::fs::symlink(
+        "../shared/agents.toml",
+        workspace.join(".kraai/agents.toml"),
+    )
+    .expect("link profiles");
+    std::fs::write(workspace.join("AGENTS.md"), "").expect("write instructions");
+    let args = build_args(&plan, &private_temp)
+        .expect("writable policy")
+        .args;
+    for name in [".kraai", "AGENTS.md"] {
+        let entry = parameters_for(&args, &workspace.join(name));
+        assert!(
+            entry
+                .iter()
+                .any(|parameter| source(&args).contains(&format!(
+                    "(deny file-write* (require-any (literal {parameter}) (subpath {parameter})))"
+                ))),
+            "{name} must be protected"
+        );
+    }
+    let profiles = parameters_for(&args, &workspace.join("shared/agents.toml"));
+    assert!(profiles.iter().any(|parameter| {
+        source(&args).contains(&format!("(deny file-write* (literal {parameter}))"))
+    }));
+}
+
+#[test]
+fn each_run_gets_a_unique_mach_lookup_marker() {
+    let (_root, plan, private_temp) = fixture(&[SandboxCapability::WorkspaceWrite]);
+    let first = build_args(&plan, &private_temp).expect("first policy");
+    let second = build_args(&plan, &private_temp).expect("second policy");
+    assert_ne!(first.run_marker, second.run_marker);
+    for command in [&first, &second] {
+        let suffix = command
+            .run_marker
+            .strip_prefix("dev.kraai.run.")
+            .expect("marker prefix");
+        assert_eq!(suffix.len(), 32);
+        assert!(suffix.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(command.args.contains(&OsString::from(format!(
+            "-DKRAAI_RUN={}",
+            command.run_marker
+        ))));
+        let policy = source(&command.args);
+        assert!(policy.contains("(allow mach-lookup (global-name (param \"KRAAI_RUN\")))"));
+        assert!(!policy.contains(&command.run_marker));
+        assert!(policy.contains("(deny job-creation lsopen appleevent-send)"));
     }
 }

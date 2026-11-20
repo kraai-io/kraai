@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+pub(crate) mod members;
 mod profile;
 
 #[cfg(target_os = "macos")]
@@ -15,18 +17,19 @@ pub(crate) async fn prepare(
             "{SANDBOX_EXEC} is not a file"
         )));
     }
-    let args = profile::build_args(&plan, private_temp.path())?;
+    let seatbelt = profile::build_args(&plan, private_temp.path())?;
     let mut environment = plan.environment;
     private_temp.apply_environment(&mut environment);
 
     Ok(crate::config::PreparedCommand {
         executable: SANDBOX_EXEC.into(),
-        args,
+        args: seatbelt.args,
         cwd: plan.workspace_root,
         environment,
         sandboxed: true,
         output_events: plan.output_events,
         private_temp: Some(private_temp),
+        run_marker: Some(seatbelt.run_marker),
     })
 }
 

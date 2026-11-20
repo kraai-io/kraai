@@ -22,6 +22,7 @@ impl TerminalReply {
         }
     }
 
+    #[cfg(any(unix, test))]
     pub(super) fn request(&mut self, query: &[u8], output: &mut impl std::io::Write) {
         self.pending = true;
         let _ = output.write_all(query).and_then(|()| output.flush());

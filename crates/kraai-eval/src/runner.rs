@@ -10,8 +10,8 @@ use crate::sandbox::{ResourceLimits, rust_environment};
 use crate::temporary_directory::TemporaryDirectory;
 use crate::{
     ControllerFailure, EvaluationMetrics, ExperimentIdentity, KraaiProviderConfigRequest,
-    ModelProxyRequest, NetworkPolicy, ProcessRecord, ProgressReporter, ResultStore, RunResult,
-    RunStatus, SandboxRecord, TaskManifest, cache, execution, provider_config, sandbox,
+    ModelProxyRequest, ProcessRecord, ProgressReporter, ResultStore, RunResult, RunStatus,
+    SandboxRecord, TaskManifest, cache, execution, provider_config, sandbox,
 };
 
 #[derive(Debug, Clone)]
@@ -27,6 +27,7 @@ pub struct RunRequest {
     pub artifact_path: PathBuf,
     pub staging_dir: PathBuf,
     pub model_proxy: Option<ModelProxyRequest>,
+    pub proxy_bridge: Option<PathBuf>,
     pub kraai_provider_config: Option<KraaiProviderConfigRequest>,
     pub progress: Option<ProgressReporter>,
 }
@@ -135,11 +136,7 @@ pub fn run(request: &RunRequest) -> Result<RunResult> {
         model_label: model_label.clone(),
         attempt: request.attempt,
         runner_args: request.runner_args.clone(),
-        sandbox_network: if request.model_proxy.is_some() {
-            NetworkPolicy::Enabled
-        } else {
-            task.runner.network.clone()
-        },
+        sandbox_network: task.runner.network.clone(),
         model_proxy: request
             .model_proxy
             .as_ref()
@@ -218,11 +215,7 @@ pub fn run(request: &RunRequest) -> Result<RunResult> {
                 grader_sha256: grader_sha256.clone(),
                 sandbox: SandboxRecord {
                     backend: String::from("bubblewrap+systemd-cgroup-v2"),
-                    network: if request.model_proxy.is_some() {
-                        NetworkPolicy::Enabled
-                    } else {
-                        task.runner.network.clone()
-                    },
+                    network: task.runner.network.clone(),
                     environment_cleared: true,
                     max_memory_bytes: task.runner.max_memory_bytes,
                     max_processes: task.runner.max_processes,

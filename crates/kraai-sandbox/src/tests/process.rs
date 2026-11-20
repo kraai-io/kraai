@@ -28,7 +28,12 @@ impl Drop for DetachedFixture {
     }
 }
 
-pub(super) async fn detached_output(mode: &str, capability: SandboxCapability, cancelled: bool) {
+pub(super) async fn detached_output(
+    mode: &str,
+    capability: SandboxCapability,
+    expected: Termination,
+) {
+    let cancelled = expected == Termination::Cancelled;
     let fixture = DetachedFixture(temp_dir("detached-output"));
     std::fs::create_dir(&fixture.0).expect("create detached fixture");
     let mut plan = LaunchPlan::new(
@@ -93,31 +98,34 @@ pub(super) async fn detached_output(mode: &str, capability: SandboxCapability, c
         .await
         .expect("detached output must not extend the execution timeout");
     let result = result.expect("capture detached output");
-    assert_eq!(
-        result.termination,
-        if cancelled {
-            Termination::Cancelled
-        } else {
-            Termination::TimedOut
-        }
-    );
+    assert_eq!(result.termination, expected);
     assert!(String::from_utf8_lossy(&result.stdout).contains("captured stdout"));
     assert!(String::from_utf8_lossy(&result.stderr).contains("captured stderr"));
 }
 
 #[tokio::test]
 async fn timeout_does_not_wait_for_detached_output_pipes() {
-    detached_output("both", SandboxCapability::NoSandbox, false).await;
+    detached_output("both", SandboxCapability::NoSandbox, Termination::TimedOut).await;
 }
 
 #[tokio::test]
 async fn timeout_preserves_completed_stdout_while_stderr_remains_open() {
-    detached_output("stderr", SandboxCapability::NoSandbox, false).await;
+    detached_output(
+        "stderr",
+        SandboxCapability::NoSandbox,
+        Termination::TimedOut,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn cancellation_preserves_output_from_detached_descendants() {
-    detached_output("stderr", SandboxCapability::NoSandbox, true).await;
+    detached_output(
+        "stderr",
+        SandboxCapability::NoSandbox,
+        Termination::Cancelled,
+    )
+    .await;
 }
 
 #[test]

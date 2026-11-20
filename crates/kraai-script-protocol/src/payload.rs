@@ -23,6 +23,7 @@ pub struct InvalidScriptBlock {
 const SCRIPT_METADATA_PREFIX: &str = "#";
 
 pub const DEFAULT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_SCRIPT_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub fn parse_script_input(input: &str) -> Result<ScriptBlock, ProtocolError> {
     let (fields, source) = split_script_header(input);
@@ -33,6 +34,11 @@ pub fn parse_script_input(input: &str) -> Result<ScriptBlock, ProtocolError> {
     let timeout = attributes
         .timeout
         .map_or(Ok(DEFAULT_SCRIPT_TIMEOUT), parse_duration)?;
+    if timeout > MAX_SCRIPT_TIMEOUT {
+        return Err(ProtocolError::InvalidTimeout(String::from(
+            "duration must be at most 1day",
+        )));
+    }
     let requested_capabilities = attributes
         .permissions
         .map(|value| parse_permissions(value).map_err(ProtocolError::InvalidPermissions))
@@ -216,6 +222,25 @@ mod tests {
         assert!(parse_script_input("# kraai timeout=1sec\necho hi").is_err());
         assert!(parse_script_input("# timeout=1sec timeout=2sec\necho hi").is_err());
         assert!(parse_script_input("# timeout=1sec mystery=x\necho hi").is_err());
+    }
+
+    #[test]
+    fn caps_the_timeout_at_one_day() {
+        let script = parse_script_input("# timeout=1day\nls").expect("valid script input");
+        assert_eq!(script.timeout, MAX_SCRIPT_TIMEOUT);
+        for input in [
+            "# timeout=24.5hr\nls",
+            "# timeout=1wk\nls",
+            "# timeout=10000000000000000000sec\nls",
+        ] {
+            assert_eq!(
+                parse_script_input(input),
+                Err(ProtocolError::InvalidTimeout(String::from(
+                    "duration must be at most 1day"
+                ))),
+                "{input:?}"
+            );
+        }
     }
 
     #[test]

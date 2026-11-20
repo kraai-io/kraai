@@ -11,10 +11,13 @@ use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::os::windows::process::ExitStatusExt;
 use std::process::ExitStatus;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::System::JobObjects::{
-    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
+    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+    TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
@@ -26,6 +29,8 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::SandboxError;
 use crate::config::PreparedCommand;
+
+const TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct Child {
     job: OwnedHandle,
@@ -47,28 +52,58 @@ impl Child {
         if unsafe { GetExitCodeProcess(self.process.as_raw_handle(), &mut code) } == 0 {
             return Err(SandboxError::Wait(io::Error::last_os_error().to_string()));
         }
-        self.kill_tree()?;
+        self.kill_tree().await?;
         Ok(ExitStatus::from_raw(code))
     }
 
     pub(crate) async fn terminate(&mut self) -> Result<(), SandboxError> {
-        self.kill_tree()?;
+        self.kill_tree().await?;
         self.wait().await?;
         Ok(())
     }
 
+    /// Terminates every process in the job and waits until they have exited, because
+    /// termination is asynchronous and a dying process can still write files.
     #[expect(
         unsafe_code,
         reason = "Windows process trees are terminated through their job object"
     )]
-    fn kill_tree(&self) -> Result<(), SandboxError> {
-        if unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } == 0 {
-            return Err(SandboxError::Wait(format!(
-                "unable to terminate process job: {}",
+    async fn kill_tree(&self) -> Result<(), SandboxError> {
+        let failed = |action: &str| {
+            SandboxError::Wait(format!(
+                "unable to {action} process job: {}",
                 io::Error::last_os_error()
-            )));
+            ))
+        };
+        if unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } == 0 {
+            return Err(failed("terminate"));
         }
-        Ok(())
+        let deadline = Instant::now() + TERMINATION_TIMEOUT;
+        loop {
+            let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            if unsafe {
+                QueryInformationJobObject(
+                    self.job.as_raw_handle(),
+                    JobObjectBasicAccountingInformation,
+                    (&raw mut accounting).cast(),
+                    std::mem::size_of_val(&accounting) as u32,
+                    std::ptr::null_mut(),
+                )
+            } == 0
+            {
+                return Err(failed("query"));
+            }
+            if accounting.ActiveProcesses == 0 {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(SandboxError::Wait(format!(
+                    "sandboxed processes were still running {} seconds after termination",
+                    TERMINATION_TIMEOUT.as_secs()
+                )));
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
     }
 }
 

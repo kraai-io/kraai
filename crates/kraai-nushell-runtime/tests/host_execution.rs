@@ -445,6 +445,64 @@ async fn private_transport_crosses_the_sandbox_boundary() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
+async fn network_scripts_cannot_reach_host_unix_sockets() {
+    use std::io::{Read, Write};
+
+    let workspace = TestWorkspace::new();
+    let socket_dir = TestWorkspace::new();
+    let socket = socket_dir.0.join("host.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).expect("host socket");
+    let server = std::thread::spawn(move || {
+        let mut served = 0;
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nreached",
+            );
+            served += 1;
+            if served == 1 {
+                break;
+            }
+        }
+        served
+    });
+    let script = format!(
+        "try {{ http get --unix-socket '{}' http://localhost/ }} catch {{ 'blocked' }}",
+        socket.display()
+    );
+
+    let mut sandboxed = plan(script.clone().into_bytes(), &workspace);
+    sandboxed.capabilities = SandboxCapabilities::new([
+        SandboxCapability::WorkspaceRead,
+        SandboxCapability::HostRead,
+        SandboxCapability::Network,
+    ]);
+    sandboxed.runtime_roots = sandbox_runtime_roots(host_executable());
+    let result = match execute(sandboxed, CancellationToken::new()).await {
+        Ok(result) => result,
+        Err(RuntimeError::Sandbox(kraai_sandbox::SandboxError::SandboxUnavailable(_))) => return,
+        Err(error) => panic!("sandboxed host execution failed: {error}"),
+    };
+    assert_eq!(
+        String::from_utf8_lossy(&result.output.stdout),
+        "blocked\n",
+        "stderr: {}",
+        String::from_utf8_lossy(&result.output.stderr)
+    );
+
+    let result = execute(
+        plan(script.into_bytes(), &workspace),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("unsandboxed host execution failed: {error}"));
+    assert_eq!(String::from_utf8_lossy(&result.output.stdout), "reached\n");
+    assert_eq!(server.join().expect("socket server"), 1);
+}
+
+#[tokio::test]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn native_commands_remain_registered_when_the_sandbox_denies_the_operation() {
     let workspace = TestWorkspace::new();

@@ -2,6 +2,7 @@ mod display;
 mod in_house;
 mod pricing;
 mod proxy;
+mod proxy_bridge;
 mod tasks;
 mod terminal_bench;
 mod viewer;
@@ -54,6 +55,12 @@ enum Command {
         about = "Run a credential proxy until stdin closes; writes private readiness and public metrics files"
     )]
     Proxy(Box<proxy::ProxyArgs>),
+    #[command(
+        hide = true,
+        name = kraai_eval::PROXY_BRIDGE_COMMAND,
+        about = "Run a command in the evaluation sandbox with a loopback port forwarded to the model proxy socket"
+    )]
+    ProxyBridge(proxy_bridge::ProxyBridgeArgs),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
@@ -140,24 +147,29 @@ struct Prepared {
 
 pub(super) fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
-    let eval_dir = cli.eval_dir.map_or_else(EvalRoot::default_path, Ok)?;
-    let tasks_dir = cli.tasks_dir.unwrap_or_else(tasks::default_directory);
+    let eval_dir = || cli.eval_dir.clone().map_or_else(EvalRoot::default_path, Ok);
+    let tasks_dir = || {
+        cli.tasks_dir
+            .clone()
+            .unwrap_or_else(tasks::default_directory)
+    };
     match cli.command {
         Command::Run(args) => {
-            let prepared = prepare(&args, &eval_dir)?;
+            let prepared = prepare(&args, &eval_dir()?)?;
             match args.benchmark {
-                Benchmark::InHouse => in_house::run(*args, prepared, &tasks_dir, cli.json),
+                Benchmark::InHouse => in_house::run(*args, prepared, &tasks_dir(), cli.json),
                 Benchmark::TerminalBench => terminal_bench::run(*args, prepared, cli.json),
             }
         }
         Command::Check(args) => match args.benchmark {
-            Benchmark::InHouse => in_house::check(&tasks_dir, &args.tasks, cli.json),
+            Benchmark::InHouse => in_house::check(&tasks_dir(), &args.tasks, cli.json),
             Benchmark::TerminalBench => {
-                terminal_bench::check(&EvalRoot::open(&eval_dir)?, &args.tasks)
+                terminal_bench::check(&EvalRoot::open(&eval_dir()?)?, &args.tasks)
             }
         },
-        Command::View(args) => viewer::execute(args, eval_dir, cli.json),
+        Command::View(args) => viewer::execute(args, eval_dir()?, cli.json),
         Command::Proxy(args) => proxy::execute(*args),
+        Command::ProxyBridge(args) => proxy_bridge::execute(args),
     }
 }
 

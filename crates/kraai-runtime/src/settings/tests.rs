@@ -227,6 +227,11 @@ async fn concurrent_settings_saves_use_independent_temporary_files() -> Result<(
     let persisted = std::fs::read_to_string(&path)?;
     let temporary = std::fs::read(&legacy_temp)?;
     let entries = std::fs::read_dir(&root)?.try_fold(0, |count, entry| entry.map(|_| count + 1))?;
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(&path)?.permissions().mode() & 0o777
+    };
     std::fs::remove_dir_all(&root)?;
 
     let expected = candidates
@@ -240,6 +245,8 @@ async fn concurrent_settings_saves_use_independent_temporary_files() -> Result<(
     ensure!(expected.contains(&persisted));
     ensure!(temporary == b"another writer");
     ensure!(entries == 2);
+    #[cfg(unix)]
+    ensure!(mode == 0o600, "provider settings can hold API keys");
     Ok(())
 }
 

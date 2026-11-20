@@ -144,16 +144,22 @@ fn write_with_sync(
     Ok(AtomicWriteOutcome::Durable)
 }
 
+/// Private and preserved files start owner-only, so their contents are never readable more
+/// widely than intended while the replacement is being written.
 fn open_temporary(path: &Path, mode: &WriteMode) -> io::Result<fs::File> {
+    #[cfg(windows)]
+    if matches!(mode, WriteMode::Private) {
+        return super::owner_only::create_private_file(path);
+    }
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
-    if matches!(mode, WriteMode::Private) {
+    if matches!(mode, WriteMode::Private | WriteMode::Preserve(_)) {
         use std::os::unix::fs::OpenOptionsExt;
 
         options.mode(0o600);
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     let _ = mode;
     options.open(path)
 }

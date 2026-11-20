@@ -9,6 +9,7 @@ use kraai_execution_types::SandboxCapability;
 use tokio::process::Command;
 
 use crate::config::LaunchPlan;
+use crate::config_guard::{self, ConfigGuard};
 use crate::error::SandboxError;
 use crate::platform::git_worktree::linked_worktree_common_dir;
 
@@ -73,7 +74,7 @@ pub(crate) async fn run_bwrap_sandbox_probe(
         .map_err(|error| format!("unable to prepare bubblewrap seccomp probe: {error}"))?;
     let stdin = seccomp_filter.map_or_else(Stdio::null, Stdio::from);
     process
-        .args(build_bwrap_probe_args(network_enabled))
+        .args(build_bwrap_probe_args(bwrap, network_enabled))
         .stdin(stdin)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -105,7 +106,9 @@ pub(crate) async fn run_bwrap_sandbox_probe(
     Err(bwrap_probe_failure_message(network_enabled, &stderr))
 }
 
-pub(crate) fn build_bwrap_probe_args(network_enabled: bool) -> Vec<OsString> {
+/// The probe runs bubblewrap's own binary, already found in a trusted directory, so no
+/// executable from PATH runs while the whole host filesystem is visible.
+pub(crate) fn build_bwrap_probe_args(bwrap: &Path, network_enabled: bool) -> Vec<OsString> {
     let mut args = vec![
         "--new-session".into(),
         "--die-with-parent".into(),
@@ -122,7 +125,14 @@ pub(crate) fn build_bwrap_probe_args(network_enabled: bool) -> Vec<OsString> {
         args.push("--seccomp".into());
         args.push(BWRAP_SECCOMP_STDIN_FD.into());
     }
-    args.extend(["--chdir".into(), "/".into(), "--".into(), "true".into()]);
+    args.extend([
+        "--clearenv".into(),
+        "--chdir".into(),
+        "/".into(),
+        "--".into(),
+        bwrap.as_os_str().to_owned(),
+        "--version".into(),
+    ]);
     args
 }
 
@@ -214,11 +224,50 @@ pub(crate) fn build_bwrap_args(
     };
     push_parent_dirs(&mut args, &resolved_workspace);
     push_bind(&mut args, workspace_flag, &resolved_workspace);
-    if capabilities.contains(SandboxCapability::WorkspaceWrite)
-        && let Some(git_dir) = linked_worktree_common_dir(&resolved_workspace)
-    {
-        push_parent_dirs(&mut args, &git_dir);
-        push_bind(&mut args, "--bind", &git_dir);
+    let git_dir = capabilities
+        .contains(SandboxCapability::WorkspaceWrite)
+        .then(|| linked_worktree_common_dir(&resolved_workspace))
+        .flatten();
+    if let Some(git_dir) = &git_dir {
+        push_parent_dirs(&mut args, git_dir);
+        push_bind(&mut args, "--bind", git_dir);
+    }
+    if ConfigGuard::applies_to(capabilities) {
+        let host_root = Path::new("/");
+        let writable_roots = if capabilities.contains(SandboxCapability::HostWrite) {
+            vec![host_root]
+        } else {
+            std::iter::once(resolved_workspace.as_path())
+                .chain(git_dir.as_deref())
+                .collect()
+        };
+        let read_only = config_guard::read_only_paths(&resolved_workspace);
+        let protected = read_only
+            .iter()
+            .filter_map(|path| {
+                writable_roots
+                    .iter()
+                    .find(|root| path.starts_with(root))
+                    .map(|root| (path, *root))
+            })
+            .collect::<Vec<_>>();
+        // Self-binding each directory between a writable root and the configuration makes
+        // it a mount point, which cannot be renamed to swap in other files. Parents bind
+        // before children, and read-only binds come last so no later bind covers them.
+        let pinned = protected
+            .iter()
+            .flat_map(|(path, root)| {
+                path.ancestors()
+                    .skip(1)
+                    .take_while(move |ancestor| ancestor != root)
+            })
+            .collect::<BTreeSet<_>>();
+        for directory in pinned {
+            push_bind(&mut args, "--bind", directory);
+        }
+        for (path, _root) in protected {
+            push_bind(&mut args, "--ro-bind", path);
+        }
     }
 
     if network_enabled

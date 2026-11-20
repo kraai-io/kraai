@@ -1,5 +1,6 @@
 (version 1)
 (deny default)
+(deny job-creation lsopen appleevent-send)
 (allow process-exec process-fork)
 (allow signal (target same-sandbox))
 (deny process-info*)

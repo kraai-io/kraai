@@ -4,6 +4,9 @@ use std::process::Command;
 
 use color_eyre::eyre::{Result, bail, ensure};
 use kraai_eval::{RunRequest, RunStatus, SuiteRequest};
+use support::{find_program, temporary_directory, user_scope_available};
+
+mod support;
 
 #[test]
 fn cli_runs_resume_and_only_add_new_attempts() -> Result<()> {
@@ -161,7 +164,6 @@ command = ["sh", "-c", "read -r actual < answer.txt; [ \"$actual\" = fixed ]"]
         fs::read(&first_attempt)? == saved,
         "a saved attempt was run again"
     );
-    fs::remove_dir_all(root)?;
     Ok(())
 }
 
@@ -261,6 +263,7 @@ timeout_seconds = {timeout}
         artifact_path: attempt(1),
         staging_dir: staging.clone(),
         model_proxy: None,
+        proxy_bridge: None,
         kraai_provider_config: None,
         progress: None,
     };
@@ -337,6 +340,7 @@ timeout_seconds = {timeout}
         artifact_path: attempt(2),
         staging_dir: staging.clone(),
         model_proxy: None,
+        proxy_bridge: None,
         kraai_provider_config: None,
         progress: None,
     })?;
@@ -364,6 +368,7 @@ timeout_seconds = {timeout}
         artifact_path: attempt(3),
         staging_dir: staging.clone(),
         model_proxy: None,
+        proxy_bridge: None,
         kraai_provider_config: None,
         progress: None,
     })?;
@@ -389,6 +394,7 @@ timeout_seconds = {timeout}
         artifact_path: attempt(3),
         staging_dir: staging.clone(),
         model_proxy: None,
+        proxy_bridge: None,
         kraai_provider_config: None,
         progress: None,
     })?;
@@ -437,6 +443,7 @@ timeout_seconds = {timeout}
         artifact_path: attempt(4),
         staging_dir: staging,
         model_proxy: None,
+        proxy_bridge: None,
         kraai_provider_config: None,
         progress: None,
     });
@@ -445,7 +452,6 @@ timeout_seconds = {timeout}
         !eval.join(attempt(4)).exists(),
         "a launch failure saved an attempt"
     );
-    fs::remove_dir_all(root)?;
     Ok(())
 }
 
@@ -474,33 +480,4 @@ fn git_output(repository: &Path, args: &[&str]) -> Result<String> {
         bail!("git command failed: {}", args.join(" "));
     }
     Ok(String::from_utf8(output.stdout)?.trim().to_owned())
-}
-
-fn find_program(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|directory| directory.join(name))
-            .find(|candidate| candidate.is_file())
-    })
-}
-
-fn user_scope_available() -> bool {
-    let Some(systemd_run) = find_program("systemd-run") else {
-        return false;
-    };
-    let Some(true_program) = find_program("true") else {
-        return false;
-    };
-
-    Command::new(systemd_run)
-        .args(["--user", "--scope", "--quiet"])
-        .arg(true_program)
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
-fn temporary_directory(name: &str) -> Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!("kraai-eval-{name}-{}", ulid::Ulid::generate()));
-    fs::create_dir(&path)?;
-    Ok(path)
 }

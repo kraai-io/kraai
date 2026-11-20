@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 mod config;
+mod config_guard;
 mod error;
 mod output;
 mod output_capture;
@@ -18,13 +19,13 @@ pub use process::run;
 pub use process_spawn::{spawn_command, spawn_tokio_command};
 
 #[cfg(target_os = "linux")]
-pub use platform::linux::restrict_network_after_startup;
+pub use platform::linux::{restrict_host_ipc_after_startup, restrict_network_after_startup};
 
 #[cfg(all(test, target_os = "linux"))]
 use platform::linux::{
     BWRAP_SECCOMP_STDIN_FD, SeccompInstruction, build_bwrap_args, build_bwrap_probe_args,
-    bwrap_probe_failure_message, find_bwrap, restricted_network_seccomp_program,
-    run_bwrap_sandbox_probe,
+    bwrap_probe_failure_message, ensure_host_ipc_isolation_available, find_bwrap,
+    restrict_only_moves, restricted_network_seccomp_program, run_bwrap_sandbox_probe,
 };
 #[cfg(all(test, unix))]
 use process::is_likely_sandbox_denied;

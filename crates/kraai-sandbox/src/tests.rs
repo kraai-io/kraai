@@ -36,6 +36,14 @@ mod process;
 mod seccomp;
 
 #[cfg(target_os = "linux")]
+#[path = "tests/landlock.rs"]
+mod landlock;
+
+#[cfg(target_os = "linux")]
+#[path = "tests/config_guard.rs"]
+mod config_guard;
+
+#[cfg(target_os = "linux")]
 #[path = "tests/policy.rs"]
 mod policy;
 
@@ -341,7 +349,17 @@ async fn cancellation_returns_capture_and_kills_process() {
 #[test]
 #[cfg(target_os = "linux")]
 fn bwrap_probe_args_match_network_shapes() {
-    let restricted = build_bwrap_probe_args(false);
+    let bwrap = Path::new("/trusted/bin/bwrap");
+    let restricted = build_bwrap_probe_args(bwrap, false);
+    assert!(
+        restricted.ends_with(&[
+            OsString::from("--"),
+            bwrap.as_os_str().to_owned(),
+            OsString::from("--version"),
+        ]),
+        "the probe must not run a program looked up through PATH"
+    );
+    assert!(restricted.iter().any(|arg| arg == "--clearenv"));
     assert!(restricted.iter().any(|arg| arg == "--unshare-all"));
     assert!(
         restricted
@@ -350,7 +368,7 @@ fn bwrap_probe_args_match_network_shapes() {
     );
     assert!(!restricted.iter().any(|arg| arg == "--share-net"));
 
-    let enabled = build_bwrap_probe_args(true);
+    let enabled = build_bwrap_probe_args(bwrap, true);
     assert!(enabled.iter().any(|arg| arg == "--share-net"));
     assert!(!enabled.iter().any(|arg| arg == "--seccomp"));
 }

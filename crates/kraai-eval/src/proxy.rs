@@ -12,8 +12,8 @@ use color_eyre::eyre::{Context, Result, bail};
 use reqwest::Client;
 use reqwest::redirect::Policy;
 use serde::Serialize;
-use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::ProxyRecord;
@@ -29,15 +29,78 @@ mod telemetry;
 mod usage;
 
 use credentials::{ProxyCredentialRequest, UpstreamCredentials};
-use forwarding::{forward_request, write_error};
+use forwarding::{forward_request, rejection, write_error};
 use recording::RequestRecord;
-use request::{ParsedRequest, read_request};
+use request::{ParsedRequest, read_request_head};
 use telemetry::{CacheState, write_event};
 use usage::{ResponseUsage, usage_from_response_body};
 
 const PROXY_TRANSPORT_REVISION: u32 = 1;
 const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CONNECTIONS: usize = 32;
+const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Copy, Debug)]
+struct ConnectionLimits {
+    max_connections: usize,
+    request_read_timeout: Duration,
+}
+
+impl Default for ConnectionLimits {
+    fn default() -> Self {
+        Self {
+            max_connections: MAX_CONNECTIONS,
+            request_read_timeout: REQUEST_READ_TIMEOUT,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ProxyListen {
+    Tcp(SocketAddr),
+    Unix {
+        path: PathBuf,
+        advertised: SocketAddr,
+    },
+}
+
+impl ProxyListen {
+    pub(crate) fn loopback() -> Self {
+        Self::Tcp(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+    }
+}
+
+enum BoundListener {
+    Tcp(TcpListener),
+    #[cfg(unix)]
+    Unix(tokio::net::UnixListener),
+}
+
+impl BoundListener {
+    async fn bind(listen: &ProxyListen) -> io::Result<(Self, SocketAddr)> {
+        match listen {
+            ProxyListen::Tcp(address) => {
+                let listener = TcpListener::bind(address).await?;
+                let address = listener.local_addr()?;
+                Ok((Self::Tcp(listener), address))
+            }
+            #[cfg(unix)]
+            ProxyListen::Unix { path, advertised } => Ok((
+                Self::Unix(tokio::net::UnixListener::bind(path)?),
+                *advertised,
+            )),
+            #[cfg(not(unix))]
+            ProxyListen::Unix { path, advertised } => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "cannot serve {advertised} through {}: Unix sockets need a Unix host",
+                    path.display()
+                ),
+            )),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ModelProxyRequest {
@@ -107,20 +170,13 @@ impl ModelProxyRequest {
         })
     }
 
-    pub(crate) fn start(&self, log_path: PathBuf) -> Result<ModelProxy> {
-        self.start_at(
-            log_path,
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-        )
-    }
-
-    fn start_at(&self, log_path: PathBuf, listen_address: SocketAddr) -> Result<ModelProxy> {
+    pub(crate) fn start(&self, log_path: PathBuf, listen: ProxyListen) -> Result<ModelProxy> {
         if self.max_requests == 0 {
             bail!("model proxy max_requests must be greater than zero");
         }
         let credentials = self.credentials.resolve()?;
         ModelProxy::start(ProxyServerConfig {
-            listen_address,
+            listen,
             upstream: credentials.upstream().to_string(),
             allowed_paths: credentials.allowed_paths(),
             kind: credentials.kind().to_string(),
@@ -129,6 +185,7 @@ impl ModelProxyRequest {
             log_path,
             max_requests: self.max_requests,
             shutdown_drain_timeout: SHUTDOWN_DRAIN_TIMEOUT,
+            limits: ConnectionLimits::default(),
         })
     }
 }
@@ -281,7 +338,7 @@ impl Drop for ModelProxy {
 }
 
 struct ProxyServerConfig {
-    listen_address: SocketAddr,
+    listen: ProxyListen,
     upstream: String,
     credentials: UpstreamCredentials,
     allowed_paths: BTreeSet<String>,
@@ -290,6 +347,7 @@ struct ProxyServerConfig {
     log_path: PathBuf,
     max_requests: u64,
     shutdown_drain_timeout: Duration,
+    limits: ConnectionLimits,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -344,14 +402,13 @@ async fn run_server(
     shutdown: oneshot::Receiver<()>,
     ready: mpsc::SyncSender<Result<SocketAddr>>,
 ) -> Result<()> {
-    let listener = match TcpListener::bind(config.listen_address).await {
-        Ok(listener) => listener,
+    let (listener, address) = match BoundListener::bind(&config.listen).await {
+        Ok(bound) => bound,
         Err(error) => {
             let _ = ready.send(Err(error.into()));
             return Ok(());
         }
     };
-    let address = listener.local_addr()?;
     let log = Arc::new(Mutex::new(File::create(&config.log_path)?));
     let state = Arc::new(ProxyState {
         upstream: config.upstream,
@@ -368,6 +425,7 @@ async fn run_server(
         .build()?,
         log,
         max_requests: config.max_requests,
+        limits: config.limits,
         request_count: AtomicU64::new(0),
         started_requests: AtomicU64::new(0),
         metrics,
@@ -376,16 +434,31 @@ async fn run_server(
         return Ok(());
     }
 
-    serve_connections(
-        || listener.accept(),
-        state,
-        shutdown,
-        config.shutdown_drain_timeout,
-    )
-    .await
+    let drain_timeout = config.shutdown_drain_timeout;
+    match &listener {
+        BoundListener::Tcp(listener) => {
+            serve_connections(
+                || async { listener.accept().await.map(|(stream, _)| stream) },
+                state,
+                shutdown,
+                drain_timeout,
+            )
+            .await
+        }
+        #[cfg(unix)]
+        BoundListener::Unix(listener) => {
+            serve_connections(
+                || async { listener.accept().await.map(|(stream, _)| stream) },
+                state,
+                shutdown,
+                drain_timeout,
+            )
+            .await
+        }
+    }
 }
 
-async fn serve_connections<Accept, Accepted>(
+async fn serve_connections<Accept, Accepted, Stream>(
     mut accept: Accept,
     state: Arc<ProxyState>,
     mut shutdown: oneshot::Receiver<()>,
@@ -393,14 +466,15 @@ async fn serve_connections<Accept, Accepted>(
 ) -> Result<()>
 where
     Accept: FnMut() -> Accepted,
-    Accepted: Future<Output = io::Result<(TcpStream, SocketAddr)>>,
+    Accepted: Future<Output = io::Result<Stream>>,
+    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let mut tasks = tokio::task::JoinSet::new();
     let result = loop {
         tokio::select! {
             _ = &mut shutdown => break Ok(()),
-            accepted = accept() => {
-                let (stream, _) = match accepted {
+            accepted = accept(), if tasks.len() < state.limits.max_connections => {
+                let stream = match accepted {
                     Ok(accepted) => accepted,
                     Err(error) => break Err(color_eyre::Report::from(error)),
                 };
@@ -441,19 +515,33 @@ struct ProxyState {
     client: Client,
     log: Arc<Mutex<File>>,
     max_requests: u64,
+    limits: ConnectionLimits,
     request_count: AtomicU64,
     started_requests: AtomicU64,
     metrics: Arc<Mutex<ProxyMetrics>>,
 }
 
-async fn handle_connection(mut stream: TcpStream, state: Arc<ProxyState>) -> Result<()> {
+async fn handle_connection<Stream>(mut stream: Stream, state: Arc<ProxyState>) -> Result<()>
+where
+    Stream: AsyncRead + AsyncWrite + Unpin,
+{
     let started = Instant::now();
-    let request = match read_request(&mut stream).await {
+    let deadline = tokio::time::Instant::now() + state.limits.request_read_timeout;
+    let head = match read_before(deadline, read_request_head(&mut stream)).await {
+        Ok(head) => head,
+        Err(error) => return reject_unreadable(&mut stream, error).await,
+    };
+    if let Some((status, reason)) = rejection(&state, &head.request) {
+        let mut record = RequestRecord::new(&state, &head.request, started);
+        record.outcome = ForwardOutcome::rejected(status);
+        record.finish(write_error(&mut stream, status, reason).await)?;
+        stream.shutdown().await?;
+        let _ = read_before(deadline, head.discard_body(&mut stream)).await;
+        return Ok(());
+    }
+    let request = match read_before(deadline, head.read_body(&mut stream)).await {
         Ok(request) => request,
-        Err(error) => {
-            write_error(&mut stream, 400, "Bad Request").await?;
-            return Err(error);
-        }
+        Err(error) => return reject_unreadable(&mut stream, error).await,
     };
     let mut record = RequestRecord::new(&state, &request, started);
     let result = forward_request(&mut stream, &state, &request, &mut record.outcome).await;
@@ -462,6 +550,25 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<ProxyState>) -> Res
         stream.shutdown().await?;
     }
     Ok(())
+}
+
+async fn read_before<T>(
+    deadline: tokio::time::Instant,
+    read: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    tokio::time::timeout_at(deadline, read).await?
+}
+
+async fn reject_unreadable<Stream>(stream: &mut Stream, error: color_eyre::Report) -> Result<()>
+where
+    Stream: AsyncWrite + Unpin,
+{
+    if error.is::<tokio::time::error::Elapsed>() {
+        write_error(stream, 408, "Request Timeout").await?;
+        return Err(error.wrap_err("proxy request read deadline elapsed"));
+    }
+    write_error(stream, 400, "Bad Request").await?;
+    Err(error)
 }
 
 fn record_usage_metrics(state: &ProxyState, body: &[u8]) -> Result<Option<ResponseUsage>> {

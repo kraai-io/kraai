@@ -10424,6 +10424,13 @@ rec {
             packageId = "kraai-types";
           }
           {
+            name = "object";
+            packageId = "object";
+            usesDefaultFeatures = false;
+            target = { target, features }: ("linux" == target."os" or null);
+            features = [ "elf" "read_core" "std" ];
+          }
+          {
             name = "reqwest";
             packageId = "reqwest";
             features = [ "json" "stream" ];
@@ -10471,6 +10478,11 @@ rec {
           {
             name = "kraai-test-support";
             packageId = "kraai-test-support";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" "test-util" ];
           }
         ];
 
@@ -10639,7 +10651,7 @@ rec {
             name = "windows-sys";
             packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
-            features = [ "Wdk_Foundation" "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Security" "Win32_Storage_FileSystem" "Win32_System_IO" ];
+            features = [ "Wdk_Foundation" "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Security" "Win32_Security_Authorization" "Win32_Storage_FileSystem" "Win32_System_IO" "Win32_System_Threading" ];
           }
         ];
         devDependencies = [
@@ -11676,6 +11688,11 @@ rec {
             packageId = "kraai-execution-types";
           }
           {
+            name = "kraai-io";
+            packageId = "kraai-io";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
             name = "libc";
             packageId = "libc";
             target = { target, features }: (target."unix" or false);
@@ -11685,6 +11702,16 @@ rec {
             packageId = "nix 0.31.3";
             target = { target, features }: (target."unix" or false);
             features = [ "process" "signal" ];
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.10.3";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.11.1";
+            target = { target, features }: (target."windows" or false);
           }
           {
             name = "tokio";
@@ -11699,18 +11726,13 @@ rec {
             name = "windows-sys";
             packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
-            features = [ "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Globalization" "Win32_Security" "Win32_Security_Isolation" "Win32_Security_Authorization" "Win32_Storage_FileSystem" "Win32_System_Threading" "Win32_System_SystemInformation" "Win32_System_JobObjects" "Win32_System_Pipes" "Win32_System_Environment" "Win32_System_Memory" "Win32_System_LibraryLoader" "Win32_UI_Shell" "Win32_System_Com" ];
+            features = [ "Wdk_Storage_FileSystem" "Win32_Foundation" "Win32_Globalization" "Win32_Security" "Win32_Security_Isolation" "Win32_Security_Authorization" "Win32_Storage_FileSystem" "Win32_System_Threading" "Win32_System_SystemInformation" "Win32_System_JobObjects" "Win32_System_Pipes" "Win32_System_Registry" "Win32_System_Environment" "Win32_System_Memory" "Win32_System_LibraryLoader" "Win32_UI_Shell" "Win32_System_Com" ];
           }
         ];
         devDependencies = [
           {
             name = "kraai-test-support";
             packageId = "kraai-test-support";
-          }
-          {
-            name = "rand";
-            packageId = "rand 0.10.3";
-            target = { target, features }: (target."windows" or false);
           }
           {
             name = "rustix";
@@ -17310,7 +17332,7 @@ rec {
           "write_core" = [ "dep:crc32fast" "dep:indexmap" "dep:hashbrown" ];
           "write_std" = [ "write_core" "std" "indexmap?/std" "crc32fast?/std" ];
         };
-        resolvedDefaultFeatures = [ "archive" "coff" "elf" "macho" "pe" "read_core" "unaligned" "xcoff" ];
+        resolvedDefaultFeatures = [ "archive" "coff" "elf" "macho" "pe" "read_core" "std" "unaligned" "xcoff" ];
       };
       "oem_cp" = rec {
         crateName = "oem_cp";

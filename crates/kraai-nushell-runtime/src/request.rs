@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use kraai_execution_types::{NushellStartup, ScriptExecutionId};
+use kraai_execution_types::{
+    NushellStartup, SandboxCapabilities, SandboxCapability, ScriptExecutionId,
+};
 use serde::{Deserialize, Serialize};
 
-pub const HOST_PROTOCOL_VERSION: u32 = 9;
+pub const HOST_PROTOCOL_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostRequest {
@@ -18,5 +20,24 @@ pub struct HostRequest {
     pub startup_files: Vec<crate::StartupFile>,
     pub event_secret: [u8; 32],
     pub(crate) output_marker: crate::rendering::Marker,
-    pub restrict_network: bool,
+    pub startup_restriction: StartupRestriction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StartupRestriction {
+    None,
+    Network,
+    HostIpc,
+}
+
+impl StartupRestriction {
+    pub fn for_capabilities(capabilities: &SandboxCapabilities) -> Self {
+        if capabilities.is_unsandboxed() {
+            Self::None
+        } else if capabilities.contains(SandboxCapability::Network) {
+            Self::HostIpc
+        } else {
+            Self::Network
+        }
+    }
 }

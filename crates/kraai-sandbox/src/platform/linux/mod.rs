@@ -1,6 +1,8 @@
 mod bubblewrap;
+mod landlock;
 mod seccomp;
 
+pub use landlock::restrict_host_ipc_after_startup;
 pub use seccomp::restrict_network_after_startup;
 
 use crate::config::{LaunchPlan, PreparedCommand};
@@ -12,6 +14,8 @@ pub(crate) use bubblewrap::{
     BWRAP_SECCOMP_STDIN_FD, build_bwrap_args, build_bwrap_probe_args, bwrap_probe_failure_message,
     find_bwrap, run_bwrap_sandbox_probe,
 };
+#[cfg(test)]
+pub(crate) use landlock::{ensure_host_ipc_isolation_available, restrict_only_moves};
 #[cfg(test)]
 pub(crate) use seccomp::{
     SeccompInstruction, install_restricted_network_filter, restricted_network_seccomp_program,
@@ -35,6 +39,9 @@ pub(crate) async fn prepare(
         .contains(kraai_execution_types::SandboxCapability::Network);
     let bwrap = bubblewrap::find_bwrap(&plan.workspace_root, private_temp.path())
         .ok_or_else(|| SandboxError::SandboxUnavailable(String::from(MISSING_BWRAP)))?;
+    if network_enabled && plan.restricts_host_ipc {
+        landlock::ensure_host_ipc_isolation_available()?;
+    }
     bubblewrap::ensure_bwrap_sandbox_available(&bwrap, network_enabled).await?;
     let seccomp_filter = seccomp::restricted_network_seccomp_filter(
         network_enabled,

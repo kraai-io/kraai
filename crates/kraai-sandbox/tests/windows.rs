@@ -61,7 +61,27 @@ fn probe() {
     let Ok(mode) = std::env::var("KRAAI_WINDOWS_PROBE") else {
         return;
     };
+    println!("package-sid={}", package_sid());
     match mode.as_str() {
+        "temp-owner" => {
+            let file = std::env::temp_dir().join("owned");
+            std::fs::write(&file, "private temp").expect("private temp write");
+            println!("temp-file={}", file.display());
+            while !std::path::Path::new("release").exists() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        "target-readable" => {
+            let target = std::env::var_os("KRAAI_WINDOWS_TARGET").expect("target path");
+            std::fs::read(target).expect("granted target read");
+        }
+        "target-denied" => {
+            let target =
+                PathBuf::from(std::env::var_os("KRAAI_WINDOWS_TARGET").expect("target path"));
+            assert!(std::fs::read(&target).is_err());
+            let parent = target.parent().expect("target parent");
+            assert!(std::fs::read_dir(parent).is_err());
+        }
         "readonly" => {
             assert_eq!(
                 std::fs::read_to_string("input").expect("workspace read"),
@@ -131,7 +151,69 @@ fn probe() {
     }
 }
 
-async fn successful(plan: LaunchPlan) {
+#[expect(
+    unsafe_code,
+    reason = "the probe reads its AppContainer SID from its own token"
+)]
+fn package_sid() -> String {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TOKEN_APPCONTAINER_INFORMATION, TOKEN_QUERY, TokenAppContainerSid,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token = std::ptr::null_mut();
+    assert_ne!(
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) },
+        0
+    );
+    let token = unsafe { OwnedHandle::from_raw_handle(token) };
+    let mut buffer = vec![0_usize; 64];
+    let mut length = 0;
+    assert_ne!(
+        unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenAppContainerSid,
+                buffer.as_mut_ptr().cast(),
+                size_of_val(buffer.as_slice()) as u32,
+                &mut length,
+            )
+        },
+        0
+    );
+    let information = unsafe {
+        buffer
+            .as_ptr()
+            .cast::<TOKEN_APPCONTAINER_INFORMATION>()
+            .read()
+    };
+    assert!(!information.TokenAppContainer.is_null());
+    let mut string = std::ptr::null_mut();
+    assert_ne!(
+        unsafe { ConvertSidToStringSidW(information.TokenAppContainer, &mut string) },
+        0
+    );
+    let mut length = 0;
+    while unsafe { *string.add(length) } != 0 {
+        length += 1;
+    }
+    let sid = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(string, length) });
+    unsafe { LocalFree(string.cast()) };
+    sid
+}
+
+fn field(output: &str, name: &str) -> String {
+    output
+        .lines()
+        .find_map(|line| line.trim_end().strip_prefix(name)?.strip_prefix('='))
+        .unwrap_or_else(|| panic!("probe output lacks {name}: {output}"))
+        .to_owned()
+}
+
+async fn successful(plan: LaunchPlan) -> String {
     let output = kraai_sandbox::run(plan, CancellationToken::new())
         .await
         .expect("Windows sandbox must launch");
@@ -142,6 +224,7 @@ async fn successful(plan: LaunchPlan) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 #[tokio::test]
@@ -199,26 +282,67 @@ async fn rejects_unsupported_host_access_without_running() {
 #[tokio::test]
 async fn concurrent_launches_preserve_workspace_isolation() {
     let mut launches = tokio::task::JoinSet::new();
-    for _ in 0..8 {
+    for _ in 0..4 {
         launches.spawn(async {
             let fixture = Fixture::new();
-            let output = kraai_sandbox::run(
-                fixture.plan("readonly", &[SandboxCapability::WorkspaceRead]),
-                CancellationToken::new(),
-            )
-            .await
-            .expect("concurrent sandbox launch");
-            assert_eq!(
-                output.termination,
-                Termination::Exited { code: Some(0) },
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
+            let (first, second) = tokio::join!(
+                successful(fixture.plan("readonly", &[SandboxCapability::WorkspaceRead])),
+                successful(fixture.plan("readonly", &[SandboxCapability::WorkspaceRead])),
             );
+            [field(&first, "package-sid"), field(&second, "package-sid")]
         });
     }
+    let mut identities = std::collections::HashSet::new();
     while let Some(result) = launches.join_next().await {
-        result.expect("concurrent launch task");
+        identities.extend(result.expect("concurrent launch task"));
     }
+    assert_eq!(identities.len(), 8, "{identities:?}");
+}
+
+#[tokio::test]
+async fn concurrent_launches_in_one_workspace_keep_private_temp_private() {
+    let fixture = Fixture::new();
+    let mut owner = fixture.plan("temp-owner", &[SandboxCapability::WorkspaceRead]);
+    let (sender, events) = tokio::sync::mpsc::channel(16);
+    owner.output_events = Some(sender);
+    let owner = tokio::spawn(kraai_sandbox::run(owner, CancellationToken::new()));
+    let started = wait_for_output(events, "temp-file=").await;
+    let mut intruder = fixture.plan("target-denied", &[SandboxCapability::WorkspaceRead]);
+    intruder.environment.insert(
+        "KRAAI_WINDOWS_TARGET".into(),
+        field(&started, "temp-file").into(),
+    );
+    let intruder = successful(intruder).await;
+    std::fs::write(fixture.0.join("workspace/release"), "").expect("release temp owner");
+    let owner = hang_guard(owner)
+        .await
+        .expect("temp owner finished")
+        .expect("join temp owner")
+        .expect("run temp owner");
+    assert_eq!(owner.termination, Termination::Exited { code: Some(0) });
+    assert_ne!(
+        field(&started, "package-sid"),
+        field(&intruder, "package-sid")
+    );
+}
+
+#[tokio::test]
+async fn runtime_roots_stay_closed_to_launches_without_them() {
+    let fixture = Fixture::new();
+    let root = fixture.0.join("runtime");
+    std::fs::create_dir(&root).expect("create runtime root");
+    std::fs::write(root.join("data"), "runtime data").expect("write runtime data");
+    let mut granted = fixture.plan("target-readable", &[SandboxCapability::WorkspaceRead]);
+    granted.runtime_roots.push(root.clone());
+    granted
+        .environment
+        .insert("KRAAI_WINDOWS_TARGET".into(), root.join("data").into());
+    successful(granted).await;
+    let mut denied = fixture.plan("target-denied", &[SandboxCapability::WorkspaceRead]);
+    denied
+        .environment
+        .insert("KRAAI_WINDOWS_TARGET".into(), root.join("data").into());
+    successful(denied).await;
 }
 
 #[tokio::test]
@@ -375,17 +499,27 @@ fn hold_cleanup_lock(
     assert_ne!(unsafe { ReleaseMutex(handle.as_raw_handle()) }, 0);
 }
 
-async fn wait_for_descendant(mut events: tokio::sync::mpsc::Receiver<kraai_sandbox::OutputEvent>) {
+async fn wait_for_descendant(events: tokio::sync::mpsc::Receiver<kraai_sandbox::OutputEvent>) {
+    wait_for_output(events, "descendant started").await;
+}
+
+async fn wait_for_output(
+    mut events: tokio::sync::mpsc::Receiver<kraai_sandbox::OutputEvent>,
+    marker: &str,
+) -> String {
     hang_guard(async {
         let mut output = Vec::new();
         while let Some(event) = events.recv().await {
             output.extend(event.bytes);
-            if String::from_utf8_lossy(&output).contains("descendant started") {
-                return;
+            let text = String::from_utf8_lossy(&output);
+            if let Some(start) = text.find(marker)
+                && text.get(start..).is_some_and(|rest| rest.contains('\n'))
+            {
+                return text.into_owned();
             }
         }
-        panic!("execution exited before starting descendant");
+        panic!("execution exited before printing {marker}");
     })
     .await
-    .expect("host started");
+    .expect("host started")
 }

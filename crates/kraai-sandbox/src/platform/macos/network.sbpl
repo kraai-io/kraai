@@ -1,4 +1,6 @@
-(allow network*)
+(allow network-outbound (remote ip "*:*"))
+(allow network-inbound network-bind (local ip "*:*"))
+(allow network-outbound (remote unix-socket (literal "/private/var/run/mDNSResponder")))
 (allow system-socket)
 (allow mach-lookup
   (global-name "com.apple.bsd.dirhelper")
