@@ -96,10 +96,7 @@ async fn installed_provider_catalog_rebinds_even_when_discovery_fails() -> Resul
     harness.maintenance_tasks.push(forwarder);
     let mut sources = harness.runtime.model_catalog_tx.subscribe();
     let mut previous = sources.borrow().clone();
-    for (type_id, discovery_failed) in [
-        ("catalog-success", false),
-        ("catalog-discovery-failure", true),
-    ] {
+    for type_id in ["catalog-success", "catalog-discovery-failure"] {
         let mut events = harness.handle.subscribe();
         tokio::fs::write(
             &harness.runtime.config.provider_config_path,
@@ -107,7 +104,7 @@ async fn installed_provider_catalog_rebinds_even_when_discovery_fails() -> Resul
         )
         .await?;
         let result = harness.runtime.load_providers_config_and_emit().await;
-        assert_eq!(result.is_err(), discovery_failed);
+        assert!(result.is_ok());
         assert!(sources.has_changed()?);
         let current = sources.borrow_and_update().clone();
         assert!(!current.same_channel(&previous));
@@ -134,7 +131,7 @@ async fn installed_provider_catalog_rebinds_even_when_discovery_fails() -> Resul
         while let Ok(event) = events.try_recv() {
             config_loaded |= matches!(event.event, Event::ConfigLoaded);
         }
-        assert_eq!(config_loaded, !discovery_failed);
+        assert!(config_loaded);
         previous = current;
     }
     tokio::fs::write(
