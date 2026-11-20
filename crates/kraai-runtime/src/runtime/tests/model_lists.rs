@@ -27,7 +27,9 @@ async fn startup_succeeds_when_a_provider_cannot_list_its_models() -> Result<()>
             let mut request = [0; 4096];
             let _ = stream.read(&mut request).await;
             let _ = stream
-                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
                 .await;
         }
     }));
