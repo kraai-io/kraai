@@ -45,7 +45,7 @@ fn linked_store_paths(program: &Path) -> Result<Vec<PathBuf>> {
     if let Some((entries, strings)) = sections.dynamic(endian, &data)? {
         let strings = sections.strings(endian, &data, strings)?;
         for entry in entries {
-            if !matches!(entry.tag32(endian), Some(DT_RUNPATH | DT_RPATH)) {
+            if !matches!(entry.tag(endian), DT_RUNPATH | DT_RPATH) {
                 continue;
             }
             let offset = entry.d_val(endian);
