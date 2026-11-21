@@ -172,7 +172,10 @@
               ++ nativeBuildInputs;
             buildInputs =
               [
+                pkgs.aws-lc
+                pkgs.libgit2
                 pkgs.openssl
+                pkgs.sqlite
               ]
               ++ buildInputs;
             cargoDeps = pkgs.rustPlatform.importCargoLock {
