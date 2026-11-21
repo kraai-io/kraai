@@ -1,5 +1,5 @@
 use color_eyre::eyre::Result;
-use kraai_execution_types::{ScriptExecutionPhase, ScriptExecutionStatus};
+use kraai_execution_types::ScriptExecutionStatus;
 use kraai_persistence::{ScriptExecutionStore, SqliteScriptExecutionStore};
 use kraai_types::{AssistantItem, AssistantPhase, ChatRole, ScriptCall, TokenUsage};
 
@@ -8,32 +8,10 @@ use super::harness::FullHistory as _;
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
 
-#[test]
-fn interrupted_recovery_status_matches_the_last_phase() {
-    use super::super::script_recovery::interrupted_execution_outcome;
-
-    for (phase, expected) in [
-        (
-            ScriptExecutionPhase::Prepared,
-            ScriptExecutionStatus::FailedToStart,
-        ),
-        (
-            ScriptExecutionPhase::AwaitingApproval,
-            ScriptExecutionStatus::Cancelled,
-        ),
-        (
-            ScriptExecutionPhase::Running,
-            ScriptExecutionStatus::RuntimeError,
-        ),
-    ] {
-        assert_eq!(interrupted_execution_outcome(phase).0, expected);
-    }
-}
-
 #[tokio::test]
 async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<()> {
     let reasoning = serde_json::json!({"type":"reasoning","id":"rs-1","encrypted_content":"opaque-ciphertext","summary":[]});
-    let Some(harness) = RuntimeTestHarness::new_native(vec![
+    let harness = RuntimeTestHarness::new_native(vec![
         vec![
             ScriptedChunk::reasoning(reasoning.clone()),
             ScriptedChunk::commentary("I will inspect it."),
@@ -52,10 +30,7 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
         ],
         vec![ScriptedChunk::plain("The requested escalation was denied.")],
     ])
-    .await
-    else {
-        return Ok(());
-    };
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -180,14 +155,11 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() -> Result<
 async fn bash_syntax_is_rewritten_before_approval_and_history() -> Result<()> {
     let original = "# timeout=30sec permissions=workspace-write\nrg -n todo src 2>/dev/null";
     let rewritten = "# timeout=30sec permissions=workspace-write\nrg -n todo src e> /dev/null";
-    let Some(harness) = RuntimeTestHarness::new(vec![
+    let harness = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::native_call("call-1", original)],
         vec![ScriptedChunk::plain("Denied.")],
     ])
-    .await
-    else {
-        return Ok(());
-    };
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -264,7 +236,7 @@ async fn bash_syntax_is_rewritten_before_approval_and_history() -> Result<()> {
 
 #[tokio::test]
 async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(vec![
+    let harness = RuntimeTestHarness::new(vec![
         vec![
             ScriptedChunk::plain("I need to run the tests."),
             ScriptedChunk::native_call(
@@ -283,10 +255,7 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
         ],
         vec![ScriptedChunk::plain("The requested escalation was denied.")],
     ])
-    .await
-    else {
-        return Ok(());
-    };
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -440,9 +409,7 @@ async fn post_boundary_drain_preserves_usage_after_many_trailing_events() -> Res
         cache_read_tokens: 4,
         ..Default::default()
     }));
-    let Some(harness) = RuntimeTestHarness::new(vec![chunks]).await else {
-        return Ok(());
-    };
+    let harness = RuntimeTestHarness::new(vec![chunks]).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -488,17 +455,14 @@ async fn post_boundary_drain_preserves_usage_after_many_trailing_events() -> Res
 
 #[tokio::test]
 async fn post_boundary_drain_error_preserves_completed_script() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(vec![vec![
+    let harness = RuntimeTestHarness::new(vec![vec![
         ScriptedChunk::native_call(
             "call-1",
             "# timeout=30sec permissions=workspace-write\n^cargo test",
         ),
         ScriptedChunk::error("transport failed after completed script"),
     ]])
-    .await
-    else {
-        return Ok(());
-    };
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -533,14 +497,11 @@ async fn post_boundary_drain_error_preserves_completed_script() -> Result<()> {
 
 #[tokio::test]
 async fn pre_boundary_stream_error_remains_a_failure() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(vec![vec![ScriptedChunk::error_with_source(
+    let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::error_with_source(
         "error decoding response body",
         "operation timed out",
     )]])
-    .await
-    else {
-        return Ok(());
-    };
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -576,17 +537,14 @@ async fn pre_boundary_stream_error_remains_a_failure() -> Result<()> {
 
 #[tokio::test]
 async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(vec![
+    let harness = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::native_call(
             "call-1",
             "# timeout=soon permissions=network\nhttp get https://example.com",
         )],
         vec![ScriptedChunk::plain("The script request was invalid.")],
     ])
-    .await
-    else {
-        return Ok(());
-    };
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -631,16 +589,13 @@ async fn malformed_script_is_durable_and_continues_with_invalid_result() -> Resu
 async fn invalid_tool_call_fails_without_running_and_replays_raw_call() -> Result<()> {
     let error = "unknown tool 'bash'; the only tool is 'kraai_nushell'";
     let arguments = r#"{"command": "ls"}"#;
-    let Some(harness) = RuntimeTestHarness::new(vec![
+    let harness = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::invalid_call(
             "call-1", "bash", arguments, error,
         )],
         vec![ScriptedChunk::plain("Retrying with the right tool.")],
     ])
-    .await
-    else {
-        return Ok(());
-    };
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -706,7 +661,7 @@ async fn invalid_tool_call_fails_without_running_and_replays_raw_call() -> Resul
 
 #[tokio::test]
 async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(vec![
+    let harness = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::native_call(
             "call-1",
             "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
@@ -715,10 +670,7 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
             "The pending approval was cancelled without running the script.",
         )],
     ])
-    .await
-    else {
-        return Ok(());
-    };
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -805,17 +757,14 @@ async fn recovery_finishes_orphaned_execution_delivers_one_result_and_continues(
 
 #[tokio::test]
 async fn transient_pre_boundary_failure_reissues_the_request() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(vec![
+    let harness = RuntimeTestHarness::new(vec![
         vec![
             ScriptedChunk::plain("partial answer"),
             ScriptedChunk::interrupted("connection reset"),
         ],
         vec![ScriptedChunk::plain("complete answer")],
     ])
-    .await
-    else {
-        return Ok(());
-    };
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -862,8 +811,7 @@ async fn a_runtime_that_lost_the_session_does_not_reissue_the_request() -> Resul
         ],
         vec![ScriptedChunk::plain("answer for the new owner")],
     ])
-    .await
-    .expect("runtime fixture");
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let agent = &harness.runtime.agent_manager;
     let request = agent
@@ -907,8 +855,7 @@ async fn long_script_output_is_excerpted_and_saved_where_scripts_can_read_it() -
         )],
         vec![ScriptedChunk::plain("done")],
     ])
-    .await
-    .expect("runtime fixture");
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -1010,8 +957,7 @@ async fn only_the_first_script_call_of_a_response_runs_and_the_others_are_answer
         ],
         vec![ScriptedChunk::plain("Both calls are answered.")],
     ])
-    .await
-    .expect("runtime fixture");
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle

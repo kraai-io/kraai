@@ -3,7 +3,6 @@ use kraai_runtime::RuntimeHandle;
 
 use crate::{content, error};
 
-/// Whether the prompt is the `/undo` command.
 pub(crate) fn is_undo(prompt: &[acp::ContentBlock]) -> Result<bool> {
     let Some(acp::ContentBlock::Text(text)) = prompt.first() else {
         return Ok(false);

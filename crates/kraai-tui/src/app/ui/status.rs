@@ -11,11 +11,9 @@ use crate::theme;
 
 const GAP: usize = 2;
 
-/// One piece of the left side of the status line.
 struct Fact {
     text: String,
     style: Style,
-    /// When the line is too narrow, facts go in this order, lowest first. `None` always stays.
     drop: Option<u8>,
 }
 
@@ -29,9 +27,6 @@ impl Fact {
     }
 }
 
-/// Draws the footer from the bottom up: the status line, an error waiting to be read above it,
-/// and the open sheet's key hints above that, so they touch the sheet. The status line is what
-/// the turn is doing, then what the composer talks to.
 pub(super) fn render_status(state: &AppState, area: Rect, buf: &mut Buffer) {
     let inset = u16::from(area.width > 2);
     let area = Rect::new(area.x + inset, area.y, area.width - 2 * inset, area.height);
@@ -65,8 +60,6 @@ pub(super) fn render_status(state: &AppState, area: Rect, buf: &mut Buffer) {
     }
 }
 
-/// Draws `facts` from the left edge and `tag` against the right one. The tag keeps its room and
-/// the facts give way, least important first.
 fn render_row(mut facts: Vec<Fact>, tag: Option<(&str, Style)>, area: Rect, buf: &mut Buffer) {
     let width = usize::from(area.width);
     let (tag, tag_style) = tag.unwrap_or_default();
@@ -132,8 +125,6 @@ pub(super) fn fit(text: &str, width: usize) -> String {
     result
 }
 
-/// What the turn is doing, in the colour that says how much it wants attention. Empty while
-/// there is nothing to report.
 fn activity(state: &AppState) -> Fact {
     let (text, style) = activity_text(state, Instant::now());
     Fact {
@@ -143,8 +134,6 @@ fn activity(state: &AppState) -> Fact {
     }
 }
 
-/// The words and style of what the turn is doing at `now`. A busy turn breathes its colour in
-/// time with the running scripts' dots.
 pub(in crate::app) fn activity_text(state: &AppState, now: Instant) -> (String, Style) {
     let accent = Style::default().fg(theme::ACCENT);
     let waiting = Style::default().fg(theme::WAITING);
@@ -204,8 +193,6 @@ fn whole_seconds(duration: Duration) -> String {
     format_duration(Duration::from_secs(duration.as_secs()))
 }
 
-/// The status line: what the turn is doing, the model, how it is set up, the agent, then what
-/// the session has used.
 fn facts(state: &AppState) -> Vec<Fact> {
     let (model, options) = model_facts(state);
     let (tokens, percent) = context_facts(state);
@@ -236,7 +223,6 @@ fn facts(state: &AppState) -> Vec<Fact> {
     ]
 }
 
-/// The model's name and its settings. A missing model takes the colour of something waiting.
 fn model_facts(state: &AppState) -> (Fact, String) {
     let (Some(provider_id), Some(model_id)) = (
         state.selected_provider_id.as_deref(),
@@ -273,7 +259,6 @@ fn agent_label(state: &AppState) -> String {
         .unwrap_or_else(|| profile_id.to_string())
 }
 
-/// The tokens in the context and, when the model's limit is known, how full that makes it.
 fn context_facts(state: &AppState) -> (String, Option<String>) {
     let max_context = match state.selected_model() {
         Some(model) => model.max_context,

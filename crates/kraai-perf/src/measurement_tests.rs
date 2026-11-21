@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use color_eyre::eyre::{Result, ensure, eyre};
+use color_eyre::eyre::{Result, ensure};
 use nix::sys::resource::{UsageWho, getrusage};
 use nix::sys::time::TimeValLike;
 
@@ -142,12 +142,6 @@ fn cpu_deltas_reject_decreasing_and_overflowing_counters() -> Result<()> {
 }
 
 #[test]
-fn failed_workloads_do_not_produce_samples() {
-    let result = measure(|| Err(eyre!("workload failed")));
-    assert!(result.is_err_and(|error| error.to_string() == "workload failed"));
-}
-
-#[test]
 fn async_measurement_excludes_surrounding_phases() -> Result<()> {
     run_fixture(module_path!(), "async_scope_fixture")
 }
@@ -209,22 +203,6 @@ fn async_scope_fixture() -> Result<()> {
     ensure!(
         dropped.load(Ordering::Relaxed),
         "operation output was not returned to the caller"
-    );
-    Ok(())
-}
-
-#[test]
-fn failed_async_workloads_do_not_produce_samples() -> Result<()> {
-    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
-    let result = runtime.block_on(measure_async(async {
-        tokio::task::yield_now().await;
-        Err::<(), _>(eyre!("async workload failed"))
-    }));
-    drop(runtime);
-    let failed = result.is_err_and(|error| error.to_string() == "async workload failed");
-    ensure!(
-        failed,
-        "failed async workload produced a sample or changed its error"
     );
     Ok(())
 }

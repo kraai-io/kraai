@@ -10,8 +10,6 @@ use kraai_headless::{RunOptions, RunOutcome};
 use serde_json::json;
 use tokio_util::task::AbortOnDropHandle;
 
-/// Runs one prompt against a provider serving `chat_completions`, returning the outcome and
-/// the transcript the run wrote.
 async fn run_against(chat_completions: Router) -> Result<(RunOutcome, String)> {
     let root = tempfile::tempdir()?;
     let router = Router::new()

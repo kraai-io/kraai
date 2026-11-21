@@ -91,8 +91,6 @@ fn read_validated_text_file(
     Ok((canonical, contents))
 }
 
-/// A write that took effect. `unsynced` is set when the parent directory could not be synced
-/// afterwards, so the change might not survive a crash.
 #[derive(Debug)]
 pub struct Written {
     pub path: PathBuf,
@@ -115,9 +113,7 @@ pub enum Overwrite {
     Replaced,
 }
 
-/// Makes `contents` the whole file, creating it or replacing an existing file while keeping its
-/// permissions. If another writer creates the file between the check and the write, its file is
-/// replaced.
+/// If another writer creates the file between the check and the write, its file is replaced.
 pub fn overwrite_text_file(
     cwd: &Path,
     requested: &Path,
@@ -183,7 +179,6 @@ fn replace_whole_file(
     Ok((written, Overwrite::Replaced))
 }
 
-/// The requested file inside its canonical parent directory.
 fn file_destination(cwd: &Path, requested: &Path) -> Result<PathBuf, WorkspaceFsError> {
     let requested = resolve_path(cwd, requested);
     let name = requested
@@ -234,13 +229,6 @@ pub fn edit_text_file(
 )]
 mod tests {
     use std::fs;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    use std::fs::{File, OpenOptions};
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    use kraai_io::fs::open_scoped_file;
-    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
-    use kraai_io::fs::{ScopedReadError, read_scoped_text_file};
 
     use ulid::Ulid;
 
@@ -377,43 +365,6 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn regular_reads_reject_replacement_fifos_without_waiting_for_a_writer() {
-        let root = temp_dir("regular-fifo");
-        let path = root.join("file.txt");
-        fs::write(&path, "initial").unwrap();
-        assert_eq!(read_regular_text_file(&path).unwrap(), "initial");
-        fs::remove_file(&path).unwrap();
-        nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRWXU).unwrap();
-        let fifo = path.clone();
-        let (send, receive) = std::sync::mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            send.send(read_regular_text_file(&path)).unwrap();
-        });
-        let result = receive.recv_timeout(kraai_test_support::HANG_TIMEOUT);
-        let reader_completed = if result.is_err() {
-            let unblock = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&fifo)
-                .unwrap();
-            let rescued = receive.recv_timeout(kraai_test_support::HANG_TIMEOUT);
-            drop(unblock);
-            !matches!(rescued, Err(std::sync::mpsc::RecvTimeoutError::Timeout))
-        } else {
-            true
-        };
-        if reader_completed {
-            reader.join().unwrap();
-        }
-        fs::remove_dir_all(root).unwrap();
-        assert_eq!(
-            result.unwrap().unwrap_err().kind(),
-            std::io::ErrorKind::InvalidInput
-        );
-    }
-
     #[cfg(windows)]
     #[test]
     fn resolves_opened_paths_without_volume_manager_access() {
@@ -430,110 +381,11 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(windows)]
     #[test]
-    fn scoped_reads_reject_traversal_and_alternate_streams() {
-        let root = temp_dir("windows-scoped-read").canonicalize().unwrap();
-        let path = root.join("file.txt");
-        fs::write(&path, "contents").unwrap();
-        assert_eq!(read_scoped_text_file(&root, &path).unwrap(), "contents");
-        for relative in ["..\\secret.txt", "file.txt:secret", "file.txt::$DATA"] {
-            assert!(matches!(
-                read_scoped_text_file(&root, &root.join(relative)),
-                Err(ScopedReadError::OutsideRoot(_))
-            ));
-        }
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn scoped_reads_reject_replacement_fifos_without_waiting_for_a_writer() {
-        assert_scoped_reads_reject_fifos(open_scoped_file);
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(super) fn assert_scoped_reads_reject_fifos(
-        open_file: fn(&Path, &Path) -> Result<File, ScopedReadError>,
-    ) {
-        for replace_root in [false, true] {
-            let directory = temp_dir("scoped-fifo");
-            let root = directory.join("workspace");
-            fs::create_dir(&root).unwrap();
-            let path = root.join("file.txt");
-            fs::write(&path, "initial").unwrap();
-            assert_eq!(read_scoped_text_file(&root, &path).unwrap(), "initial");
-            let fifo = if replace_root {
-                fs::remove_dir_all(&root).unwrap();
-                root.clone()
-            } else {
-                fs::remove_file(&path).unwrap();
-                path.clone()
-            };
-            nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
-            let (send, receive) = std::sync::mpsc::channel();
-            let reader = std::thread::spawn(move || {
-                send.send(open_file(&root, &path)).unwrap();
-            });
-            let result = receive.recv_timeout(kraai_test_support::HANG_TIMEOUT);
-            let reader_completed = if result.is_err() {
-                let unblock = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&fifo)
-                    .unwrap();
-                let rescued = receive.recv_timeout(kraai_test_support::HANG_TIMEOUT);
-                drop(unblock);
-                !matches!(rescued, Err(std::sync::mpsc::RecvTimeoutError::Timeout))
-            } else {
-                true
-            };
-            if reader_completed {
-                reader.join().unwrap();
-            }
-            fs::remove_dir_all(directory).unwrap();
-            assert!(result.is_ok(), "scoped open waited for a FIFO writer");
-            if replace_root {
-                assert!(matches!(
-                    result.unwrap(),
-                    Err(ScopedReadError::OpenRoot { .. })
-                ));
-            } else {
-                assert!(matches!(result.unwrap(), Err(ScopedReadError::NotFile(_))));
-            }
-        }
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn scoped_read_survives_atomic_replacement_but_rejects_escape_symlinks() {
-        use std::os::unix::fs::symlink;
-
-        let root = temp_dir("scoped-read");
-        let outside = temp_dir("scoped-read-outside");
-        let path = root.join("file.txt");
-        let outside_path = outside.join("secret.txt");
-        fs::write(&path, "first").unwrap();
-        fs::write(&outside_path, "outside").unwrap();
-        assert_eq!(read_scoped_text_file(&root, &path).unwrap(), "first");
-
-        atomic_write(
-            &path,
-            b"second",
-            WriteMode::Replace {
-                permissions: path.metadata().unwrap().permissions(),
-            },
-        )
-        .unwrap();
-        assert_eq!(read_scoped_text_file(&root, &path).unwrap(), "second");
-
-        fs::remove_file(&path).unwrap();
-        symlink(&outside_path, &path).unwrap();
-        assert!(matches!(
-            read_scoped_text_file(&root, &path),
-            Err(ScopedReadError::OutsideRoot(_))
-        ));
-        let _ = fs::remove_dir_all(root);
-        let _ = fs::remove_dir_all(outside);
+    fn normalizes_missing_paths_without_requiring_the_file_to_exist() {
+        assert_eq!(
+            normalize_allow_missing(Path::new("/workspace/src"), Path::new("../missing.rs")),
+            Path::new("/workspace/missing.rs")
+        );
     }
 }

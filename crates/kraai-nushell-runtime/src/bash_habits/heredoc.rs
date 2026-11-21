@@ -3,16 +3,12 @@ use nu_parser::{Token, lex};
 /// Each pass rewrites one heredoc, so a script cannot keep the loop going forever.
 const MAX_HEREDOCS: usize = 32;
 
-/// Characters that make a heredoc's command line more than a simple command.
 const SHELL_SYNTAX: &[char] = &[
     '|', ';', '&', '<', '>', '(', ')', '{', '}', '$', '`', '\'', '"', '\\',
 ];
 
-/// Turns bash heredocs, which Nushell has no syntax for, into raw strings. `cat > F <<'X'`
-/// becomes a whole-file write with `kraai-edit-file` when the shell has it, or `save -f`
-/// otherwise, and `cmd <<'X'` pipes the text into `cmd`. Returns the script and one change
-/// label for each heredoc it rewrote, or `None` when a heredoc has no safe rewrite, because the
-/// other rules would then misread its body as Nushell.
+/// Returns `None` when a heredoc has no safe rewrite, because the other rules would then
+/// misread its body as Nushell.
 pub(super) fn rewrite(source: &str, edit_file: bool) -> Option<(String, Vec<String>)> {
     let mut current = source.to_owned();
     let mut changes = Vec::new();
@@ -35,7 +31,6 @@ pub(super) fn rewrite(source: &str, edit_file: bool) -> Option<(String, Vec<Stri
 }
 
 enum Found {
-    /// The heredoc from its command line through its terminator, and what replaces it.
     Rewrite {
         start: usize,
         end: usize,
@@ -45,7 +40,6 @@ enum Found {
     Unsupported,
 }
 
-/// The first heredoc outside any Nushell string, if the script has one.
 fn next_heredoc(source: &str, edit_file: bool) -> Option<Found> {
     let (tokens, _) = lex(source.as_bytes(), 0, &[], &[], false);
     let lines: Vec<(usize, &str)> = source
@@ -95,7 +89,6 @@ fn next_heredoc(source: &str, edit_file: bool) -> Option<Found> {
     None
 }
 
-/// Whether `operator` lies in a string that started before its line, looking inside blocks.
 fn in_string(source: &[u8], tokens: &[Token], line_start: usize, operator: usize) -> bool {
     let Some(token) = tokens
         .iter()
@@ -120,14 +113,11 @@ fn in_string(source: &[u8], tokens: &[Token], line_start: usize, operator: usize
 
 struct Heredoc<'a> {
     indent: &'a str,
-    /// The command line as written, such as `cat > src/lib.rs <<'RS'`.
     written: &'a str,
-    /// Where `<<` starts in the line.
     operator_at: usize,
     tag: &'a str,
     quoted: bool,
-    /// Where the text goes, or `None` for a heredoc this rewrite does not understand. `<<-`
-    /// strips leading tabs, which a verbatim copy would not, so it has none.
+    /// `None` for `<<-`, which strips leading tabs that a verbatim copy would keep.
     destination: Option<Destination<'a>>,
 }
 
@@ -214,8 +204,6 @@ impl<'a> Heredoc<'a> {
     }
 }
 
-/// `cat > F` with the heredoc before or after the redirect writes a file; a plain command with
-/// nothing after the heredoc reads it as input.
 fn destination<'a>(command: &'a str, rest: &str, words: &[&'a str]) -> Option<Destination<'a>> {
     if let [head, rest @ ..] = words
         && matches!(*head, "cat" | "^cat")
@@ -243,7 +231,6 @@ fn is_plain_path(path: &str) -> bool {
             .all(|character| character.is_alphanumeric() || "/._-+@,:".contains(character))
 }
 
-/// A bare delimiter word and the text after it.
 fn split_tag(text: &str) -> Option<(&str, &str)> {
     let length = text
         .find(|character: char| !is_tag_character(character))
@@ -260,7 +247,6 @@ fn without_newline(line: &str) -> &str {
         .map_or(line, |line| line.trim_suffix('\r'))
 }
 
-/// A Nushell raw string holding `text` verbatim, with enough `#`s that `text` cannot close it.
 /// The opening quote counts too: `r#'#x'#` closes right after its opening `'`.
 fn raw_string(text: &str) -> String {
     let quoted = format!("'{text}");

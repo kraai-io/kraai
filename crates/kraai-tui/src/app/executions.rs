@@ -16,7 +16,7 @@ fn mark(outcome: ScriptExecutionOutcome) -> ScriptMark {
     }
 }
 
-/// The run time, which only the rendered result records.
+/// Only the rendered result records the run time.
 fn elapsed_millis(parsed: Option<&ParsedToolCallResult<'_>>) -> Option<u64> {
     parsed?.attribute("elapsed_ms")?.parse().ok()
 }
@@ -61,8 +61,6 @@ fn section_label(section: &ToolCallResultSection<'_>) -> String {
     parts.join(" · ")
 }
 
-/// What the expanded chat shows for one script result: the sections of its `output`, then the
-/// `images` it returned, one label a line.
 pub(super) fn script_view<'a>(
     outcome: ScriptExecutionOutcome,
     output: &'a str,

@@ -41,7 +41,6 @@ mod command {
     use crate::{command_error, declare_kraai_command};
 
     declare_kraai_command! {
-        /// Applies deterministic, exact text edits or creates one text file.
         pub struct EditFileCommand;
         metadata: super::METADATA;
         signature: Signature::build(Self::METADATA.name)

@@ -1,9 +1,5 @@
-# crate2nix ignores Cargo profiles, so this resolves them the way cargo does and turns them into
-# rustc flags. Profiles come from Cargo.toml and .cargo/config.toml, with cargo's built-in
-# defaults underneath. Keys this file can't translate throw instead of being dropped.
-#
-# One difference remains. Cargo applies build-override to build scripts, proc macros, and every
-# crate they depend on. Here it applies to build scripts and proc macros only, because a
+# crate2nix ignores Cargo profiles, so this resolves them into rustc flags the way cargo does.
+# Unlike cargo, build-override skips the dependencies of build scripts and proc macros, because a
 # dependency of a proc macro is the same derivation as the runtime copy of that crate.
 {
   lib,
@@ -66,8 +62,6 @@
     "nix/cargo-profiles.nix does not translate the versioned package override `${key}`"
     key;
 
-  # Precedence, first match wins: package.<name>, package."*" for non-members, build-override
-  # for build units, the profile.
   settingsFor = {
     profile,
     crateName,

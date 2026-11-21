@@ -57,8 +57,6 @@ pub fn parse_script_input(input: &str) -> Result<ScriptBlock, ProtocolError> {
     })
 }
 
-/// Splits a script into the fields of its metadata header, when its first non-blank line is
-/// one, and the source that follows.
 pub fn split_script_header(input: &str) -> (Option<&str>, &str) {
     let tail = input.trim_start_matches(|character: char| character.is_ascii_whitespace());
     let header_end = tail.find(['\n', '\r']).unwrap_or(tail.len());

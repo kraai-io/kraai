@@ -18,7 +18,6 @@ impl AgentManager {
             .await
     }
 
-    /// Starts a turn from queued messages, removing them from the queue only if the turn starts.
     pub async fn prepare_queued_stream(
         &self,
         session_id: &SessionId,

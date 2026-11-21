@@ -114,9 +114,7 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
             text_before_call: Some("I am partway through."),
         }),
     );
-    let harness = RuntimeTestHarness::new_with_message_store(providers, Some(store.clone()))
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new_with_message_store(providers, Some(store.clone())).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -240,8 +238,7 @@ async fn held_preparation_queues_without_blocking_another_session() -> Result<()
         vec![ScriptedChunk::plain("other session complete")],
         vec![ScriptedChunk::plain("queued message complete")],
     ])
-    .await
-    .expect("runtime regression fixture must initialize");
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let other_session = create_session_with_profile(&harness.handle, "test-profile").await?;
     super::harness::hold_preparation(&harness.runtime, &session_id).await;
@@ -310,9 +307,7 @@ fn idle_provider() -> kraai_provider_core::ProviderManager {
 
 #[tokio::test]
 async fn session_stays_running_between_streams_until_turn_finishes() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let idle_session = create_session_with_profile(&harness.handle, "test-profile").await?;
     let request = harness
@@ -366,9 +361,7 @@ async fn session_stays_running_between_streams_until_turn_finishes() -> Result<(
 #[tokio::test]
 async fn stream_start_events_precede_a_snapshot_taken_right_after_the_stream_starts() -> Result<()>
 {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let mut request = harness
         .runtime
@@ -417,9 +410,7 @@ async fn stream_start_events_precede_a_snapshot_taken_right_after_the_stream_sta
 
 #[tokio::test]
 async fn cancellation_finishes_after_a_snapshot_and_stays_active_until_finalized() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let runtime = harness.runtime.clone();
     let (generation, cancellation) = runtime
@@ -459,9 +450,7 @@ async fn cancellation_finishes_after_a_snapshot_and_stays_active_until_finalized
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shutdown_waits_for_synchronous_stream_poll_to_return() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let entered = CancellationToken::new();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -500,9 +489,7 @@ async fn shutdown_waits_for_synchronous_stream_poll_to_return() -> Result<()> {
 
 #[tokio::test]
 async fn shutdown_cancels_a_running_script_and_waits_for_its_finalization() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let runtime = harness.runtime.clone();
     let (generation, cancellation, mailbox) = runtime
@@ -537,9 +524,7 @@ async fn shutdown_cancels_a_running_script_and_waits_for_its_finalization() -> R
 
 #[tokio::test]
 async fn session_commands_after_shutdown_cannot_start_a_new_stream() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let agent = &harness.runtime.agent_manager;
     let request = agent
@@ -605,8 +590,7 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
         kraai_provider_core::ProviderManager::new(),
         Some(store.clone()),
     )
-    .await
-    .expect("runtime regression fixture must initialize");
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let message_id = MessageId::new(ulid::Ulid::generate());
     harness

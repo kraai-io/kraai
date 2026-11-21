@@ -10,7 +10,6 @@ use crate::{
     SessionContextUsage, SessionSnapshot, SettingsDocument, SubmitMessageOutcome, WorkspaceState,
 };
 
-/// Internal commands sent to the runtime
 pub(crate) enum Command {
     GetMcpAuthStatuses {
         response: oneshot::Sender<RuntimeResult<Vec<crate::McpAuthStatus>>>,

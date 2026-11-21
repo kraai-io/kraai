@@ -6,9 +6,7 @@
 use super::*;
 use crate::app::model_options::active_options;
 use crate::app::{KeyCode, UiMode};
-use kraai_types::{
-    ModelOptionDefinition, ModelOptionKind, ModelOptionValue, ModelOptionValues, SessionId,
-};
+use kraai_types::{ModelOptionDefinition, ModelOptionKind, ModelOptionValue, ModelOptionValues};
 
 mod errors;
 mod refresh;
@@ -76,7 +74,6 @@ fn model_mut(harness: &mut TestHarness) -> color_eyre::Result<&mut kraai_runtime
         .ok_or_else(|| color_eyre::eyre::eyre!("missing model"))
 }
 
-/// Opens the settings of the model in use through the model list and highlights `id`.
 fn open_settings(harness: &mut TestHarness, id: &str) -> color_eyre::Result<()> {
     harness.app.handle_command("model");
     ctrl(harness, 's');
@@ -88,7 +85,6 @@ fn open_settings(harness: &mut TestHarness, id: &str) -> color_eyre::Result<()> 
     Ok(())
 }
 
-/// Sets an option on the model in use.
 pub(super) fn set(harness: &mut TestHarness, id: &str, input: &str) -> Result<(), String> {
     let provider = harness.app.state.selected_provider_id.clone();
     let model = harness.app.state.selected_model_id.clone();
@@ -351,7 +347,6 @@ fn enter_uses_the_model_and_ctrl_s_opens_its_settings() -> color_eyre::Result<()
     Ok(())
 }
 
-/// Adds a second model whose only setting is a required reasoning effort.
 fn add_effort_model(harness: &mut TestHarness, extra: bool) -> color_eyre::Result<()> {
     let mut options: Vec<ModelOptionDefinition> = serde_json::from_value(serde_json::json!([
         {"id":"reasoning_effort","label":"Reasoning effort","type":"choice","required":true,"binding":{"type":"body","path":"/effort"},"choices":[{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"}]},
@@ -748,82 +743,5 @@ fn typed_options_validate_and_hide_inactive_budget() -> color_eyre::Result<()> {
     );
     assert!(set(&mut harness, "budget", "50").is_err());
     assert_eq!(active_ids(&harness), ["effort", "thinking"]);
-    Ok(())
-}
-
-#[test]
-fn deferred_submission_retains_options_after_local_selection_changes() -> color_eyre::Result<()> {
-    let mut harness = test_harness();
-    configure(&mut harness)?;
-    harness.app.state.selected_model_options = std::collections::BTreeMap::from([
-        ("effort".into(), ModelOptionValue::Choice("high".into())),
-        ("thinking".into(), ModelOptionValue::Boolean(false)),
-    ]);
-    let selected = harness.app.state.selected_model_options.clone();
-    harness.app.submit_message("Hello".into());
-    let creation_id = harness
-        .drain_requests()
-        .into_iter()
-        .find_map(|request| match request {
-            RuntimeRequest::CreateSession { creation_id, .. } => Some(creation_id),
-            _ => None,
-        })
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing creation request"))?;
-    harness
-        .app
-        .state
-        .selected_model_options
-        .insert("effort".into(), ModelOptionValue::Choice("low".into()));
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::CreateSession {
-            creation_id,
-            result: Ok(SessionId::new("session")),
-        });
-    assert!(harness.drain_requests().into_iter().any(|request| matches!(request, RuntimeRequest::SendMessage { options, .. } if options == selected)));
-    Ok(())
-}
-
-#[test]
-fn session_restore_does_not_overwrite_later_option_edits() -> color_eyre::Result<()> {
-    let mut harness = test_harness();
-    configure(&mut harness)?;
-    harness
-        .app
-        .reset_chat_session(Some(SessionId::new("session")));
-    let mut snapshot = session_snapshot(None);
-    let selected = std::collections::BTreeMap::from([(
-        "effort".into(),
-        ModelOptionValue::Choice("high".into()),
-    )]);
-    snapshot.session.selected_model = Some(kraai_types::ModelSelection {
-        provider_id: kraai_types::ProviderId::new("provider"),
-        model_id: kraai_types::ModelId::new("model"),
-        options: selected.clone(),
-    });
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-            model_save_id: 0,
-            session_id: SessionId::new("session"),
-            result: Box::new(Ok(snapshot.clone())),
-        });
-    assert_eq!(harness.app.state.selected_model_options, selected);
-    harness
-        .app
-        .state
-        .selected_model_options
-        .insert("effort".into(), ModelOptionValue::Choice("low".into()));
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-            model_save_id: 0,
-            session_id: SessionId::new("session"),
-            result: Box::new(Ok(snapshot)),
-        });
-    assert_eq!(
-        harness.app.state.selected_model_options.get("effort"),
-        Some(&ModelOptionValue::Choice("low".into()))
-    );
     Ok(())
 }

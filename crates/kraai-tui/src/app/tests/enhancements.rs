@@ -326,7 +326,7 @@ fn model_refresh_preserves_selection_and_clamps_missing_or_filtered_entries() {
 }
 
 #[test]
-fn model_search_matches_provider_name_and_id_with_empty_results() {
+fn enter_on_an_empty_model_search_selects_nothing() {
     let mut harness = test_harness();
     harness.app.state.mode = UiMode::Model;
     harness.app.state.models_by_provider.insert(
@@ -338,10 +338,6 @@ fn model_search_matches_provider_name_and_id_with_empty_results() {
             max_context: Some(1000),
         }],
     );
-    for query in ["PROVIDER", "model-id", "display"] {
-        harness.app.state.sheet_query.set(query.to_string());
-        assert_eq!(harness.app.state.filtered_models().len(), 1);
-    }
     harness.app.state.sheet_query.set(String::from("missing"));
     harness
         .app

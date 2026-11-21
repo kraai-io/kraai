@@ -7,7 +7,6 @@ impl AppState {
         self.sheet_scroll.set(0);
     }
 
-    /// Backspace with nothing typed asks to leave the sheet the way it was entered.
     pub(super) fn wants_back(&self, key: KeyEvent) -> bool {
         key.code == KeyCode::Backspace && key.modifiers.is_empty() && self.sheet_query.is_empty()
     }
@@ -30,7 +29,6 @@ impl AppState {
             .collect()
     }
 
-    /// The breadcrumb shown ahead of the query while a sheet owns the composer.
     pub(super) fn sheet_prefix(&self) -> Option<String> {
         match self.mode {
             UiMode::Model => Some(String::from("/model ")),
@@ -65,7 +63,6 @@ impl AppState {
 }
 
 impl App {
-    /// Opens a sheet with nothing typed and its first row highlighted.
     pub(super) fn open_sheet(&mut self, mode: UiMode) {
         self.state.sheet_query.clear();
         self.state.sheet_notice = None;
@@ -84,14 +81,12 @@ impl App {
         self.reset_command_selection();
     }
 
-    /// Returns to the chat from whatever sheet is open, leaving the command list alone.
     pub(super) fn leave_sheet(&mut self) {
         if self.state.mode != UiMode::Chat {
             self.close_sheet();
         }
     }
 
-    /// Closes the sheet and puts `command` back in an empty composer, as if backspacing into it.
     pub(super) fn close_sheet_to_composer(&mut self, command: &str) {
         self.close_sheet();
         if self.state.input.is_empty() && self.state.draft_images.len() == 0 {
@@ -100,8 +95,6 @@ impl App {
         }
     }
 
-    /// Applies a key that edits the filter of a sheet a command opened. Backspace on an empty
-    /// filter hands `command` back to the composer. False when the key is not an edit.
     pub(super) fn filter_sheet(&mut self, key: KeyEvent, command: &str) -> bool {
         if self.state.wants_back(key) {
             self.close_sheet_to_composer(command);
@@ -110,8 +103,6 @@ impl App {
         self.edit_sheet_filter(key)
     }
 
-    /// Applies a key that edits a sheet's filter or moves its cursor. An edit puts the highlight
-    /// back on the first row. False when the key does neither.
     pub(super) fn edit_sheet_filter(&mut self, key: KeyEvent) -> bool {
         let handled = self.state.sheet_query.handle_key(key);
         if handled == Some(LineKey::Edited) {
@@ -120,8 +111,6 @@ impl App {
         handled.is_some()
     }
 
-    /// Moves the highlight through `len` rows with the arrows, Tab and Shift+Tab, wrapping at
-    /// both ends. False when the key is something else.
     pub(super) fn walk_sheet(&mut self, key: KeyEvent, len: usize) -> bool {
         let index = self.state.sheet_index.min(len.saturating_sub(1));
         self.state.sheet_index = match key.code {
@@ -132,7 +121,6 @@ impl App {
         true
     }
 
-    /// Applies a key that edits the sheet query or moves its cursor; false when it does neither.
     pub(super) fn edit_sheet_query(&mut self, key: KeyEvent) -> bool {
         self.state.sheet_query.handle_key(key).is_some()
     }

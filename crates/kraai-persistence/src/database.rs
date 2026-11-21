@@ -138,7 +138,6 @@ impl Database {
             .context("Database task failed")?
     }
 
-    /// Runs `operation` inside one read transaction, so all of its queries see the same commit.
     pub(crate) async fn read<T: Send + 'static>(
         &self,
         operation: impl FnOnce(&Connection, &LeaseTokens) -> Result<T> + Send + 'static,

@@ -1,7 +1,7 @@
 use crate::{SeccompInstruction, restricted_network_seccomp_program};
 
-/// Execute the classic BPF subset emitted by the policy, including branch skips.
-/// Scanning adjacent constants confuses argument checks with syscall comparisons.
+/// Interprets the BPF because scanning adjacent constants confuses argument checks with
+/// syscall comparisons.
 pub(super) fn denies_call(program: &[SeccompInstruction], syscall: u32, args: [u64; 6]) -> bool {
     let arch = match std::env::consts::ARCH {
         "x86_64" => 0xc000_003e,

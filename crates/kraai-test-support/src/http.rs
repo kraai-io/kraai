@@ -1,10 +1,5 @@
-//! HTTP fixture servers that only serve the requests their test sends.
-//!
-//! Other local clients can reach a fixture's port. T3 Code's preview port scanner, for one,
-//! sends `GET /` to every port a process started from a T3 thread listens on. A fixture that
-//! treats each connection as its test's request lets such a probe use up a scripted response
-//! or fail a request assertion, so fixtures serve their test's traffic under a path and
-//! answer everything else with 404.
+//! T3 Code's preview port scanner sends `GET /` to every port a T3 thread's process listens on,
+//! so fixtures serve their test's traffic under a path and answer everything else with 404.
 
 use std::io::{self, Read};
 use std::net::SocketAddr;
@@ -14,14 +9,12 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 
-/// Path a fixture serves when the code under test lets the test choose the URL.
 pub const PATH: &str = "/kraai-fixture";
 
 const MAX_REQUEST_LINE: usize = 8192;
 const NOT_FOUND: &[u8] =
     b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
-/// A loopback listener that only yields connections requesting a path under its prefix.
 pub struct Listener {
     inner: TcpListener,
     prefix: String,
@@ -29,7 +22,6 @@ pub struct Listener {
 }
 
 impl Listener {
-    /// Binds a loopback port serving request targets that start with `prefix`.
     pub async fn bind(prefix: &str) -> io::Result<Self> {
         Ok(Self {
             inner: TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?,
@@ -42,13 +34,10 @@ impl Listener {
         self.inner.local_addr()
     }
 
-    /// The fixture's URL, ending in its prefix.
     pub fn url(&self) -> io::Result<String> {
         Ok(format!("http://{}{}", self.local_addr()?, self.prefix))
     }
 
-    /// Accepts the next connection whose request targets the prefix, answering every other
-    /// request with 404. The returned stream has not been read from.
     pub async fn accept(&mut self) -> io::Result<(TcpStream, SocketAddr)> {
         loop {
             tokio::select! {
@@ -89,8 +78,6 @@ async fn expected(mut stream: TcpStream, prefix: &str) -> Option<TcpStream> {
     None
 }
 
-/// Reports whether a connection queued on the nonblocking `listener` requested a target
-/// under `prefix`, for tests that check a sandboxed process could not reach the network.
 pub fn received(listener: &std::net::TcpListener, prefix: &str) -> io::Result<bool> {
     loop {
         let mut stream = match listener.accept() {

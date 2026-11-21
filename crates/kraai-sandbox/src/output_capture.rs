@@ -4,8 +4,6 @@ pub const CAPTURE_HEAD_BYTES: usize = 32 * 1024;
 pub const CAPTURE_TAIL_BYTES: usize = 32 * 1024;
 pub const MAX_CAPTURE_BYTES: usize = CAPTURE_HEAD_BYTES + CAPTURE_TAIL_BYTES;
 
-/// Keeps the first and last bytes of a stream. The head is emitted as it arrives; the tail,
-/// preceded by a notice when the middle was dropped, is emitted by [`OutputCapture::finish`].
 #[derive(Default)]
 pub struct OutputCapture {
     bytes: Vec<u8>,

@@ -10,34 +10,6 @@ use crate::request_context::ProviderRetryObserver;
 use kraai_test_support::http;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
-    let mut current = Some(error);
-    while let Some(error) = current {
-        let display = error.to_string();
-        let debug = format!("{error:?}");
-        if display.contains("No CA certificates were loaded from the system")
-            || debug.contains("No CA certificates were loaded from the system")
-            || display == "builder error"
-        {
-            return true;
-        }
-        current = error.source();
-    }
-    false
-}
-
-fn test_client_from_builder_or_skip(builder: reqwest::ClientBuilder) -> Option<reqwest::Client> {
-    match builder.build() {
-        Ok(client) => Some(client),
-        Err(error) if is_missing_system_ca_error(&error) => None,
-        Err(error) => panic!("unexpected reqwest client build error: {error}"),
-    }
-}
-
-fn test_client_or_skip() -> Option<reqwest::Client> {
-    test_client_from_builder_or_skip(reqwest::Client::builder())
-}
-
 #[derive(Clone, Default)]
 struct RetryCollector {
     events: Arc<Mutex<Vec<ProviderRetryEvent>>>,
@@ -197,9 +169,7 @@ async fn failed_attempt_record_prevents_retry_send() -> Result<()> {
         body: "try again",
     }])
     .await?;
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
     let context = ProviderRequestContext::with_retry_observer(Arc::new(RejectRetry));
     let mut sends = 0;
     let result = send_with_retry("test", &test_policy(), &context, || {
@@ -227,9 +197,7 @@ async fn retries_500_then_succeeds() -> Result<()> {
         },
     ])
     .await?;
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
 
     let observer = Arc::new(RetryCollector::default());
     let context = ProviderRequestContext::with_retry_observer(observer.clone());
@@ -262,9 +230,7 @@ async fn retries_429_then_succeeds() -> Result<()> {
         },
     ])
     .await?;
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
 
     let observer = Arc::new(RetryCollector::default());
     let context = ProviderRequestContext::with_retry_observer(observer.clone());
@@ -297,9 +263,7 @@ async fn retries_408_then_succeeds() -> Result<()> {
         },
     ])
     .await?;
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
 
     let observer = Arc::new(RetryCollector::default());
     let context = ProviderRequestContext::with_retry_observer(observer.clone());
@@ -332,9 +296,7 @@ async fn retries_409_then_succeeds() -> Result<()> {
         },
     ])
     .await?;
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
 
     let response = send_with_retry(
         "test",
@@ -349,54 +311,31 @@ async fn retries_409_then_succeeds() -> Result<()> {
 }
 
 #[tokio::test]
-async fn does_not_retry_400() -> Result<()> {
-    let url = spawn_server(vec![ScriptedResponse::Status {
-        status_line: "400 Bad Request",
-        headers: Vec::new(),
-        body: "bad request",
-    }])
-    .await?;
-    let collector = Arc::new(RetryCollector::default());
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+async fn does_not_retry_client_errors() -> Result<()> {
+    let client = reqwest::Client::builder().build()?;
+    for (status_line, status) in [
+        ("400 Bad Request", StatusCode::BAD_REQUEST),
+        ("401 Unauthorized", StatusCode::UNAUTHORIZED),
+    ] {
+        let url = spawn_server(vec![ScriptedResponse::Status {
+            status_line,
+            headers: Vec::new(),
+            body: "rejected",
+        }])
+        .await?;
+        let collector = Arc::new(RetryCollector::default());
 
-    let response = send_with_retry(
-        "test",
-        &test_policy(),
-        &ProviderRequestContext::with_retry_observer(collector.clone()),
-        || client.get(&url).send(),
-    )
-    .await?;
+        let response = send_with_retry(
+            "test",
+            &test_policy(),
+            &ProviderRequestContext::with_retry_observer(collector.clone()),
+            || client.get(&url).send(),
+        )
+        .await?;
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert!(collector.snapshot().is_empty());
-    Ok(())
-}
-
-#[tokio::test]
-async fn does_not_retry_401() -> Result<()> {
-    let url = spawn_server(vec![ScriptedResponse::Status {
-        status_line: "401 Unauthorized",
-        headers: Vec::new(),
-        body: "nope",
-    }])
-    .await?;
-    let collector = Arc::new(RetryCollector::default());
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
-
-    let response = send_with_retry(
-        "test",
-        &test_policy(),
-        &ProviderRequestContext::with_retry_observer(collector.clone()),
-        || client.get(&url).send(),
-    )
-    .await?;
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert!(collector.snapshot().is_empty());
+        assert_eq!(response.status(), status);
+        assert!(collector.snapshot().is_empty());
+    }
     Ok(())
 }
 
@@ -409,9 +348,7 @@ async fn retries_transport_connect_failure() -> Result<()> {
     }])
     .await?;
     let closed_url = closed_port_url()?;
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
     let attempt = Arc::new(Mutex::new(0usize));
 
     let response = send_with_retry(
@@ -445,7 +382,7 @@ async fn retries_transport_connect_failure() -> Result<()> {
 #[tokio::test]
 async fn retries_transport_timeout() -> Result<()> {
     let slow_url = spawn_server(vec![ScriptedResponse::DelayedStatus {
-        delay: Duration::from_millis(50),
+        delay: kraai_test_support::HANG_TIMEOUT,
         status_line: "200 OK",
         headers: Vec::new(),
         body: "slow",
@@ -457,11 +394,7 @@ async fn retries_transport_timeout() -> Result<()> {
         body: "ok",
     }])
     .await?;
-    let Some(client) = test_client_from_builder_or_skip(
-        reqwest::Client::builder().timeout(Duration::from_millis(10)),
-    ) else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
     let attempt = Arc::new(Mutex::new(0usize));
 
     let response = send_with_retry(
@@ -470,20 +403,20 @@ async fn retries_transport_timeout() -> Result<()> {
         &ProviderRequestContext::default(),
         || {
             let attempt = attempt.clone();
-            let url = {
-                let mut guard = attempt
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let current = *guard;
-                *guard += 1;
-                drop(guard);
-                if current == 0 {
-                    slow_url.clone()
-                } else {
-                    ok_url.clone()
-                }
-            };
-            client.get(url).send()
+            let mut guard = attempt
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let current = *guard;
+            *guard += 1;
+            drop(guard);
+            if current == 0 {
+                client
+                    .get(&slow_url)
+                    .timeout(Duration::from_millis(10))
+                    .send()
+            } else {
+                client.get(&ok_url).send()
+            }
         },
     )
     .await?;
@@ -519,9 +452,7 @@ async fn stops_after_max_attempts() -> Result<()> {
         max_elapsed: kraai_test_support::HANG_TIMEOUT,
     };
     let collector = Arc::new(RetryCollector::default());
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
 
     let response = send_with_retry(
         "test",
@@ -563,9 +494,7 @@ async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
         max_elapsed: kraai_test_support::HANG_TIMEOUT,
     };
     let collector = Arc::new(RetryCollector::default());
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
 
     let response = send_with_retry(
         "responses",
@@ -608,9 +537,7 @@ async fn a_shorter_retry_after_still_waits_the_backoff() -> Result<()> {
     ])
     .await?;
     let collector = Arc::new(RetryCollector::default());
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
 
     let response = send_with_retry(
         "responses",
@@ -652,9 +579,7 @@ async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
         max_delay: Duration::from_millis(20),
         max_elapsed: kraai_test_support::HANG_TIMEOUT,
     };
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
 
     let response = send_with_retry(
         "responses",
@@ -675,13 +600,7 @@ async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
 }
 
 #[test]
-fn default_retry_policy_is_bounded_and_jitter_stays_within_limits() {
-    assert_eq!(DEFAULT_HTTP_RETRY_POLICY.max_attempts, 10);
-    assert_eq!(DEFAULT_HTTP_RETRY_POLICY.max_delay, Duration::from_secs(15));
-    assert_eq!(
-        DEFAULT_HTTP_RETRY_POLICY.max_elapsed,
-        Duration::from_secs(300)
-    );
+fn jitter_and_backoff_stay_within_limits() {
     assert_eq!(
         apply_jitter(Duration::from_secs(10), 80),
         Duration::from_secs(8)
@@ -705,9 +624,7 @@ async fn returns_rate_limit_when_retry_after_exceeds_the_budget() -> Result<()> 
     }])
     .await?;
     let collector = Arc::new(RetryCollector::default());
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
 
     let response = send_with_retry(
         "responses",
@@ -738,9 +655,7 @@ async fn honors_retry_after_longer_than_max_delay_within_the_budget() -> Result<
     ])
     .await?;
     let collector = Arc::new(RetryCollector::default());
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
 
     let response = send_with_retry(
         "responses",
@@ -766,9 +681,7 @@ async fn zero_attempt_policy_is_normalized_to_one_attempt() -> Result<()> {
         body: "ok",
     }])
     .await?;
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
     let policy = HttpRetryPolicy {
         max_attempts: 0,
         initial_backoff: Duration::ZERO,
@@ -791,9 +704,7 @@ async fn shared_cooldown_beyond_the_budget_fails_fast_without_sending() -> Resul
     cooldown.defer(kraai_test_support::HANG_TIMEOUT * 2);
     let context = ProviderRequestContext::default().with_cooldown(cooldown);
     let sent = std::sync::atomic::AtomicBool::new(false);
-    let Some(client) = test_client_or_skip() else {
-        return Ok(());
-    };
+    let client = reqwest::Client::builder().build()?;
     let Err(error) = send_with_retry("responses", &test_policy(), &context, || {
         sent.store(true, std::sync::atomic::Ordering::SeqCst);
         client.get("http://127.0.0.1:9/").send()

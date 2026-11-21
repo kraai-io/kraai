@@ -26,8 +26,7 @@ pub mod __private {
     pub use serde;
 }
 
-/// Defines a string id newtype checked by `$validator`. The invoking crate decides whether the
-/// id derives `ts_rs::TS` through its own `typescript` feature.
+/// The invoking crate's `typescript` feature decides whether the id derives `ts_rs::TS`.
 #[macro_export]
 macro_rules! define_id {
     ($name:ident, $validator:path) => {

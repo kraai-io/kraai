@@ -26,7 +26,6 @@ pub(crate) struct RefreshedContextState {
     pub(crate) notifications: Vec<String>,
 }
 
-/// The current version of one instruction section, such as an AGENTS.md file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InstructionSection {
     pub(crate) key: &'static str,
@@ -108,8 +107,7 @@ pub(crate) async fn refresh_context_state(
     Ok(refreshed)
 }
 
-/// Keeps each unchanged section where the conversation first saw it and places changed or
-/// added sections after `latest`, so a change leaves the earlier conversation untouched.
+/// Changed or added sections go after `latest` so the earlier conversation stays untouched.
 fn refresh_instructions(
     previous: &[InstructionSnapshot],
     current: Vec<InstructionSection>,

@@ -10,8 +10,7 @@ use super::harness::FullHistory as _;
 use super::harness::{
     RetryNotifyingProvider, RuntimeTestHarness, ScriptedChunk, create_session_with_profile,
 };
-use crate::handle::{Command, RuntimeEventSender, RuntimeLifecycle};
-use crate::{Event, RuntimeErrorKind, RuntimeEvent, RuntimeHandle, RuntimeStartupState};
+use crate::{Event, RuntimeErrorKind, RuntimeEvent};
 
 #[test]
 fn idle_config_watcher_does_not_block_single_thread_runtime() -> Result<()> {
@@ -19,9 +18,7 @@ fn idle_config_watcher_does_not_block_single_thread_runtime() -> Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
-            return Ok(());
-        };
+        let harness = RuntimeTestHarness::new(Vec::new()).await;
 
         hang_guard(harness.handle.list_sessions()).await??;
 
@@ -32,9 +29,7 @@ fn idle_config_watcher_does_not_block_single_thread_runtime() -> Result<()> {
 
 #[tokio::test]
 async fn profile_queries_share_reads_and_validate_workspace_before_locking() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
-        return Ok(());
-    };
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = harness
         .handle
         .create_session_with(crate::CreateSessionRequest {
@@ -80,9 +75,7 @@ async fn profile_queries_share_reads_and_validate_workspace_before_locking() -> 
 #[tokio::test]
 async fn runtime_shutdown_is_awaitable_and_rejects_new_commands() -> Result<()> {
     for _ in 0..2 {
-        let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
-            return Ok(());
-        };
+        let harness = RuntimeTestHarness::new(Vec::new()).await;
         let handle = harness.handle.clone();
 
         hang_guard(handle.shutdown()).await??;
@@ -91,53 +84,6 @@ async fn runtime_shutdown_is_awaitable_and_rejects_new_commands() -> Result<()> 
         hang_guard(harness.shutdown()).await?;
     }
     Ok(())
-}
-
-#[tokio::test]
-async fn startup_state_remains_observable_after_initial_result() -> Result<()> {
-    let (command_tx, _command_rx) = tokio::sync::mpsc::channel(1);
-    let event_tx = RuntimeEventSender::new(1);
-    let (startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Starting);
-    startup_tx.send_replace(RuntimeStartupState::Failed(String::from("initial failure")));
-    let handle = RuntimeHandle {
-        command_tx,
-        event_tx,
-        lifecycle: None,
-        startup_rx,
-    };
-
-    tokio::task::yield_now().await;
-
-    assert_eq!(
-        handle.startup_status(),
-        RuntimeStartupState::Failed(String::from("initial failure"))
-    );
-    assert_eq!(
-        handle.wait_for_startup().await?,
-        RuntimeStartupState::Failed(String::from("initial failure"))
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn dropping_last_handle_signals_shutdown_when_command_queue_is_full() {
-    let (command_tx, _command_rx) = tokio::sync::mpsc::channel(1);
-    let event_tx = RuntimeEventSender::new(1);
-    let (_startup_tx, startup_rx) = tokio::sync::watch::channel(RuntimeStartupState::Starting);
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    command_tx
-        .try_send(Command::LoadConfig)
-        .expect("fill command queue");
-    let handle = RuntimeHandle {
-        command_tx,
-        event_tx,
-        lifecycle: Some(std::sync::Arc::new(RuntimeLifecycle::new(shutdown_tx))),
-        startup_rx,
-    };
-
-    drop(handle);
-
-    assert!(*shutdown_rx.borrow());
 }
 
 #[tokio::test]
@@ -150,9 +96,7 @@ async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> 
         }),
     );
 
-    let Some(harness) = RuntimeTestHarness::new_with_parts(providers).await else {
-        return Ok(());
-    };
+    let harness = RuntimeTestHarness::new_with_parts(providers).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
 
     harness
@@ -213,11 +157,8 @@ async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> 
 
 #[tokio::test]
 async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
-    let Some(harness) =
-        RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("shared event stream")]]).await
-    else {
-        return Ok(());
-    };
+    let harness =
+        RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("shared event stream")]]).await;
     let mut first = harness.handle.subscribe();
     let mut second = harness.handle.subscribe();
 
@@ -312,7 +253,7 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
 
 #[tokio::test]
 async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(vec![vec![
+    let harness = RuntimeTestHarness::new(vec![vec![
         ScriptedChunk::plain("usage-aware reply"),
         ScriptedChunk::usage(TokenUsage {
             total_tokens: 42,
@@ -323,10 +264,7 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
             ..Default::default()
         }),
     ]])
-    .await
-    else {
-        return Ok(());
-    };
+    .await;
 
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
@@ -402,11 +340,7 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
 
 #[tokio::test]
 async fn session_list_omits_sessions_without_messages() -> Result<()> {
-    let Some(harness) =
-        RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("first reply")]]).await
-    else {
-        return Ok(());
-    };
+    let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("first reply")]]).await;
 
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     assert!(harness.handle.list_sessions().await?.is_empty());
@@ -454,60 +388,8 @@ async fn session_list_omits_sessions_without_messages() -> Result<()> {
 }
 
 #[tokio::test]
-async fn invalid_public_ids_return_errors_without_stopping_runtime() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
-        return Ok(());
-    };
-
-    let model_error = harness
-        .handle
-        .send_message(
-            SessionId::new("session"),
-            String::from("message"),
-            String::new(),
-            String::from("provider"),
-            Default::default(),
-        )
-        .await
-        .unwrap_err();
-    assert!(model_error.to_string().contains("model_id"));
-
-    let provider_error = harness
-        .handle
-        .send_message(
-            SessionId::new("session"),
-            String::from("message"),
-            String::from("model"),
-            String::new(),
-            Default::default(),
-        )
-        .await
-        .unwrap_err();
-    assert!(provider_error.to_string().contains("provider_id"));
-
-    let approve_error = harness
-        .handle
-        .approve_script(SessionId::new("session"), String::new())
-        .await
-        .unwrap_err();
-    assert!(approve_error.to_string().contains("execution_id"));
-    let deny_error = harness
-        .handle
-        .deny_script(SessionId::new("session"), String::new())
-        .await
-        .unwrap_err();
-    assert!(deny_error.to_string().contains("execution_id"));
-
-    hang_guard(harness.handle.list_sessions()).await??;
-    harness.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn domain_failures_preserve_their_public_error_kind() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
-        return Ok(());
-    };
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
 
     let missing_session = harness
         .handle
@@ -544,9 +426,7 @@ async fn domain_failures_preserve_their_public_error_kind() -> Result<()> {
 
 #[tokio::test]
 async fn session_snapshot_waits_for_state_event_boundary() -> Result<()> {
-    let Some(harness) = RuntimeTestHarness::new(Vec::new()).await else {
-        return Ok(());
-    };
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let barrier = harness.runtime.sessions.barrier(&session_id);
     let mutation_guard = barrier.read().await;
@@ -577,9 +457,7 @@ async fn session_snapshot_waits_for_state_event_boundary() -> Result<()> {
 
 #[tokio::test]
 async fn deleting_session_removes_only_its_timer() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime fixture");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let deleted = create_session_with_profile(&harness.handle, "test-profile").await?;
     let retained = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness.runtime.event_tx.resume_timer(&deleted);

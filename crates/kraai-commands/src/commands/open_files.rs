@@ -23,7 +23,6 @@ mod command {
     use crate::{command_error, declare_kraai_command};
 
     declare_kraai_command! {
-        /// Pins files for fresh context injection on subsequent model turns.
         pub struct OpenFilesCommand;
         metadata: super::METADATA;
         signature: Signature::build(Self::METADATA.name)

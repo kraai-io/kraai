@@ -16,7 +16,6 @@ pub struct StartupOptions {
     pub message: Option<String>,
 }
 
-/// A script the runtime started and has not answered yet.
 pub(super) struct RunningScript {
     pub(super) started: std::time::Instant,
     pub(super) timeout: std::time::Duration,
@@ -43,9 +42,7 @@ pub(super) enum UiMode {
 pub(super) enum ProvidersView {
     List,
     Connect,
-    /// One provider's actions.
     Provider,
-    /// One provider's fields and models.
     Config,
 }
 

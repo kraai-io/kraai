@@ -1,7 +1,4 @@
 #![forbid(unsafe_code)]
-//! What the script host, the sandbox and native commands exchange: permissions and policy,
-//! script profiles and outcomes, state effects, and the requests commands make. Conversation
-//! history and its records live in `kraai-types`.
 
 mod effect;
 mod error;

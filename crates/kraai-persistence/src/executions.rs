@@ -33,7 +33,6 @@ pub struct ScriptExecutionRecord {
     pub source_message_id: MessageId,
     pub call_id: ToolCallId,
     pub profile: ScriptProfileSnapshot,
-    /// What Kraai changed in the model's script before it ran, such as `` `2>` → `e>` ``.
     #[serde(default)]
     pub rewrites: Vec<String>,
     pub requested_capabilities: SandboxCapabilities,
@@ -107,8 +106,6 @@ pub trait ScriptExecutionStore: Send + Sync {
 
     async fn mark_running(&self, id: &ScriptExecutionId) -> Result<ScriptExecutionRecord>;
 
-    /// Append and sync output chunks, in order, in one transaction while the execution remains
-    /// active.
     async fn append_output(
         &self,
         id: &ScriptExecutionId,
@@ -177,7 +174,6 @@ impl SqliteScriptExecutionStore {
     }
 }
 
-/// Joins adjacent chunks of the same stream and drops empty ones, keeping their order.
 fn coalesce_output(
     chunks: Vec<(ScriptOutputStream, Vec<u8>)>,
 ) -> Vec<(ScriptOutputStream, Vec<u8>)> {

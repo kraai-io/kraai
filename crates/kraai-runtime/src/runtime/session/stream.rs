@@ -12,7 +12,6 @@ use super::actor::{SessionActor, SessionMessage, StreamJob, StreamKind, TurnStat
 use crate::api::Event;
 use kraai_types::SessionId;
 
-/// A provider stream change that the actor applies to the streaming message.
 #[derive(Debug)]
 pub(crate) enum StreamEvent {
     Text {
@@ -30,7 +29,6 @@ pub(crate) enum StreamEvent {
     },
     ScriptCall(ScriptCall),
     Usage(TokenUsage),
-    /// The request failed transiently and is being issued again.
     Restart {
         reason: String,
     },
@@ -201,7 +199,6 @@ impl SessionActor {
         .await;
     }
 
-    /// Rolls back a failed stream's assistant message and reports the failure.
     pub(super) async fn stream_failed(
         &mut self,
         kind: StreamKind,
@@ -356,8 +353,6 @@ fn send_streamed_item(
     runtime.send_event(event);
 }
 
-/// Applies one forwarded provider event to the streaming message, returning a failure that
-/// ends the stream.
 pub(in crate::runtime) async fn apply_stream_event(
     runtime: &RuntimeCore,
     session_id: &SessionId,

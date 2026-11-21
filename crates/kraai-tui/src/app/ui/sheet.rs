@@ -33,10 +33,8 @@ impl Tone {
     }
 }
 
-/// A line of text under the rows that stays in view while the rows scroll.
 #[derive(Default)]
 pub(super) struct Note {
-    /// Names the text, in a column every note of the sheet shares.
     pub(super) label: String,
     pub(super) text: String,
     pub(super) tone: Tone,
@@ -64,14 +62,12 @@ impl Note {
 pub(super) struct SheetItem {
     pub(super) label: String,
     pub(super) value: String,
-    /// Drawn in the value column on one line, with the chosen one boxed.
     pub(super) choices: Vec<String>,
     pub(super) chosen: Option<usize>,
     pub(super) detail: String,
     pub(super) meta: String,
     pub(super) tag: String,
     pub(super) waiting: bool,
-    /// Colours the label and the tag. A plain row keeps its tag in the accent.
     pub(super) tone: Tone,
 }
 
@@ -87,8 +83,6 @@ pub(super) struct Sheet {
     pub(super) selected: usize,
     pub(super) empty: String,
     pub(super) notes: Vec<Note>,
-    /// Choices share one column wide enough for the longest row. When false, each row's detail
-    /// follows straight after its own choices.
     pub(super) align_choices: bool,
 }
 
@@ -209,13 +203,11 @@ pub(super) fn render(
 
 struct NoteLine {
     label: String,
-    /// The column the text starts in. Notes with a label share one; the others start at zero.
     offset: usize,
     text: String,
     tone: Tone,
 }
 
-/// Wraps the notes to `width`, one entry per line.
 fn note_lines(notes: &[Note], width: usize) -> Vec<NoteLine> {
     let label = notes
         .iter()
@@ -289,7 +281,6 @@ fn selected_row(rows: &[SheetRow], selected: usize) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
-/// Returns the first visible row, moving the previous window only as far as the selection needs.
 fn window(rows: &[SheetRow], selected: Option<usize>, capacity: usize, scroll: usize) -> usize {
     let total = rows.len();
     if capacity == 0 || total <= capacity {
@@ -362,8 +353,6 @@ fn choices_width(choices: &[String]) -> usize {
         + GAP * choices.len().saturating_sub(1)
 }
 
-/// The run of choices that fits in `room` columns, grown around the chosen one. A cut end costs
-/// a gap and one column for its `…`.
 fn choice_run(choices: &[String], chosen: Option<usize>, room: usize) -> Range<usize> {
     let len = choices.len();
     let cost = |run: &Range<usize>| {
@@ -393,7 +382,6 @@ struct ChoiceStyles {
     mark: Style,
 }
 
-/// Draws the choices from column `x` and returns how many columns they took.
 fn render_choices(
     item: &SheetItem,
     styles: &ChoiceStyles,

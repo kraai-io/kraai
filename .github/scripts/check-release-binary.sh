@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# check-release-binary.sh <binary>: checks target/$TARGET/release/<binary>$EXE before it ships.
-# Native builds must print KRAAI_VERSION for --version. Every build may link only libraries the
-# operating system provides, Linux builds may need no newer glibc than GLIBC_FLOOR, and Windows
-# builds must embed the Kraai icon.
 set -euo pipefail
 
 bin=$1

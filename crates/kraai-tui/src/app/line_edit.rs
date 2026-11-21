@@ -1,7 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
 
-/// One line of text with a cursor, edited the way a shell prompt is.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct LineEdit {
     text: String,
@@ -9,12 +8,9 @@ pub(super) struct LineEdit {
     cursor: usize,
 }
 
-/// What a key did to a [`LineEdit`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LineKey {
-    /// The text changed.
     Edited,
-    /// Only the cursor moved.
     Moved,
 }
 
@@ -31,7 +27,6 @@ impl LineEdit {
         self.cursor
     }
 
-    /// Replaces the text and puts the cursor after it.
     pub(super) fn set(&mut self, text: impl Into<String>) {
         self.text = text.into();
         self.cursor = self.text.len();
@@ -42,16 +37,14 @@ impl LineEdit {
         self.cursor = 0;
     }
 
-    /// Inserts `text` at the cursor, dropping control characters.
     pub(super) fn insert(&mut self, text: &str) {
         let text: String = text.chars().filter(|ch| !ch.is_control()).collect();
         self.text.insert_str(self.cursor, &text);
         self.cursor = self.snap(self.cursor + text.len(), true);
     }
 
-    /// Applies an editing or cursor key. Left, Right and Delete act only while there is text for
-    /// them to act on, so a sheet can give them a meaning of its own on an empty line or, for
-    /// Delete, at its end.
+    /// Left, Right and Delete act only while there is text for them to act on, so a sheet can
+    /// give them a meaning of its own on an empty line or, for Delete, at its end.
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> Option<LineKey> {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -89,7 +82,6 @@ impl LineEdit {
         Some(LineKey::Moved)
     }
 
-    /// Removes the text between the cursor and `boundary`.
     fn remove_to(&mut self, boundary: usize) -> Option<LineKey> {
         let range = self.cursor.min(boundary)..self.cursor.max(boundary);
         if range.is_empty() {
@@ -127,8 +119,7 @@ impl LineEdit {
         self.snap(word_right(&self.text, self.cursor), true)
     }
 
-    /// `position`, or the nearest grapheme boundary after it when `forward` and before it when
-    /// not. An edit can join the graphemes on either side of the cursor into one, and a word
+    /// An edit can join the graphemes on either side of the cursor into one, and a word
     /// boundary can fall before a combining mark.
     fn snap(&self, position: usize, forward: bool) -> usize {
         for (start, grapheme) in self.text.grapheme_indices(true) {
@@ -145,7 +136,6 @@ impl LineEdit {
     }
 }
 
-/// The start of the word before `cursor`, skipping whitespace first.
 pub(super) fn word_left(input: &str, cursor: usize) -> usize {
     let mut position = cursor;
     let mut word = false;
@@ -159,7 +149,6 @@ pub(super) fn word_left(input: &str, cursor: usize) -> usize {
     position
 }
 
-/// The end of the word after `cursor`, skipping whitespace first.
 pub(super) fn word_right(input: &str, cursor: usize) -> usize {
     let mut word = false;
     for (index, ch) in input.get(cursor..).unwrap_or_default().char_indices() {

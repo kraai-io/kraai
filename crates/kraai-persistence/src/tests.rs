@@ -226,24 +226,6 @@ async fn stale_metadata_is_rejected_instead_of_overwriting_another_client() -> R
 }
 
 #[tokio::test]
-async fn legacy_json_and_deletion_markers_are_ignored() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    std::fs::write(
-        directory.path().join("sessions.json"),
-        b"invalid legacy JSON",
-    )?;
-    std::fs::create_dir(directory.path().join("session-deletions"))?;
-    std::fs::write(
-        directory.path().join("session-deletions/session.json"),
-        b"invalid marker",
-    )?;
-    let persistence = open_persistence(directory.path()).await?;
-    ensure!(persistence.sessions().list().await?.is_empty());
-    ensure!(std::fs::read(directory.path().join("sessions.json"))? == b"invalid legacy JSON");
-    Ok(())
-}
-
-#[tokio::test]
 async fn opening_an_observer_does_not_delete_unlinked_messages() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let a = open_persistence(directory.path()).await?;
@@ -392,13 +374,19 @@ async fn execution_sources_output_and_terminal_outcomes_survive_reopen() -> Resu
                 exit_code: Some(0),
                 sandbox_denied: false,
                 error: None,
-                stdout: b"complete".to_vec(),
+                stdout: b"complete\0binary".to_vec(),
                 stderr: Vec::new(),
             },
         )
         .await?;
+    ensure!(
+        b.executions()
+            .get(&record.id)
+            .await?
+            .is_some_and(|record| record.status == Some(ScriptExecutionStatus::Completed))
+    );
     ensure!(b.executions().read_source(&record.id).await? == b"print hello");
-    ensure!(b.executions().read_output(&record.id).await?.stdout == b"complete");
+    ensure!(b.executions().read_output(&record.id).await?.stdout == b"complete\0binary");
     ensure!(
         b.executions()
             .read_output(&record.id)

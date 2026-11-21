@@ -65,14 +65,15 @@ mod tests {
                 .await
                 .unwrap();
             stream.flush().await.unwrap();
-            tokio::time::sleep(kraai_test_support::HANG_TIMEOUT).await;
+            std::future::pending::<()>().await;
         });
         let client = build_test_client(base_client_builder(
-            Duration::from_millis(100),
-            Duration::from_millis(25),
+            kraai_test_support::HANG_TIMEOUT,
+            kraai_test_support::HANG_TIMEOUT,
         ));
 
         let response = client.get(url).send().await.unwrap();
+        tokio::time::pause();
         let mut body = crate::stream_sse_data(response);
         assert_eq!(
             body.next().await.unwrap().unwrap(),

@@ -33,7 +33,7 @@ enum WriteMode {
     Private,
 }
 
-/// Replace a file within an existing, durably established parent directory.
+/// The parent directory must already exist and be durable.
 pub fn atomic_replace(path: &Path, content: &[u8]) -> io::Result<AtomicWriteOutcome> {
     write_atomic(path, content, WriteMode::Replace, true)
 }
@@ -42,7 +42,6 @@ pub fn atomic_replace_private(path: &Path, content: &[u8]) -> io::Result<AtomicW
     write_atomic(path, content, WriteMode::Private, true)
 }
 
-/// Create and sync parent directories beneath an existing durable anchor before replacement.
 pub fn atomic_replace_in(
     anchor: &Path,
     path: &Path,

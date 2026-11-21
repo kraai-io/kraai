@@ -15,21 +15,16 @@ const HISTORY_PAGE: usize = 200;
 pub struct RunOptions {
     pub provider_id: String,
     pub model_id: String,
-    /// Model option assignments such as `reasoning_effort=high`.
     pub options: Vec<String>,
     pub agent_profile: String,
     pub message: String,
 }
 
-/// What a run did, and why it failed if it did.
 pub struct RunOutcome {
     pub metrics: HarnessMetrics,
     pub failure: Option<String>,
 }
 
-/// Sends the prompt, follows the turn until the session stops running, and writes the
-/// assistant's text and script calls to `output`. Fails without metrics only when the run
-/// could not start.
 pub async fn run(
     runtime: &RuntimeHandle,
     options: RunOptions,
@@ -159,7 +154,6 @@ pub async fn run(
     Ok(RunOutcome { metrics, failure })
 }
 
-/// Tracks which items of each message the output already showed.
 #[derive(Default)]
 struct Transcript {
     shown: HashMap<String, HashSet<usize>>,
@@ -188,8 +182,6 @@ impl Transcript {
         }
     }
 
-    /// Writes text of the item at `index`, starting a paragraph when an earlier item of the
-    /// message was already shown.
     fn text(
         &mut self,
         output: &mut impl Write,

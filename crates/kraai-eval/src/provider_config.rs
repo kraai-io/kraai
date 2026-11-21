@@ -67,7 +67,6 @@ impl KraaiProviderConfigRequest {
         self.model_id.is_some()
     }
 
-    /// The model the harness evaluates, which a task context limit applies to.
     #[must_use]
     pub fn with_model(mut self, model_id: impl Into<String>) -> Self {
         self.model_id = Some(model_id.into());
@@ -210,8 +209,6 @@ impl PreparedKraaiProviderConfig {
         self.provider.id.as_str()
     }
 
-    /// Writes the config for one attempt. `max_context` lowers the evaluated model's context
-    /// limit, so a task can make the harness compact.
     pub(crate) fn materialize(
         &self,
         workspace: &Path,

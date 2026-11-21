@@ -12,7 +12,6 @@ use crate::api::Event;
 use crate::api::RuntimeStartupState;
 use crate::handle::{Command, RuntimeEventSender, RuntimeHandle, RuntimeLifecycle};
 
-/// Builder for creating a runtime
 pub struct RuntimeBuilder {
     providers: Arc<dyn ProviderSet>,
     mcp_config_path: Option<PathBuf>,
@@ -70,7 +69,6 @@ impl RuntimeParts {
 }
 
 impl RuntimeBuilder {
-    /// Create a runtime builder that offers the provider types in `providers`.
     pub fn new(providers: impl ProviderSet + 'static) -> Self {
         Self {
             providers: Arc::new(providers),
@@ -108,18 +106,13 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Uses this frontend executable as the sandboxed Nushell host unless an explicit host path
-    /// is configured. The executable must call
-    /// [`crate::run_internal_process`] before parsing its own arguments.
+    /// The executable must call [`crate::run_internal_process`] before parsing its own
+    /// arguments.
     pub fn use_current_executable_as_nushell_host(mut self) -> Self {
         self.use_current_executable_as_nushell_host = true;
         self
     }
 
-    /// Build and start the runtime
-    ///
-    /// This spawns the runtime in a background thread and returns a handle
-    /// to send commands.
     pub fn build(self) -> RuntimeHandle {
         let RuntimeParts {
             handle,
@@ -175,10 +168,6 @@ impl RuntimeBuilder {
         handle
     }
 
-    /// Build the runtime as a task on an existing Tokio runtime.
-    ///
-    /// This is the hosting mode for servers and other applications that already
-    /// own their executor and tracing subscriber.
     pub fn build_on(self, runtime: &tokio::runtime::Handle) -> RuntimeHandle {
         let RuntimeParts {
             handle,

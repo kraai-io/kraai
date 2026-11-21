@@ -188,18 +188,15 @@ impl AgentManager {
         Ok(())
     }
 
-    /// Rolls back a streaming placeholder left by a stopped runtime; requires the session lease.
+    /// Requires the session lease.
     pub async fn recover_interrupted_session(&self, session_id: &SessionId) -> AgentResult<()> {
         let session = self.require_session(session_id).await?;
         self.recover_interrupted_stream(session).await?;
         Ok(())
     }
 
-    /// Roll back an assistant placeholder left by a process that stopped during a stream.
-    ///
-    /// Provider streams are not resumable. Keeping an incomplete assistant message in the
-    /// conversation would make the next request include a response the provider never finished,
-    /// so recovery restores the last durable parent message instead.
+    /// Provider streams are not resumable, so recovery restores the last durable parent message
+    /// instead of keeping an incomplete assistant message.
     pub(super) async fn recover_interrupted_stream(
         &self,
         mut session: SessionMeta,
@@ -246,8 +243,6 @@ impl AgentManager {
         Ok(session)
     }
 
-    /// For a script result at the tip, the first result of its response and the assistant
-    /// message that made the call it answers.
     async fn answered_response(&self, tip: &Message) -> AgentResult<Option<(Message, Message)>> {
         let mut result = tip.clone();
         loop {

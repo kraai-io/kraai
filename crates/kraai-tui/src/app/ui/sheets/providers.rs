@@ -45,7 +45,6 @@ fn model_count(state: &AppState, provider_id: &str) -> String {
     )
 }
 
-/// Where a sign-in stands, in a few words.
 fn auth_words(auth: &ProviderAuthStatus) -> (String, Tone) {
     match auth.state {
         ProviderAuthState::SignedOut => (String::from("signed out"), Tone::Waiting),

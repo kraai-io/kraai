@@ -156,7 +156,7 @@ struct Process {
 }
 
 impl Process {
-    async fn start(upstream: &Upstream, directory: Option<PathBuf>) -> Option<Self> {
+    async fn start(upstream: &Upstream, directory: Option<PathBuf>) -> Self {
         let attempts = Arc::new(AtomicUsize::new(0));
         let mut providers = ProviderManager::new();
         providers.register_provider(
@@ -167,8 +167,8 @@ impl Process {
                 models: Mutex::default(),
             }),
         );
-        let harness = RuntimeTestHarness::new_in_directory(providers, None, directory).await?;
-        Some(Self { harness, attempts })
+        let harness = RuntimeTestHarness::new_in_directory(providers, None, directory).await;
+        Self { harness, attempts }
     }
 
     fn attempts(&self) -> usize {
@@ -214,17 +214,13 @@ impl Process {
 #[tokio::test]
 async fn a_second_process_installs_the_stored_list_without_fetching() -> Result<()> {
     let upstream = Upstream::default();
-    let Some(first) = Process::start(&upstream, None).await else {
-        return Ok(());
-    };
+    let first = Process::start(&upstream, None).await;
     first.harness.runtime.poll_model_lists(unix_millis()).await;
     assert_eq!(first.attempts(), 1);
     assert_eq!(first.listed().await?, ["model-1"]);
     first.wait_for_models_updates(1).await;
 
-    let second = Process::start(&upstream, Some(first.harness.data_dir.clone()))
-        .await
-        .ok_or_else(|| eyre!("second process fixture"))?;
+    let second = Process::start(&upstream, Some(first.harness.data_dir.clone())).await;
     second.harness.runtime.poll_model_lists(unix_millis()).await;
     assert_eq!(second.attempts(), 0);
     assert_eq!(second.listed().await?, ["model-1"]);
@@ -242,12 +238,8 @@ async fn a_second_process_installs_the_stored_list_without_fetching() -> Result<
 #[tokio::test]
 async fn a_stale_list_is_refetched_by_one_process_and_picked_up_by_the_other() -> Result<()> {
     let upstream = Upstream::default();
-    let Some(first) = Process::start(&upstream, None).await else {
-        return Ok(());
-    };
-    let second = Process::start(&upstream, Some(first.harness.data_dir.clone()))
-        .await
-        .ok_or_else(|| eyre!("second process fixture"))?;
+    let first = Process::start(&upstream, None).await;
+    let second = Process::start(&upstream, Some(first.harness.data_dir.clone())).await;
     first.harness.runtime.poll_model_lists(unix_millis()).await;
     second.harness.runtime.poll_model_lists(unix_millis()).await;
     assert_eq!(second.listed().await?, ["model-1"]);
@@ -273,9 +265,7 @@ async fn a_stale_list_is_refetched_by_one_process_and_picked_up_by_the_other() -
 #[tokio::test]
 async fn a_stored_list_older_than_the_installed_one_is_ignored() -> Result<()> {
     let upstream = Upstream::default();
-    let Some(process) = Process::start(&upstream, None).await else {
-        return Ok(());
-    };
+    let process = Process::start(&upstream, None).await;
     let runtime = &process.harness.runtime;
     runtime.sync_model_lists(unix_millis()).await?;
     rusqlite::Connection::open(process.harness.data_dir.join("kraai.sqlite3"))?.execute(
@@ -294,9 +284,7 @@ async fn a_stored_list_older_than_the_installed_one_is_ignored() -> Result<()> {
 #[tokio::test]
 async fn a_failed_refresh_keeps_the_installed_list_and_backs_off_until_reload() -> Result<()> {
     let upstream = Upstream::default();
-    let Some(process) = Process::start(&upstream, None).await else {
-        return Ok(());
-    };
+    let process = Process::start(&upstream, None).await;
     let runtime = &process.harness.runtime;
     assert!(
         runtime

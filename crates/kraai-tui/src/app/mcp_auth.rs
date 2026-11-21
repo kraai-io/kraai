@@ -8,7 +8,6 @@ pub(super) struct BrowserIntent {
     sequence: Option<u64>,
 }
 
-/// What a server's sheet offers, depending on where its sign-in stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum McpAction {
     SignIn,
@@ -41,7 +40,6 @@ impl McpAction {
 }
 
 impl AppState {
-    /// The servers the server list shows: every server, or the ones the typed text names.
     pub(super) fn listed_mcp_servers(&self) -> Vec<&McpAuthStatus> {
         let query = self.sheet_query.as_str().to_lowercase();
         self.mcp_auth
@@ -50,7 +48,6 @@ impl AppState {
             .collect()
     }
 
-    /// The actions the open server offers that the typed text names.
     pub(super) fn listed_mcp_actions(&self) -> Vec<McpAction> {
         let query = self.sheet_query.as_str().to_lowercase();
         self.mcp_open
@@ -219,7 +216,6 @@ impl App {
         }
     }
 
-    /// Steps out of a server's sheet to the server list, or out of the list to the chat.
     pub(super) fn close_mcp_level(&mut self) {
         match self.state.mcp_open.take() {
             Some(server) => {

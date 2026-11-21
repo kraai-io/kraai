@@ -3610,8 +3610,6 @@ name = "kraai-workspace-fs"
 version = "0.1.0"
 dependencies = [
  "kraai-io",
- "kraai-test-support",
- "nix 0.31.3",
  "thiserror 2.0.21",
  "ulid",
  "windows-sys 0.61.2",

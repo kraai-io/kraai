@@ -151,9 +151,8 @@ async fn full_and_partial_model_options_survive_restarting_each_session() -> Res
                 outputs: Mutex::default(),
             }),
         );
-        let harness = RuntimeTestHarness::new_in_directory(providers, None, Some(data_dir.clone()))
-            .await
-            .expect("runtime fixture");
+        let harness =
+            RuntimeTestHarness::new_in_directory(providers, None, Some(data_dir.clone())).await;
         if !restart {
             for selection in &selections {
                 let session = create_session_with_profile(&harness.handle, "test-profile").await?;
@@ -194,9 +193,7 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
             outputs: Mutex::new(VecDeque::from([first_receiver, second_receiver])),
         }),
     );
-    let harness = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("runtime fixture");
+    let harness = RuntimeTestHarness::new_with_parts(providers).await;
     let session = create_session_with_profile(&harness.handle, "test-profile").await?;
     let models = harness.handle.list_models().await?;
     let model = models

@@ -10,9 +10,7 @@ use kraai_persistence::SessionStore;
 
 #[tokio::test]
 async fn observers_refresh_on_expiry_without_a_revision_change_and_can_submit() -> Result<()> {
-    let observer = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("reply")]])
-        .await
-        .expect("observer fixture");
+    let observer = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("reply")]]).await;
     let session = create_session_with_profile(&observer.handle, "test-profile").await?;
     let owner = kraai_persistence::Persistence::open(&observer.data_dir).await?;
     owner.sessions().claim_turn(&session).await?;
@@ -124,9 +122,7 @@ async fn startup_recovers_sessions_whose_owner_stopped_mid_stream() -> Result<()
         [session.as_str()],
     )?;
 
-    let restarted = RuntimeTestHarness::new_shared(Vec::new(), directory.clone())
-        .await
-        .expect("restarted runtime");
+    let restarted = RuntimeTestHarness::new_shared(Vec::new(), directory.clone()).await;
     assert!(
         restarted
             .handle

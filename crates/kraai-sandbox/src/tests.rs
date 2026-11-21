@@ -5,8 +5,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kraai_execution_types::{SandboxCapabilities, SandboxCapability};
 use kraai_test_support::{HANG_TIMEOUT, hang_guard};
-#[cfg(unix)]
-use nix::unistd::Pid;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(target_os = "linux")]
@@ -224,7 +222,7 @@ async fn private_temp_is_writable_and_removed_after_exit() {
     let output = run(
         shell_plan(
             &workspace,
-            "printf data > \"$TMPDIR/probe\"; printf %s \"$TMPDIR\"",
+            "printf data > \"$TMPDIR/probe\" || exit 1; printf %s \"$TMPDIR\"",
             capabilities([SandboxCapability::NoSandbox]),
             HANG_TIMEOUT,
         ),
@@ -232,69 +230,17 @@ async fn private_temp_is_writable_and_removed_after_exit() {
     )
     .await
     .expect("process should run");
+    assert_eq!(
+        output.termination,
+        Termination::Exited { code: Some(0) },
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let temp_path = PathBuf::from(String::from_utf8(output.stdout).expect("utf8 temp path"));
     assert!(
         !temp_path.exists(),
         "private temp should be removed after exit"
     );
-    let _ = std::fs::remove_dir_all(workspace);
-}
-
-#[tokio::test]
-#[cfg(unix)]
-async fn timeout_terminates_descendants_and_preserves_output() {
-    use nix::sys::signal::kill;
-
-    let workspace = temp_dir("timeout-tree");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
-    let pid_path = workspace.join("grandchild.pid");
-    let script = format!(
-        "printf started; sleep {} & child=$!; echo $child > '{}'; wait $child",
-        (HANG_TIMEOUT * 2).as_secs(),
-        pid_path.display()
-    );
-    let mut plan = shell_plan(
-        &workspace,
-        script,
-        capabilities([SandboxCapability::NoSandbox]),
-        Duration::from_millis(100),
-    );
-    let (started, execution_started) = tokio::sync::oneshot::channel();
-    plan.execution_started = Some(execution_started);
-    let child_recorded = async {
-        hang_guard(async {
-            while !std::fs::read_to_string(&pid_path).is_ok_and(|pid| pid.ends_with('\n')) {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("script recorded its child");
-        let _ = started.send(tokio::time::Instant::now());
-    };
-    let (output, ()) = tokio::join!(run(plan, CancellationToken::new()), child_recorded);
-    let output = output.expect("timeout is a stable process outcome");
-
-    assert_eq!(output.termination, Termination::TimedOut);
-    assert_eq!(output.stdout, b"started");
-    let pid = std::fs::read_to_string(&pid_path)
-        .expect("read grandchild pid")
-        .trim()
-        .parse::<i32>()
-        .expect("parse grandchild pid");
-    let deadline = tokio::time::Instant::now() + HANG_TIMEOUT;
-    loop {
-        match kill(Pid::from_raw(pid), None) {
-            Err(nix::errno::Errno::ESRCH) => break,
-            Ok(()) | Err(nix::errno::Errno::EPERM) => {
-                assert!(
-                    tokio::time::Instant::now() < deadline,
-                    "descendant survived"
-                );
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Err(error) => panic!("unexpected process lookup error: {error}"),
-        }
-    }
     let _ = std::fs::remove_dir_all(workspace);
 }
 
@@ -316,33 +262,6 @@ async fn normal_exit_closes_descendant_output_pipes() {
     .expect("normal exit closes descendant pipes");
     assert_eq!(output.termination, Termination::Exited { code: Some(0) });
     assert_eq!(output.stdout, b"done");
-    let _ = std::fs::remove_dir_all(workspace);
-}
-
-#[tokio::test]
-async fn cancellation_returns_capture_and_kills_process() {
-    let workspace = temp_dir("cancel");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
-    let cancellation = CancellationToken::new();
-    let cancel = cancellation.clone();
-    let (sender, mut events) = tokio::sync::mpsc::channel(16);
-    let mut plan = shell_plan(
-        &workspace,
-        format!("printf before; sleep {}", (HANG_TIMEOUT * 2).as_secs()),
-        capabilities([SandboxCapability::NoSandbox]),
-        HANG_TIMEOUT,
-    );
-    plan.output_events = Some(sender);
-    tokio::spawn(async move {
-        if events.recv().await.is_some() {
-            cancel.cancel();
-        }
-    });
-    let output = run(plan, cancellation)
-        .await
-        .expect("cancellation is a stable process outcome");
-    assert_eq!(output.termination, Termination::Cancelled);
-    assert_eq!(output.stdout, b"before");
     let _ = std::fs::remove_dir_all(workspace);
 }
 

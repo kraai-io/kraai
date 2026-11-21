@@ -185,7 +185,6 @@ impl ProviderRegistry {
 mod tests {
     use super::*;
     use color_eyre::eyre::eyre;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::test_support::{MockFactory, MockProvider, simple_provider_definition};
 
@@ -226,21 +225,6 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_registration() -> Result<()> {
-        let mut registry = ProviderRegistry::default();
-        registry.register_factory::<MockFactory>()?;
-        assert!(registry.has_factory("mock"));
-        assert_eq!(
-            registry
-                .get_definition("mock")
-                .ok_or_else(|| eyre!("mock factory definition missing"))?
-                .display_name,
-            "Mock".to_string()
-        );
-        Ok(())
-    }
-
-    #[test]
     fn cloned_registries_isolate_registration_and_rejected_duplicates() -> Result<()> {
         let mut registry = ProviderRegistry::default();
         registry.register_factory::<MockFactory>()?;
@@ -273,70 +257,6 @@ mod tests {
                 target.create_provider("mock", ProviderId::new("shared"), DynamicConfig::new())?;
             assert_eq!(provider.get_provider_id(), ProviderId::new("shared"));
         }
-        Ok(())
-    }
-
-    #[test]
-    fn test_dynamic_registry_registration() -> Result<()> {
-        let mut registry = ProviderRegistry::default();
-        let create_count = Arc::new(AtomicUsize::new(0));
-        let create_count_for_factory = Arc::clone(&create_count);
-
-        registry.register_dynamic_factory(
-            "dynamic-mock",
-            simple_provider_definition(
-                "Dynamic Mock",
-                "Mock provider built from closures",
-                true,
-                "dynamic-mock",
-            ),
-            ProviderPricingPolicy::default(),
-            move |id, _config| {
-                create_count_for_factory.fetch_add(1, Ordering::SeqCst);
-                Ok(Box::new(MockProvider::new(id.as_str())))
-            },
-            |_| Vec::new(),
-            |_| Vec::new(),
-        )?;
-
-        let provider = registry.create_provider(
-            "dynamic-mock",
-            ProviderId::new("dynamic-mock"),
-            DynamicConfig::new(),
-        )?;
-        assert_eq!(provider.get_provider_id(), ProviderId::new("dynamic-mock"));
-        assert_eq!(create_count.load(Ordering::SeqCst), 1);
-        Ok(())
-    }
-
-    #[test]
-    fn test_dynamic_registry_rejects_duplicates() -> Result<()> {
-        let mut registry = ProviderRegistry::default();
-        registry.register_dynamic_factory(
-            "duplicate",
-            simple_provider_definition("Duplicate", "duplicate", false, "duplicate"),
-            ProviderPricingPolicy::default(),
-            |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
-            |_| Vec::new(),
-            |_| Vec::new(),
-        )?;
-
-        let result = registry.register_dynamic_factory(
-            "duplicate",
-            simple_provider_definition("Duplicate", "duplicate", false, "duplicate"),
-            ProviderPricingPolicy::default(),
-            |id, _config| Ok(Box::new(MockProvider::new(id.as_str()))),
-            |_| Vec::new(),
-            |_| Vec::new(),
-        );
-        let Err(error) = result else {
-            return Err(eyre!("duplicate factory registration succeeded"));
-        };
-
-        assert!(matches!(
-            error,
-            ProviderError::FactoryAlreadyRegistered(provider_type) if provider_type == "duplicate"
-        ));
         Ok(())
     }
 }

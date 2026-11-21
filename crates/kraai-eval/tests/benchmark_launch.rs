@@ -103,7 +103,13 @@ fn more_tasks_and_attempts_reuse_the_same_results_folder() -> Result<()> {
 #[test]
 fn terminal_bench_requires_a_task_count() -> Result<()> {
     let root = temporary("benchmark-count")?;
-    ensure!(dry_run(&root, &std::env::current_exe()?, &[]).is_err());
+    let result = dry_run(&root, &std::env::current_exe()?, &[]);
+    ensure!(
+        result
+            .as_ref()
+            .is_err_and(|error| error.to_string().contains("terminal-bench needs --tasks N")),
+        "{result:?}"
+    );
     fs::remove_dir_all(root)?;
     Ok(())
 }

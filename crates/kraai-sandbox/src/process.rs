@@ -297,15 +297,14 @@ async fn terminate_process_tree(
     process_group: &mut process_group::ProcessGroup,
 ) -> Result<(), SandboxError> {
     if let Err(error) = process_group.kill() {
-        // Darwin refuses to signal a group whose only member is the leader that just exited and
-        // is not yet reaped. Reaping it lets any remaining members be signalled.
-        let exited = child
-            .try_wait()
-            .map_err(|error| SandboxError::Wait(error.to_string()))?;
-        if exited.is_none() {
-            return Err(error);
+        // Darwin refuses to signal a group whose only member is the leader while it exits and
+        // until it is reaped. Reaping it lets any remaining members be signalled.
+        let _ = child.start_kill();
+        match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
+            Ok(Ok(_)) => process_group.kill()?,
+            Ok(Err(error)) => return Err(SandboxError::Wait(error.to_string())),
+            Err(_) => return Err(error),
         }
-        process_group.kill()?;
     }
     child
         .kill()

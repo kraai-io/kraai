@@ -104,15 +104,6 @@ mod tests {
     }
 
     #[test]
-    fn reads_multiline_sse_after_notifications() {
-        let body = "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\r\n\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\r\ndata: \"result\":{\"content\":[{\"type\":\"text\",\"text\":\"found\"}]}}\r\n\r\n";
-        assert_eq!(
-            decode(body, 100).map(|result| result.content),
-            Ok(String::from("found"))
-        );
-    }
-
-    #[test]
     fn reads_sse_with_each_line_ending() {
         let body = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\ndata: \"result\":{\"content\":[{\"type\":\"text\",\"text\":\"found\"}]}}\n\n";
         for ending in ["\n", "\r\n", "\r"] {

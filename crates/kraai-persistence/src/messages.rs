@@ -28,10 +28,8 @@ pub trait MessageStore: Send + Sync {
         None
     }
 
-    /// Get a message by ID
     async fn get(&self, id: &MessageId) -> Result<Option<Message>>;
 
-    /// Reads up to `limit` messages from `from` toward the root, tip first.
     async fn read_history(&self, from: &MessageId, limit: usize) -> Result<Vec<Message>> {
         let mut history = Vec::new();
         let mut visited = HashSet::new();
@@ -52,12 +50,10 @@ pub trait MessageStore: Send + Sync {
         Ok(history)
     }
 
-    /// Save a message
     async fn save(&self, message: &Message) -> Result<()>;
 
-    /// Durably appends incremental changes to a streaming message. Deltas are
-    /// numbered from `first_sequence`, so resending an already stored delta is a
-    /// no-op. `message` is the streaming message with every delta applied.
+    /// Deltas are numbered from `first_sequence`, so resending an already stored delta is a
+    /// no-op.
     async fn append_stream_deltas(
         &self,
         message: &Message,
@@ -67,19 +63,16 @@ pub trait MessageStore: Send + Sync {
         self.save(message).await
     }
 
-    /// Links messages atomically, or returns `None` when this store cannot, in which case
-    /// the caller saves them individually.
+    /// `None` means this store cannot link atomically, so the caller saves the messages
+    /// individually.
     async fn save_linked(&self, _request: LinkRequest<'_>) -> Result<Option<bool>> {
         Ok(None)
     }
 
-    /// Delete a message
     async fn delete(&self, id: &MessageId) -> Result<()>;
 
-    /// Check if a message exists
     async fn exists(&self, id: &MessageId) -> Result<bool>;
 
-    /// List all message IDs
     async fn list_ids(&self) -> Result<HashSet<MessageId>>;
 }
 
@@ -266,7 +259,6 @@ impl MessageStore for SqliteMessageStore {
     }
 }
 
-/// Messages to link after `expected_tip`, optionally consuming queued messages in the same step.
 pub struct LinkRequest<'a> {
     pub messages: &'a [Message],
     pub session: &'a SessionMeta,

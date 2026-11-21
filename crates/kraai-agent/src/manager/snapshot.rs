@@ -7,9 +7,7 @@ use kraai_types::{AgentProfilesState, ChatRole, Message, MessageId, MessageStatu
 
 use super::{AgentManager, AgentResult, SessionContextUsage};
 
-/// Captures mutable session state before loading its persisted history.
-/// Completed messages are immutable in the manager. In-flight messages must be
-/// copied here because completion or cancellation can replace or delete them.
+/// Completion or cancellation can replace or delete in-flight messages, so they are copied here.
 pub struct SessionSnapshotReader {
     session: SessionMeta,
     profile_locked: bool,
@@ -86,8 +84,6 @@ impl AgentManager {
         )
     }
 
-    /// Reads up to `limit` messages ending at `from`, newest first, and where the next older
-    /// page starts.
     pub async fn history_page(
         &self,
         from: &MessageId,
@@ -122,7 +118,6 @@ impl AgentManager {
 }
 
 impl SessionSnapshotReader {
-    /// Performs history and profile I/O without holding the runtime or manager locks.
     pub async fn load(self) -> Result<SessionSnapshotData> {
         let mut history = self.persisted_history.unwrap_or_default();
         if history.is_empty() && self.session.tip_id.is_some() {

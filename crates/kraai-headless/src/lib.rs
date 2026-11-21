@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-//! Runs one prompt without a user interface and reports what the run did, for evaluations.
 
 mod metrics;
 #[cfg(feature = "runner")]

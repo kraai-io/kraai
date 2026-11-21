@@ -158,9 +158,7 @@ async fn fixture(
             release: release.clone(),
         }),
     );
-    let harness = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("runtime fixture");
+    let harness = RuntimeTestHarness::new_with_parts(providers).await;
     let session = create_session_with_profile(&harness.handle, "test-profile").await?;
     let mut request = harness
         .runtime

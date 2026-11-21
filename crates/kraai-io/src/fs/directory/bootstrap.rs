@@ -4,8 +4,7 @@ use std::sync::Mutex;
 
 use super::{create_directories_with_sync, sync_directory};
 
-/// The anchor must already be durable. The first successful initialization syncs
-/// every descendant through it, including directories left by failed attempts.
+/// The anchor must already be durable.
 #[derive(Debug)]
 pub struct DirectoryBootstrap {
     anchor: PathBuf,

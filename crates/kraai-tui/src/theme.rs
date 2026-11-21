@@ -9,18 +9,12 @@ pub(crate) const RAISED: Color = Color::DarkGray;
 pub(crate) const WAITING: Color = Color::Yellow;
 pub(crate) const DANGER: Color = Color::Red;
 
-/// How often a breathing colour takes a new shade.
 pub(crate) const BREATH_FRAME: Duration = Duration::from_millis(50);
-/// How long a breathing colour takes to dim.
 const BREATH_FALL: Duration = Duration::from_millis(800);
-/// How long a breathing colour takes to light up again.
 const BREATH_RISE: Duration = Duration::from_millis(1600);
-/// How much of its colour a breathing colour keeps at its dimmest.
 const BREATH_FLOOR: f64 = 0.15;
 
-/// `colour` `elapsed` into a breath that dims it toward `muted` and lights it up again, one
-/// shade per `BREATH_FRAME`. Everything that breathes counts `elapsed` from the same moment,
-/// so it all breathes together. `None` unless both colours are RGB.
+/// Everything that breathes counts `elapsed` from the same moment, so it all breathes together.
 pub(crate) fn breathe(elapsed: Duration, colour: Color, muted: Color) -> Option<Color> {
     let frame = BREATH_FRAME.as_millis();
     let phase = elapsed.as_millis() % (BREATH_FALL + BREATH_RISE).as_millis() / frame * frame;
@@ -35,13 +29,11 @@ pub(crate) fn breathe(elapsed: Duration, colour: Color, muted: Color) -> Option<
     mix(muted, colour, BREATH_FLOOR + (1.0 - BREATH_FLOOR) * glow)
 }
 
-/// `amount` between 0 and 1, eased so a fade starts and stops without a jump.
 pub(crate) fn ease(amount: f64) -> f64 {
     let amount = amount.clamp(0.0, 1.0);
     amount * amount * (3.0 - 2.0 * amount)
 }
 
-/// The colour `amount` of the way from `from` to `to`, or `None` unless both are RGB.
 pub(crate) fn mix(from: Color, to: Color, amount: f64) -> Option<Color> {
     let (Color::Rgb(from_r, from_g, from_b), Color::Rgb(to_r, to_g, to_b)) = (from, to) else {
         return None;

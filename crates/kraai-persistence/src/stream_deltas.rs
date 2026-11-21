@@ -7,11 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::database::{LeaseTokens, assert_owner, bump_revision, read_record, record_session};
 
-/// An incremental change to a streaming assistant message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamDelta {
-    /// Appends text to the item at `index`, creating it when `index` is the item count.
     Text {
         index: usize,
         phase: AssistantPhase,
@@ -23,7 +21,6 @@ pub enum StreamDelta {
     Usage {
         usage: TokenUsage,
     },
-    /// Discards the partial response before the request is issued again.
     Reset,
 }
 
@@ -67,7 +64,6 @@ impl StreamDelta {
         Ok(())
     }
 
-    /// Merges `next` into this delta when both append to the same text item.
     pub fn coalesce(&mut self, next: Self) -> Option<Self> {
         match (self, next) {
             (

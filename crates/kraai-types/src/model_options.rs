@@ -9,7 +9,6 @@ pub use validation::{
 
 pub type ModelOptionValues = BTreeMap<String, ModelOptionValue>;
 
-/// The id of the reasoning effort option, which clients may offer outside the full option list.
 pub const REASONING_EFFORT_OPTION_ID: &str = "reasoning_effort";
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

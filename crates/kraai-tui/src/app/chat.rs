@@ -503,7 +503,6 @@ impl App {
         self.state.cards_epoch = self.state.cards_epoch.wrapping_add(1);
     }
 
-    /// Forgets every running script and redraws the cards that showed one.
     pub(super) fn clear_running_scripts(&mut self) {
         if !self.state.running_scripts.is_empty() {
             self.state.running_scripts.clear();

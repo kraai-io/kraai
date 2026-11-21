@@ -1,7 +1,5 @@
-# Cargo-based checks compile every dependency from scratch. This builds a check's dependencies
-# once, against a copy of the workspace where every target is a stub, so the result only changes
-# with the manifests and Cargo.lock. The check copies that target directory in, and cargo then
-# rebuilds the workspace members alone.
+# Builds a check's dependencies once against stub members, so the result only changes with the
+# manifests and Cargo.lock.
 {
   lib,
   formats,
@@ -88,9 +86,8 @@ in {
     ${lib.concatMapStrings (member: lib.concatMapStrings (writeStub member) member.stubs) members}
   '';
 
-  # Drops the stubbed members from a target directory, so the real build compiles them instead of
-  # finding them fresh, and their outputs never sit next to the real ones. Cargo's fine-grain-locking
-  # keeps each package under build/<name>/, the older layout spreads it over .fingerprint/ and deps/.
+  # Stubbed members must go, or the real build finds them fresh. Cargo's fine-grain-locking keeps
+  # each package under build/<name>/, the older layout spreads it over .fingerprint/ and deps/.
   removeMembers = targetDir:
     lib.concatMapStrings (member: let
       name = lib.escapeShellArg member.name;

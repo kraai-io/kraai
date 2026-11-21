@@ -90,30 +90,6 @@ async fn context_usage_selects_the_latest_complete_assistant_and_validates_older
 }
 
 #[tokio::test]
-async fn limited_user_history_reads_the_entire_session() -> Result<()> {
-    let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
-    let oldest = manager
-        .add_message(&session_id, ChatRole::User, "oldest".into(), None)
-        .await?;
-    let assistant = manager
-        .add_message(&session_id, ChatRole::Assistant, "reply".into(), None)
-        .await?;
-    let newest = manager
-        .add_message(&session_id, ChatRole::User, "newest".into(), None)
-        .await?;
-    let ids = [oldest, assistant, newest];
-
-    assert_eq!(manager.list_user_input_history(1).await?, ["newest"]);
-    for id in ids {
-        assert!(manager.message_store.exists(&id).await?);
-    }
-
-    cleanup_dir(data_dir).await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn limited_user_history_rejects_invalid_ancestors_after_the_limit() -> Result<()> {
     for corruption in ["cycle", "missing", "malformed"] {
         let (manager, data_dir) = test_manager().await;

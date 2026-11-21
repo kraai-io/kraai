@@ -16,9 +16,7 @@ use crate::Event;
 
 #[tokio::test]
 async fn deletion_waits_for_turn_preparation() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     super::harness::hold_preparation(&harness.runtime, &session_id).await;
     let deletion = {
@@ -99,9 +97,7 @@ async fn deletion_waits_for_a_blocked_stream_to_stop_polling() -> Result<()> {
             release: std::sync::Mutex::new(Some(release_rx)),
         }),
     );
-    let harness = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new_with_parts(providers).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -145,8 +141,7 @@ async fn deleting_during_script_preparation_cannot_leave_an_orphan_approval() ->
         "call-1",
         "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
     )]])
-    .await
-    .expect("runtime regression fixture must initialize");
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let idle_session = create_session_with_profile(&harness.handle, "test-profile").await?;
     let store = Arc::new(PausedExecutionStore {

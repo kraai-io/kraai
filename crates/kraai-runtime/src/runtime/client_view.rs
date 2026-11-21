@@ -1,5 +1,5 @@
-//! What clients see of history: everything except opaque provider payloads, which only the
-//! provider that produced them can use and which can be large.
+//! Clients never see opaque provider payloads, which only the provider that produced them
+//! can use and which can be large.
 
 use kraai_types::{AssistantItem, ConversationItem, Message};
 

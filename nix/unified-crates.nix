@@ -1,6 +1,6 @@
 # crate2nix resolves features separately for every root crate, and its test builds resolve a second
-# graph with the root's dev-dependencies. Every package and test check then built its own copy of
-# most dependencies. These graphs resolve features once for the whole workspace, like cargo's
+# graph with the root's dev-dependencies, so every package and test check would build its own copy
+# of most dependencies. These graphs resolve features once for the whole workspace, like cargo's
 # `resolver.feature-unification = "workspace"`.
 {
   lib,

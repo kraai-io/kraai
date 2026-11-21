@@ -302,8 +302,6 @@ impl App {
         }
     }
 
-    /// Moves the clock running scripts are drawn at, and redraws the chat when a card would
-    /// show something new.
     pub(super) fn advance_script_clock(&mut self, now: Instant) -> bool {
         let Some(clock) = self.state.script_clock else {
             return false;

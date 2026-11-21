@@ -172,8 +172,8 @@ mod forwarding {
         }
     }
 
-    /// Relays one connection. It ends once the proxy closes its side, even when the client
-    /// never closes its own, so a lingering client cannot hold a connection slot.
+    /// Ends once the proxy closes its side, even when the client never closes its own, so a
+    /// lingering client cannot hold a connection slot.
     pub(super) async fn forward_connection(mut client: TcpStream, socket: &Path) -> io::Result<()> {
         client.set_nodelay(true)?;
         let mut upstream = UnixStream::connect(socket).await?;

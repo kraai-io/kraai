@@ -207,13 +207,9 @@ impl ProviderManager {
             .providers
             .get(provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
-        let pricing_model = provider.pricing_model_id(model_id).await?;
         let context = context.with_cooldown(self.cooldown(provider_id));
         let stream = provider.compact_stream(model_id, request, &context).await?;
-        Ok(self
-            .pricing
-            .apply(provider_id, model_id, &pricing_model, stream)
-            .await)
+        Ok(self.pricing.apply(provider_id, model_id, stream).await)
     }
 
     pub async fn generate_reply_stream(
@@ -239,15 +235,11 @@ impl ProviderManager {
                 None
             }
         };
-        let pricing_model = provider.pricing_model_id(model_id).await?;
         let request_context = request_context.with_cooldown(self.cooldown(&provider_id));
         let stream = provider
             .generate_reply_stream(model_id, request, &request_context)
             .await?;
-        let priced = self
-            .pricing
-            .apply(&provider_id, model_id, &pricing_model, stream)
-            .await;
+        let priced = self.pricing.apply(&provider_id, model_id, stream).await;
         Ok(priced
             .map(move |event| {
                 if let (Some(observer), Ok(ProviderStreamEvent::Usage(usage))) =

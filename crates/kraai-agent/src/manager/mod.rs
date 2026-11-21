@@ -91,8 +91,6 @@ pub struct PendingStreamRequest {
     pub model_id: ModelId,
     pub provider_request: ProviderRequest,
     pub context_notifications: Vec<String>,
-    /// Summarizes older history; runs before the request when `compact_first` is set, and
-    /// after the provider reports that the request overflowed the model's context window.
     pub context_compaction: Option<crate::ContextCompaction>,
     pub compact_first: bool,
 }
@@ -126,7 +124,6 @@ struct SessionRuntimeState {
     last_provider: Option<ProviderId>,
     last_options: ModelOptionValues,
     active_turn_profile: Option<Arc<AgentProfile>>,
-    /// Discovery runs before every model request; retain warnings already sent to this session.
     reported_discovery_warnings: Vec<String>,
 }
 
@@ -143,7 +140,6 @@ impl SessionRuntimeState {
         }
     }
 
-    /// Return only warnings that are new or have reappeared since the last discovery pass.
     fn take_unreported_discovery_warnings(&mut self, warnings: Vec<String>) -> Vec<String> {
         let unreported = warnings
             .iter()
@@ -217,7 +213,6 @@ pub struct AgentManager {
     context_state_store: Arc<dyn ContextStateStore>,
     session_states: StdMutex<HashMap<SessionId, SessionRuntimeState>>,
     last_used_profile_id: StdMutex<Option<String>>,
-    /// Messages currently being streamed (not yet persisted).
     streaming_messages: RwLock<BTreeMap<MessageId, StreamingMessageState>>,
     streaming_persistence: Mutex<()>,
     history_observer: StdRwLock<Option<HistoryObserver>>,

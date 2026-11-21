@@ -5,7 +5,6 @@ use kraai_types::{
 
 use super::*;
 
-/// The model whose settings the settings sheet edits.
 #[derive(Clone)]
 pub(super) struct ModelSettingsTarget {
     pub(super) provider_id: String,
@@ -30,7 +29,6 @@ pub(super) fn model_option_choices(option: &ModelOptionDefinition) -> Vec<(Strin
     choices
 }
 
-/// The position of the value in effect within `model_option_choices`.
 pub(super) fn chosen_choice(
     choices: &[(String, String)],
     value: Option<&ModelOptionValue>,
@@ -39,7 +37,6 @@ pub(super) fn chosen_choice(
     choices.iter().position(|(id, _)| *id == current)
 }
 
-/// The choice one step left or right of the value in effect, wrapping at the ends.
 fn stepped_choice(
     option: &ModelOptionDefinition,
     value: Option<&ModelOptionValue>,
@@ -55,8 +52,6 @@ fn stepped_choice(
     choices.into_iter().nth(next).map(|(value, _)| value)
 }
 
-/// The reasoning effort option of a model while it is active. The model list changes it in
-/// place on the highlighted row.
 pub(super) fn inline_option<'a>(
     model: &'a Model,
     values: &ModelOptionValues,
@@ -68,7 +63,6 @@ pub(super) fn inline_option<'a>(
     })
 }
 
-/// The level a model starts on: "medium" when it lists one, otherwise the middle of its list.
 fn starting_effort(option: &ModelOptionDefinition) -> Option<String> {
     let ModelOptionKind::Choice { choices } = &option.kind else {
         return None;
@@ -80,7 +74,6 @@ fn starting_effort(option: &ModelOptionDefinition) -> Option<String> {
         .map(|choice| choice.id.clone())
 }
 
-/// Gives a model the reasoning effort it needs when it holds none. Returns whether it did.
 fn fill_starting_effort(model: &Model, values: &mut ModelOptionValues) -> bool {
     let Some((id, effort)) = inline_option(model, values)
         .filter(|option| option.required && !values.contains_key(&option.id))
@@ -122,7 +115,6 @@ pub(super) fn option_value_label(
     }
 }
 
-/// The values in effect for a model as short words, such as "High, thinking, budget 50".
 pub(super) fn option_summary(model: &Model, values: &ModelOptionValues) -> String {
     summarize_options(active_options(model, values), values)
 }
@@ -144,7 +136,6 @@ pub(super) fn summarize_options<'a>(
         .join(", ")
 }
 
-/// Turns typed text into the value the option parser takes; `None` when it names no value.
 fn resolve_option_input(option: &ModelOptionDefinition, raw: &str) -> Option<String> {
     let resolved = match &option.kind {
         ModelOptionKind::Choice { choices } => choices
@@ -169,8 +160,6 @@ impl AppState {
         )
     }
 
-    /// The values a model would run with: the active ones for the model in use, otherwise the
-    /// ones last set for it. A model that was never set up has none.
     pub(super) fn model_option_values(
         &self,
         provider_id: &str,
@@ -191,7 +180,6 @@ impl AppState {
         values
     }
 
-    /// Whether the settings sheet of a model holds a setting the model list cannot change.
     pub(super) fn model_has_more_settings(&self, provider_id: &str, model_id: &str) -> bool {
         self.find_model(provider_id, model_id).is_some_and(|model| {
             let values = self.model_option_values(provider_id, model_id);
@@ -214,7 +202,6 @@ impl AppState {
             .map(|option| option.id.clone())
     }
 
-    /// Moves the highlight to a setting, or keeps it in range when the setting is gone.
     pub(super) fn highlight_model_setting(&mut self, id: &str) {
         let Some((model, values)) = self.model_settings_view() else {
             return;
@@ -236,7 +223,6 @@ impl App {
         }
     }
 
-    /// Records the active values as the ones last used with the model in use.
     pub(super) fn remember_model_options(&mut self) {
         if let (Some(provider_id), Some(model_id)) = (
             self.state.selected_provider_id.clone(),
@@ -291,8 +277,6 @@ impl App {
         }
     }
 
-    /// Gives the model the model list highlights a reasoning effort when it needs one and has
-    /// none, so it can run as soon as it is used.
     pub(super) fn settle_highlighted_model(&mut self) {
         if self.state.mode != UiMode::Model {
             return;
@@ -308,7 +292,6 @@ impl App {
         self.store_model_options(&provider_id, &model_id, values);
     }
 
-    /// Steps the reasoning effort of a model from the model list.
     pub(super) fn step_inline_option(&mut self, provider_id: &str, model_id: &str, forward: bool) {
         let values = self.state.model_option_values(provider_id, model_id);
         let Some((id, value)) = self
@@ -338,7 +321,6 @@ impl App {
         self.state.reset_sheet_selection();
     }
 
-    /// Returns from the settings sheet to the model list.
     pub(super) fn close_model_settings(&mut self) {
         match self.state.model_settings.take() {
             Some(target) => self.return_to_model_sheet(&target.provider_id, &target.model_id),
@@ -417,7 +399,6 @@ impl App {
         }
     }
 
-    /// Sets a value from the settings sheet and keeps the highlight on that setting.
     fn apply_model_setting(&mut self, target: &ModelSettingsTarget, id: &str, value: &str) -> bool {
         if let Err(error) = self.set_model_option(&target.provider_id, &target.model_id, id, value)
         {

@@ -22,7 +22,6 @@ const PROTECTED: [Protected; 2] = [
 
 struct Protected {
     name: &'static str,
-    /// The file Kraai reads inside a protected directory. `None` means the entry is the file.
     file: Option<&'static str>,
 }
 
@@ -32,9 +31,8 @@ type Snapshot = Arc<Vec<GuardedEntry>>;
 /// later run never records an earlier run's change as the original.
 static ACTIVE: LazyLock<Mutex<HashMap<PathBuf, (usize, Snapshot)>>> = LazyLock::new(Mutex::default);
 
-/// Keeps sandboxed scripts from changing the workspace entries in [`PROTECTED`]. Mounts or
-/// Seatbelt rules make the existing entries read-only; [`ConfigGuard::restore`] undoes what
-/// they cannot block once the script is gone.
+/// Mounts or Seatbelt rules make the existing entries read-only; [`ConfigGuard::restore`]
+/// undoes what they cannot block once the script is gone.
 #[derive(Debug)]
 pub(crate) struct ConfigGuard {
     workspace: PathBuf,
@@ -47,7 +45,7 @@ struct GuardedEntry {
     path: PathBuf,
     state: EntryState,
     directory: bool,
-    /// The file Kraai reads, restored on Windows, which has no read-only mounts.
+    /// Restored on Windows, which has no read-only mounts.
     #[cfg(windows)]
     file: Option<FileSnapshot>,
 }
@@ -105,8 +103,7 @@ impl ConfigGuard {
         })
     }
 
-    /// Runs after every process of the script has exited. A guard dropped without this, such
-    /// as when the run is abandoned, restores on drop and ignores errors.
+    /// Runs after every process of the script has exited.
     pub(crate) fn restore(mut self) -> Result<(), SandboxError> {
         self.restored = true;
         restore_entries(&self.entries)
@@ -149,7 +146,6 @@ impl Drop for ConfigGuard {
     }
 }
 
-/// The protected workspace entries, whether or not they exist.
 #[cfg(any(target_os = "macos", all(test, unix)))]
 pub(crate) fn entry_paths(workspace: &Path) -> impl Iterator<Item = PathBuf> {
     PROTECTED
@@ -157,7 +153,6 @@ pub(crate) fn entry_paths(workspace: &Path) -> impl Iterator<Item = PathBuf> {
         .map(move |protected| workspace.join(protected.name))
 }
 
-/// Existing protected paths, resolved through symlinks.
 #[cfg(unix)]
 pub(crate) fn read_only_paths(workspace: &Path) -> Vec<PathBuf> {
     let workspace = workspace
@@ -417,7 +412,6 @@ fn symlink(target: &Path, path: &Path, directory: bool) -> io::Result<()> {
     }
 }
 
-/// Resolves `path`, following a link whose target is missing to where that target belongs.
 #[cfg(windows)]
 fn location(path: &Path) -> io::Result<PathBuf> {
     match path.canonicalize() {

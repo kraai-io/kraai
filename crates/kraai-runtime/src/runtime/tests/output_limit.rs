@@ -15,14 +15,10 @@ use super::harness::{RuntimeTestHarness, create_session_with_profile};
 #[derive(Clone, Copy)]
 enum CutOff {
     Text,
-    /// The provider dropped the cut off call, so the response is empty.
     Nothing,
-    /// The provider reported the cut off call as an invalid call.
     Call,
 }
 
-/// Stops every response at the output limit until the request was compacted, or until it
-/// carries the output limit notice when `obeys_notice` is set.
 struct TruncatingProvider {
     model: Model,
     cut_off: CutOff,
@@ -157,9 +153,7 @@ async fn drive(
     });
     let mut providers = ProviderManager::new();
     providers.register_provider(ProviderId::new("mock"), Box::new(Shared(provider.clone())));
-    let harness = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new_with_parts(providers).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let agent = &harness.runtime.agent_manager;
     let request = agent

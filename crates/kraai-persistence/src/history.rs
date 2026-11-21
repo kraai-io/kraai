@@ -37,9 +37,8 @@ pub(crate) fn read_history_chain(
     Ok(history)
 }
 
-/// Walks a message parent chain from a tip toward the root in pages that
-/// double in size, so callers that stop early read little and full walks
-/// take a logarithmic number of store round trips.
+/// Pages double in size, so callers that stop early read little and full walks take a
+/// logarithmic number of store round trips.
 pub struct HistoryCursor<'a> {
     store: &'a dyn MessageStore,
     overlay: Option<&'a HashMap<MessageId, Message>>,
@@ -59,7 +58,6 @@ impl<'a> HistoryCursor<'a> {
         }
     }
 
-    /// Prefers these in-memory versions over persisted messages with the same id.
     pub fn with_overlay(mut self, overlay: &'a HashMap<MessageId, Message>) -> Self {
         self.overlay = Some(overlay);
         self
@@ -97,7 +95,6 @@ impl<'a> HistoryCursor<'a> {
         Ok(Some(self.finish_page(page)))
     }
 
-    /// Reads up to `limit` messages, tip first, and returns where the next older page starts.
     pub async fn read_page(mut self, limit: usize) -> Result<(Vec<Message>, Option<MessageId>)> {
         self.page_size = limit.max(1);
         let page = self.next_page().await?.unwrap_or_default();
@@ -128,7 +125,6 @@ impl<'a> HistoryCursor<'a> {
     }
 }
 
-/// Indexes a tip-first history by message id, keeping the occurrence nearest the tip.
 pub fn history_by_id(history: Vec<Message>) -> BTreeMap<MessageId, Message> {
     let mut indexed = BTreeMap::new();
     for message in history {

@@ -43,7 +43,6 @@ pub fn command_id_set() -> HashSet<String> {
     command_ids().map(String::from).collect()
 }
 
-/// Whether any of the active commands declares the given host service.
 pub fn provides_service(active_commands: &[String], service: HostService) -> bool {
     active_commands
         .iter()

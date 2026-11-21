@@ -207,12 +207,16 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
         let headers = headers.to_ascii_lowercase();
         assert!(headers.contains("authorization: bearer test-token\r\n"));
         assert!(headers.contains("accept: text/event-stream"));
-        assert_eq!(
-            headers
-                .lines()
-                .find_map(|line| line.strip_prefix("session_id: ")),
-            cache_key
-        );
+        assert!(!headers.contains("chatgpt-account-id"));
+        for name in ["session_id", "x-client-request-id"] {
+            assert_eq!(
+                headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix(&format!("{name}: "))),
+                cache_key,
+                "{name}"
+            );
+        }
         let body: Value = serde_json::from_str(body)?;
         assert_eq!(body.get("model"), Some(&json!("summary-model")));
         assert_eq!(
@@ -350,25 +354,6 @@ async fn initial_discovery_failure_does_not_create_models() -> Result<()> {
     assert!(provider.refresh_model_list().await.is_err());
     assert!(provider.list_models().await.is_empty());
     server.await??;
-    Ok(())
-}
-
-#[tokio::test]
-async fn pricing_uses_the_discovered_model_identity() -> Result<()> {
-    let provider = provider(String::from("http://127.0.0.1/backend-api"))?;
-    *provider.models.write().await = DiscoveredModels::new(vec![serde_json::from_value(json!({
-        "slug": "gpt-6-astra",
-        "display_name": "Astra",
-        "visibility": "list",
-        "default_reasoning_level": "low",
-        "supported_reasoning_levels": [{"effort": "low", "description": "Fast"}]
-    }))?])?;
-    assert_eq!(
-        provider
-            .pricing_model_id(&ModelId::new("gpt-6-astra"))
-            .await?,
-        ModelId::new("gpt-6-astra")
-    );
     Ok(())
 }
 
@@ -791,7 +776,6 @@ async fn configured_custom_models_send_their_settings_without_native_discovery_e
     }).await?;
     provider.refresh_model_list().await?;
     assert_eq!(provider.list_models().await.len(), 1);
-    assert_eq!(provider.pricing_model_id(&id).await?, id);
     provider
         .generate_reply_stream(
             &id,

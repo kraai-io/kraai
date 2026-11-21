@@ -151,7 +151,6 @@ fn successful_snapshots_clear_incomplete_costs_after_lag() {
             result: Box::new(Ok(session_snapshot_at(10, None))),
         });
     assert!(!harness.app.costs_incomplete());
-    assert!(!harness.app.costs_incomplete());
 }
 
 #[test]

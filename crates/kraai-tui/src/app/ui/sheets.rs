@@ -13,7 +13,6 @@ mod provider_config;
 mod providers;
 mod sessions;
 
-/// The sheet the current mode shows above the status line, if any.
 pub(super) fn active(state: &AppState) -> Option<Sheet> {
     match state.mode {
         UiMode::Chat => commands(state),
@@ -26,7 +25,6 @@ pub(super) fn active(state: &AppState) -> Option<Sheet> {
     }
 }
 
-/// Key hints for the open sheet, shown in the status line.
 pub(super) fn hints(state: &AppState) -> Option<String> {
     match state.mode {
         UiMode::Chat if !state.command_matches().is_empty() => {
@@ -226,7 +224,6 @@ fn model_settings(state: &AppState) -> Sheet {
     }
 }
 
-/// What the last key press did, and what it could not do, as the sheet's closing notes.
 fn notice(state: &AppState) -> Vec<Note> {
     state
         .sheet_feedback
@@ -241,7 +238,6 @@ fn notice(state: &AppState) -> Vec<Note> {
         .collect()
 }
 
-/// How long ago something happened, right-aligned to three columns.
 fn age(seconds: u64) -> String {
     let (count, unit) = match seconds {
         0..60 => (seconds, 's'),

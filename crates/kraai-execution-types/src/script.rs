@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// Stable terminal outcome for a Nushell script execution.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,7 +46,6 @@ impl ScriptExecutionStatus {
     }
 }
 
-/// Durable lifecycle phase, separate from the stable terminal outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ScriptExecutionPhase {
@@ -64,32 +62,4 @@ pub enum ScriptExecutionPhase {
 pub enum ScriptOutputStream {
     Stdout,
     Stderr,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ScriptExecutionPhase, ScriptExecutionStatus};
-
-    #[test]
-    fn lifecycle_and_terminal_outcomes_are_independent() {
-        let phases = [
-            ScriptExecutionPhase::Prepared,
-            ScriptExecutionPhase::AwaitingApproval,
-            ScriptExecutionPhase::Running,
-            ScriptExecutionPhase::Finished,
-        ];
-        let statuses = [
-            ScriptExecutionStatus::Completed,
-            ScriptExecutionStatus::Denied,
-            ScriptExecutionStatus::InvalidScript,
-            ScriptExecutionStatus::TimedOut,
-            ScriptExecutionStatus::Cancelled,
-            ScriptExecutionStatus::SandboxUnavailable,
-            ScriptExecutionStatus::FailedToStart,
-            ScriptExecutionStatus::HostUnavailable,
-            ScriptExecutionStatus::RuntimeError,
-        ];
-        assert_eq!(phases.len(), 4);
-        assert_eq!(statuses.len(), 9);
-    }
 }

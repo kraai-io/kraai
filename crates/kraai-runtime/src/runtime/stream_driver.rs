@@ -30,7 +30,6 @@ struct CompletedProtocolBoundary {
     script: Option<ScriptBlock>,
     invalid_script: Option<InvalidScriptBlock>,
     protocol_error: Option<ProtocolError>,
-    /// What Kraai changed in the model's script, for the notice in its result.
     rewrites: Vec<String>,
 }
 
@@ -69,8 +68,6 @@ pub(super) fn auxiliary_usage_observer(
     })
 }
 
-/// Reads one provider response and forwards its events to the session actor, which applies
-/// them. The reader never mutates the streaming message itself.
 pub(super) struct StreamReader {
     pub(super) session_id: SessionId,
     pub(super) providers: ProviderManager,
@@ -89,7 +86,6 @@ struct ResponseRequest {
     model_id: ModelId,
     provider_request: ProviderRequest,
     context: ProviderRequestContext,
-    /// Used once if the provider reports that the request overflowed the context window.
     compaction: Option<ContextCompaction>,
 }
 
@@ -177,7 +173,6 @@ impl StreamReader {
         );
     }
 
-    /// Returns false once the actor no longer accepts this stream's events.
     fn forward(&self, event: StreamEvent) -> bool {
         self.mailbox
             .send(SessionMessage::Stream {
@@ -584,7 +579,6 @@ impl StreamReader {
 struct ResponseState {
     boundary: Option<CompletedProtocolBoundary>,
     reached_output_limit: bool,
-    /// The response streamed text, so a cut off answer is visible to the user.
     answered: bool,
 }
 
@@ -624,14 +618,12 @@ enum ResponseEnd {
     Interrupted {
         error: String,
         transient: bool,
-        /// The request did not fit the model's context window.
         overflow: bool,
     },
 }
 
 enum OutputLimitRecovery {
     Compact(Box<ContextCompaction>),
-    /// Retry once, telling the model its last response was cut off at this many tokens.
     Warn(Option<usize>),
 }
 

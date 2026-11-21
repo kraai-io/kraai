@@ -1,7 +1,6 @@
 use super::*;
 
 impl AppState {
-    /// The agents the agent list shows: every agent, or the ones the typed text names.
     pub(super) fn filtered_agents(&self) -> Vec<&kraai_runtime::AgentProfileSummary> {
         let query = self.sheet_query.as_str().to_lowercase();
         self.agent_profiles
@@ -18,7 +17,6 @@ impl AppState {
             .collect()
     }
 
-    /// Puts the highlight of the unfiltered agent list on the agent in use.
     pub(super) fn highlight_selected_agent(&mut self) {
         if self.mode != UiMode::Agent || !self.sheet_query.is_empty() {
             return;

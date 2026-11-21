@@ -31,7 +31,6 @@ pub(crate) struct RuntimeCore {
     pub(crate) context_state_store: Arc<dyn ContextStateStore>,
     pub(crate) provider_registry: ProviderRegistry,
     pub(crate) stream_tasks: Arc<super::stream_tasks::StreamTasks>,
-    /// Serializes provider configuration reloads.
     pub(crate) config_reload: Arc<Mutex<()>>,
     pub(crate) stopping: Arc<AtomicBool>,
     pub(crate) provider_auth: Arc<Vec<Arc<dyn kraai_provider_core::ProviderAuth>>>,
@@ -47,7 +46,6 @@ pub(crate) struct RuntimeConfig {
     pub(crate) nushell_host_path: Option<PathBuf>,
     pub(crate) script_runtime_roots: Option<Vec<PathBuf>>,
     pub(crate) use_current_executable_as_nushell_host: bool,
-    /// Holds full script output that the model saw only part of, one directory per session.
     pub(crate) script_output_root: PathBuf,
 }
 
@@ -122,9 +120,6 @@ impl RuntimeCore {
         tracing::info!("Event loop terminated");
     }
 
-    /// Recovers abandoned sessions, then dispatches commands until shutdown and stops all
-    /// session work before answering the shutdown request.
-    /// Reports every durable history change to clients as it happens.
     fn observe_history(&self) {
         let event_tx = self.event_tx.clone();
         self.agent_manager

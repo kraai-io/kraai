@@ -1,5 +1,4 @@
-//! One actor per session owns that session's turn state and applies every change to it in
-//! order. Long work runs in child tasks that report back to the actor.
+//! One actor per session applies every change to that session's turn state, in order.
 
 mod actor;
 mod cancel;
@@ -34,7 +33,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Default)]
 struct Actors {
     senders: HashMap<SessionId, mpsc::UnboundedSender<SessionMessage>>,
-    /// Set once the runtime stops; no actor may start after that.
+    /// No actor may start once the runtime stops.
     closed: bool,
 }
 
@@ -110,7 +109,6 @@ impl SessionActors {
         lock(&self.activity).remove(session_id);
     }
 
-    /// Stops every actor's work and waits until all actors have exited.
     pub(crate) async fn stop(&self) {
         let actors: Vec<_> = {
             let mut actors = lock(&self.actors);

@@ -144,3 +144,69 @@ fn replacement_symlinks_never_change_the_opened_file() {
         Err(ScopedReadError::OutsideRoot(_))
     ));
 }
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn scoped_reads_reject_replacement_fifos_without_waiting_for_a_writer() {
+    for replace_root in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let path = root.join("file.txt");
+        fs::write(&path, "initial").unwrap();
+        assert_eq!(read_scoped_text_file(&root, &path).unwrap(), "initial");
+        let fifo = if replace_root {
+            fs::remove_dir_all(&root).unwrap();
+            root.clone()
+        } else {
+            fs::remove_file(&path).unwrap();
+            path.clone()
+        };
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            send.send(open_scoped_file(&root, &path)).unwrap();
+        });
+        let result = receive.recv_timeout(kraai_test_support::HANG_TIMEOUT);
+        let reader_completed = if result.is_err() {
+            let unblock = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&fifo)
+                .unwrap();
+            let rescued = receive.recv_timeout(kraai_test_support::HANG_TIMEOUT);
+            drop(unblock);
+            !matches!(rescued, Err(std::sync::mpsc::RecvTimeoutError::Timeout))
+        } else {
+            true
+        };
+        if reader_completed {
+            reader.join().unwrap();
+        }
+        assert!(result.is_ok(), "scoped open waited for a FIFO writer");
+        if replace_root {
+            assert!(matches!(
+                result.unwrap(),
+                Err(ScopedReadError::OpenRoot { .. })
+            ));
+        } else {
+            assert!(matches!(result.unwrap(), Err(ScopedReadError::NotFile(_))));
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn scoped_reads_reject_traversal_and_alternate_streams() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let path = root.join("file.txt");
+    fs::write(&path, "contents").unwrap();
+    assert_eq!(read_scoped_text_file(&root, &path).unwrap(), "contents");
+    for relative in ["..\\secret.txt", "file.txt:secret", "file.txt::$DATA"] {
+        assert!(matches!(
+            read_scoped_text_file(&root, &root.join(relative)),
+            Err(ScopedReadError::OutsideRoot(_))
+        ));
+    }
+}

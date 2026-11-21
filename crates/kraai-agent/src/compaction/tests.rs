@@ -137,7 +137,6 @@ fn files(text: &str) -> RefreshedContextState {
     }
 }
 
-/// A compaction together with the request it was prepared for.
 struct Prepared {
     compaction: ContextCompaction,
     original: ProviderRequest,

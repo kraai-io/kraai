@@ -129,18 +129,6 @@ async fn create_session_returns_usable_session_id() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn title_from_user_prompt_truncates_to_sixty_characters() {
-    let prompt = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let title = title_from_user_prompt(prompt).expect("title should be present");
-
-    assert_eq!(
-        title,
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567"
-    );
-    assert_eq!(title.chars().count(), 60);
-}
-
 #[tokio::test]
 async fn session_defaults_follow_profiles_available_in_the_target_workspace() -> Result<()> {
     let (manager, data_dir) = test_manager().await;
@@ -210,20 +198,14 @@ nushell_startup = "clean"
 }
 
 #[test]
-fn title_from_user_prompt_flattens_newlines() {
-    let title =
-        title_from_user_prompt("first line\nsecond\r\nthird").expect("title should be present");
-
-    assert_eq!(title, "first line second third");
-    assert!(!title.contains('\n'));
-    assert!(!title.contains('\r'));
-}
-
-#[test]
 fn title_from_user_prompt_preserves_unicode_whitespace_and_truncation_boundaries() {
     for (prompt, expected) in [
         (String::new(), None),
         (String::from(" \t\r\n\u{2003}\u{a0}"), None),
+        (
+            String::from("first line\nsecond\r\nthird"),
+            Some(String::from("first line second third")),
+        ),
         (
             String::from("\t é \u{2003}模型\u{a0}🦀\n"),
             Some(String::from("é 模型 🦀")),

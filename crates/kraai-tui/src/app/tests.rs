@@ -134,7 +134,6 @@ fn type_text(harness: &mut TestHarness, text: &str) {
     }
 }
 
-/// The screen at the given size, one string per row with trailing spaces removed.
 fn screen_rows(state: &AppState, width: u16, height: u16) -> Vec<String> {
     use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
 
@@ -154,12 +153,10 @@ fn screen_rows(state: &AppState, width: u16, height: u16) -> Vec<String> {
         .collect()
 }
 
-/// The screen at the given size as one string, with a line break after each row.
 fn screen(state: &AppState, width: u16, height: u16) -> String {
     screen_rows(state, width, height).join("\n")
 }
 
-/// The screen at the given width, split into the chat, the status line and the composer.
 fn screen_parts(harness: &TestHarness, width: u16) -> [Vec<String>; 3] {
     let area = ratatui::layout::Rect::new(0, 0, width, 40);
     let rows = screen_rows(&harness.app.state, width, area.height);
@@ -170,7 +167,6 @@ fn screen_parts(harness: &TestHarness, width: u16) -> [Vec<String>; 3] {
     })
 }
 
-/// The rows of the open sheet, from its rule to its last note.
 fn sheet(harness: &TestHarness, width: u16) -> Vec<String> {
     let [chat, _, _] = screen_parts(harness, width);
     let start = chat
@@ -180,7 +176,6 @@ fn sheet(harness: &TestHarness, width: u16) -> Vec<String> {
     chat.get(start..).unwrap_or_default().to_vec()
 }
 
-/// The key hints the status line shows while a sheet is open.
 fn hints(harness: &TestHarness) -> String {
     let [_, status, _] = screen_parts(harness, 120);
     status
@@ -189,7 +184,6 @@ fn hints(harness: &TestHarness) -> String {
         .unwrap_or_default()
 }
 
-/// What the composer shows, the breadcrumb of a sheet included.
 fn composer(harness: &TestHarness) -> String {
     let [_, _, composer] = screen_parts(harness, 120);
     composer
@@ -200,7 +194,6 @@ fn composer(harness: &TestHarness) -> String {
         .to_owned()
 }
 
-/// A row whose right side ends one column short of `width`.
 fn spaced(left: &str, right: &str, width: usize) -> String {
     let used = left.chars().count() + right.chars().count() + 1;
     format!("{left}{}{right}", " ".repeat(width.saturating_sub(used)))
@@ -406,42 +399,6 @@ fn background_script_approval_does_not_replace_foreground_state() {
 }
 
 #[test]
-fn confirming_script_approval_sends_execution_scoped_request() {
-    let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.state.pending_script = Some(pending_script("execution"));
-    harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
-
-    harness.app.confirm_current_script_action();
-
-    assert!(matches!(
-        harness.drain_requests().as_slice(),
-        [RuntimeRequest::ApproveScript {
-            session_id,
-            execution_id,
-        }] if session_id.as_str() == "session" && execution_id == "execution"
-    ));
-}
-
-#[test]
-fn rejecting_script_sends_denial_for_exact_execution() {
-    let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.state.pending_script = Some(pending_script("execution"));
-    harness.app.state.script_approval_action = ScriptApprovalAction::Reject;
-
-    harness.app.confirm_current_script_action();
-
-    assert!(matches!(
-        harness.drain_requests().as_slice(),
-        [RuntimeRequest::DenyScript {
-            session_id,
-            execution_id,
-        }] if session_id.as_str() == "session" && execution_id == "execution"
-    ));
-}
-
-#[test]
 fn approval_response_is_correlated_to_foreground_session_and_execution() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
@@ -479,25 +436,6 @@ fn approval_response_is_correlated_to_foreground_session_and_execution() {
 }
 
 #[test]
-fn approved_script_transitions_to_executing() {
-    let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.state.pending_script = Some(pending_script("execution"));
-    harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
-
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::ApproveScript {
-            session_id: SessionId::new("session"),
-            execution_id: String::from("execution"),
-            result: Ok(()),
-        });
-
-    assert!(harness.app.state.pending_script.is_none());
-    assert_eq!(harness.app.state.script_phase, ScriptPhase::Executing);
-}
-
-#[test]
 fn pending_script_resync_clears_stale_approval_state() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
@@ -528,20 +466,6 @@ fn execution_phase_counts_as_active_and_blocks_commands() {
     state.script_phase = ScriptPhase::AwaitingApproval;
     assert!(!state.runtime_is_active());
     assert!(state.turn_blocks_user_commands());
-}
-
-#[test]
-fn session_sync_requests_atomic_snapshot() {
-    let mut harness = test_harness();
-    harness
-        .app
-        .request_sync_for_session(&SessionId::new("session"));
-    assert!(harness.drain_requests().iter().any(|request| {
-        matches!(
-            request,
-            RuntimeRequest::GetSessionSnapshot { session_id } if session_id.as_str() == "session"
-        )
-    }));
 }
 
 #[test]

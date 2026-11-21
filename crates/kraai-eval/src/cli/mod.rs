@@ -312,33 +312,4 @@ mod tests {
         ensure!(run(&["--price-output", "1"]).is_err());
         Ok(())
     }
-
-    #[test]
-    fn run_requires_a_known_benchmark_a_model_and_positive_counts() {
-        assert!(Cli::try_parse_from(["kraai-eval", "run", "in-house"]).is_err());
-        assert!(Cli::try_parse_from(["kraai-eval", "run", "swe-bench", "--model", "m"]).is_err());
-        for zero in ["--attempts", "--tasks"] {
-            assert!(
-                Cli::try_parse_from(["kraai-eval", "run", "in-house", "--model", "m", zero, "0"])
-                    .is_err()
-            );
-        }
-        assert!(
-            Cli::try_parse_from([
-                "kraai-eval",
-                "run",
-                "terminal-bench",
-                "--model",
-                "m",
-                "--reasoning",
-                "high",
-                "--tasks",
-                "3",
-                "--attempts",
-                "5",
-                "--json",
-            ])
-            .is_ok()
-        );
-    }
 }

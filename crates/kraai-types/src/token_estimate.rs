@@ -1,9 +1,7 @@
-//! Rough token counts for deciding when a request may outgrow a model's context window.
-//! They err high, so a decision based on them happens early rather than late.
+//! Estimates err high, so a decision based on them happens early rather than late.
 
 use crate::{AssistantItem, ContentPart, ConversationItem, MessageContent, ScriptCall};
 
-/// Bytes of text per estimated token.
 pub const BYTES_PER_TOKEN: usize = 4;
 const IMAGE_TOKENS: usize = 1_600;
 const ITEM_OVERHEAD_TOKENS: usize = 4;

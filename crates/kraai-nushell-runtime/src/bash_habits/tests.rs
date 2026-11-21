@@ -9,7 +9,6 @@ fn every_command() -> Vec<String> {
     kraai_commands::command_ids().map(String::from).collect()
 }
 
-/// Rewrites `script` for a shell with every Kraai command and `config` as its `config.nu`.
 fn rewrite_with_startup(script: &str, config: &str) -> Option<String> {
     let startup = (!config.is_empty()).then(|| StartupFile {
         path: "/home/user/.config/nushell/config.nu".into(),

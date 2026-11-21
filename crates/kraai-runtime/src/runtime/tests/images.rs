@@ -7,10 +7,7 @@ use kraai_types::{ContentPart, ConversationItem, MessageContent};
 
 #[tokio::test]
 async fn failed_script_images_recover_and_reopen_without_source_or_pins() -> Result<()> {
-    let Some((mut harness, session_id, completed)) = completed_script_with_image(true).await?
-    else {
-        return Ok(());
-    };
+    let (mut harness, session_id, completed) = completed_script_with_image(true).await?;
     let image = completed
         .record
         .images
@@ -90,9 +87,7 @@ async fn failed_script_images_recover_and_reopen_without_source_or_pins() -> Res
 
 #[tokio::test]
 async fn image_only_queued_input_keeps_references_and_undo_restores_them() -> Result<()> {
-    let Some(harness) = super::harness::RuntimeTestHarness::new(Vec::new()).await else {
-        return Ok(());
-    };
+    let harness = super::harness::RuntimeTestHarness::new(Vec::new()).await;
     let session_id =
         super::harness::create_session_with_profile(&harness.handle, "test-profile").await?;
     let mut bytes = std::io::Cursor::new(Vec::new());

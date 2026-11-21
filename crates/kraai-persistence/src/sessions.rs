@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OwnedMutexGuard;
-/// Metadata for a session, persisted to disk
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
     #[serde(skip)]
@@ -27,10 +26,8 @@ pub struct SessionMeta {
     pub selected_model: Option<kraai_types::ModelSelection>,
 }
 
-/// Trait for storing and retrieving sessions
 #[async_trait::async_trait]
 pub trait SessionStore: Send + Sync {
-    /// List all sessions
     async fn list(&self) -> Result<Vec<SessionMeta>>;
 
     async fn list_ids(&self) -> Result<HashSet<SessionId>> {
@@ -42,13 +39,10 @@ pub trait SessionStore: Send + Sync {
             .collect())
     }
 
-    /// Get a session by ID
     async fn get(&self, id: &SessionId) -> Result<Option<SessionMeta>>;
 
-    /// Save a session
     async fn save(&self, session: &SessionMeta) -> Result<()>;
 
-    /// Save a session only when its currently persisted tip matches `expected_tip`.
     async fn save_if_tip_matches(
         &self,
         session: &SessionMeta,
@@ -71,7 +65,6 @@ pub trait SessionStore: Send + Sync {
         message_store: Arc<dyn MessageStore>,
     ) -> Result<()>;
 
-    /// Delete a session
     async fn delete(&self, id: &SessionId) -> Result<()>;
 }
 

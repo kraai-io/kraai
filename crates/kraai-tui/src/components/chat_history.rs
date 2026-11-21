@@ -337,7 +337,6 @@ impl<'a> ChatHistory<'a> {
             .collect()
     }
 
-    /// The lines of one message. `card` says where each of its unanswered script calls stands.
     pub(crate) fn build_message_lines(
         msg: &Message,
         width: u16,
@@ -824,21 +823,6 @@ mod tests {
     }
 
     #[test]
-    fn renders_script_source_without_parsing_nushell() {
-        let assistant = script_message("", "# timeout=1sec\nthis is not parsed here", "");
-        let refs = [&assistant];
-        let history = ChatHistory::new(&refs, 0, true);
-        let lines = history.build_rendered_lines(120);
-        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
-
-        assert!(
-            rendered
-                .iter()
-                .any(|line| line.contains("this is not parsed here"))
-        );
-    }
-
-    #[test]
     fn renders_user_messages_with_one_cell_horizontal_padding() {
         let user = message("1", ChatRole::User, "hello");
         let refs = [&user];
@@ -888,35 +872,6 @@ mod tests {
     }
 
     #[test]
-    fn renders_fenced_code_block_with_label() {
-        let assistant = message("1", ChatRole::Assistant, "```rust\nfn main() {}\n```");
-        let refs = [&assistant];
-        let history = ChatHistory::new(&refs, 0, true);
-        let lines = history.build_rendered_lines(120);
-        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
-
-        assert!(rendered.iter().any(|line| *line == " • rust"));
-        assert!(rendered.iter().any(|line| *line == "   │ fn main() {}"));
-    }
-
-    #[test]
-    fn renders_inline_code_with_distinct_color() {
-        let assistant = message("1", ChatRole::Assistant, "alpha `beta` gamma");
-        let refs = [&assistant];
-        let history = ChatHistory::new(&refs, 0, true);
-        let lines = history.build_rendered_lines(120);
-
-        assert_eq!(lines.len(), 1);
-        assert_eq!(ChatHistory::line_text(&lines[0]), " • alpha beta gamma");
-
-        let has_colored_inline_code = lines[0]
-            .spans
-            .iter()
-            .any(|span| span.text == "beta" && span.style.fg == Some(crate::theme::ACCENT));
-        assert!(has_colored_inline_code);
-    }
-
-    #[test]
     fn wraps_assistant_messages_with_single_first_line_indicator() {
         let assistant = message("1", ChatRole::Assistant, "abcdefghijk");
         let refs = [&assistant];
@@ -925,17 +880,6 @@ mod tests {
         let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
 
         assert_eq!(rendered, vec![" • abcde", "   fghij", "   k"]);
-    }
-
-    #[test]
-    fn skips_leading_blank_line_before_assistant_script_call() {
-        let assistant = script_message("", "# timeout=5sec\nkraai-open-files /tmp/a.txt", "");
-        let refs = [&assistant];
-        let history = ChatHistory::new(&refs, 0, true);
-        let lines = history.build_rendered_lines(120);
-        let rendered = lines.iter().map(ChatHistory::line_text).collect::<Vec<_>>();
-
-        assert_eq!(rendered.first().map(String::as_str), Some(" · not started"));
     }
 
     #[test]

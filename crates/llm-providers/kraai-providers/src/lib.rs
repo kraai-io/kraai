@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-//! The provider types Kraai frontends ship with.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -11,7 +10,6 @@ use kraai_provider_openai_codex::{
     OpenAiCodexAuthController, OpenAiCodexAuthControllerOptions, OpenAiCodexFactory,
 };
 
-/// OpenAI-compatible chat completions, OpenAI, and OpenAI Codex with account sign-in.
 pub struct DefaultProviders;
 
 #[async_trait::async_trait]

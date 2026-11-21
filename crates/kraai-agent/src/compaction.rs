@@ -117,7 +117,7 @@ impl ContextCompaction {
         self
     }
 
-    /// Summarizes `original`, which must be the request this compaction was prepared with.
+    /// `original` must be the request this compaction was prepared with.
     pub async fn run(
         &self,
         original: &ProviderRequest,

@@ -17,7 +17,6 @@ pub(crate) fn format_duration(duration: Duration) -> String {
     }
 }
 
-/// A time limit: `format_duration` without the units that are zero, so five minutes is "5m".
 pub(crate) fn format_limit(limit: Duration) -> String {
     let text = format_duration(limit);
     for (suffix, unit) in [("m00s", "m"), ("h00m", "h")] {

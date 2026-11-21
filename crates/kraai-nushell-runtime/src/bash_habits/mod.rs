@@ -15,15 +15,11 @@ const MAX_ROUNDS: usize = 4;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BashRewrite {
     pub source: String,
-    /// What changed, once each, such as `` `2>&1 |` → `o+e>|` ``.
     pub changes: Vec<String>,
 }
 
-/// Rewrites bash syntax that Nushell rejects or silently misreads, such as `2>/dev/null`,
-/// `find . -name x`, or a heredoc, into the Nushell form with the same meaning. The script is
-/// parsed with the same Kraai commands and startup files its shell will load, so user aliases
-/// and definitions are respected. Returns `None` when nothing changed, the rewritten script
-/// still fails to parse, or the startup files do not parse on their own.
+/// The script is parsed with the same Kraai commands and startup files its shell will load, so
+/// user aliases and definitions are respected.
 pub fn rewrite_bash_habits(
     source: &str,
     active_commands: &[String],
@@ -74,7 +70,6 @@ struct EngineKey {
     startup_files: Vec<StartupFile>,
 }
 
-/// The engine for the most recent shell setup, or `None` when its startup files do not parse.
 /// Sessions usually share one profile, so a single entry is enough.
 type CachedEngine = (EngineKey, Option<Arc<EngineState>>);
 
@@ -102,8 +97,6 @@ fn parse_engine(
     engine
 }
 
-/// Mirrors the host's engine: Nushell's commands, then the active Kraai commands, then the
-/// declarations from each startup file. Startup files are parsed, never evaluated.
 fn build_parse_engine(
     active_commands: &[String],
     startup_files: &[StartupFile],

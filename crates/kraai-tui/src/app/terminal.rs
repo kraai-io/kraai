@@ -1,6 +1,5 @@
 use super::*;
 
-// Keep wheel movement responsive without adding inertia or delaying direction changes.
 const WHEEL_SCROLL_LINES: i16 = 3;
 const TERMINAL_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(1);
 

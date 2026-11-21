@@ -11,10 +11,6 @@ use crate::stream::ProviderStreamEvent;
 pub trait Provider: Send + Sync {
     fn get_provider_id(&self) -> ProviderId;
 
-    async fn pricing_model_id(&self, model_id: &ModelId) -> Result<ModelId> {
-        Ok(model_id.clone())
-    }
-
     async fn list_models(&self) -> Vec<Model>;
 
     async fn get_model(&self, model_id: &ModelId) -> Option<Model> {
@@ -105,30 +101,4 @@ pub struct Model {
     pub supports_images: bool,
     #[serde(default)]
     pub options: Vec<kraai_types::ModelOptionDefinition>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use color_eyre::eyre::{ensure, eyre};
-
-    #[tokio::test]
-    async fn default_model_lookup_preserves_listed_metadata_and_missing_ids() -> Result<()> {
-        let provider = crate::test_support::MockProvider::new("fixture");
-        let listed = provider
-            .list_models()
-            .await
-            .into_iter()
-            .next()
-            .ok_or_else(|| eyre!("fixture model missing"))?;
-        let found = provider
-            .get_model(&listed.id)
-            .await
-            .ok_or_else(|| eyre!("model lookup missed listed model"))?;
-        ensure!(found.id == listed.id);
-        ensure!(found.name == listed.name);
-        ensure!(found.max_context == listed.max_context);
-        ensure!(provider.get_model(&ModelId::new("unknown")).await.is_none());
-        Ok(())
-    }
 }

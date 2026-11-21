@@ -23,7 +23,6 @@ mod command {
     use crate::{command_error, declare_kraai_command};
 
     declare_kraai_command! {
-        /// Removes files from fresh context injection on subsequent model turns.
         pub struct CloseFilesCommand;
         metadata: super::METADATA;
         signature: Signature::build(Self::METADATA.name)
@@ -73,20 +72,6 @@ mod command {
                 call.head,
             )
             .into_pipeline_data())
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use kraai_workspace_fs::normalize_allow_missing;
-        use std::path::Path;
-
-        #[test]
-        fn normalizes_missing_paths_without_requiring_the_file_to_exist() {
-            assert_eq!(
-                normalize_allow_missing(Path::new("/workspace/src"), Path::new("../missing.rs")),
-                Path::new("/workspace/missing.rs")
-            );
         }
     }
 }

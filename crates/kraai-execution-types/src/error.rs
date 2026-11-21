@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// A failure caused by the requested domain operation rather than by the service itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DomainErrorKind {
@@ -9,7 +8,6 @@ pub enum DomainErrorKind {
     Conflict,
 }
 
-/// A typed domain failure that can cross crate boundaries without depending on a frontend API.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DomainError {
     kind: DomainErrorKind,

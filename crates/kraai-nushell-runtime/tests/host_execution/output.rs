@@ -261,7 +261,7 @@ async fn unfinished_lists_keep_their_rows_when_execution_is_cancelled() {
     let workspace = TestWorkspace::new();
     let source = r#"
 print "started"
-[1 2] | each {|n| if $n == 2 { print "waiting"; sleep 1hr }; {n: $n} }
+[1 2] | each {|n| if $n == 2 { print {waiting: true}; sleep 1hr }; {n: $n} }
 "#;
     let mut execution = plan(source.as_bytes().to_vec(), &workspace);
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -272,13 +272,13 @@ print "started"
     hang_guard(async {
         while let Some(event) = receiver.recv().await {
             received.extend_from_slice(&event.bytes);
-            if received.ends_with(b"started\nwaiting\n") {
+            if received.ends_with(b"started\nwaiting: true\n") {
                 break;
             }
         }
     })
     .await
-    .expect("output printed by the second row should stream after the first row");
+    .expect("a value printed by the second row should stream after the first row");
     cancellation.cancel();
     let result = run
         .await
@@ -287,7 +287,7 @@ print "started"
     assert_eq!(result.output.termination, Termination::Cancelled);
     assert_eq!(
         String::from_utf8_lossy(&result.output.stdout),
-        "started\nwaiting\n[1]{n}:\n  1\n"
+        "started\nwaiting: true\n[1]{n}:\n  1\n"
     );
 }
 

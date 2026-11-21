@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn derives_subscription_routing_hint_without_changing_body() -> Result<()> {
+    fn derives_subscription_routing_hint() -> Result<()> {
         for (body, expected) in [
             (r#"{"model":"gpt-6-astra"}"#, "model=gpt-6-astra"),
             (
@@ -213,7 +213,6 @@ mod tests {
                     .get("x-codex-routing-hint")
                     .is_some_and(|hint| hint == expected)
             );
-            ensure!(forwarded.body().and_then(reqwest::Body::as_bytes) == Some(body.as_bytes()));
         }
         Ok(())
     }

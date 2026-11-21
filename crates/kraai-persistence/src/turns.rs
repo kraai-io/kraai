@@ -71,7 +71,6 @@ impl ConversationStore {
         })
     }
 
-    /// Links `messages` after `expected_tip` in one durable step, or links none of them.
     pub async fn append_messages(
         &self,
         session_id: &SessionId,
@@ -191,8 +190,7 @@ impl ConversationStore {
         Ok(true)
     }
 
-    /// Append a message with a stable ID, or finish linking the same durable message after a
-    /// process interruption. This is used for script results whose delivery must be retry-safe.
+    /// Used for script results, whose delivery must be retry-safe.
     pub async fn append_message_idempotent(
         &self,
         message_id: MessageId,

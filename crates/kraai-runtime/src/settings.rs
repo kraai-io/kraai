@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{FieldViolation, SettingsValue};
 
-/// Editable provider settings shared across clients.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,7 +20,6 @@ pub struct ProviderSettings {
     pub values: Vec<FieldValueEntry>,
 }
 
-/// Editable model settings shared across clients.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,7 +33,6 @@ pub struct ModelSettings {
     pub remove_options: Vec<String>,
 }
 
-/// Full editable settings document persisted to providers.toml.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

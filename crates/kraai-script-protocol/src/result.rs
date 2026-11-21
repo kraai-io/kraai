@@ -4,10 +4,8 @@ use kraai_execution_types::{SandboxCapabilities, SandboxCapability, ScriptExecut
 
 const BINARY_OUTPUT_MESSAGE: &str = "Binary output was preserved by Kraai. Decode an existing output file if available. Rerun only if repeating the command's effects is safe, decoding its output with the appropriate encoding before returning text.";
 
-/// The most bytes of one output channel shown to the model; the rest stays in its output file.
 pub const CHANNEL_DISPLAY_LIMIT: usize = 16 * 1024;
 
-/// Whether the model sees less than all of `bytes`, so the full channel belongs in a file.
 #[must_use]
 pub fn channel_needs_output_file(bytes: &[u8]) -> bool {
     bytes.len() > CHANNEL_DISPLAY_LIMIT || std::str::from_utf8(bytes).is_err()
@@ -21,11 +19,9 @@ pub struct ToolCallResultView<'a> {
     pub stdout: &'a [u8],
     pub stderr: &'a [u8],
     pub diagnostic: Option<&'a str>,
-    /// Where the full stdout was saved when the model sees only part of it.
     pub stdout_file: Option<&'a Path>,
     pub stderr_file: Option<&'a Path>,
     pub sandbox_blocked: Option<&'a SandboxCapabilities>,
-    /// What Kraai changed in the model's script before it ran.
     pub rewrites: &'a [String],
 }
 
@@ -135,7 +131,6 @@ fn push_attribute(rendered: &mut String, name: &str, value: &str) {
     rendered.push('"');
 }
 
-/// Keeps the start and end of `text`, cut at line breaks when one is near the cut.
 fn push_excerpt(rendered: &mut String, text: &str) {
     let half = CHANNEL_DISPLAY_LIMIT / 2;
     let mut head_end = text.floor_char_boundary(half);

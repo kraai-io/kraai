@@ -3,9 +3,7 @@ use super::*;
 pub(super) struct SlashCommand {
     pub(super) name: &'static str,
     pub(super) description: &'static str,
-    /// The command opens a list and takes no arguments, so Space after its name runs it.
     pub(super) opens_list: bool,
-    /// The command list shows the command only while an error is waiting to be read.
     pub(super) needs_error: bool,
 }
 
@@ -55,7 +53,6 @@ pub(super) fn is_known_slash_command(command_line: &str) -> bool {
         .is_some_and(|name| SLASH_COMMANDS.iter().any(|command| command.name == name))
 }
 
-/// Commands whose name contains `query`, with names that start with it first.
 pub(super) fn slash_command_matches(query: &str) -> Vec<&'static SlashCommand> {
     let mut matches: Vec<_> = SLASH_COMMANDS
         .iter()
@@ -94,7 +91,6 @@ impl App {
         self.state.sheet_scroll.set(0);
     }
 
-    /// Handles keys that act on the command list; false leaves the key to the composer.
     pub(super) fn handle_command_list_key(&mut self, key: KeyEvent) -> bool {
         let matches = self.state.command_matches();
         let len = matches.len();
@@ -131,8 +127,7 @@ impl App {
         true
     }
 
-    /// Highlights a row and writes its command into the composer. The list keeps showing what
-    /// the typed text matched, so repeated presses walk every match.
+    /// The list keeps showing what the typed text matched, so repeated presses walk every match.
     fn walk_command_list(&mut self, index: usize, name: &str) {
         let filter = self
             .state

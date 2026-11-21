@@ -53,12 +53,10 @@ impl From<&kraai_types::TokenUsage> for UsageMetrics {
     }
 }
 
-/// What a harness reports about one run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HarnessMetrics {
     pub schema_version: u32,
-    /// Responses the model completed.
     #[serde(default)]
     pub turns: Option<u64>,
     #[serde(default)]
