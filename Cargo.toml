@@ -138,7 +138,7 @@ image = { version = "0.25.10", default-features = false, features = [
 libc = "0.2.186"
 markdown = "1.0.0"
 miette = "7.6.0"
-nix = { version = "0.31.3", features = ["process", "signal"] }
+nix = { version = "0.32.0", features = ["process", "signal"] }
 notify = "8.2.0"
 nu-cli = "=0.117.0"
 nu-cmd-lang = "=0.117.0"
@@ -148,7 +148,7 @@ nu-engine = "=0.117.0"
 nu-experimental = "=0.117.0"
 nu-parser = "=0.117.0"
 nu-protocol = "=0.117.0"
-object = { version = "0.37.3", default-features = false, features = [
+object = { version = "0.41.0", default-features = false, features = [
   "elf",
   "read_core",
   "std",
