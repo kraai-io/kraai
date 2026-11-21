@@ -900,7 +900,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.60.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Foundation" ];
           }
@@ -926,7 +926,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.60.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Foundation" ];
           }
@@ -1063,7 +1063,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_DataExchange" "Win32_System_Memory" "Win32_System_Ole" "Win32_UI_Shell" ];
           }
@@ -1611,7 +1611,7 @@ rec {
           }
           {
             name = "object";
-            packageId = "object";
+            packageId = "object 0.37.3";
             usesDefaultFeatures = false;
             target = { target, features }: (!((target."windows" or false) && ("msvc" == target."env" or null) && (!("uwp" == target."vendor" or null))));
             features = [ "read_core" "elf" "macho" "pe" "xcoff" "unaligned" "archive" ];
@@ -5129,7 +5129,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_UI_Shell" "Win32_Foundation" "Win32_Globalization" "Win32_System_Com" ];
           }
@@ -5223,7 +5223,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.60.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Networking_WinSock" "Win32_Foundation" ];
           }
@@ -5535,7 +5535,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Diagnostics_Debug" ];
           }
@@ -5936,7 +5936,7 @@ rec {
           }
           {
             name = "notify";
-            packageId = "notify 9.0.0-rc.7";
+            packageId = "notify 9.0.0-rc.8";
           }
           {
             name = "notify-types";
@@ -6070,7 +6070,7 @@ rec {
           }
           {
             name = "notify";
-            packageId = "notify 9.0.0-rc.7";
+            packageId = "notify 9.0.0-rc.8";
           }
           {
             name = "parking_lot";
@@ -9386,7 +9386,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: ("windows" == target."os" or null);
             features = [ "Win32_Storage_FileSystem" ];
           }
@@ -10425,7 +10425,7 @@ rec {
           }
           {
             name = "object";
-            packageId = "object";
+            packageId = "object 0.41.0";
             usesDefaultFeatures = false;
             target = { target, features }: ("linux" == target."os" or null);
             features = [ "elf" "read_core" "std" ];
@@ -10744,7 +10744,7 @@ rec {
           }
           {
             name = "sse-stream";
-            packageId = "sse-stream";
+            packageId = "sse-stream 0.3.0";
           }
           {
             name = "tokio";
@@ -13392,9 +13392,9 @@ rec {
       };
       "napi" = rec {
         crateName = "napi";
-        version = "3.16.1";
+        version = "3.16.2";
         edition = "2021";
-        sha256 = "0svx8f9c0fmz20x0ng2sssw16ssxmkw8xw6hxll2w65pdwvgfzwh";
+        sha256 = "0ns3pjcpwsmhv0gf0gms8mdwg8k6mn36cxizf4iy3ynhqawn4z2n";
         license = "MIT";
         authors = [
           "Nathan Sobo <nathan@github.com>"
@@ -13529,9 +13529,9 @@ rec {
       };
       "napi-derive" = rec {
         crateName = "napi-derive";
-        version = "3.7.0";
+        version = "3.7.1";
         edition = "2021";
-        sha256 = "1vl9kzfry7wws53x9cdyxv9aghi95c44k3rjziig8k7qj87v0bnk";
+        sha256 = "177d9gicpw7jg1b4pvr383ib0cbmh4vwc6cm06yin6nnv670kj4l";
         procMacro = true;
         libName = "napi_derive";
         license = "MIT";
@@ -13581,9 +13581,9 @@ rec {
       };
       "napi-derive-backend" = rec {
         crateName = "napi-derive-backend";
-        version = "7.0.0";
+        version = "7.0.1";
         edition = "2021";
-        sha256 = "146ck7zvi0b2219y7wb0axai8ydyppzd05xqz5ljxhcg9p32izni";
+        sha256 = "0fpzi10h663xpn6wlbsmhczbyarjw4vl2jz8pbc8z5xx8b5dck1i";
         libName = "napi_derive_backend";
         license = "MIT";
         dependencies = [
@@ -14023,11 +14023,11 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "fsevent-sys" "macos_fsevent" ];
       };
-      "notify 9.0.0-rc.7" = rec {
+      "notify 9.0.0-rc.8" = rec {
         crateName = "notify";
-        version = "9.0.0-rc.7";
+        version = "9.0.0-rc.8";
         edition = "2024";
-        sha256 = "0rkrnha2w6ijg2f4h9jj97kdlmbh0qg8zsn28wiarr5s3rby3iwx";
+        sha256 = "1xphz5w2vj58k6lbdmqw9f4dnj6kkyjxr2s4xgc5qjd132p4mfly";
         license = "CC0-1.0";
         authors = [
           "Félix Saparelli <me@passcod.name>"
@@ -14129,7 +14129,7 @@ rec {
             name = "windows-sys";
             packageId = "windows-sys 0.61.2";
             target = { target, features }: (target."windows" or false);
-            features = [ "Win32_System_Threading" "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_Security" "Win32_System_WindowsProgramming" "Win32_System_IO" ];
+            features = [ "Win32_System_Threading" "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_Security" "Win32_System_WindowsProgramming" "Win32_System_IO" "Win32_System_LibraryLoader" ];
           }
           {
             name = "xxhash-rust";
@@ -14199,9 +14199,9 @@ rec {
       };
       "notify-types" = rec {
         crateName = "notify-types";
-        version = "2.2.0";
+        version = "2.3.0";
         edition = "2024";
-        sha256 = "027ip1l8ak1vq502cjbk7ky7x8wfsd0gbzg7n6affb13129plhqa";
+        sha256 = "0ycrsp2i90gbcssn75s3qza0ja51720xnp2nvwhfr7xg9cw1ljcc";
         libName = "notify_types";
         license = "MIT OR Apache-2.0";
         authors = [
@@ -14256,7 +14256,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.59.0";
             rename = "windows";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Console" "Win32_Storage_FileSystem" "Win32_Security" ];
@@ -17300,7 +17300,7 @@ rec {
         };
         resolvedDefaultFeatures = [ "CFODNode" "CFODQuery" "CFODRecord" "CFODSession" "CFOpenDirectory" "CFOpenDirectoryConstants" "alloc" "objc2-core-foundation" "std" ];
       };
-      "object" = rec {
+      "object 0.37.3" = rec {
         crateName = "object";
         version = "0.37.3";
         edition = "2018";
@@ -17332,7 +17332,41 @@ rec {
           "write_core" = [ "dep:crc32fast" "dep:indexmap" "dep:hashbrown" ];
           "write_std" = [ "write_core" "std" "indexmap?/std" "crc32fast?/std" ];
         };
-        resolvedDefaultFeatures = [ "archive" "coff" "elf" "macho" "pe" "read_core" "std" "unaligned" "xcoff" ];
+        resolvedDefaultFeatures = [ "archive" "coff" "elf" "macho" "pe" "read_core" "unaligned" "xcoff" ];
+      };
+      "object 0.41.0" = rec {
+        crateName = "object";
+        version = "0.41.0";
+        edition = "2024";
+        sha256 = "1lppjhm865qzljahnp5xmvsmvprbhrypb3gw9x70a9k0hxkdpnqi";
+        license = "Apache-2.0 OR MIT";
+        dependencies = [
+          {
+            name = "memchr";
+            packageId = "memchr";
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "all" = [ "read" "write" "build" "std" "compression" "names" "wasm" ];
+          "alloc" = [ "dep:alloc" ];
+          "build" = [ "build_core" "write_std" "elf" ];
+          "build_core" = [ "read_core" "write_core" ];
+          "compression" = [ "dep:flate2" "dep:ruzstd" "std" ];
+          "core" = [ "dep:core" ];
+          "default" = [ "read" "compression" ];
+          "doc" = [ "all" ];
+          "pe" = [ "coff" ];
+          "read" = [ "read_core" "archive" "coff" "elf" "goff" "macho" "pe" "xcoff" ];
+          "rustc-dep-of-std" = [ "core" "alloc" "memchr/rustc-dep-of-std" ];
+          "std" = [ "memchr/std" ];
+          "unstable-all" = [ "all" "unstable" ];
+          "wasm" = [ "dep:wasmparser" ];
+          "write" = [ "write_std" "coff" "elf" "goff" "macho" "pe" "xcoff" ];
+          "write_core" = [ "dep:crc32fast" "dep:indexmap" "dep:hashbrown" ];
+          "write_std" = [ "write_core" "std" "indexmap?/std" "crc32fast?/std" ];
+        };
+        resolvedDefaultFeatures = [ "elf" "read_core" "std" ];
       };
       "oem_cp" = rec {
         crateName = "oem_cp";
@@ -17527,7 +17561,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Pipes" "Win32_Security" ];
           }
@@ -19265,7 +19299,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_IO" "Win32_Networking_WinSock" ];
           }
@@ -20876,7 +20910,7 @@ rec {
           }
           {
             name = "sse-stream";
-            packageId = "sse-stream";
+            packageId = "sse-stream 0.2.6";
             optional = true;
           }
           {
@@ -21394,7 +21428,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Networking_WinSock" ];
           }
@@ -21670,7 +21704,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             usesDefaultFeatures = false;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Security_Cryptography" ];
@@ -23073,7 +23107,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.60.2";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Networking_WinSock" "Win32_System_IO" "Win32_System_Threading" "Win32_System_WindowsProgramming" ];
           }
@@ -23147,7 +23181,7 @@ rec {
           "bindgen" = [ "dep:bindgen" ];
         };
       };
-      "sse-stream" = rec {
+      "sse-stream 0.2.6" = rec {
         crateName = "sse-stream";
         version = "0.2.6";
         edition = "2021";
@@ -23183,6 +23217,60 @@ rec {
           "tracing" = [ "dep:tracing" ];
         };
         resolvedDefaultFeatures = [ "default" ];
+      };
+      "sse-stream 0.3.0" = rec {
+        crateName = "sse-stream";
+        version = "0.3.0";
+        edition = "2021";
+        sha256 = "1939rrd18cyzaq9pz4mlgb5f7l0hwiik5vy8kixlza7vq07id1fk";
+        libName = "sse_stream";
+        license = "MIT OR Apache-2.0";
+        authors = [
+          "4t145 <u4t145@163.com>"
+        ];
+        dependencies = [
+          {
+            name = "bytes";
+            packageId = "bytes";
+          }
+          {
+            name = "futures-util";
+            packageId = "futures-util";
+          }
+          {
+            name = "http-body";
+            packageId = "http-body";
+          }
+          {
+            name = "http-body-util";
+            packageId = "http-body-util";
+          }
+          {
+            name = "memchr";
+            packageId = "memchr";
+            optional = true;
+          }
+          {
+            name = "pin-project-lite";
+            packageId = "pin-project-lite";
+          }
+          {
+            name = "simdutf8";
+            packageId = "simdutf8";
+            optional = true;
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+        ];
+        features = {
+          "default" = [ "memchr" "simdutf8" ];
+          "memchr" = [ "dep:memchr" ];
+          "simdutf8" = [ "dep:simdutf8" ];
+          "tracing" = [ "dep:tracing" ];
+        };
+        resolvedDefaultFeatures = [ "default" "memchr" "simdutf8" ];
       };
       "stable_deref_trait" = rec {
         crateName = "stable_deref_trait";
@@ -23767,7 +23855,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Storage_FileSystem" "Win32_Foundation" ];
           }
@@ -23828,7 +23916,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.60.2";
             usesDefaultFeatures = false;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_System_Console" "Win32_Storage_FileSystem" "Win32_System_IO" "Win32_System_Threading" "Win32_Security" ];
@@ -23858,7 +23946,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Console" ];
           }
@@ -28439,9 +28527,9 @@ rec {
       };
       "webbrowser" = rec {
         crateName = "webbrowser";
-        version = "1.2.6";
+        version = "1.2.7";
         edition = "2021";
-        sha256 = "1mfb3bxsc9yyyxbak6nvykc5fxnsq43w634b3gqvl9s0478213gy";
+        sha256 = "0nxrg5r513rrnagh5s8bh5izvp7ilcbyps1pc5yn9wlq8v6irsbk";
         license = "MIT OR Apache-2.0";
         authors = [
           "Amod Malviya @amodm"
@@ -28877,7 +28965,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_Console" "Win32_System_SystemInformation" ];
           }
@@ -30390,7 +30478,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_System" "Win32_System_Threading" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Cryptography" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Pipes" "Win32_System_SystemInformation" "Win32_System_Threading" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.59.0" = rec {
         crateName = "windows-sys";
@@ -30650,7 +30738,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_LibraryLoader" "Win32_System_Registry" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-sys 0.60.2" = rec {
         crateName = "windows-sys";
@@ -30916,7 +31004,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_IO" "Win32_System_Threading" "Win32_System_WindowsProgramming" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Console" "Win32_System_IO" "Win32_System_Threading" "Win32_System_WindowsProgramming" "default" ];
       };
       "windows-sys 0.61.2" = rec {
         crateName = "windows-sys";
@@ -31179,7 +31267,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Wdk_System_SystemInformation" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_NetManagement" "Win32_NetworkManagement_WNet" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Authorization" "Win32_Security_Credentials" "Win32_Security_Cryptography" "Win32_Security_Isolation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_Environment" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_JobObjects" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Ole" "Win32_System_Pipes" "Win32_System_Registry" "Win32_System_RemoteDesktop" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Wdk_System_SystemInformation" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_NetManagement" "Win32_NetworkManagement_WNet" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authentication" "Win32_Security_Authentication_Identity" "Win32_Security_Authorization" "Win32_Security_Credentials" "Win32_Security_Cryptography" "Win32_Security_Isolation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_Environment" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_JobObjects" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_Registry" "Win32_System_RemoteDesktop" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "default" ];
       };
       "windows-targets 0.48.5" = rec {
         crateName = "windows-targets";
@@ -31651,7 +31739,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.59.0";
             features = [ "Win32_Foundation" "Win32_System_Time" "Win32_System_Registry" "Win32_Security" "Win32_Storage_FileSystem" "Win32_System_Diagnostics_Debug" ];
           }
         ];
