@@ -69,21 +69,22 @@ check-node test_script="test":
     npm run typecheck
     npm run "{{ test_script }}"
 
+# Builds a Vite app in packages/<package>, such as eval-viewer or site.
 [script('bash')]
-build-eval-viewer:
+build-web package:
     set -euo pipefail
-    cd packages/eval-viewer
+    cd "packages/{{ package }}"
     npm ci --no-audit --no-fund
     npm run build
 
 [script('bash')]
-check-eval-viewer: build-eval-viewer
+check-web package: (build-web package)
     set -euo pipefail
-    cd packages/eval-viewer
+    cd "packages/{{ package }}"
     npm run typecheck
     npm test
 
-check: generate-cargo-nix format lint test test-harbor check-node check-eval-viewer
+check: generate-cargo-nix format lint test test-harbor check-node (check-web "eval-viewer") (check-web "site")
 
 eval *args:
     nix run .#kraai-eval -- {{ args }}
