@@ -24,7 +24,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@f4371d1ec7179bfbd04a82a81e3b3af7f720750f
+      - uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266
         with:
           cache-on-failure: true
           add-rust-environment-hash-key: false
