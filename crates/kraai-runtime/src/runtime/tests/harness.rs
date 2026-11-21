@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use color_eyre::eyre::{Result, eyre};
@@ -370,12 +370,8 @@ impl RuntimeTestHarness {
         shared_directory: Option<PathBuf>,
     ) -> Self {
         let owns_directory = shared_directory.is_none();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
         let data_dir = shared_directory.unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("kraai-runtime-test-{}-{nanos}", std::process::id()))
+            std::env::temp_dir().join(format!("kraai-runtime-test-{}", ulid::Ulid::generate()))
         });
         tokio::fs::create_dir_all(data_dir.join("workspace/.kraai"))
             .await
