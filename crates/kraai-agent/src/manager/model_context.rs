@@ -3,9 +3,7 @@ use crate::compaction::{ContextCompaction, assemble};
 
 pub(super) struct ModelContext {
     pub(super) request: ProviderRequest,
-    /// Present whenever there is history to summarize.
     pub(super) compaction: Option<ContextCompaction>,
-    /// Whether the request is projected to fill most of the model's context window.
     pub(super) compact_first: bool,
     pub(super) notifications: Vec<String>,
 }

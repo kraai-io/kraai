@@ -41,12 +41,10 @@ pub struct FileContextSnapshot {
     pub text: String,
 }
 
-/// One instruction section, such as an AGENTS.md file, placed in the conversation like a pinned file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstructionSnapshot {
     pub key: String,
     pub label: String,
-    /// The message this version follows; `None` places it before the whole conversation.
     pub anchor: Option<MessageId>,
     pub text: String,
 }

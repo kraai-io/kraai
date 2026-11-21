@@ -16,22 +16,6 @@ use super::super::core::{RuntimeConfig, RuntimeCore};
 use crate::handle::RuntimeEventSender;
 use crate::{Event, EventCallback, RuntimeHandle};
 
-fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
-    let mut current = Some(error);
-    while let Some(error) = current {
-        let display = error.to_string();
-        let debug = format!("{error:?}");
-        if display.contains("No CA certificates were loaded from the system")
-            || debug.contains("No CA certificates were loaded from the system")
-            || display == "builder error"
-        {
-            return true;
-        }
-        current = error.source();
-    }
-    false
-}
-
 #[derive(Clone, Debug)]
 enum ScriptedChunkKind {
     Reasoning(serde_json::Value),
@@ -344,11 +328,11 @@ pub(super) struct RuntimeTestHarness {
 }
 
 impl RuntimeTestHarness {
-    pub(super) async fn new(scripts: Vec<Vec<ScriptedChunk>>) -> Option<Self> {
+    pub(super) async fn new(scripts: Vec<Vec<ScriptedChunk>>) -> Self {
         Self::new_scripted("mock", scripts, None).await
     }
 
-    pub(super) async fn new_native(scripts: Vec<Vec<ScriptedChunk>>) -> Option<Self> {
+    pub(super) async fn new_native(scripts: Vec<Vec<ScriptedChunk>>) -> Self {
         Self::new_scripted("mock-native", scripts, None).await
     }
 
@@ -356,30 +340,27 @@ impl RuntimeTestHarness {
         provider_id: &str,
         scripts: Vec<Vec<ScriptedChunk>>,
         shared_directory: Option<PathBuf>,
-    ) -> Option<Self> {
+    ) -> Self {
         let (providers, provider_requests) = scripted_providers(provider_id, scripts);
-        let harness = Self::new_in_directory(providers, None, shared_directory).await?;
-        Some(Self {
+        let harness = Self::new_in_directory(providers, None, shared_directory).await;
+        Self {
             provider_requests,
             ..harness
-        })
+        }
     }
 
-    pub(super) async fn new_with_parts(providers: ProviderManager) -> Option<Self> {
+    pub(super) async fn new_with_parts(providers: ProviderManager) -> Self {
         Self::new_with_message_store(providers, None).await
     }
 
     pub(super) async fn new_with_message_store(
         providers: ProviderManager,
         message_store: Option<Arc<dyn kraai_persistence::MessageStore>>,
-    ) -> Option<Self> {
+    ) -> Self {
         Self::new_in_directory(providers, message_store, None).await
     }
 
-    pub(super) async fn new_shared(
-        scripts: Vec<Vec<ScriptedChunk>>,
-        data_dir: PathBuf,
-    ) -> Option<Self> {
+    pub(super) async fn new_shared(scripts: Vec<Vec<ScriptedChunk>>, data_dir: PathBuf) -> Self {
         Self::new_scripted("mock", scripts, Some(data_dir)).await
     }
 
@@ -387,7 +368,7 @@ impl RuntimeTestHarness {
         providers: ProviderManager,
         message_store: Option<Arc<dyn kraai_persistence::MessageStore>>,
         shared_directory: Option<PathBuf>,
-    ) -> Option<Self> {
+    ) -> Self {
         let owns_directory = shared_directory.is_none();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -438,16 +419,10 @@ path = \"inherit\"\n",
             data_dir.clone(),
         ));
 
-        let setup = match kraai_provider_core::ProviderSet::load(
-            &kraai_providers::DefaultProviders,
-            &data_dir,
-        )
-        .await
-        {
-            Ok(setup) => setup,
-            Err(error) if is_missing_system_ca_error(error.as_ref()) => return None,
-            Err(error) => panic!("unexpected provider setup error: {error:?}"),
-        };
+        let setup =
+            kraai_provider_core::ProviderSet::load(&kraai_providers::DefaultProviders, &data_dir)
+                .await
+                .expect("provider setup");
         let events = EventCollector::default();
         let (command_tx, command_rx) = mpsc::channel(32);
         let event_tx = RuntimeEventSender::new(1024);
@@ -508,7 +483,7 @@ path = \"inherit\"\n",
             runtime.spawn_session_observers(),
             runtime.spawn_turn_timer_persistence(),
         ];
-        Some(Self {
+        Self {
             provider_requests: ProviderRequests::default(),
             owns_directory,
             maintenance_tasks,
@@ -518,7 +493,7 @@ path = \"inherit\"\n",
             runtime_task,
             event_task,
             data_dir,
-        })
+        }
     }
 
     pub(super) async fn shutdown(self) {
@@ -579,7 +554,6 @@ async fn with_turn<T>(
     result
 }
 
-/// Queues messages as this runtime would, claiming the session only for the write.
 pub(super) async fn enqueue(
     runtime: &RuntimeCore,
     session: &SessionId,
@@ -625,7 +599,6 @@ pub(super) async fn take_queue(
     messages
 }
 
-/// Takes the session's pending approval out of its actor, as a stopped runtime would lose it.
 pub(super) async fn take_pending_approval(
     runtime: &RuntimeCore,
     session: &SessionId,
@@ -638,7 +611,6 @@ pub(super) async fn take_pending_approval(
         .expect("pending script approval")
 }
 
-/// Cancels the session's work the way the lease heartbeat does after losing `token`.
 pub(super) async fn cancel_if_lease_matches(
     runtime: &RuntimeCore,
     session: &SessionId,
@@ -659,7 +631,6 @@ pub(super) async fn cancel_if_lease_matches(
         .expect("session actor answered the cancellation")
 }
 
-/// The message id of the latest stream started in `session`.
 pub(super) fn started_stream(events: &[Event], session: &SessionId) -> kraai_types::MessageId {
     events
         .iter()
@@ -674,7 +645,6 @@ pub(super) fn started_stream(events: &[Event], session: &SessionId) -> kraai_typ
         .expect("stream start event")
 }
 
-/// Holds the session in its preparing state until `release_preparation`.
 pub(super) async fn hold_preparation(runtime: &RuntimeCore, session: &SessionId) {
     runtime
         .with_session_actor(session, |actor| {
@@ -691,7 +661,6 @@ pub(super) async fn release_preparation(runtime: &RuntimeCore, session: &Session
         .await;
 }
 
-/// Drives one provider response, applying its events the way the session actor does.
 pub(super) async fn drive_stream(
     runtime: RuntimeCore,
     session: SessionId,
@@ -733,7 +702,6 @@ pub(super) async fn drive_stream(
 }
 
 impl RuntimeCore {
-    /// Runs `hook` inside the session's actor and returns its result.
     pub(in crate::runtime) async fn with_session_actor<T: Send + 'static>(
         &self,
         session_id: &kraai_types::SessionId,
@@ -758,7 +726,6 @@ impl RuntimeCore {
     }
 }
 
-/// The assistant text an event streamed for `session`.
 pub(super) fn streamed_text<'a>(event: &'a Event, session: &SessionId) -> Option<&'a str> {
     match event {
         Event::ItemStarted {
@@ -775,7 +742,6 @@ pub(super) fn streamed_text<'a>(event: &'a Event, session: &SessionId) -> Option
     }
 }
 
-/// Reads a session's whole history page by page, as a client would.
 pub(super) trait FullHistory {
     async fn get_chat_history(
         &self,

@@ -92,7 +92,6 @@ kraai_runtime::runtime_methods!(node_methods);
 
 const BINARY_DECLARATIONS: &str = "  importImage(bytes: Uint8Array): Promise<RuntimeResult<ImageAttachment>>;\n  readImage(image: ImageAttachment): Promise<RuntimeResult<Uint8Array>>;\n";
 
-/// A successful result whose value is raw bytes, shaped like `RuntimeResult`.
 #[napi(object)]
 pub struct BytesOk {
     #[napi(js_name = "Ok")]

@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener};

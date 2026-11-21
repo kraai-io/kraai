@@ -341,8 +341,7 @@ fn options_protocol(
 pub struct OpenAiChatCompletionsFactory;
 
 impl OpenAiChatCompletionsFactory {
-    /// The cache hints `config` resolves to, as explicit settings that keep them when
-    /// `base_url` is replaced, such as by an eval proxy.
+    /// Explicit settings keep the hints when `base_url` is replaced, such as by an eval proxy.
     pub fn cache_hint_settings(config: &DynamicConfig) -> Result<DynamicConfig> {
         Ok(resolve_cache_hints::<GenericChatCompletionsProfile>(config)?.settings())
     }

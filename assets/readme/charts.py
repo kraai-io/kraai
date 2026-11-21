@@ -1,6 +1,4 @@
-"""Draws the README benchmark charts as light and dark SVGs.
-
-The README charts read their numbers only from this file. After a new run,
+"""The README charts read their numbers only from this file. After a new run,
 edit them, update any README prose that quotes them, then run
 `python3 assets/readme/charts.py` from the repository root.
 """
@@ -11,8 +9,8 @@ from pathlib import Path
 
 OUTPUT = Path(__file__).parent
 
-# One color per tool, kept the same in every chart. Validated as a categorical
-# palette against GitHub's light (#ffffff) and dark (#0d1117) page colors.
+# Validated as a categorical palette against GitHub's light (#ffffff) and dark (#0d1117) page
+# colors.
 THEMES = {
     "light": {
         "Kraai": "#2a78d6",
@@ -100,7 +98,6 @@ FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, A
 
 
 def bar_path(x: float, y: float, length: float) -> str:
-    """A bar anchored square at the baseline with rounded data-end corners."""
     length = max(length, 2.0)
     r = min(RADIUS, length / 2, BAR / 2)
     return (

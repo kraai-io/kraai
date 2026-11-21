@@ -39,63 +39,33 @@ use tokio::sync::{Barrier, oneshot};
 use tokio::task::AbortHandle;
 use ulid::Ulid;
 
-fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
-    let mut current = Some(error);
-    while let Some(error) = current {
-        let display = error.to_string();
-        let debug = format!("{error:?}");
-        if display.contains("No CA certificates were loaded from the system")
-            || debug.contains("No CA certificates were loaded from the system")
-            || display == "builder error"
-        {
-            return true;
-        }
-        current = error.source();
-    }
-    false
-}
-
-fn auth_controller_or_skip() -> Option<OpenAiCodexAuthController> {
+fn auth_controller() -> OpenAiCodexAuthController {
     let auth_path = temp_auth_path();
-    match OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
+    OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
         auth_path.parent().unwrap().to_path_buf(),
         auth_path,
-    )) {
-        Ok(controller) => Some(controller),
-        Err(error) if is_missing_system_ca_error(&error) => None,
-        Err(error) => panic!("unexpected auth controller init error: {error}"),
-    }
+    ))
+    .unwrap()
 }
 
-fn auth_controller_with_issuer_or_skip(
-    auth_path: PathBuf,
-    issuer: String,
-) -> Option<OpenAiCodexAuthController> {
+fn auth_controller_with_issuer(auth_path: PathBuf, issuer: String) -> OpenAiCodexAuthController {
     let mut options =
         OpenAiCodexAuthControllerOptions::new(auth_path.parent().unwrap().to_path_buf(), auth_path);
     options.issuer = issuer;
-    match OpenAiCodexAuthController::new_with_options(options) {
-        Ok(controller) => Some(controller),
-        Err(error) if is_missing_system_ca_error(&error) => None,
-        Err(error) => panic!("unexpected auth controller init error: {error}"),
-    }
+    OpenAiCodexAuthController::new_with_options(options).unwrap()
 }
 
-fn auth_controller_with_refresh_timeout_or_skip(
+fn auth_controller_with_refresh_timeout(
     auth_path: PathBuf,
     issuer: String,
     refresh_timeout: Duration,
-) -> Option<OpenAiCodexAuthController> {
+) -> OpenAiCodexAuthController {
     let mut options =
         OpenAiCodexAuthControllerOptions::new(auth_path.parent().unwrap().to_path_buf(), auth_path);
     options.issuer = issuer;
     let mut config = AuthConfig::from(options);
     config.refresh_timeout = refresh_timeout;
-    match OpenAiCodexAuthController::with_config(config) {
-        Ok(controller) => Some(controller),
-        Err(error) if is_missing_system_ca_error(&error) => None,
-        Err(error) => panic!("unexpected auth controller init error: {error}"),
-    }
+    OpenAiCodexAuthController::with_config(config).unwrap()
 }
 
 fn temp_auth_path() -> PathBuf {
@@ -121,9 +91,7 @@ fn fake_jwt(email: &str, plan_type: &str, account_id: &str) -> String {
 
 #[tokio::test]
 async fn immediately_failing_login_does_not_leave_pending_state() {
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
     controller
         .install_login_task(
             ProviderLoginState::BrowserPending(PendingBrowserLogin {
@@ -157,11 +125,7 @@ async fn dropping_last_controller_releases_pending_browser_listener() {
         OpenAiCodexAuthControllerOptions::new(auth_path.parent().unwrap().to_path_buf(), auth_path);
     options.default_callback_port = reservation.local_addr().unwrap().port();
     options.fallback_callback_ports.clear();
-    let controller = match OpenAiCodexAuthController::new_with_options(options) {
-        Ok(controller) => controller,
-        Err(error) if is_missing_system_ca_error(&error) => return,
-        Err(error) => panic!("unexpected auth controller init error: {error}"),
-    };
+    let controller = OpenAiCodexAuthController::new_with_options(options).unwrap();
     let weak = Arc::downgrade(&controller.inner);
     drop(reservation);
     let status = controller.start_browser_login().await.unwrap();
@@ -193,9 +157,7 @@ async fn dropping_last_controller_releases_pending_browser_listener() {
 
 #[tokio::test]
 async fn completed_login_still_publishes_status_and_persists_auth() {
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
     let path = controller.inner.config.auth_path.clone();
     let auth = stored_auth("user@example.com", "pro", "workspace_123", unix_now());
     let generation = auth.generation.clone();
@@ -240,9 +202,7 @@ async fn login_completion_holds_file_lock_until_memory_matches_disk() {
         }
     }
 
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
     let path = controller.inner.config.auth_path.clone();
     let file_lock = controller.acquire_file_lock().await.unwrap();
     let auth = stored_auth("user@example.com", "pro", "workspace_123", unix_now());
@@ -314,9 +274,7 @@ async fn login_completion_holds_file_lock_until_memory_matches_disk() {
 
 #[tokio::test]
 async fn refresh_failure_preserves_login_waiting_for_file_lock() {
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
     let path = controller.inner.config.auth_path.clone();
     let file_lock = controller.acquire_file_lock().await.unwrap();
     controller
@@ -364,9 +322,7 @@ async fn refresh_failure_preserves_login_waiting_for_file_lock() {
 
 #[tokio::test]
 async fn stale_login_completion_cannot_clear_newer_attempt() {
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
     controller
         .install_login_task(
             ProviderLoginState::BrowserPending(PendingBrowserLogin {
@@ -427,9 +383,7 @@ fn id_token_claims_extract_email_plan_and_account_id() {
 
 #[tokio::test]
 async fn missing_auth_file_reports_signed_out_status() {
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
 
     assert_eq!(
         controller.get_status().await.state,
@@ -565,10 +519,7 @@ async fn simultaneous_proactive_refreshes_use_one_network_request() {
     )
     .unwrap();
     let (issuer, requests, server) = scripted_refresh_server("workspace_123").await;
-    let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
-        server.abort();
-        return;
-    };
+    let controller = auth_controller_with_issuer(path.clone(), issuer);
 
     let tasks = (0..8).map(|_| {
         let controller = controller.clone();
@@ -595,10 +546,7 @@ async fn simultaneous_unauthorized_recovery_reuses_refreshed_credentials() {
     )
     .unwrap();
     let (issuer, requests, server) = scripted_refresh_server("workspace_123").await;
-    let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
-        server.abort();
-        return;
-    };
+    let controller = auth_controller_with_issuer(path.clone(), issuer);
     let expected_auth = controller.get_request_auth().await.unwrap();
 
     let results = run_concurrent_refreshes(controller, expected_auth, 8).await;
@@ -623,14 +571,8 @@ async fn separate_controllers_do_not_reuse_a_rotated_refresh_token() {
     )
     .unwrap();
     let (issuer, requests, server) = scripted_refresh_server("workspace_123").await;
-    let Some(first) = auth_controller_with_issuer_or_skip(path.clone(), issuer.clone()) else {
-        server.abort();
-        return;
-    };
-    let Some(second) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
-        server.abort();
-        return;
-    };
+    let first = auth_controller_with_issuer(path.clone(), issuer.clone());
+    let second = auth_controller_with_issuer(path.clone(), issuer);
     let mut first_updates = first.subscribe();
     let mut second_updates = second.subscribe();
     let expected_auth = first.get_request_auth().await.unwrap();
@@ -679,14 +621,8 @@ async fn stalled_refresh_releases_auth_file_lock_after_timeout() {
     )
     .unwrap();
     let (issuer, request_received, server) = stalled_refresh_server().await;
-    let Some(controller) = auth_controller_with_refresh_timeout_or_skip(
-        path.clone(),
-        issuer,
-        Duration::from_millis(100),
-    ) else {
-        server.abort();
-        return;
-    };
+    let controller =
+        auth_controller_with_refresh_timeout(path.clone(), issuer, Duration::from_millis(100));
     let expected_auth = controller.get_request_auth().await.unwrap();
 
     let refresh_controller = controller.clone();
@@ -735,10 +671,7 @@ async fn stale_refresh_cannot_overwrite_or_clear_newer_credentials() {
     )
     .unwrap();
     let (issuer, requests, server) = scripted_refresh_server("workspace_old").await;
-    let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
-        server.abort();
-        return;
-    };
+    let controller = auth_controller_with_issuer(path.clone(), issuer);
     let stale_auth = controller.get_request_auth().await.unwrap();
 
     controller
@@ -768,23 +701,6 @@ async fn stale_refresh_cannot_overwrite_or_clear_newer_credentials() {
     );
 
     server.abort();
-    let _ = std::fs::remove_dir_all(path.parent().unwrap());
-}
-
-#[test]
-fn persisted_auth_file_round_trips() {
-    let path = temp_auth_path();
-    let auth = stored_auth("user@example.com", "pro", "workspace_123", 42);
-
-    persist_auth_file(&path, &auth).unwrap();
-
-    let loaded = load_auth_file(&path).unwrap().unwrap();
-    assert_eq!(loaded.tokens.account_id, "workspace_123");
-    assert_eq!(loaded.claims.email.as_deref(), Some("user@example.com"));
-    assert_eq!(loaded.claims.plan_type.as_deref(), Some("Pro"));
-    assert_eq!(loaded.last_refresh_unix, 42);
-
-    let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 

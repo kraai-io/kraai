@@ -1,7 +1,5 @@
 use kraai_execution_types::DomainError;
 
-/// A failure of an agent operation: either the request was wrong for the current state, or the
-/// service failed.
 #[derive(Debug)]
 pub enum AgentError {
     Domain(DomainError),
@@ -23,7 +21,6 @@ impl AgentError {
         Self::Domain(DomainError::conflict(message))
     }
 
-    /// The domain failure, if this is one.
     pub fn domain(&self) -> Option<&DomainError> {
         match self {
             Self::Domain(error) => Some(error),
@@ -38,9 +35,6 @@ impl From<DomainError> for AgentError {
     }
 }
 
-/// Persistence and MCP report domain failures, such as a session leased by another runtime,
-/// inside their `eyre` reports. This is the one place those are told apart from service
-/// failures.
 impl From<color_eyre::Report> for AgentError {
     fn from(report: color_eyre::Report) -> Self {
         let report = match report.downcast::<Self>() {

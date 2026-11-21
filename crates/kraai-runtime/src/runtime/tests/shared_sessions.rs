@@ -58,15 +58,12 @@ async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_com
             events: Mutex::new(VecDeque::from([receiver])),
         }),
     );
-    let owner = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("owner fixture");
+    let owner = RuntimeTestHarness::new_with_parts(providers).await;
     let observer = RuntimeTestHarness::new_shared(
         vec![vec![ScriptedChunk::plain("second reply")]],
         owner.data_dir.clone(),
     )
-    .await
-    .expect("observer fixture");
+    .await;
     let session = create_session_with_profile(&owner.handle, "test-profile").await?;
     assert!(observer.handle.load_session(session.clone()).await?);
     assert!(!owner.runtime.session_store.owns_turn(&session).await?);
@@ -179,12 +176,8 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
             events: Mutex::new(VecDeque::from([first_receiver, second_receiver])),
         }),
     );
-    let owner = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("owner fixture");
-    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone())
-        .await
-        .expect("observer fixture");
+    let owner = RuntimeTestHarness::new_with_parts(providers).await;
+    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone()).await;
     let session = create_session_with_profile(&owner.handle, "test-profile").await?;
     owner
         .handle
@@ -249,12 +242,8 @@ async fn failed_intercepted_continuation_releases_ownership_and_preserves_input(
             events: Mutex::new(VecDeque::from([receiver])),
         }),
     );
-    let owner = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("owner fixture");
-    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone())
-        .await
-        .expect("observer fixture");
+    let owner = RuntimeTestHarness::new_with_parts(providers).await;
+    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone()).await;
     let session = create_session_with_profile(&owner.handle, "test-profile").await?;
     owner
         .handle
@@ -328,9 +317,7 @@ async fn delayed_lease_cancellation_does_not_cancel_a_replacement_turn() -> Resu
             events: Mutex::new(VecDeque::from([receiver])),
         }),
     );
-    let owner = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("owner fixture");
+    let owner = RuntimeTestHarness::new_with_parts(providers).await;
     let session = create_session_with_profile(&owner.handle, "test-profile").await?;
     let store = &owner.runtime.session_store;
     store.claim_turn(&session).await?;
@@ -366,11 +353,8 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
         "call",
         "# timeout=30sec permissions=workspace-write\nprint hello",
     )]])
-    .await
-    .expect("owner fixture");
-    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone())
-        .await
-        .expect("observer fixture");
+    .await;
+    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone()).await;
     let session = create_session_with_profile(&owner.handle, "test-profile").await?;
     owner
         .handle
@@ -471,12 +455,8 @@ async fn observers_follow_the_owners_turn_timer() -> Result<()> {
             events: Mutex::new(VecDeque::from([receiver])),
         }),
     );
-    let owner = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("owner fixture");
-    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone())
-        .await
-        .expect("observer fixture");
+    let owner = RuntimeTestHarness::new_with_parts(providers).await;
+    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone()).await;
     let session = create_session_with_profile(&owner.handle, "test-profile").await?;
     assert!(observer.handle.load_session(session.clone()).await?);
     let timer_of = |events: &[Event], running: bool| {

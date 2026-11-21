@@ -13,7 +13,7 @@ use crate::api::{
     PendingScriptInfo, RuntimeError, Session, SessionActivity, SessionContextUsage, SessionSnapshot,
 };
 
-/// The parts of a snapshot captured inside the actor, coherent with the session's events.
+/// Captured inside the actor, so it is coherent with the session's events.
 struct CapturedSnapshot {
     reader: SessionSnapshotReader,
     foreign_owner: bool,
@@ -89,10 +89,8 @@ impl SessionActor {
     }
 }
 
-/// How many of the latest messages a snapshot carries; clients page through older ones.
 pub(crate) const SNAPSHOT_HISTORY_LIMIT: usize = 200;
 
-/// The latest messages on the chain ending at `tip`, and where the older ones continue.
 fn latest_history(
     mut history: BTreeMap<MessageId, Message>,
     tip: Option<&MessageId>,

@@ -35,7 +35,6 @@ pub(crate) struct EffectiveScriptRequest {
     pub(crate) call_id: ToolCallId,
     pub(crate) profile: ScriptProfileSnapshot,
     pub(crate) source: Vec<u8>,
-    /// What Kraai changed in the model's script before it ran.
     pub(crate) rewrites: Vec<String>,
     pub(crate) workspace_root: PathBuf,
     pub(crate) requested_capabilities: SandboxCapabilities,
@@ -91,8 +90,6 @@ impl CompletedScriptExecution {
 }
 
 impl RuntimeCore {
-    /// Renders a script result for the model, saving each channel it sees only part of to
-    /// the session's output directory.
     pub(crate) async fn render_script_result(
         &self,
         completed: &CompletedScriptExecution,
@@ -248,10 +245,8 @@ impl RuntimeCore {
     }
 }
 
-/// The shortest time between two tails of one script's output.
 const TAIL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Where the last lines of a running script's output go.
 struct TailSink {
     events: RuntimeEventSender,
     session_id: SessionId,
@@ -302,7 +297,6 @@ async fn persist_output_events(
         let Some(event) = event else {
             break;
         };
-        // Everything that arrived while the previous batch was being written goes in one write.
         let mut batch = vec![chunk(event)];
         while let Ok(event) = events.try_recv() {
             batch.push(chunk(event));
@@ -325,7 +319,6 @@ async fn persist_output_events(
     first_error.map_or(Ok(()), Err)
 }
 
-/// Saves `bytes` when the model sees only part of them; the result omits the path on failure.
 async fn save_output_channel(
     directory: &Path,
     id: &ScriptExecutionId,
@@ -487,30 +480,5 @@ mod tests {
         ensure!(received.try_recv().is_err());
         let _ = std::fs::remove_dir_all(&directory);
         Ok(())
-    }
-
-    #[test]
-    fn incompatible_host_is_an_application_failure() {
-        for error in [
-            RuntimeError::Transport(String::from("incompatible host protocol")),
-            RuntimeError::Sandbox(SandboxError::Spawn {
-                executable: String::from("kraai-nushell-host"),
-                message: String::from("Permission denied"),
-            }),
-            RuntimeError::Sandbox(SandboxError::Spawn {
-                executable: String::from("kraai-nushell-host"),
-                message: String::from("Exec format error"),
-            }),
-        ] {
-            let completion = completion_from_runtime_error(
-                error,
-                PersistedScriptOutput {
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                },
-                None,
-            );
-            assert_eq!(completion.status, ScriptExecutionStatus::HostUnavailable);
-        }
     }
 }

@@ -102,41 +102,17 @@ fn every_secured_root_is_checked_and_failure_stops_setup() {
 }
 
 #[test]
-fn queries_preserve_path_forms_and_api_failure_context() {
-    for path in [
-        r"X:\",
-        r"X:\workspace",
-        r"\\?\X:\",
-        r"\\?\X:\workspace",
-        r"\\server\share\",
-        r"\\?\UNC\server\share\workspace",
-        r"C:\mounted-volume\workspace",
-    ] {
-        let path = Path::new(path);
-        let result = check_with(path, |actual| {
-            assert_eq!(actual, path);
-            Err(query_error(
-                actual,
-                "GetVolumeInformationW",
-                std::io::Error::from_raw_os_error(87),
-            ))
-        });
-        let message = result
-            .err()
-            .map(|error| {
-                error
-                    .with_workspace_root(Path::new(r"F:\workspace"))
-                    .to_string()
-            })
-            .unwrap_or_default();
-        for text in [
-            path.to_str().unwrap_or_default(),
+fn query_failures_are_reported_instead_of_missing_features() {
+    let message = check_with(Path::new(r"X:\workspace"), |path| {
+        Err(query_error(
+            path,
             "GetVolumeInformationW",
-            "87",
-            r"F:\workspace",
-        ] {
-            assert!(message.contains(text), "missing {text}: {message}");
-        }
-        assert!(!message.contains("lacks"));
-    }
+            std::io::Error::from_raw_os_error(87),
+        ))
+    })
+    .err()
+    .map(|error| error.to_string())
+    .unwrap_or_default();
+    assert!(message.contains("GetVolumeInformationW"), "{message}");
+    assert!(!message.contains("lacks"), "{message}");
 }

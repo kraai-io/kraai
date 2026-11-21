@@ -24,7 +24,6 @@ mod command {
     use crate::{command_error, declare_kraai_command};
 
     declare_kraai_command! {
-        /// Attaches a snapshot of an image to the current script result.
         pub struct ViewImageCommand;
         metadata: super::METADATA;
         signature: Signature::build(Self::METADATA.name)

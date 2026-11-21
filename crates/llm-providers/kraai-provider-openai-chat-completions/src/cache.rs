@@ -2,8 +2,7 @@ use kraai_provider_core::{DynamicConfig, DynamicValue, ModelOptionsProtocol};
 
 use crate::wire::{CacheControl, RequestContent, RequestContentPart, RequestMessage};
 
-/// Breakpoints after the system prompt, plus this many of the latest messages. Anthropic allows
-/// four per request.
+/// Anthropic allows four cache breakpoints per request.
 const RECENT_BREAKPOINTS: usize = 2;
 pub const BREAKPOINTS_KEY: &str = "cache_breakpoints";
 pub const PROMPT_CACHE_KEY_KEY: &str = "prompt_cache_key";
@@ -34,7 +33,7 @@ impl CacheHints {
         }
     }
 
-    /// The hints as explicit settings, which keep them when `base_url` later points elsewhere.
+    /// Explicit settings keep the hints when `base_url` later points elsewhere.
     pub fn settings(self) -> DynamicConfig {
         DynamicConfig::from([
             (
@@ -49,8 +48,6 @@ impl CacheHints {
     }
 }
 
-/// Marks the system prompt and the latest messages so providers with explicit prompt caching
-/// reuse the conversation prefix written by the previous request.
 pub fn mark_breakpoints(messages: &mut [RequestMessage]) {
     let system = messages
         .iter()

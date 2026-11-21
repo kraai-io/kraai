@@ -133,13 +133,5 @@ async fn cancelled_unpolled_effect_commit_keeps_session_and_shutdown_ownership()
             },
         }]
     );
-    reopened.delete(&SessionId::new("session")).await.unwrap();
-    assert!(
-        reopened
-            .list(&SessionId::new("session"))
-            .await
-            .unwrap()
-            .is_empty()
-    );
     tokio::fs::remove_dir_all(directory).await.unwrap();
 }

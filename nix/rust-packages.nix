@@ -148,8 +148,8 @@
       manifest = cargoToml;
     };
 
-    # dependenciesCommand compiles the check's dependencies against stubbed members ahead of time.
-    # It must resolve the same features and profile as command, or cargo rebuilds them anyway.
+    # dependenciesCommand must resolve the same features and profile as command, or cargo
+    # rebuilds the dependencies anyway.
     mkCargoCheck = {
       name,
       command,

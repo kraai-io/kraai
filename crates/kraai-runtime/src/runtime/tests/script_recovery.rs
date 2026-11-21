@@ -14,16 +14,13 @@ use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_prof
 use crate::Event;
 use crate::runtime::script_execution::CompletedScriptExecution;
 
-async fn completed_script()
--> Result<Option<(RuntimeTestHarness, SessionId, CompletedScriptExecution)>> {
+async fn completed_script() -> Result<(RuntimeTestHarness, SessionId, CompletedScriptExecution)> {
     completed_script_with_image(false).await
 }
 
 #[tokio::test]
 async fn recovery_can_restore_results_without_resuming_the_turn() -> Result<()> {
-    let Some((mut harness, session_id, completed)) = completed_script().await? else {
-        return Ok(());
-    };
+    let (mut harness, session_id, completed) = completed_script().await?;
     reopen_agent(&mut harness).await?;
     let runtime = harness.runtime.clone();
 
@@ -43,15 +40,12 @@ async fn recovery_can_restore_results_without_resuming_the_turn() -> Result<()> 
 
 pub(super) async fn completed_script_with_image(
     include_image: bool,
-) -> Result<Option<(RuntimeTestHarness, SessionId, CompletedScriptExecution)>> {
-    let Some(harness) = RuntimeTestHarness::new(vec![vec![ScriptedChunk::native_call(
+) -> Result<(RuntimeTestHarness, SessionId, CompletedScriptExecution)> {
+    let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::native_call(
         "call-1",
         "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
     )]])
-    .await
-    else {
-        return Ok(None);
-    };
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -128,7 +122,7 @@ pub(super) async fn completed_script_with_image(
             .await?;
         manager.clear_active_turn(&session_id);
     }
-    Ok(Some((harness, session_id, completed)))
+    Ok((harness, session_id, completed))
 }
 
 pub(super) async fn reopen_agent(
@@ -158,9 +152,7 @@ pub(super) async fn reopen_agent(
 }
 
 async fn assert_undone_turn_not_replayed(retained_by_other_session: bool) -> Result<()> {
-    let Some((mut harness, session_id, completed)) = completed_script().await? else {
-        return Ok(());
-    };
+    let (mut harness, session_id, completed) = completed_script().await?;
     if retained_by_other_session {
         let (_, sessions) = reopen_agent(&mut harness).await?;
         let mut retained = sessions.get(&session_id).await?.unwrap();
@@ -236,9 +228,7 @@ async fn append_later_message(
 
 #[tokio::test]
 async fn recovery_retains_script_sources_in_the_current_history_ancestry() -> Result<()> {
-    let Some((mut harness, session_id, completed)) = completed_script().await? else {
-        return Ok(());
-    };
+    let (mut harness, session_id, completed) = completed_script().await?;
     append_later_message(&mut harness, &session_id).await?;
     reopen_agent(&mut harness).await?;
     let before = harness.handle.get_chat_history(session_id.clone()).await?;
@@ -261,9 +251,7 @@ async fn recovery_retains_script_sources_in_the_current_history_ancestry() -> Re
 #[tokio::test]
 async fn recovery_keeps_delivered_script_results_as_written_even_when_they_disagree() -> Result<()>
 {
-    let Some((mut harness, session_id, completed)) = completed_script().await? else {
-        return Ok(());
-    };
+    let (mut harness, session_id, completed) = completed_script().await?;
     let messages = append_later_message(&mut harness, &session_id).await?;
     let mut message = messages
         .get(&completed.record.result_message_id)

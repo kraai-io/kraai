@@ -105,24 +105,15 @@ impl Pricing {
             .is_some_and(|config| config.subscription)
     }
 
-    pub async fn quote(
-        &self,
-        provider: &ProviderId,
-        model: &ModelId,
-        pricing_model: &ModelId,
-    ) -> Option<PriceQuote> {
+    pub async fn quote(&self, provider: &ProviderId, model: &ModelId) -> Option<PriceQuote> {
         let config = self.configs.get(provider)?;
-        let configured = config
-            .models
-            .get(model)
-            .or_else(|| config.models.get(pricing_model))
-            .cloned();
+        let configured = config.models.get(model).cloned();
         let catalog_pricing = if configured.is_none() {
             self.catalog
                 .lookup(
                     config.provider.as_deref(),
                     config.api.as_deref(),
-                    pricing_model.as_str(),
+                    model.as_str(),
                     config.source,
                 )
                 .await
@@ -143,10 +134,9 @@ impl Pricing {
         &self,
         provider: &ProviderId,
         model: &ModelId,
-        pricing_model: &ModelId,
         stream: BoxStream<'static, color_eyre::Result<ProviderStreamEvent>>,
     ) -> BoxStream<'static, color_eyre::Result<ProviderStreamEvent>> {
-        let quote = self.quote(provider, model, pricing_model).await;
+        let quote = self.quote(provider, model).await;
         stream
             .map(move |event| match event {
                 Ok(ProviderStreamEvent::Usage(mut usage)) => {
@@ -439,7 +429,7 @@ mod tests {
             Ok(ProviderStreamEvent::Usage(reported)),
         ])
         .boxed();
-        let mut stream = pricing.apply(&provider, &model, &model, source).await;
+        let mut stream = pricing.apply(&provider, &model, source).await;
         let Some(Ok(ProviderStreamEvent::Usage(estimated))) = stream.next().await else {
             return Err(color_eyre::eyre::eyre!("missing estimated usage"));
         };

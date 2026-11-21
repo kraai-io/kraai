@@ -25,17 +25,13 @@ pub(super) struct AppState {
     pub(super) cost_recovery_list_pending: bool,
     pub(super) cost_recovery_sessions: std::collections::BTreeSet<SessionId>,
     pub(super) exit: bool,
-    /// Text typed while a sheet owns the composer; the message draft stays in `input`.
     pub(super) sheet_query: super::line_edit::LineEdit,
     pub(super) sheet_index: usize,
     pub(super) sheet_scroll: Cell<usize>,
     pub(super) sheet_notice: Option<String>,
-    /// The highlighted row was asked to delete something and waits for the key a second time.
     pub(super) sheet_armed: bool,
-    /// What the last key press did, shown under the rows of a sheet.
     pub(super) sheet_feedback: Option<String>,
     pub(super) model_settings: Option<super::model_options::ModelSettingsTarget>,
-    /// What the command list stays filtered by while its rows are walked into the composer.
     pub(super) command_filter: Option<String>,
     pub(super) approval_scroll: Cell<usize>,
     pub(super) approval_expanded: bool,
@@ -55,8 +51,6 @@ pub(super) struct AppState {
     pub(super) optimistic_messages: Vec<OptimisticMessage>,
     pub(super) optimistic_seq: u64,
     pub(super) chat_epoch: u64,
-    /// Moves when only the script cards may have changed, so the chat rebuilds just the
-    /// messages that hold them.
     pub(super) cards_epoch: u64,
     pub(super) chat_render_cache: RefCell<ChatRenderCache>,
     pub(super) chat_viewport_height: u16,
@@ -64,9 +58,7 @@ pub(super) struct AppState {
     pub(super) auto_scroll: bool,
     pub(super) config_loaded: bool,
     pub(super) mode: UiMode,
-    /// The last turn ended because it was cancelled.
     pub(super) turn_cancelled: bool,
-    /// What the error panel says about a key that failed, such as a copy.
     pub(super) error_notice: Option<String>,
     pub(super) last_error: Option<String>,
     pub(super) error_open: bool,
@@ -77,7 +69,6 @@ pub(super) struct AppState {
     pub(super) feedback: super::feedback::VisualFeedback,
     pub(super) cursor_preferences: super::cursor_preferences::CursorPreferences,
     pub(super) palette: super::palette::TerminalPalette,
-    /// The moment every breathing colour counts its breath from.
     pub(super) breath_origin: std::time::Instant,
     pub(super) models_by_provider: HashMap<String, Vec<Model>>,
     pub(super) agent_profiles: Vec<AgentProfileSummary>,
@@ -93,21 +84,16 @@ pub(super) struct AppState {
     pub(super) session_model_saves: HashMap<SessionId, super::session_model::SessionModelSave>,
     pub(super) next_model_save_id: u64,
     pub(super) selected_model_options: kraai_types::ModelOptionValues,
-    /// Option values last chosen for each provider and model.
     pub(super) remembered_model_options:
         BTreeMap<String, BTreeMap<String, kraai_types::ModelOptionValues>>,
     pub(super) context_usage: Option<RuntimeSessionContextUsage>,
     pub(super) pending_script: Option<PendingScriptInfo>,
-    /// Scripts of the current session that are running, by call id.
     pub(super) running_scripts: HashMap<String, RunningScript>,
-    /// The time the chat last drew running scripts for. It moves only when a card would show
-    /// something new, so no card is rebuilt for a frame that looks the same.
     pub(super) script_clock: Option<std::time::Instant>,
     pub(super) submitted_script_decisions: BTreeMap<SessionId, BTreeSet<String>>,
     pub(super) sessions: Vec<Session>,
     pub(super) current_session_id: Option<SessionId>,
     pub(super) current_tip_id: Option<String>,
-    /// Where Kraai runs, as sessions record it. Empty when it is unknown.
     pub(super) workspace_dir: String,
     pub(super) home_dir: String,
     pub(super) script_approval_action: ScriptApprovalAction,
@@ -115,17 +101,13 @@ pub(super) struct AppState {
     pub(super) command_popup_dismissed: bool,
     pub(super) settings_draft: Option<SettingsDocument>,
     pub(super) settings_errors: HashMap<String, String>,
-    /// The place in the settings of the provider whose sheet is open.
     pub(super) settings_provider_index: usize,
     pub(super) providers_view: ProvidersView,
-    /// The configuration row whose value the composer is typing.
     pub(super) config_editing: Option<super::provider_config::ConfigRow>,
-    /// Sign-in state of each provider type that signs in with an account.
     pub(super) provider_auth: HashMap<String, ProviderAuthStatus>,
     pub(super) mcp_auth: BTreeMap<String, kraai_runtime::McpAuthStatus>,
     pub(super) mcp_browser_intent: BTreeMap<String, super::mcp_auth::BrowserIntent>,
     pub(super) next_mcp_login_request: u64,
-    /// The server whose sheet is open. The server list shows while there is none.
     pub(super) mcp_open: Option<String>,
     pub(super) mcp_loaded: bool,
     pub(super) mcp_feedback: BTreeMap<String, String>,
@@ -287,13 +269,10 @@ impl AppState {
         }
     }
 
-    /// How far into the shared breath `at` is.
     pub(super) fn breath(&self, at: std::time::Instant) -> std::time::Duration {
         at.saturating_duration_since(self.breath_origin)
     }
 
-    /// Where the script call `call_id` stands, for a message the model is or is not still
-    /// writing.
     pub(super) fn script_card(&self, call_id: &str, writing: bool) -> ScriptCard {
         if let Some(script) = self.running_scripts.get(call_id) {
             let now = self.script_clock.unwrap_or(script.started);

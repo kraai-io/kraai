@@ -162,16 +162,11 @@ struct Output {
     session_id: SessionId,
     connection: Connection,
     executions: HashMap<String, String>,
-    /// Bytes of each assistant text item already sent, by message and item index.
     sent: HashMap<(String, usize), usize>,
-    /// Messages that already showed an item, so their next text starts a new paragraph.
     shown: HashSet<String>,
-    /// Tool calls announced to the client, and those still waiting for a result.
     announced: HashSet<String>,
     open: HashSet<String>,
-    /// The session tip before the prompt was submitted; the prompt's messages descend from it.
     prompt_start: Option<MessageId>,
-    /// The global event sequence the last resync already covered.
     covered: u64,
     streaming: Option<String>,
     open_text: Option<String>,
@@ -195,12 +190,10 @@ impl Output {
         }
     }
 
-    /// Whether `event` belongs to this session and is newer than the last resync.
     fn uncovered(&self, event: &kraai_runtime::RuntimeEvent) -> bool {
         event.sequence > self.covered && event.event.session_id() == Some(&self.session_id)
     }
 
-    /// This prompt's messages in the snapshot, oldest first.
     fn prompt_messages<'a>(
         &self,
         snapshot: &'a kraai_runtime::SessionSnapshot,
@@ -238,7 +231,6 @@ impl Output {
         ))
     }
 
-    /// Sends `text` appended to the text item at `index`, starting a paragraph for a new item.
     fn item_text(&mut self, message_id: &str, index: usize, text: &str) -> Result<()> {
         let sent = self
             .sent
@@ -366,8 +358,6 @@ impl Output {
         Ok(())
     }
 
-    /// Sends whatever this prompt's messages gained that the client has not seen, after
-    /// events were missed.
     async fn resync(&mut self, runtime: &RuntimeHandle) -> Result<kraai_runtime::SessionSnapshot> {
         let snapshot = runtime
             .get_session_snapshot(self.session_id.clone())
@@ -408,7 +398,6 @@ impl Output {
         Ok(snapshot)
     }
 
-    /// Recovers from missed events and returns the stop reason if the turn already ended.
     async fn catch_up(
         &mut self,
         runtime: &RuntimeHandle,
@@ -424,7 +413,6 @@ impl Output {
         Ok((!snapshot.session.is_running).then_some(acp::StopReason::EndTurn))
     }
 
-    /// Asks the client about a pending script; returns false when the prompt was cancelled.
     async fn approve(
         &mut self,
         runtime: &RuntimeHandle,

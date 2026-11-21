@@ -96,7 +96,6 @@ fn build_engine(
     Ok(engine_state)
 }
 
-/// Nushell's built-in commands, before Kraai's commands, environment, and startup files.
 pub(crate) fn default_engine() -> EngineState {
     nu_cli::add_cli_context(nu_command::add_shell_command_context(
         nu_cmd_lang::create_default_context(),

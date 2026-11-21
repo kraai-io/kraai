@@ -23,7 +23,7 @@ struct PendingCall {
 
 #[derive(Default)]
 struct Completion {
-    /// Calls by their stream index; models that ignore `parallel_tool_calls` can send several.
+    /// Models that ignore `parallel_tool_calls` can send several calls.
     calls: Vec<PendingCall>,
     reasoning: crate::reasoning::Reasoning,
     finish_reason: Option<String>,
@@ -192,7 +192,6 @@ impl Completion {
         Ok(())
     }
 
-    /// Calls cut off by the output limit become invalid calls whose error tells the model why.
     fn finish_calls(
         &mut self,
         tool_name: Option<&str>,

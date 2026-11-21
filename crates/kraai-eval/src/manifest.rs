@@ -76,8 +76,7 @@ pub struct RunnerPolicy {
     pub max_processes: u64,
     #[serde(default = "default_cpu_quota_percent")]
     pub cpu_quota_percent: u64,
-    /// Lowers the evaluated model's context limit so the harness compacts. Only Kraai provider
-    /// configs can apply it.
+    /// Only Kraai provider configs can lower the context limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context: Option<u64>,
 }

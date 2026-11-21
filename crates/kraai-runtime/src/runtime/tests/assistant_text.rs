@@ -6,11 +6,7 @@ use crate::Event;
 #[tokio::test]
 async fn native_assistant_text_preserves_literal_tool_envelopes() -> Result<()> {
     let text = "Example:\n<tool_call>print 'example'</tool_call>\nThis is literal text.";
-    let Some(harness) =
-        RuntimeTestHarness::new_native(vec![vec![ScriptedChunk::plain(text)]]).await
-    else {
-        return Ok(());
-    };
+    let harness = RuntimeTestHarness::new_native(vec![vec![ScriptedChunk::plain(text)]]).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle

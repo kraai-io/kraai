@@ -11257,6 +11257,11 @@ rec {
             name = "kraai-test-support";
             packageId = "kraai-test-support";
           }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" "test-util" ];
+          }
         ];
         features = {
           "typescript" = [ "dep:ts-rs" "kraai-types/typescript" ];
@@ -12035,16 +12040,6 @@ rec {
           }
         ];
         devDependencies = [
-          {
-            name = "kraai-test-support";
-            packageId = "kraai-test-support";
-          }
-          {
-            name = "nix";
-            packageId = "nix 0.31.3";
-            target = { target, features }: (("linux" == target."os" or null) || ("macos" == target."os" or null));
-            features = [ "process" "signal" "fs" ];
-          }
           {
             name = "ulid";
             packageId = "ulid";

@@ -146,7 +146,6 @@ impl SessionActor {
         cancel.answer(Ok(true));
     }
 
-    /// Returns true when the session was deleted and the actor should exit.
     pub(super) async fn delete(&mut self, response: Responder<()>) -> bool {
         match std::mem::replace(&mut self.state, TurnState::Idle) {
             state @ (TurnState::RunningScript(_) | TurnState::AwaitingApproval(_)) => {

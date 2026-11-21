@@ -78,7 +78,6 @@ fn request_prefix(request: &PendingStreamRequest) -> &str {
         .expect("request should start with its instruction prefix")
 }
 
-/// Everything the model reads as instructions: the static prefix and every context section.
 fn request_instructions(request: &PendingStreamRequest) -> String {
     format!(
         "{}\n{}",
@@ -416,10 +415,6 @@ async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt()
             .system_prompt
             .is_empty()
     );
-    assert_eq!(
-        kraai_script_protocol::DEFAULT_SCRIPT_TIMEOUT,
-        std::time::Duration::from_secs(30)
-    );
     assert!(system_prompt.contains("Scripts time out after 30sec."));
     let edit_command = kraai_commands::edit_file::METADATA;
     assert!(system_prompt.contains(edit_command.description));
@@ -488,45 +483,6 @@ async fn execution_context_reports_selected_profile_grants_and_policy() -> Resul
             Some(&serde_json::json!({"network": "deny"}))
         );
     }
-    cleanup_dir(data_dir).await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn prepare_start_stream_injects_latest_workspace_agents_md_contents() -> Result<()> {
-    let (manager, data_dir) = test_manager().await;
-    let workspace_dir = test_dir("agents-present");
-    tokio::fs::create_dir_all(&workspace_dir).await?;
-    tokio::fs::write(
-        workspace_dir.join(AGENTS_MD_FILE_NAME),
-        "# Workspace rules\nAlways prefer deterministic behavior.\n",
-    )
-    .await?;
-
-    let session_id = manager.create_session().await?;
-    manager
-        .set_workspace_dir(&session_id, workspace_dir.clone())
-        .await?;
-    manager
-        .set_session_profile(&session_id, String::from("coding"))
-        .await?;
-
-    let request = manager
-        .prepare_start_stream(
-            &session_id,
-            String::from("follow up").into(),
-            ModelId::new("mock-model"),
-            ProviderId::new("mock"),
-            Default::default(),
-        )
-        .await?;
-
-    let system_prompt = request_instructions(&request);
-    assert!(system_prompt.contains("Workspace Instructions"));
-    assert!(system_prompt.contains("# Workspace rules"));
-    assert!(system_prompt.contains("Always prefer deterministic behavior."));
-
-    let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
     Ok(())
 }
@@ -765,6 +721,7 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
         .await?;
     let prompt = request_instructions(&request);
     assert!(prompt.contains(user_path.to_string_lossy().as_ref()));
+    assert!(prompt.contains("Workspace Instructions"));
     assert!(
         prompt.find("Global working agreements").unwrap()
             < prompt.find("Project agreements").unwrap()

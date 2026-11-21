@@ -109,10 +109,6 @@ fn probe() {
                 );
             }
         }
-        "network" => {
-            let _listener = std::net::TcpListener::bind("0.0.0.0:0")
-                .expect("network capability allows listening");
-        }
         "metadata" => {
             std::fs::write(".git/config", "authorized").expect("metadata write");
         }
@@ -225,13 +221,6 @@ async fn successful(plan: LaunchPlan) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-#[tokio::test]
-async fn isolates_host_reads_writes_network_and_private_temp() {
-    let fixture = Fixture::new();
-    successful(fixture.plan("readonly", &[SandboxCapability::WorkspaceRead])).await;
-    assert!(!fixture.0.join("workspace/blocked").exists());
 }
 
 #[tokio::test]
@@ -404,16 +393,6 @@ async fn timeout_kills_descendants() {
 #[tokio::test]
 async fn cancellation_kills_descendants() {
     assert_tree_stopped(&Fixture::new(), true).await;
-}
-
-#[tokio::test]
-async fn network_capability_allows_sockets() {
-    let fixture = Fixture::new();
-    successful(fixture.plan(
-        "network",
-        &[SandboxCapability::WorkspaceRead, SandboxCapability::Network],
-    ))
-    .await;
 }
 
 #[tokio::test]

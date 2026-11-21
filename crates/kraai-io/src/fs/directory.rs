@@ -22,8 +22,8 @@ pub fn sync_directory(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Bootstrap a storage root, accepting its nearest existing ancestor as durable.
-/// Subsequent writes should retain that root and use `create_dir_all_in`.
+/// Accepts the nearest existing ancestor as durable, so later writes should use
+/// `create_dir_all_in`.
 pub fn create_dir_all(path: &Path) -> io::Result<()> {
     let path = nonempty_path(path);
     let mut anchor = path;
@@ -43,8 +43,7 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
     create_directories_with_sync(anchor, path, false, sync_directory)
 }
 
-/// The existing anchor and its ancestors must already be durable. Every descendant
-/// directory is synced through the anchor, including on retries after a failed sync.
+/// The existing anchor and its ancestors must already be durable.
 pub fn create_dir_all_in(anchor: &Path, path: &Path) -> io::Result<()> {
     create_directories_with_sync(anchor, path, false, sync_directory)
 }

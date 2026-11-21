@@ -37,7 +37,6 @@ impl RuntimeCore {
             })
     }
 
-    /// Reads a page of history ending at `from`, or at the session's latest message.
     async fn history_page(
         &self,
         session_id: &kraai_types::SessionId,
@@ -72,8 +71,6 @@ impl RuntimeCore {
         })
     }
 
-    /// Routes session commands to their session's actor in arrival order and runs every
-    /// other command concurrently.
     pub(crate) fn dispatch(&self, command: Command) {
         let (session_id, message) = match command {
             Command::SendMessage {

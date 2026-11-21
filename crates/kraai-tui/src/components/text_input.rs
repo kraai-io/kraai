@@ -37,7 +37,6 @@ impl<'a> TextInput<'a> {
         }
     }
 
-    /// Shows `prefix` in the accent colour ahead of the editable text.
     pub fn with_prefix(prefix: &str, input: &str, cursor: usize) -> TextInput<'static> {
         let prefix = normalize_terminal_text(prefix);
         TextInput {

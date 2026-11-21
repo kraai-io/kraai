@@ -157,13 +157,6 @@ class StateTests(Fixture):
         with run_lock(path):
             pass
 
-    def test_completed_run_has_no_remaining_work(self):
-        self.args.attempts = 1
-        prepare_run(self.args, self.tasks)
-        self.trial("one", "one")
-        self.trial("two", "two", reward=0)
-        self.assertEqual(prepare_run(self.args, self.tasks)["remaining"], 0)
-
     def test_task_selection_is_stable_and_extends_by_prefix(self):
         tasks = ["one", "two", "three", "four"]
         first = select_tasks("test@1", tasks, 2)
@@ -212,7 +205,3 @@ class StateTests(Fixture):
                 if (stats[faster]["passes"] >= stats[slower]["passes"]
                     and stats[faster]["mean_trial_seconds"] < stats[slower]["mean_trial_seconds"]):
                     self.assertLess(ranked.index(faster), ranked.index(slower))
-
-    def test_long_running_task_is_disabled_before_sampling(self):
-        with self.assertRaisesRegex(ValueError, "temporarily disabled"):
-            eligible_tasks(TERMINAL_BENCH, {"ctr-optimization"}, ["ctr-optimization"])

@@ -423,7 +423,6 @@ impl SessionActor {
         }
     }
 
-    /// Waits for a running script to stop after its cancellation was requested.
     pub(super) fn cancel_running_script(&mut self, response: Option<Responder<bool>>) {
         if let TurnState::RunningScript(job) = &mut self.state {
             job.cancel.cancel();

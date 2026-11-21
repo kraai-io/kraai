@@ -1,20 +1,17 @@
 use super::providers_sheet::ProviderAction;
 use super::*;
 
-/// One row of a provider's configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ConfigRow {
     ProviderId,
     ProviderType,
     ProviderValue(String),
     AddModel,
-    /// The id of the model at this place in the settings.
     ModelId(usize),
     ModelValue(usize, String),
 }
 
 impl ConfigRow {
-    /// The model the row belongs to, by its place in the settings.
     pub(super) fn model(&self) -> Option<usize> {
         match self {
             Self::ModelId(model) | Self::ModelValue(model, _) => Some(*model),
@@ -23,18 +20,14 @@ impl ConfigRow {
     }
 }
 
-/// How a row is changed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ConfigKind {
-    /// Typed in the composer.
     Text,
     Toggle,
-    /// The provider type, stepped through the kinds of provider Kraai knows.
     Type,
     AddModel,
 }
 
-/// A secret as the form shows it: dots, then the last four characters of a long one.
 pub(super) fn masked(secret: &str) -> String {
     let characters = secret.chars().count();
     let tail: String = if characters >= 12 {
@@ -46,7 +39,6 @@ pub(super) fn masked(secret: &str) -> String {
 }
 
 impl AppState {
-    /// The rows of the open provider's configuration, top to bottom.
     pub(super) fn config_rows(&self) -> Vec<ConfigRow> {
         let (Some(provider), Some(draft)) = (self.open_provider(), self.settings_draft.as_ref())
         else {
@@ -82,7 +74,6 @@ impl AppState {
         Some(rows.swap_remove(index))
     }
 
-    /// The field a row sets. Ids, the type and the add row have none.
     pub(super) fn config_field(&self, row: &ConfigRow) -> Option<&FieldDefinition> {
         let definition = self.provider_definition(&self.open_provider()?.type_id)?;
         let (fields, key) = match row {
@@ -116,7 +107,6 @@ impl AppState {
         }
     }
 
-    /// What a row holds, as text. Empty when nothing is set.
     pub(super) fn config_value(&self, row: &ConfigRow) -> String {
         let model = |index: &usize| self.settings_draft.as_ref()?.models.get(*index);
         match row {
@@ -136,19 +126,16 @@ impl AppState {
         .unwrap_or_default()
     }
 
-    /// The row holds something to keep off the screen, such as an API key.
     pub(super) fn config_secret(&self, row: &ConfigRow) -> bool {
         self.config_field(row).is_some_and(|field| field.secret)
     }
 
-    /// Saving the edit as typed would erase a secret the row holds.
     pub(super) fn edit_clears_secret(&self, row: &ConfigRow) -> bool {
         self.config_secret(row)
             && self.sheet_query.as_str().trim().is_empty()
             && !self.config_value(row).is_empty()
     }
 
-    /// Why the last save refused what a row holds.
     pub(super) fn config_error(&self, row: &ConfigRow) -> Option<&str> {
         let provider = self.settings_provider_index;
         let key = match row {
@@ -215,7 +202,6 @@ impl App {
         }
     }
 
-    /// Starts typing a value for the highlighted row from pasted text.
     pub(super) fn paste_into_provider_config(&mut self, text: &str) {
         if self.state.config_editing.is_none() {
             let Some(row) = self
@@ -231,8 +217,6 @@ impl App {
         self.paste_into_sheet_query(text);
     }
 
-    /// The typed text as the value of a field, or why the field cannot take it. No text clears
-    /// the field.
     fn typed_field_value(
         field: &FieldDefinition,
         text: &str,

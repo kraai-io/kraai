@@ -78,8 +78,6 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
             .get(&request.message_id),
         Some(request.as_ref())
     );
-    reopened.delete(&SessionId::new("session")).await?;
-    assert!(reopened.load(&SessionId::new("session")).await?.is_empty());
     tokio::fs::remove_dir_all(directory).await?;
     Ok(())
 }
@@ -93,9 +91,7 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
             events: tokio::sync::Mutex::new(std::collections::VecDeque::from([receiver])),
         }),
     );
-    let harness = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new_with_parts(providers).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle

@@ -13,13 +13,10 @@ pub(crate) fn normalized_byte_len(ch: char) -> usize {
     }
 }
 
-/// Returns the number of terminal cells needed to render `text`.
 pub(crate) fn display_width(text: &str) -> usize {
     text.width()
 }
 
-/// Returns the largest grapheme-aligned prefix that fits in `width` terminal
-/// cells, together with its display width.
 pub(crate) fn fitting_prefix(text: &str, width: usize) -> (&str, usize) {
     let mut end = 0;
     let mut used_width = 0;
@@ -36,10 +33,6 @@ pub(crate) fn fitting_prefix(text: &str, width: usize) -> (&str, usize) {
     (&text[..end], used_width)
 }
 
-/// Makes externally supplied text safe for terminal rendering.
-///
-/// Newlines retain their structural meaning, tabs become four spaces, and all
-/// other control characters are removed before they can reach a terminal cell.
 pub(crate) fn normalize_terminal_text(text: &str) -> Cow<'_, str> {
     if !text
         .chars()

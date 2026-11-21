@@ -101,9 +101,7 @@ impl Drop for Grants {
     }
 }
 
-/// Grants `sid` `access` below `path` for good: skipped when `path` already carries the
-/// inheritable entry, and not revoked at cleanup. Files created later inherit the entry. `path`
-/// is granted after everything below it, so its entry marks a completed walk.
+/// `path` is granted after everything below it, so its entry marks a completed walk.
 pub(super) fn grant_persistent(path: &Path, sid: &Sid, access: Access) -> Result<(), SandboxError> {
     let _lock = super::mutation_lock::Lock::acquire()?;
     let root =

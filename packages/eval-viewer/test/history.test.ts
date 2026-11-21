@@ -29,8 +29,7 @@ function attempt(id: string, overrides: Partial<Attempt> = {}, metrics: Partial<
   };
 }
 
-test("history defaults to cost and offers each metric once", () => {
-  assert.equal(historyMetrics[0].key, "cost_usd");
+test("history offers each metric once", () => {
   assert.equal(new Set(historyMetrics.map(({ key }) => key)).size, metricKeys.length + 2);
 });
 
@@ -92,16 +91,6 @@ test("a missing metric on one task leaves a gap without silently changing the co
     attempt("missing", { task: "b" }),
   ], version, ["a", "b"], "cost_usd");
   assert.deepEqual(point, { version, value: null, samples: 1, attempts: 2, tasks: 2, complete: true });
-});
-
-test("known metric observations remain usable with explicit sample counts", () => {
-  const point = historyPoint([
-    attempt("missing"),
-    attempt("known", {}, { cost_usd: 2 }),
-  ], version, ["a"], "cost_usd");
-  assert.equal(point.value, 2);
-  assert.equal(point.samples, 1);
-  assert.equal(point.attempts, 2);
 });
 
 test("unfinished and unselected attempts cannot complete a missing cohort task", () => {

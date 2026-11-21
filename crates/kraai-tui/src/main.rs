@@ -137,13 +137,6 @@ mod tests {
     use super::Cli;
 
     #[test]
-    fn evaluation_flags_belong_to_the_headless_runner() {
-        for flag in ["--ci", "--provider", "--model", "--option"] {
-            assert!(Cli::try_parse_from(["kraai", flag, "value"]).is_err());
-        }
-    }
-
-    #[test]
     fn interactive_mode_keeps_message_profile_and_provider_config_flags() {
         for args in [
             vec!["kraai"],

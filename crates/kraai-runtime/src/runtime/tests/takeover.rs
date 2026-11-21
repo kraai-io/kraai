@@ -20,9 +20,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
             events: Mutex::new(VecDeque::from([first_receiver, next_receiver])),
         }),
     );
-    let old_owner = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("old owner fixture");
+    let old_owner = RuntimeTestHarness::new_with_parts(providers).await;
     for task in &old_owner.maintenance_tasks {
         task.abort();
     }
@@ -36,8 +34,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
     );
     let new_owner =
         RuntimeTestHarness::new_in_directory(providers, None, Some(old_owner.data_dir.clone()))
-            .await
-            .expect("new owner fixture");
+            .await;
     let session = create_session_with_profile(&old_owner.handle, "test-profile").await?;
     old_owner
         .handle

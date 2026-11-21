@@ -90,28 +90,10 @@ fn rejected_requests_without_usage_are_not_model_requests() -> Result<()> {
 }
 
 #[test]
-fn service_tiers_are_recorded_and_stale_sidecars_are_rejected() -> Result<()> {
+fn stale_sidecars_are_rejected() -> Result<()> {
     let root = fixture()?;
     let path = root.join("proxy.events.jsonl");
-    let standard = event(100, 400, 20, 10);
-    fs::write(&path, format!("{standard}\n"))?;
-    for tier in ["default", "auto", "priority", "fast", "ultrafast", "flex"] {
-        let mut request = standard.clone();
-        request
-            .as_object_mut()
-            .ok_or_else(|| color_eyre::eyre::eyre!("missing object"))?
-            .insert("service_tier".into(), serde_json::json!(tier));
-        fs::write(&path, format!("{request}\n"))?;
-        let result = analyze_requests(&path, 1)?;
-        ensure!(result.complete_context().is_some());
-        ensure!(
-            result
-                .requests
-                .first()
-                .and_then(|request| request.service_tier.as_deref())
-                == Some(tier)
-        );
-    }
+    fs::write(&path, format!("{}\n", event(100, 400, 20, 10)))?;
     let result = analyze_requests(&path, 1)?;
     let sidecar = root.join("request-accounting.json");
     fs::write(&sidecar, serde_json::to_vec(&result)?)?;

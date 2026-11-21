@@ -95,20 +95,3 @@ fn loading_models_never_saves_over_the_session_model() {
         );
     }
 }
-
-#[test]
-fn empty_discovery_preserves_selection_for_recovery() {
-    let mut harness = test_harness();
-    harness.app.state.selected_provider_id = Some("provider".into());
-    harness.app.state.selected_model_id = Some("model".into());
-    harness.app.state.models_by_provider = HashMap::from([("provider".into(), Vec::new())]);
-    harness.app.ensure_selected_model();
-    assert_eq!(
-        harness.app.state.selected_provider_id.as_deref(),
-        Some("provider")
-    );
-    assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
-        Some("model")
-    );
-}

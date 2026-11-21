@@ -60,8 +60,7 @@ impl AppState {
         }
     }
 
-    /// Rebuilds only the messages whose script cards may have changed. Returns false when a
-    /// card came out empty, which only a full rebuild can lay out.
+    /// False when a card came out empty, which only a full rebuild can lay out.
     fn refresh_script_cards(&self) -> bool {
         let mut cache = self.chat_render_cache.borrow_mut();
         let cache = &mut *cache;
@@ -91,7 +90,6 @@ impl AppState {
         true
     }
 
-    /// Folds the cards of a message's script calls into its fingerprint `base`.
     fn card_fingerprint(&self, base: u64, msg: &Message) -> u64 {
         let ConversationItem::Assistant { items } = &msg.content else {
             return base;
@@ -273,13 +271,10 @@ struct CachedMessageRender {
     lines: Arc<Vec<RenderedLine>>,
 }
 
-/// A drawn message with a script call that has not finished, so its card can change without
-/// the message changing.
 struct LiveCards {
     section: usize,
     key: String,
     message: Message,
-    /// The fingerprint of the message without its cards.
     base: u64,
 }
 

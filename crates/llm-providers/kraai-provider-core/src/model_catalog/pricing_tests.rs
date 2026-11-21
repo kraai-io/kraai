@@ -115,7 +115,7 @@ async fn pricing_prefers_manufacturer_without_replacing_serving_limits() -> colo
         )?;
         *pricing.catalog.snapshot.write().await = snapshot()?;
         let quote = pricing
-            .quote(&provider, &model, &model)
+            .quote(&provider, &model)
             .await
             .ok_or_else(|| color_eyre::eyre::eyre!("missing quote"))?;
         let usage = TokenUsage {
@@ -192,7 +192,7 @@ async fn reported_charges_including_zero_override_catalog_estimates() -> color_e
         }))
     }))
     .boxed();
-    let mut stream = pricing.apply(&provider, &model, &model, source).await;
+    let mut stream = pricing.apply(&provider, &model, source).await;
     for cost in reported {
         let Some(Ok(ProviderStreamEvent::Usage(usage))) = stream.next().await else {
             return Err(color_eyre::eyre::eyre!("missing reported usage"));

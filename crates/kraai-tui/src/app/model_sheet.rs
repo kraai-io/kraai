@@ -13,7 +13,6 @@ impl AppState {
             && self.selected_model_id.as_deref() == Some(model_id)
     }
 
-    /// The model the model list highlights.
     pub(super) fn highlighted_model(&self) -> Option<(&str, &Model)> {
         let models = self.filtered_models();
         let index = self.sheet_index.min(models.len().checked_sub(1)?);
@@ -47,7 +46,6 @@ impl App {
         self.request(RuntimeRequest::ListModels);
     }
 
-    /// Returns to the model list with `provider_id` / `model_id` highlighted.
     pub(super) fn return_to_model_sheet(&mut self, provider_id: &str, model_id: &str) {
         self.open_sheet(UiMode::Model);
         self.state.sheet_index = self
@@ -98,7 +96,6 @@ impl App {
         }
     }
 
-    /// Switches to a model, bringing back the option values last used with it.
     pub(super) fn select_model(&mut self, provider_id: &str, model_id: &str) {
         if self.state.find_model(provider_id, model_id).is_none() {
             return;

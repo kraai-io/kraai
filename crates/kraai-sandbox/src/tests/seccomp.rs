@@ -116,8 +116,8 @@ fn restricted_network_child() {
         Err(rustix::io::Errno::PERM)
     );
 
-    // Check flag masking and both constructors. A connected datagram pair could
-    // otherwise use msg_name to redirect sendmsg to a mounted host endpoint.
+    // A connected datagram pair could use msg_name to redirect sendmsg to a mounted host
+    // endpoint.
     for flags in [
         0,
         libc::SOCK_CLOEXEC,

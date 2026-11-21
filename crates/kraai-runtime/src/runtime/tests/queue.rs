@@ -29,9 +29,7 @@ async fn wait_for_continuation_failure(
 
 #[tokio::test]
 async fn failed_queue_preparation_keeps_the_batch_and_allows_later_retry() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime fixture");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let runtime = &harness.runtime;
     super::harness::enqueue(
@@ -85,7 +83,7 @@ async fn failed_queue_preparation_keeps_the_batch_and_allows_later_retry() -> Re
 
 #[tokio::test]
 async fn failed_continuation_preserves_queue_order_with_messages_queued_meanwhile() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new()).await.expect("fixture");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let message = |text: &str| {
         super::harness::queued(
@@ -125,7 +123,7 @@ async fn failed_continuation_preserves_queue_order_with_messages_queued_meanwhil
 
 #[tokio::test]
 async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new()).await.expect("fixture");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     super::harness::hold_preparation(&harness.runtime, &session_id).await;
     let outcome = harness
@@ -162,9 +160,7 @@ async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
 
 #[tokio::test]
 async fn queued_messages_survive_restart_and_drain_on_the_next_send() -> Result<()> {
-    let previous = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("previous runtime");
+    let previous = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&previous.handle, "test-profile").await?;
     super::harness::enqueue(
         &previous.runtime,
@@ -180,8 +176,7 @@ async fn queued_messages_survive_restart_and_drain_on_the_next_send() -> Result<
         vec![vec![super::harness::ScriptedChunk::plain("both handled")]],
         previous.data_dir.clone(),
     )
-    .await
-    .expect("restarted runtime");
+    .await;
     let snapshot = restarted
         .handle
         .get_session_snapshot(session_id.clone())

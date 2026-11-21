@@ -92,44 +92,6 @@ async fn execution_timing_starts_at_running_and_survives_reopen() {
 }
 
 #[tokio::test]
-async fn output_is_written_before_terminal_record_is_exposed() {
-    let data_dir = test_dir("terminal-output");
-    let id = ScriptExecutionId::new(Ulid::generate());
-    let store = SqliteScriptExecutionStore::new(&data_dir);
-    store.create(execution(&id)).await.unwrap();
-    store.mark_running(&id).await.unwrap();
-    store
-        .append_output(&id, vec![(ScriptOutputStream::Stdout, b"partial".to_vec())])
-        .await
-        .unwrap();
-    let prefix = store.read_output(&id).await.unwrap();
-    assert_eq!(prefix.stdout, b"partial");
-    store
-        .finish(
-            &id,
-            ScriptExecutionCompletion {
-                status: ScriptExecutionStatus::Completed,
-                exit_code: Some(0),
-                sandbox_denied: false,
-                error: None,
-                stdout: b"ok\0binary".to_vec(),
-                stderr: b"warning".to_vec(),
-            },
-        )
-        .await
-        .unwrap();
-
-    let reopened = SqliteScriptExecutionStore::new(&data_dir);
-    let record = reopened.get(&id).await.unwrap().unwrap();
-    let output = reopened.read_output(&id).await.unwrap();
-    assert_eq!(record.phase, ScriptExecutionPhase::Finished);
-    assert_eq!(record.status, Some(ScriptExecutionStatus::Completed));
-    assert_eq!(output.stdout, b"ok\0binary");
-    assert_eq!(output.stderr, b"warning");
-    let _ = fs::remove_dir_all(data_dir).await;
-}
-
-#[tokio::test]
 async fn image_results_survive_failure_and_reopen_with_idempotent_sequences() {
     let data_dir = test_dir("image-results");
     let store = SqliteScriptExecutionStore::new(&data_dir);

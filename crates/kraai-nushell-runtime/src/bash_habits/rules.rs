@@ -2,8 +2,8 @@ use nu_parser::{Token, TokenContents, lex};
 use nu_protocol::engine::StateWorkingSet;
 use nu_protocol::{ParseError, Span};
 
-/// Built-in commands named like a common external program. A bash-style call to one of them
-/// fails to parse, so it runs the external program instead.
+/// A bash-style call to one of these built-ins fails to parse, so it runs the external program
+/// instead.
 const SHADOWED_PROGRAMS: [&str; 18] = [
     "cp", "date", "du", "echo", "find", "ls", "mkdir", "mktemp", "mv", "ps", "rm", "sort", "tee",
     "touch", "uname", "uniq", "which", "whoami",
@@ -14,12 +14,9 @@ pub(super) struct Edit {
     start: usize,
     end: usize,
     text: String,
-    /// What the edit changed, such as `` `2>` → `e>` ``.
     pub(super) change: String,
 }
 
-/// Collects the edits for one round. `offset` is where the parsed source starts in the working
-/// set's span space.
 pub(super) fn edits(working_set: &StateWorkingSet, source: &str, offset: usize) -> Vec<Edit> {
     let mut scan = Scan {
         working_set,
@@ -75,11 +72,9 @@ struct Scan<'a> {
 struct Command {
     span: Span,
     head: Span,
-    /// The head and the next word name a subcommand, such as `date now`.
     subcommand: bool,
 }
 
-/// A bash `2>&1`, and the pipe after it if there is one.
 #[derive(Clone, Copy)]
 struct Merge {
     span: Span,
@@ -143,7 +138,6 @@ impl Scan<'_> {
         self.command(&command, None);
     }
 
-    /// Scans the contents of `(...)`, `{...}`, and `[...]` items.
     fn nested(&mut self, span: Span) {
         let bytes = self.bytes(span);
         let (Some(open), Some(close)) = (bytes.first(), bytes.last()) else {
@@ -270,7 +264,6 @@ impl Scan<'_> {
         }
     }
 
-    /// The command's head, after `let x =` or `$x =` when the command is an assignment.
     fn head_index(&self, tokens: &[&Token]) -> Option<usize> {
         let first = self.bytes(tokens.first()?.span);
         let assigns = matches!(first, b"let" | b"mut" | b"const") || first.starts_with(b"$");
@@ -352,8 +345,6 @@ fn change(bash: &str, nushell: &str) -> String {
     format!("`{bash}` → `{nushell}`")
 }
 
-/// The Nushell form of a bash redirection argument, whether it redirects stdout, and its change
-/// label.
 fn item_redirect(
     bytes: &[u8],
     external: bool,
@@ -399,7 +390,6 @@ fn redirect(operator: &str, target: &str, has_target: bool) -> Option<String> {
     Some(format!("{operator} {target}"))
 }
 
-/// `$HOME` becomes `$env.HOME`, and `$HOME/path` becomes `$"($env.HOME)/path"`.
 fn env_variable(bytes: &[u8]) -> Option<(String, String)> {
     let text = std::str::from_utf8(bytes).ok()?.strip_prefix('$')?;
     let (name, rest) = text.split_at(text.find('/').unwrap_or(text.len()));

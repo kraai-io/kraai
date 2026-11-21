@@ -4,10 +4,8 @@ use kraai_types::{ScriptCall, ScriptRewrite};
 
 use super::script_environment::script_environment;
 
-/// Rewrites bash syntax in a script call before anything records or runs it, so history, the
-/// approval prompt, and the execution all use the corrected script and the model never sees its
-/// mistake. The result tells the model what changed so it stops writing bash. The script is
-/// checked against the profile's commands and startup files, the same shell it will run in.
+/// Runs before anything records or runs the call, so history, the approval prompt, and the
+/// execution all use the corrected script.
 pub(super) async fn rewrite_script_call(
     mut call: ScriptCall,
     profile: Option<ScriptProfileSnapshot>,

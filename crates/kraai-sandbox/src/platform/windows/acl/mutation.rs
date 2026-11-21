@@ -153,7 +153,6 @@ fn mask(access: Access) -> u32 {
     }
 }
 
-/// Whether `file` already has an inheritable entry allowing `sid` at least `access`.
 pub(super) fn grants(file: &File, sid: &Sid, access: Access) -> Result<bool, SandboxError> {
     let mut dacl = ptr::null_mut();
     let mut descriptor = ptr::null_mut();

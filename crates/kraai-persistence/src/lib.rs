@@ -50,15 +50,9 @@ pub use turns::{
     IdempotentAppendOutcome, NewMessage,
 };
 
-/// Get the data directory for the application
 pub fn agent_state_root() -> Result<PathBuf> {
     let base_dirs = BaseDirs::new().context("Failed to determine home directory")?;
     Ok(base_dirs.home_dir().join(".kraai"))
-}
-
-/// Get the data directory for the application
-pub fn get_data_dir() -> Result<PathBuf> {
-    Ok(agent_state_root()?.join("data"))
 }
 
 #[cfg(test)]

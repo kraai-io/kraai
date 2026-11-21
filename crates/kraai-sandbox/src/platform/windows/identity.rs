@@ -53,8 +53,8 @@ impl Sid {
     }
 }
 
-/// A launch's own AppContainer. Its mutex stays open while the profile is in use, so a sweep
-/// can tell a crashed launch's profile from a running one.
+/// The mutex stays open while the profile is in use, so a sweep can tell a crashed launch's
+/// profile from a running one.
 #[derive(Debug)]
 pub(super) struct Identity {
     name: Vec<u16>,
@@ -155,7 +155,6 @@ fn is_live(moniker: &str) -> bool {
     true
 }
 
-/// Deletes kraai AppContainer profiles that no running launch holds, once per process.
 pub(super) fn sweep_stale_profiles_once() {
     static SWEPT: std::sync::Once = std::sync::Once::new();
     SWEPT.call_once(|| {
@@ -200,7 +199,6 @@ impl Drop for RegistryKey {
     }
 }
 
-/// The monikers of the current user's AppContainer profiles.
 fn monikers() -> Result<Vec<String>, SandboxError> {
     let path = wide(MAPPINGS);
     let mut key = ptr::null_mut();
@@ -266,8 +264,8 @@ fn registry_error(operation: &str, status: u32) -> SandboxError {
     ))
 }
 
-/// The capability that unlocks the persistent grant of `access` on `path`. Only launches whose
-/// plan grants `path` carry it, so its ACEs give nothing to other launches.
+/// Only launches whose plan grants `path` carry this capability, so its ACEs give nothing to
+/// other launches.
 pub(super) fn path_capability(
     kind: &str,
     path: &Path,

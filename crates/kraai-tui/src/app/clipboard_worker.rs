@@ -95,18 +95,29 @@ impl ClipboardWorker {
 }
 
 async fn read_helper(
-    mut command: tokio::process::Command,
+    command: tokio::process::Command,
     timeout: Duration,
     max_bytes: usize,
 ) -> RuntimeResult<Option<Vec<u8>>> {
+    read_child(spawn_helper(command)?, timeout, max_bytes).await
+}
+
+fn spawn_helper(mut command: tokio::process::Command) -> RuntimeResult<tokio::process::Child> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = kraai_sandbox::spawn_tokio_command(&mut command).map_err(|error| {
+    kraai_sandbox::spawn_tokio_command(&mut command).map_err(|error| {
         RuntimeError::unavailable(format!("Cannot launch clipboard helper: {error}"))
-    })?;
+    })
+}
+
+async fn read_child(
+    mut child: tokio::process::Child,
+    timeout: Duration,
+    max_bytes: usize,
+) -> RuntimeResult<Option<Vec<u8>>> {
     let outcome = tokio::time::timeout(timeout, async {
         let stdout = child
             .stdout

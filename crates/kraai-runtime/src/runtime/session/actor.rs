@@ -75,7 +75,6 @@ pub(crate) enum SessionMessage {
         generation: u64,
         result: color_eyre::Result<CompletedScriptExecution>,
     },
-    /// Runs test code inside the actor, ordered with the session's other messages.
     #[cfg(test)]
     Hook(ActorHook),
 }
@@ -86,7 +85,6 @@ pub(in crate::runtime) type ActorHook = Box<
 >;
 
 impl SessionMessage {
-    /// Answers a request that can no longer reach a running actor.
     pub(crate) fn reject(self) {
         let error = || RuntimeError::unavailable("Session actor stopped");
         match self {
@@ -130,7 +128,6 @@ pub(super) enum StreamKind {
     Continuation,
 }
 
-/// Who is waiting for a preparation to finish.
 pub(super) enum PreparationOrigin {
     Send(Responder<SubmitMessageOutcome>),
     Continue,
@@ -202,11 +199,9 @@ pub(in crate::runtime) struct SessionActor {
     pub(super) sender: mpsc::UnboundedSender<SessionMessage>,
     pub(super) state: TurnState,
     pub(super) next_generation: u64,
-    /// Requests that must wait until the current preparation finishes.
     pub(super) deferred: VecDeque<SessionMessage>,
     pub(super) stopping: bool,
     stopped: Vec<oneshot::Sender<()>>,
-    /// The state clients last heard about.
     published: (SessionActivity, bool),
 }
 
@@ -260,7 +255,6 @@ impl SessionActor {
         }
     }
 
-    /// Returns true when the actor should exit.
     async fn handle(&mut self, message: SessionMessage) -> bool {
         match message {
             SessionMessage::Send {
@@ -351,7 +345,6 @@ impl SessionActor {
         self.next_generation
     }
 
-    /// Sends a message to this actor from one of its child tasks.
     pub(super) fn mailbox(&self) -> mpsc::UnboundedSender<SessionMessage> {
         self.sender.clone()
     }
@@ -368,7 +361,6 @@ impl SessionActor {
         )
     }
 
-    /// Stops child work; the actor exits once every child has reported back.
     fn stop(&mut self) {
         self.stopping = true;
         match &self.state {

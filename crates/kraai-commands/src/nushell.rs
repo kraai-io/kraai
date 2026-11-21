@@ -189,7 +189,6 @@ impl CommandContext {
         }
     }
 
-    /// A context for engines that parse scripts but never run Kraai commands.
     pub fn parse_only() -> Self {
         Self::new(
             Arc::new(ParseOnly),
@@ -216,7 +215,6 @@ impl CommandContext {
     }
 }
 
-/// Clients for commands that are only parsed, never run.
 struct ParseOnly;
 
 const PARSE_ONLY: &str = "Kraai commands cannot run in a parse-only engine";

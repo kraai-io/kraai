@@ -60,9 +60,7 @@ impl Provider for CatalogProvider {
 
 #[tokio::test]
 async fn installed_provider_catalog_rebinds_even_when_discovery_fails() -> Result<()> {
-    let Some(mut harness) = RuntimeTestHarness::new(Vec::new()).await else {
-        return Ok(());
-    };
+    let mut harness = RuntimeTestHarness::new(Vec::new()).await;
     for (type_id, fail_cache, fail_creation) in [
         ("catalog-success", false, false),
         ("catalog-discovery-failure", true, false),

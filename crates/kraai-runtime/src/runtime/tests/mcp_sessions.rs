@@ -45,9 +45,7 @@ async fn servers(harness: &RuntimeTestHarness, session: &SessionId) -> Vec<Value
 
 #[tokio::test]
 async fn attachments_replace_atomically_and_never_enter_session_storage() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime fixture");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     harness.runtime.agent_manager.set_mcp(std::sync::Arc::new(
         McpManager::new(config("configured")).unwrap(),
     ));
@@ -106,9 +104,7 @@ async fn attachments_replace_atomically_and_never_enter_session_storage() -> Res
 
 #[tokio::test]
 async fn attachments_reject_preparing_and_queued_sessions_without_waiting() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime fixture");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session = harness.handle.create_session().await?;
     super::harness::hold_preparation(&harness.runtime, &session).await;
     let busy = hang_guard(

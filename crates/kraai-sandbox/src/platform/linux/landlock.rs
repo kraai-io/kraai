@@ -35,8 +35,7 @@ pub(crate) fn ensure_host_ipc_isolation_available() -> Result<(), SandboxError> 
     )))
 }
 
-/// Denies connections to UNIX sockets created outside this process and its descendants,
-/// once the host holds its trusted IPC connection. Sockets created later stay reachable.
+/// Runs once the host holds its trusted IPC connection. Sockets created later stay reachable.
 pub fn restrict_host_ipc_after_startup() -> Result<(), SandboxError> {
     ensure_host_ipc_isolation_available()?;
     restrict(

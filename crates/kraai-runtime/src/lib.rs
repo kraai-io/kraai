@@ -35,8 +35,6 @@ pub const VERSION: &str = match option_env!("KRAAI_VERSION") {
 };
 pub use settings::{FieldValueEntry, ModelSettings, ProviderSettings, SettingsDocument};
 
-/// Runs a hidden runtime subprocess mode when requested by a child Kraai process.
-///
 /// Frontend executables that opt into `RuntimeBuilder::use_current_executable_as_nushell_host`
 /// must call this before parsing their own command-line arguments.
 pub fn run_internal_process() -> Option<i32> {

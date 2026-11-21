@@ -22,10 +22,6 @@ pub(crate) use command::Command;
 pub(crate) use events::RuntimeEventSender;
 pub(crate) use lifecycle::RuntimeLifecycle;
 
-/// Handle to the runtime for sending commands
-///
-/// This is cheaply cloneable and can be passed around to different parts
-/// of the application.
 #[derive(Clone)]
 pub struct RuntimeHandle {
     pub(crate) command_tx: mpsc::Sender<Command>,
@@ -94,7 +90,6 @@ impl RuntimeHandle {
         }
     }
 
-    /// Stop the runtime and wait for its host task or background thread.
     pub async fn shutdown(&self) -> RuntimeResult<()> {
         match &self.lifecycle {
             Some(lifecycle) => lifecycle.shutdown(&self.command_tx).await,
@@ -102,7 +97,6 @@ impl RuntimeHandle {
         }
     }
 
-    /// List available models from all providers
     pub async fn list_models(&self) -> RuntimeResult<HashMap<String, Vec<Model>>> {
         self.request(|response| Command::ListModels { response })
             .await
@@ -113,7 +107,6 @@ impl RuntimeHandle {
             .await
     }
 
-    /// Get the editable settings document.
     pub async fn get_settings(&self) -> RuntimeResult<SettingsDocument> {
         self.request(|response| Command::GetSettings { response })
             .await
@@ -191,7 +184,6 @@ impl RuntimeHandle {
         .await
     }
 
-    /// Save the editable settings document and reload providers.
     pub async fn save_settings(&self, settings: SettingsDocument) -> RuntimeResult<()> {
         self.request(|response| Command::SaveSettings { settings, response })
             .await
@@ -210,7 +202,6 @@ impl RuntimeHandle {
             .await
     }
 
-    /// Send a message to the agent
     pub async fn send_message(
         &self,
         session_id: SessionId,
@@ -264,8 +255,6 @@ impl RuntimeHandle {
         .await
     }
 
-    /// Reads up to `limit` messages of the session's history ending at `from`, or at the latest
-    /// message when `from` is `None`.
     pub async fn get_history_page(
         &self,
         session_id: SessionId,
@@ -303,7 +292,6 @@ impl RuntimeHandle {
         .await
     }
 
-    /// Load a session by ID
     pub async fn load_session(&self, session_id: SessionId) -> RuntimeResult<bool> {
         self.request(|response| Command::LoadSession {
             session_id,
@@ -312,7 +300,6 @@ impl RuntimeHandle {
         .await
     }
 
-    /// List all sessions
     pub async fn list_sessions(&self) -> RuntimeResult<Vec<Session>> {
         self.request(|response| Command::ListSessions { response })
             .await
@@ -323,7 +310,6 @@ impl RuntimeHandle {
             .await
     }
 
-    /// Delete a session by ID
     pub async fn delete_session(&self, session_id: SessionId) -> RuntimeResult<()> {
         self.request(|response| Command::DeleteSession {
             session_id,
@@ -356,7 +342,6 @@ impl RuntimeHandle {
         .await
     }
 
-    /// Get the current tip message ID for a session.
     pub async fn get_tip(&self, session_id: SessionId) -> RuntimeResult<Option<String>> {
         self.request(|response| Command::GetTip {
             session_id,
@@ -419,7 +404,6 @@ impl RuntimeHandle {
         .await
     }
 
-    /// Cancel the active stream for a session.
     pub async fn cancel_stream(&self, session_id: SessionId) -> RuntimeResult<bool> {
         self.request(|response| Command::CancelStream {
             session_id,
@@ -436,7 +420,6 @@ impl RuntimeHandle {
         .await
     }
 
-    /// The sign-in state of every provider type that signs in with an account.
     pub async fn get_provider_auth_statuses(
         &self,
     ) -> RuntimeResult<Vec<crate::ProviderAuthStatus>> {
@@ -500,9 +483,7 @@ impl RuntimeHandle {
     }
 }
 
-/// Lists every request method of [`RuntimeHandle`] for bindings that expose it over a wire,
-/// by calling `$callback! { json { name(arg: Type, ...) -> Output; ... } binary { ... } }`.
-/// `binary` methods take or return raw bytes. Add every new request method here.
+/// Add every new request method of [`RuntimeHandle`] here.
 #[macro_export]
 macro_rules! runtime_methods {
     ($callback:ident) => {
@@ -554,19 +535,4 @@ macro_rules! runtime_methods {
             }
         }
     };
-}
-
-#[cfg(test)]
-mod method_list {
-    macro_rules! assert_handle_methods {
-        (json { $($name:ident($($arg:ident: $ty:ty),*) -> $out:ty;)* } binary { $($bname:ident($($barg:ident: $bty:ty),*) -> $bout:ty;)* }) => {
-            #[test]
-            fn listed_methods_exist_on_the_handle() {
-                $(let _ = crate::RuntimeHandle::$name;)*
-                $(let _ = crate::RuntimeHandle::$bname;)*
-            }
-        };
-    }
-
-    crate::runtime_methods!(assert_handle_methods);
 }

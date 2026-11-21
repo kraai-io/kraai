@@ -31,9 +31,7 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
             dropped: CancellationToken::new(),
         }),
     );
-    let harness = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new_with_parts(providers).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let (request, providers) = {
         let agent = &harness.runtime.agent_manager;
@@ -149,9 +147,7 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
             dropped: dropped.clone(),
         }),
     );
-    let harness = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new_with_parts(providers).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let other_session = create_session_with_profile(&harness.handle, "test-profile").await?;
     {
@@ -226,9 +222,7 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
             dropped: dropped.clone(),
         }),
     );
-    let harness = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new_with_parts(providers).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let (request, providers) = {
         let agent = &harness.runtime.agent_manager;
@@ -294,7 +288,6 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
     Ok(())
 }
 
-/// Rejects conversation requests that were not compacted yet as too large for the context.
 struct OverflowingProvider {
     requests: std::sync::Mutex<Vec<&'static str>>,
     in_stream: bool,
@@ -375,9 +368,7 @@ async fn drive_overflowing(
         ProviderId::new("mock"),
         Box::new(SharedProvider(provider.clone())),
     );
-    let harness = RuntimeTestHarness::new_with_parts(providers)
-        .await
-        .expect("runtime regression fixture must initialize");
+    let harness = RuntimeTestHarness::new_with_parts(providers).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let agent = &harness.runtime.agent_manager;
     let request = agent

@@ -1,6 +1,5 @@
 use super::*;
 
-/// User messages that are linked together with the assistant message of the turn they start.
 pub(super) struct TurnInput {
     pub(super) tip: Option<MessageId>,
     pub(super) users: Vec<kraai_persistence::NewMessage>,

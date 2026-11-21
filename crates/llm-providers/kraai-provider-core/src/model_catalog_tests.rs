@@ -159,8 +159,7 @@ async fn matches_serving_endpoint_and_context_tier() -> color_eyre::Result<()> {
 }
 
 #[tokio::test]
-async fn reasoning_variant_uses_base_catalog_rates_for_all_token_categories()
--> color_eyre::Result<()> {
+async fn catalog_rates_price_every_token_category_and_context_tier() -> color_eyre::Result<()> {
     use crate::{
         DynamicConfig, ProviderConfig, ProviderManagerConfig, ProviderPricingCatalog,
         ProviderPricingPolicy, ProviderStreamEvent,
@@ -207,12 +206,7 @@ async fn reasoning_variant_uses_base_catalog_rates_for_all_token_categories()
         }))])
         .boxed();
         let mut stream = pricing
-            .apply(
-                &provider,
-                &ModelId::new("gpt-6-astra-low"),
-                &ModelId::new("gpt-6-astra"),
-                source,
-            )
+            .apply(&provider, &ModelId::new("gpt-6-astra"), source)
             .await;
         let Some(Ok(ProviderStreamEvent::Usage(usage))) = stream.next().await else {
             return Err(color_eyre::eyre::eyre!("missing usage"));

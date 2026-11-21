@@ -99,10 +99,7 @@ pub struct App {
     hangup: Receiver<()>,
     clipboard: Option<arboard::Clipboard>,
     startup_options: StartupOptions,
-    /// Whether model choices are remembered for the workspace; off in tests.
     persist_workspace_preferences: bool,
-    /// Says why sandboxed scripts cannot run, rerun whenever the agent list opens; reports
-    /// nothing until `main` installs the real check.
     sandbox_check: fn() -> Option<String>,
     startup_message_sent: bool,
     startup_sync: StartupSync,
@@ -196,8 +193,6 @@ impl App {
         }
     }
 
-    /// Adds a streamed item to the cached message; false when the cache cannot take it and
-    /// needs a snapshot.
     pub(super) fn apply_item_started(
         &mut self,
         message_id: &str,
@@ -221,7 +216,6 @@ impl App {
         true
     }
 
-    /// Appends streamed text to a cached item; false when the cache cannot take it.
     pub(super) fn apply_item_delta(&mut self, message_id: &str, index: usize, delta: &str) -> bool {
         let Some(items) = self.streaming_items(message_id) else {
             return false;
@@ -249,7 +243,6 @@ impl App {
         }
     }
 
-    /// Installs the latest history from a snapshot, keeping older messages already loaded.
     pub(super) fn install_latest_history(
         &mut self,
         session_id: &SessionId,

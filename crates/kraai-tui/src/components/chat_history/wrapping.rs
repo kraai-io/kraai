@@ -75,7 +75,6 @@ pub(super) fn push_prose(
     }
 }
 
-/// Word-wraps plain text to `width` columns.
 pub(crate) fn wrap_words(text: &str, width: usize) -> Vec<String> {
     let style = Style::default();
     let mut lines = Vec::new();

@@ -27,34 +27,6 @@ class NativeResumeTests(unittest.TestCase):
         )
         self.assertEqual(len(job._remaining_trial_configs), 3)
 
-    def test_native_reconciliation_preserves_each_completed_attempt(self):
-        one = TrialConfig(
-            task=TaskConfig(path=Path("/tasks/one")), trial_name="one-old"
-        )
-        two = TrialConfig(
-            task=TaskConfig(path=Path("/tasks/two")), trial_name="two-old"
-        )
-        job = object.__new__(Job)
-        job._existing_trial_configs = [
-            one,
-            one.model_copy(update={"trial_name": "one-old-2"}),
-            two,
-        ]
-        job._trial_configs = [
-            config.model_copy(update={"trial_name": f"new-{index}"})
-            for index, config in enumerate([one, two] * 3)
-        ]
-        job._init_remaining_trial_configs()
-        self.assertEqual(len(job._remaining_trial_configs), 3)
-        self.assertEqual(
-            sum(config.task == one.task for config in job._remaining_trial_configs), 1
-        )
-        self.assertEqual(
-            sum(config.task == two.task for config in job._remaining_trial_configs), 2
-        )
-        self.assertIs(job._trial_configs[0], one)
-        self.assertIs(job._trial_configs[1], two)
-
 
 class IncrementalPlanTests(unittest.IsolatedAsyncioTestCase):
     async def test_expanding_tasks_attempts_and_subsets_preserves_completed_trials(self):

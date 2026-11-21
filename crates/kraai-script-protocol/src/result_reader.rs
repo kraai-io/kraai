@@ -2,7 +2,6 @@ const SECTIONS: [&str; 5] = ["notice", "stdout", "stderr", "diagnostic", "sandbo
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallResultSection<'a> {
-    /// The tag name. Empty for text after the last section the reader recognised.
     pub name: &'a str,
     pub attributes: Vec<(&'a str, String)>,
     pub text: &'a str,
@@ -15,7 +14,6 @@ impl ToolCallResultSection<'_> {
     }
 }
 
-/// The text `render_tool_call_result` writes, split back into its parts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedToolCallResult<'a> {
     pub attributes: Vec<(&'a str, String)>,
@@ -36,9 +34,8 @@ fn attribute<'a>(attributes: &'a [(&str, String)], name: &str) -> Option<&'a str
         .map(|(_, value)| value.as_str())
 }
 
-/// Reads a rendered result for display. Channel text is not escaped, so output that itself
-/// contains a closing tag followed by a later section's opening tag ends its section early; the
-/// text is kept either way.
+/// Channel text is not escaped, so output containing a closing tag followed by a later
+/// section's opening tag ends its section early, though the text is kept.
 #[must_use]
 pub fn parse_tool_call_result(rendered: &str) -> Option<ParsedToolCallResult<'_>> {
     let (attributes, body) = open_tag(rendered, "tool_call_result")?;
@@ -82,7 +79,6 @@ pub fn parse_tool_call_result(rendered: &str) -> Option<ParsedToolCallResult<'_>
 
 type OpenTag<'a> = (Vec<(&'a str, String)>, &'a str);
 
-/// The attributes of `<name ...>` at the start of `text`, and the text after the tag.
 fn open_tag<'a>(text: &'a str, name: &str) -> Option<OpenTag<'a>> {
     let mut rest = text.strip_prefix('<')?.strip_prefix(name)?;
     let mut attributes = Vec::new();

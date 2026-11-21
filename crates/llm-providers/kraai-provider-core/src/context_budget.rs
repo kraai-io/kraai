@@ -7,10 +7,8 @@ pub fn compaction_point(max_context: usize) -> usize {
 }
 
 impl crate::Model {
-    /// The most tokens a response to `messages` may use. A response may fill the context up to
-    /// the compaction point, which leaves room for the compaction request that follows it.
-    /// Input already past that point, such as the compaction request itself, may use the rest of
-    /// the window.
+    /// A response stops at the compaction point to leave room for the compaction request, which
+    /// itself may use the rest of the window.
     pub fn output_limit(&self, messages: &[ConversationItem]) -> Option<usize> {
         let input: usize = messages
             .iter()
@@ -31,8 +29,6 @@ impl crate::Model {
             .filter(|tokens| *tokens > 0)
     }
 
-    /// Whether the context left before compaction, rather than the model's own output limit,
-    /// limits a response to `messages`, so compacting first would give it more room.
     pub fn output_limited_by_context(&self, messages: &[ConversationItem]) -> bool {
         self.output_limit(messages)
             .is_some_and(|limit| self.max_output.is_none_or(|max| limit < max))

@@ -2,7 +2,6 @@ use super::*;
 
 pub(super) const CONNECT_LABEL: &str = "Connect a provider";
 
-/// What a provider's sheet offers, depending on where its sign-in stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ProviderAction {
     SignInBrowser,
@@ -68,7 +67,6 @@ impl ProviderAction {
 }
 
 impl AppState {
-    /// The provider whose sheet or configuration is open.
     pub(super) fn open_provider(&self) -> Option<&ProviderSettings> {
         self.settings_draft
             .as_ref()?
@@ -82,12 +80,10 @@ impl AppState {
             .find(|definition| definition.type_id == type_id)
     }
 
-    /// Where the open provider's sign-in stands, when its type signs in with an account.
     pub(super) fn open_provider_auth(&self) -> Option<&ProviderAuthStatus> {
         self.provider_auth.get(&self.open_provider()?.type_id)
     }
 
-    /// The configured providers the provider list shows, each with its place in the settings.
     pub(super) fn listed_providers(&self) -> Vec<(usize, &ProviderSettings)> {
         let query = self.sheet_query.as_str().to_lowercase();
         self.settings_draft
@@ -104,7 +100,6 @@ impl AppState {
             .collect()
     }
 
-    /// The provider list ends with a row that connects another provider.
     pub(super) fn offers_connect(&self) -> bool {
         self.settings_draft.is_some()
             && CONNECT_LABEL
@@ -112,7 +107,6 @@ impl AppState {
                 .contains(&self.sheet_query.as_str().to_lowercase())
     }
 
-    /// The kinds of provider the connect list shows, OpenAI first.
     pub(super) fn listed_provider_definitions(&self) -> Vec<&ProviderDefinition> {
         let query = self.sheet_query.as_str().trim().to_lowercase();
         let mut definitions: Vec<_> = self
@@ -128,7 +122,6 @@ impl AppState {
         definitions
     }
 
-    /// The actions the open provider offers that the typed text names.
     pub(super) fn listed_provider_actions(&self) -> Vec<ProviderAction> {
         if self.open_provider().is_none() {
             return Vec::new();
@@ -142,7 +135,6 @@ impl AppState {
             .collect()
     }
 
-    /// The breadcrumb the composer shows while a provider sheet is open.
     pub(super) fn providers_prefix(&self) -> String {
         let id = self
             .open_provider()
@@ -172,7 +164,6 @@ impl App {
         self.state.providers_view = view;
     }
 
-    /// Stops an edit, or steps out one level: configuration, provider, list, chat.
     pub(super) fn close_providers_level(&mut self) {
         if self.state.config_editing.take().is_some() {
             self.state.sheet_query.clear();
@@ -202,7 +193,6 @@ impl App {
             .unwrap_or(0);
     }
 
-    /// Shows the open provider's actions with `action` highlighted.
     pub(super) fn return_to_provider(&mut self, action: ProviderAction) {
         self.show_providers_view(ProvidersView::Provider);
         self.state.sheet_index = self
@@ -334,7 +324,6 @@ impl App {
         }
     }
 
-    /// Says what a provider action did, in the provider sheet while one is open.
     pub(super) fn provider_feedback(&mut self, text: impl Into<String>) {
         let text = text.into();
         if self.state.mode == UiMode::Providers {

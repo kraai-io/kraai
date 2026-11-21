@@ -195,7 +195,6 @@ impl RuntimeCore {
 }
 
 impl RuntimeCore {
-    /// Recovers sessions left mid-turn by a runtime that stopped without releasing them.
     pub(crate) async fn sweep_expired_leases(&self) {
         let sessions = match self.session_store.expired_leases().await {
             Ok(sessions) => sessions,

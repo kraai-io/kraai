@@ -85,7 +85,6 @@ fn row(state: &AppState, session: &Session, local: bool, armed: bool, now: u64) 
     }
 }
 
-/// Writes a path under the home directory with `~` in place of the home directory.
 fn short_path(path: &str, home: &str) -> String {
     match path.strip_prefix(home) {
         Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {

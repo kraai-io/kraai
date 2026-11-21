@@ -37,7 +37,6 @@ impl Workspace {
         plan
     }
 
-    /// Returns `false` when this host cannot run the sandbox.
     async fn sandbox_available(&self) -> bool {
         let probe = shell_plan(
             &self.0,
@@ -54,8 +53,6 @@ impl Workspace {
         )
     }
 
-    /// Runs `script` with workspace-write and host-read. Returns `None` when this host
-    /// cannot run the sandbox.
     async fn run(&self, script: &str) -> Option<String> {
         if !self.sandbox_available().await {
             return None;

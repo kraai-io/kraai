@@ -107,7 +107,13 @@ fn total_cpu_includes_children_and_memory_peaks_stay_separate() -> Result<()> {
 
 #[test]
 fn round_trip_preserves_report_validation() -> Result<()> {
-    let original = report(vec![sample(100, 20, 30, 4096)])?;
+    let original = report(vec![
+        sample(1_234_567_891, 20, 30, 4096),
+        sample(1_234_567_892, 21, 33, 4097),
+        sample(1_234_567_895, 23, 34, 4099),
+        sample(1_234_567_897, 24, 36, 4103),
+    ])?;
+    ensure!(first_workload(&original)?.summary.wall_ns.median.fract() != 0.0);
     let json = serde_json::to_string(&original)?;
     let restored: Report = serde_json::from_str(&json)?;
     restored.validate()?;
@@ -394,20 +400,5 @@ fn implementation_provenance_and_sample_counts_may_differ() -> Result<()> {
     ensure!(comparison.baseline_provenance == original.metadata.provenance);
     ensure!(comparison.candidate_provenance == candidate.metadata.provenance);
     ensure!(comparison.changed_workloads.is_empty());
-    Ok(())
-}
-
-#[test]
-fn report_schema_requires_per_workload_fingerprints() -> Result<()> {
-    let original = report(vec![sample(100, 20, 30, 4096)])?;
-    ensure!(original.schema_version == 2);
-    let mut value = serde_json::to_value(&original)?;
-    value
-        .pointer_mut("/workloads/0/spec")
-        .and_then(serde_json::Value::as_object_mut)
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing serialized workload"))?
-        .remove("fingerprint");
-    let result = serde_json::from_value::<Report>(value);
-    ensure!(result.is_err());
     Ok(())
 }

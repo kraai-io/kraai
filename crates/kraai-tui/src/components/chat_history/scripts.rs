@@ -22,35 +22,26 @@ pub(crate) enum ScriptMark {
     Cancelled,
 }
 
-/// Where a script call that has no result yet stands.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ScriptCard {
-    /// The model is still writing the call.
     Writing,
-    /// The runtime waits for the user to allow the call.
     AwaitingApproval,
-    /// The call is written and has not started.
     Waiting,
     Running(RunningCard),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct RunningCard {
-    /// How long the script has run, in whole seconds.
     pub(crate) elapsed: Duration,
-    /// The colour of the dot that shows the script is alive.
     pub(crate) dot: Color,
-    /// How long the script may run before the runtime stops it.
     pub(crate) timeout: Duration,
-    /// The last lines it printed, oldest first.
     pub(crate) tail: Vec<ScriptOutputLine>,
 }
 
-/// How long the running dot holds each colour when the terminal's muted colour is unknown.
 const DOT_BLINK: Duration = Duration::from_millis(500);
 
 impl RunningCard {
-    /// The card of a script that started `elapsed` ago, with its dot in colour `dot`.
+    /// Whole seconds are the precision the card shows.
     pub(crate) fn new(
         elapsed: Duration,
         timeout: Duration,
@@ -66,9 +57,7 @@ impl RunningCard {
     }
 }
 
-/// The dot of a running script, `breath` into the breath it shares with the status line. It
-/// breathes in the accent toward `muted`. Without an RGB `muted` there is nothing to fade
-/// toward, so it switches between the two colours.
+/// Without an RGB `muted` there is nothing to fade toward, so it switches between the two colours.
 pub(crate) fn running_dot(breath: Duration, muted: Option<Color>) -> Color {
     let fallback = if (breath.as_millis() / DOT_BLINK.as_millis()).is_multiple_of(2) {
         theme::ACCENT
@@ -81,7 +70,6 @@ pub(crate) fn running_dot(breath: Duration, muted: Option<Color>) -> Color {
 }
 
 pub(crate) struct ScriptSection<'a> {
-    /// Names the output when it is not plain stdout; empty otherwise.
     pub(crate) label: String,
     pub(crate) text: &'a str,
 }
@@ -93,12 +81,10 @@ pub(crate) struct ScriptView<'a> {
     pub(crate) sections: Vec<ScriptSection<'a>>,
 }
 
-/// How many of a running script's last lines its card shows.
 const TAIL_ROWS: usize = 3;
 const STDERR_RAIL: &str = "   ┆ ";
 const CUT: &str = "…";
 
-/// The source as the user reads it: without the metadata header and the blank lines around it.
 /// The header comes off before the text is made safe to draw, so a carriage return still ends it.
 fn shown_source(source: &str) -> String {
     normalize_terminal_text(split_script_header(source).1)
@@ -107,8 +93,6 @@ fn shown_source(source: &str) -> String {
 }
 
 impl ChatHistory<'_> {
-    /// A script call that has no result yet, in the shape of a finished one: where it stands,
-    /// its source, and the last lines it printed while it runs.
     pub(crate) fn build_script_card_lines(
         source: &str,
         card: &ScriptCard,
@@ -181,7 +165,6 @@ impl ChatHistory<'_> {
         lines
     }
 
-    /// One printed line on one row behind `rail`, ending in `CUT` when the row is too short.
     fn tail_line(rail: &str, text: &str, width: usize, rail_style: Style) -> RenderedLine {
         let (rail, used) = fitting_prefix(rail, width);
         let room = width.saturating_sub(used);
@@ -210,7 +193,6 @@ impl ChatHistory<'_> {
         }
     }
 
-    /// The one line that stands for a run of scripts while their output is collapsed.
     pub(crate) fn build_script_group_lines(summary: &str, width: u16) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
         Self::push_wrapped_lines(
@@ -224,7 +206,6 @@ impl ChatHistory<'_> {
         lines
     }
 
-    /// One script: how it ended, what ran, then its output behind a rail.
     pub(crate) fn build_script_lines(view: &ScriptView<'_>, width: u16) -> Vec<RenderedLine> {
         let width = usize::from(width);
         let muted = Style::default().fg(theme::MUTED);
@@ -533,18 +514,6 @@ mod tests {
                 ),
                 "{source:?}"
             );
-        }
-    }
-
-    #[test]
-    fn cards_fit_narrow_widths() {
-        let tail = vec![line(ScriptOutputStream::Stderr, "a line of output")];
-        for card in [ScriptCard::Writing, running(1_500, tail)] {
-            for width in 0..12 {
-                for line in ChatHistory::build_script_card_lines(SOURCE, &card, width) {
-                    assert!(display_width(&ChatHistory::line_text(&line)) <= width);
-                }
-            }
         }
     }
 

@@ -22,8 +22,7 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
         )],
         vec![ScriptedChunk::plain("Queued message handled")],
     ])
-    .await
-    .expect("runtime fixture");
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle

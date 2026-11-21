@@ -11,8 +11,7 @@ async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<(
         ScriptedChunk::plain("Looking"),
         ScriptedChunk::plain(" done."),
     ]])
-    .await
-    .expect("runtime fixture");
+    .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -129,9 +128,7 @@ async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<(
 
 #[tokio::test]
 async fn snapshots_carry_the_latest_history_and_pages_reach_the_first_message() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime fixture");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     let total = crate::runtime::session::SNAPSHOT_HISTORY_LIMIT + 5;
     let mut first = None;

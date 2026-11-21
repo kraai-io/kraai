@@ -13,7 +13,6 @@ use super::{
     ProxyState, UpstreamCredentials, constant_time_eq,
 };
 
-/// How long one downstream write may wait for a client that stopped reading.
 const DOWNSTREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) fn rejection(

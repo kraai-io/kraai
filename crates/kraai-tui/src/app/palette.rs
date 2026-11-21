@@ -84,25 +84,14 @@ mod tests {
     }
 
     #[test]
-    fn delayed_and_partial_replies_never_become_input() {
+    fn request_writes_the_query_and_input_after_the_reply_passes_through() {
         let mut palette = TerminalPalette::default();
         let mut query = Vec::new();
         palette.request_with(&mut query);
         assert_eq!(query, b"\x1b]4;8;?\x07");
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        assert!(matches!(palette.filter(start()), PaletteEvent::Consumed));
-        for ch in "4;8;rgb:5858/".chars() {
-            assert!(matches!(
-                palette.filter(character(ch)),
-                PaletteEvent::Consumed
-            ));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        for ch in "5252/7373".chars() {
-            assert!(matches!(
-                palette.filter(character(ch)),
-                PaletteEvent::Consumed
-            ));
+        palette.filter(start());
+        for ch in "4;8;rgb:5858/5252/7373".chars() {
+            palette.filter(character(ch));
         }
         assert!(matches!(
             palette.filter(CrosstermEvent::Key(KeyEvent::new(

@@ -1,10 +1,5 @@
 use super::*;
 
-fn configure_refresh(harness: &mut TestHarness) -> color_eyre::Result<()> {
-    configure(harness)?;
-    Ok(())
-}
-
 fn switch_to_other_session(harness: &mut TestHarness) {
     harness
         .app
@@ -29,7 +24,7 @@ fn remaining_options() -> ModelOptionValues {
 #[test]
 fn metadata_refresh_reconciles_deferred_saves_before_the_turn_finishes() -> color_eyre::Result<()> {
     let mut harness = test_harness();
-    configure_refresh(&mut harness)?;
+    configure(&mut harness)?;
     let mut active = session_snapshot(None);
     active.session.is_running = true;
     active.activity = SessionActivity::Streaming;
@@ -53,7 +48,7 @@ fn metadata_refresh_reconciles_deferred_saves_before_the_turn_finishes() -> colo
 #[test]
 fn unchanged_catalog_metadata_does_not_write_session_selection() -> color_eyre::Result<()> {
     let mut harness = test_harness();
-    configure_refresh(&mut harness)?;
+    configure(&mut harness)?;
     let models = harness.app.state.models_by_provider.clone();
     harness
         .app
@@ -66,7 +61,7 @@ fn unchanged_catalog_metadata_does_not_write_session_selection() -> color_eyre::
 fn metadata_refresh_reconciles_background_saves_before_the_turn_finishes() -> color_eyre::Result<()>
 {
     let mut harness = test_harness();
-    configure_refresh(&mut harness)?;
+    configure(&mut harness)?;
     let mut active = session_snapshot(None);
     active.session.is_running = true;
     active.activity = SessionActivity::Streaming;
@@ -103,7 +98,7 @@ fn stale_background_save_results_preserve_reconciled_pending_options() -> color_
         )),
     ] {
         let mut harness = test_harness();
-        configure_refresh(&mut harness)?;
+        configure(&mut harness)?;
         harness.app.state.selected_model_options = options("high", false, None);
         harness.app.save_model_selection();
         let (_, initial_id, initial) = saves(&harness)
@@ -147,7 +142,7 @@ fn stale_background_save_results_preserve_reconciled_pending_options() -> color_
 #[test]
 fn metadata_refresh_retries_background_saves_rejected_before_refresh() -> color_eyre::Result<()> {
     let mut harness = test_harness();
-    configure_refresh(&mut harness)?;
+    configure(&mut harness)?;
     harness.app.state.selected_model_options = options("high", false, None);
     harness.app.save_model_selection();
     let (_, save_id, _) = saves(&harness)

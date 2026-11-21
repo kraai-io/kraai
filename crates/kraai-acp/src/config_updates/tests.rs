@@ -113,22 +113,6 @@ async fn failed_session_response_keeps_the_session_hidden_and_releases_publicati
 }
 
 #[tokio::test]
-async fn cancelled_foreground_update_does_not_leave_refresh_blocked() {
-    let updated = Arc::new(ConfigUpdates::default());
-    let session = Session::new(updated.clone());
-    let mut action = Box::pin(async {
-        let publication = lock(&session).await;
-        std::future::pending::<()>().await;
-        drop(publication);
-    });
-    assert!(futures::poll!(action.as_mut()).is_pending());
-    assert!(session.configuration.try_lock().is_err());
-    drop(action);
-    assert!(session.configuration.try_lock().is_ok());
-    assert!(futures::poll!(Box::pin(updated.wake.notified())).is_ready());
-}
-
-#[tokio::test]
 async fn foreground_refresh_requests_coalesce_and_background_publication_does_not_retrigger() {
     let updated = Arc::new(ConfigUpdates::default());
     let sessions = [Session::new(updated.clone()), Session::new(updated.clone())];

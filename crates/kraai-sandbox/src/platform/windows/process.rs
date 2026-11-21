@@ -62,8 +62,8 @@ impl Child {
         Ok(())
     }
 
-    /// Terminates every process in the job and waits until they have exited, because
-    /// termination is asynchronous and a dying process can still write files.
+    /// Waits for exit because termination is asynchronous and a dying process can still
+    /// write files.
     #[expect(
         unsafe_code,
         reason = "Windows process trees are terminated through their job object"

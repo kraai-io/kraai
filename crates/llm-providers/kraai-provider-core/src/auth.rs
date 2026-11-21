@@ -1,6 +1,3 @@
-//! Interactive sign-in for provider types that authenticate with an account rather than a
-//! configured key, so frontends handle every such provider the same way.
-
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
@@ -49,7 +46,6 @@ pub enum ProviderLoginState {
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, Eq, Serialize, Deserialize)]
 pub struct ProviderAuthStatus {
-    /// The provider type this sign-in serves, such as `openai-codex`.
     pub provider_type: String,
     /// Orders updates from one provider type; a status with a lower sequence is stale.
     pub sequence: u64,
@@ -79,18 +75,15 @@ pub trait ProviderAuth: Send + Sync {
     async fn start_login(&self, method: LoginMethod) -> io::Result<ProviderAuthStatus>;
     async fn cancel_login(&self) -> io::Result<ProviderAuthStatus>;
     async fn logout(&self) -> io::Result<ProviderAuthStatus>;
-    /// Every status change, including those caused by background token refreshes.
     fn subscribe(&self) -> broadcast::Receiver<ProviderAuthStatus>;
 }
 
-/// The provider types a runtime can configure and the sign-ins they use.
 #[derive(Default)]
 pub struct ProviderSetup {
     pub registry: ProviderRegistry,
     pub auth: Vec<Arc<dyn ProviderAuth>>,
 }
 
-/// Builds the provider types for a runtime once its storage root is known.
 #[async_trait::async_trait]
 pub trait ProviderSet: Send + Sync {
     async fn load(&self, storage_root: &Path) -> Result<ProviderSetup>;

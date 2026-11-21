@@ -71,7 +71,6 @@ impl ProviderError {
         .then(|| Self::ContextWindowExceeded(body.to_string()))
     }
 
-    /// Classifies a failed HTTP response from `provider`'s `operation`.
     pub async fn from_response(
         provider: &str,
         operation: &str,
@@ -89,7 +88,6 @@ impl ProviderError {
         )
     }
 
-    /// Classifies a failed response whose body the caller already read.
     pub fn from_body(
         status: StatusCode,
         retry_after: Option<Duration>,
@@ -125,7 +123,6 @@ impl ProviderError {
         }
     }
 
-    /// Classifies an error reported inside a response stream by its API error code.
     pub fn from_stream_error(code: Option<&str>, message: String) -> Self {
         match code {
             Some("context_length_exceeded" | "context_window_exceeded") => {
@@ -145,7 +142,6 @@ impl ProviderError {
         }
     }
 
-    /// Whether repeating the identical request may succeed.
     pub fn is_transient(&self) -> bool {
         matches!(
             self,
@@ -157,7 +153,6 @@ impl ProviderError {
     }
 }
 
-/// Whether the request was too large for the model's context window.
 pub fn is_context_overflow_error(report: &color_eyre::Report) -> bool {
     report.chain().any(|cause| {
         matches!(
@@ -167,7 +162,6 @@ pub fn is_context_overflow_error(report: &color_eyre::Report) -> bool {
     })
 }
 
-/// Whether a provider failure anywhere in `report`'s chain may succeed on an identical retry.
 pub fn is_transient_error(report: &color_eyre::Report) -> bool {
     report.chain().any(|cause| {
         cause

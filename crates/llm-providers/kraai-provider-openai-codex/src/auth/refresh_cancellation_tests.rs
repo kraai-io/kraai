@@ -101,9 +101,7 @@ async fn cancelling_a_refresh_caller_preserves_rotated_credentials() {
     .unwrap();
     let (issuer, received, release, requests, _server) =
         paused_rotating_server(RefreshOutcome::Rotated).await;
-    let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
-        return;
-    };
+    let controller = auth_controller_with_issuer(path.clone(), issuer);
     let expected = controller.get_request_auth().await.unwrap();
     let caller = {
         let controller = controller.clone();
@@ -142,9 +140,7 @@ async fn logout_after_cancelled_refresh_cannot_restore_credentials() {
     .unwrap();
     let (issuer, received, release, requests, _server) =
         paused_rotating_server(RefreshOutcome::Rotated).await;
-    let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
-        return;
-    };
+    let controller = auth_controller_with_issuer(path.clone(), issuer);
     let expected = controller.get_request_auth().await.unwrap();
     let caller = {
         let controller = controller.clone();
@@ -178,14 +174,8 @@ async fn cancelled_refresh_still_times_out_and_releases_the_file_lock() {
     )
     .unwrap();
     let (issuer, received, server) = stalled_refresh_server().await;
-    let Some(controller) = auth_controller_with_refresh_timeout_or_skip(
-        path.clone(),
-        issuer,
-        Duration::from_millis(100),
-    ) else {
-        server.abort();
-        return;
-    };
+    let controller =
+        auth_controller_with_refresh_timeout(path.clone(), issuer, Duration::from_millis(100));
     let expected = controller.get_request_auth().await.unwrap();
     let caller = {
         let controller = controller.clone();
@@ -225,9 +215,7 @@ async fn refresh_failure_preserves_newer_logins(outcome: RefreshOutcome) {
             .unwrap();
             let (issuer, received, release, requests, _server) =
                 paused_rotating_server(outcome).await;
-            let Some(controller) = auth_controller_with_issuer_or_skip(path.clone(), issuer) else {
-                return;
-            };
+            let controller = auth_controller_with_issuer(path.clone(), issuer);
             let expected = controller.get_request_auth().await.unwrap();
             let caller = {
                 let controller = controller.clone();

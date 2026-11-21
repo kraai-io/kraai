@@ -6,16 +6,14 @@ use kraai_execution_types::NushellStartup;
 use nu_config::EnvAccess;
 use serde::{Deserialize, Serialize};
 
-/// A Nushell startup file as the script's shell loads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartupFile {
     pub path: PathBuf,
     pub contents: Vec<u8>,
 }
 
-/// Reads `env.nu` and `config.nu` in load order for a script that runs with `environment`, or
-/// nothing for a clean startup. The runtime reads them once, so the host loads the same bytes
-/// that the bash-habits rewrite parsed.
+/// The runtime reads startup files once, so the host loads the same bytes that the bash-habits
+/// rewrite parsed.
 pub fn startup_files(
     startup: NushellStartup,
     environment: &BTreeMap<String, String>,
@@ -40,7 +38,6 @@ pub fn startup_files(
     Ok(files)
 }
 
-/// The script's environment variables, with this platform's directories as fallbacks.
 struct ScriptEnvironment<'a>(&'a BTreeMap<String, String>);
 
 impl EnvAccess for ScriptEnvironment<'_> {

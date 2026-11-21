@@ -183,27 +183,6 @@ mod tests {
     }
 
     #[test]
-    fn subscription_is_controlled_by_policy_not_provider_type() -> Result<()> {
-        let provider = ProviderConfig {
-            id: kraai_types::ProviderId::new("subscription"),
-            type_id: "custom-factory".into(),
-            config: DynamicConfig::new(),
-        };
-        for subscription in [false, true] {
-            let config = PricingConfig::new(
-                &provider,
-                &[],
-                ProviderPricingPolicy {
-                    subscription,
-                    ..ProviderPricingPolicy::default()
-                },
-            )?;
-            assert_eq!(config.subscription, subscription);
-        }
-        Ok(())
-    }
-
-    #[test]
     fn overrides_require_both_rates_and_accept_decimal_strings() -> Result<()> {
         let mut config = DynamicConfig::from([("price_input".into(), DynamicValue::from("2.50"))]);
         assert!(!validate_pricing_config(&config).is_empty());

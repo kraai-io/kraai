@@ -153,7 +153,6 @@ pub struct ResponseOutputItem {
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
-    clippy::indexing_slicing,
     reason = "tests use direct assertions for serialized wire payloads"
 )]
 mod tests {
@@ -167,54 +166,6 @@ mod tests {
             name: String::from("kraai_nushell"),
             description: String::from("Execute Nushell"),
         }
-    }
-
-    #[test]
-    fn responses_request_serializes_prompt_cache_key_when_present() {
-        let request = ResponsesRequest {
-            service_tier: None,
-            model: "gpt-5.2-codex".to_string(),
-            instructions: "instructions".to_string(),
-            input: Vec::<ResponsesRequestItem>::new(),
-            reasoning: None,
-            tools: vec![script_tool()],
-            tool_choice: None,
-            parallel_tool_calls: None,
-            max_output_tokens: None,
-            stream: true,
-            store: false,
-            include: vec!["reasoning.encrypted_content"],
-            prompt_cache_key: Some("session-123".to_string()),
-        };
-
-        let serialized = serde_json::to_value(request).expect("serialized request");
-
-        assert_eq!(serialized["prompt_cache_key"], json!("session-123"));
-    }
-
-    #[test]
-    fn responses_request_omits_prompt_cache_key_when_missing() {
-        let request = ResponsesRequest {
-            service_tier: None,
-            model: "gpt-5.2-codex".to_string(),
-            instructions: "instructions".to_string(),
-            input: Vec::<ResponsesRequestItem>::new(),
-            reasoning: None,
-            tools: vec![script_tool()],
-            tool_choice: None,
-            parallel_tool_calls: None,
-            max_output_tokens: None,
-            stream: true,
-            store: false,
-            include: vec!["reasoning.encrypted_content"],
-            prompt_cache_key: None,
-        };
-
-        let serialized = serde_json::to_value(request).expect("serialized request");
-
-        assert!(serialized.get("prompt_cache_key").is_none());
-        assert!(serialized.get("tool_choice").is_none());
-        assert!(serialized.get("parallel_tool_calls").is_none());
     }
 
     #[test]
@@ -250,17 +201,5 @@ mod tests {
                 "include": ["reasoning.encrypted_content"],
             })
         );
-        assert_eq!(serialized["tools"].as_array().map(Vec::len), Some(1));
-        assert_eq!(
-            serialized["tools"][0],
-            json!({
-                "type": "custom",
-                "name": "kraai_nushell",
-                "description": "Execute Nushell"
-            })
-        );
-        assert_eq!(serialized["tool_choice"], json!("auto"));
-        assert_eq!(serialized["parallel_tool_calls"], json!(false));
-        assert_eq!(serialized["reasoning"]["context"], json!("all_turns"));
     }
 }

@@ -17,7 +17,6 @@ pub struct CommandExample {
     pub outcome: &'static str,
 }
 
-/// Runtime services a command may request from the parent process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HostService {
     Mcp,

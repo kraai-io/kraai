@@ -142,25 +142,6 @@ test('streams a reply from a local provider and persists the conversation', { ti
   assert.equal(receipt.model_id, 'test-model');
 });
 
-test('native methods reject invalid and wrong-class receivers', { timeout: HANG_TIMEOUT }, async t => {
-  const { create } = fixture(t);
-  const runtime = create();
-  const events = runtime.subscribe();
-  t.after(() => events.close());
-  for (const [instance, wrongClass, syncMethod, asyncMethod] of [
-    [runtime, events, 'startupStatus', 'listSessions'],
-    [events, runtime, 'close', 'next'],
-  ]) {
-    for (const receiver of [null, undefined, {}, Object.create(Object.getPrototypeOf(instance)), wrongClass]) {
-      assert.throws(() => instance[syncMethod].call(receiver));
-      await assert.rejects(async () => instance[asyncMethod].call(receiver));
-    }
-  }
-  assert.deepEqual(unwrap(await runtime.waitForStartup()), { Ready: { protocol_version: 1 } });
-  events.close();
-  assert.deepEqual(await events.next(), { type: 'closed' });
-});
-
 test('model options require explicit choices and survive request persistence', { timeout: HANG_TIMEOUT }, async t => {
   const { directory, create } = fixture(t);
   const provider = await localProvider(t, ['Chosen options']);

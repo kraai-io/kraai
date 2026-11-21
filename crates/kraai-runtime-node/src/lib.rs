@@ -65,7 +65,6 @@ impl Runtime {
         EventSubscription::new(self.handle.subscribe(), self.closed.child_token())
     }
 
-    /// Events of one session plus runtime-wide service events.
     #[napi(skip_typescript)]
     pub fn subscribe_session(&self, session_id: String) -> EventSubscription {
         EventSubscription::new(

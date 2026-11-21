@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,9 +12,7 @@ mod support;
 
 #[test]
 fn cli_runs_resume_and_only_add_new_attempts() -> Result<()> {
-    let Some(binary) = option_env!("CARGO_BIN_EXE_kraai-eval") else {
-        return Ok(());
-    };
+    let binary = env!("CARGO_BIN_EXE_kraai-eval");
     let Some(shell) = find_program("sh") else {
         return Ok(());
     };

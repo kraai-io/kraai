@@ -26,7 +26,6 @@ impl Reasoning {
             && self.reasoning_details.as_ref().is_none_or(Vec::is_empty)
     }
 
-    /// The readable reasoning text in this fragment, if any.
     pub fn display_text(&self) -> Option<&str> {
         [
             &self.reasoning_content,

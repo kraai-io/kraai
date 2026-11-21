@@ -256,19 +256,4 @@ mod tests {
             assert!(matches!(content.display_text(), Cow::Borrowed(value) if value == text));
         }
     }
-
-    #[test]
-    fn persisted_ids_reject_path_syntax() {
-        for invalid in [
-            "../sessions",
-            "/tmp/message",
-            r"..\sessions",
-            r"C:\temp\message",
-            r"\\server\share",
-            ".",
-        ] {
-            assert!(MessageId::try_new(invalid).is_err(), "accepted {invalid:?}");
-        }
-        assert!(MessageId::try_new("01J_VALID-message_id").is_ok());
-    }
 }

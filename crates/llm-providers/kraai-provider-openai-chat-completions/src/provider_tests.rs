@@ -42,48 +42,16 @@ fn provider_creation_uses_the_same_catalog_identity_as_pricing() {
     }
 }
 
-fn is_missing_system_ca_error(error: &dyn std::error::Error) -> bool {
-    let mut current = Some(error);
-    while let Some(error) = current {
-        let display = error.to_string();
-        let debug = format!("{error:?}");
-        if display.contains("No CA certificates were loaded from the system")
-            || debug.contains("No CA certificates were loaded from the system")
-            || display == "builder error"
-        {
-            return true;
-        }
-        current = error.source();
-    }
-    false
-}
-
-fn test_client_or_skip() -> Option<Client> {
-    match Client::builder()
-        .timeout(kraai_test_support::HANG_TIMEOUT)
-        .build()
-    {
-        Ok(client) => Some(client),
-        Err(error) if is_missing_system_ca_error(&error) => None,
-        Err(error) => panic!("unexpected reqwest client build error: {error}"),
-    }
-}
-
-fn discovery_provider(
-    url: String,
-) -> Option<ChatCompletionsProvider<GenericChatCompletionsProfile>> {
-    match create_provider::<GenericChatCompletionsProfile>(
+fn discovery_provider(url: String) -> ChatCompletionsProvider<GenericChatCompletionsProfile> {
+    create_provider::<GenericChatCompletionsProfile>(
         ProviderId::new("fixture"),
         DynamicConfig::from([
             ("base_url".into(), DynamicValue::String(url)),
             ("api_key".into(), DynamicValue::String("fixture-key".into())),
             ("only_listed_models".into(), DynamicValue::Bool(false)),
         ]),
-    ) {
-        Ok(provider) => Some(provider),
-        Err(error) if is_missing_system_ca_error(error.as_ref()) => None,
-        Err(error) => panic!("unexpected provider creation error: {error}"),
-    }
+    )
+    .unwrap()
 }
 
 #[derive(Clone, Default)]
@@ -186,9 +154,10 @@ async fn generate_reply_stream_forwards_retry_observer_to_http_retry_layer() {
     ])
     .await;
 
-    let Some(client) = test_client_or_skip() else {
-        return;
-    };
+    let client = Client::builder()
+        .timeout(kraai_test_support::HANG_TIMEOUT)
+        .build()
+        .unwrap();
 
     let provider = ChatCompletionsProvider::<GenericChatCompletionsProfile> {
         id: ProviderId::new("openai-chat-completions"),
@@ -311,9 +280,10 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
             },
         ])
         .await;
-        let Some(client) = test_client_or_skip() else {
-            return;
-        };
+        let client = Client::builder()
+            .timeout(kraai_test_support::HANG_TIMEOUT)
+            .build()
+            .unwrap();
         let cached_models = ModelMetadataCache::default();
         cached_models
             .install(None, Vec::new(), |_, _| {
@@ -394,9 +364,7 @@ async fn discovery_requires_advertised_reasoning_and_applies_native_modes_to_htt
         ScriptedResponse::Status { status_line: "200 OK", body: r#"{"data":[{"id":"future-model","reasoning_options":[{"type":"effort","values":[null,"future-effort"]}],"experimental":{"modes":{"fast":{"provider":{"body":{"speed":"fast"},"headers":{"x-mode":"fast"}}}}}}]}"# },
         ScriptedResponse::Status { status_line: "200 OK", body: "data: [DONE]\n\n" },
     ]).await;
-    let Some(provider) = discovery_provider(url) else {
-        return;
-    };
+    let provider = discovery_provider(url);
     provider.refresh_model_list().await.unwrap();
     let id = ModelId::new("future-model");
     let make_request = |options| ProviderRequest {
@@ -470,9 +438,7 @@ async fn supported_reasoning_levels_preserve_explicit_descriptors_and_generic_to
         body: "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
     }));
     let (url, server) = spawn_recording_server(responses).await;
-    let Some(provider) = discovery_provider(url) else {
-        return;
-    };
+    let provider = discovery_provider(url);
     provider.refresh_model_list().await.unwrap();
     let make_request = |options| ProviderRequest {
         messages: Vec::new(),
@@ -567,9 +533,7 @@ async fn configured_reasoning_options_keep_unconditional_and_custom_conditions_a
         },
     ])
     .await;
-    let Some(mut provider) = discovery_provider(url) else {
-        return;
-    };
+    let mut provider = discovery_provider(url);
     let id = ModelId::new("configured-model");
     let options = serde_json::from_value(serde_json::json!([
         {"id":"custom_gate","label":"Custom gate","type":"boolean","required":true,
@@ -680,9 +644,7 @@ async fn configured_custom_models_absent_from_discovery_apply_custom_settings() 
         },
     ])
     .await;
-    let Some(mut provider) = discovery_provider(url) else {
-        return;
-    };
+    let mut provider = discovery_provider(url);
     let id = ModelId::new("custom-model");
     let definition = serde_json::from_value(serde_json::json!({
         "id":"custom-budget","label":"Custom Budget","required":true,"type":"integer","min":1,"max":10000,
@@ -739,15 +701,13 @@ async fn configured_custom_models_absent_from_discovery_apply_custom_settings() 
     );
 }
 
-/// Sends one request with the cache hints set to `enabled` and returns its JSON body, or `None`
-/// when the system has no CA bundle to build a client with.
-async fn cache_hint_request_body(enabled: bool) -> Option<serde_json::Value> {
+async fn cache_hint_request_body(enabled: bool) -> serde_json::Value {
     let (url, server) = spawn_recording_server(vec![ScriptedResponse::Status {
         status_line: "200 OK",
         body: "data: [DONE]\n\n",
     }])
     .await;
-    let provider = match create_provider::<GenericChatCompletionsProfile>(
+    let provider = create_provider::<GenericChatCompletionsProfile>(
         ProviderId::new("fixture"),
         DynamicConfig::from([
             ("base_url".into(), DynamicValue::String(url)),
@@ -756,11 +716,8 @@ async fn cache_hint_request_body(enabled: bool) -> Option<serde_json::Value> {
             ("cache_breakpoints".into(), DynamicValue::Bool(enabled)),
             ("prompt_cache_key".into(), DynamicValue::Bool(enabled)),
         ]),
-    ) {
-        Ok(provider) => provider,
-        Err(error) if is_missing_system_ca_error(error.as_ref()) => return None,
-        Err(error) => panic!("unexpected provider creation error: {error}"),
-    };
+    )
+    .unwrap();
     provider
         .generate_reply_stream(
             &ModelId::new("fixture-model"),
@@ -788,14 +745,12 @@ async fn cache_hint_request_body(enabled: bool) -> Option<serde_json::Value> {
         .unwrap_or_else(|_| panic!("provider sent no request"))
         .unwrap();
     let (_, body) = requests[0].split_once("\r\n\r\n").unwrap();
-    Some(serde_json::from_str(body).unwrap())
+    serde_json::from_str(body).unwrap()
 }
 
 #[tokio::test]
 async fn cache_hints_mark_breakpoints_and_send_the_prompt_cache_key() {
-    let Some(body) = cache_hint_request_body(true).await else {
-        return;
-    };
+    let body = cache_hint_request_body(true).await;
     assert_eq!(body["prompt_cache_key"], serde_json::json!("session"));
     for (index, text) in [(0, "instructions"), (1, "hello")] {
         assert_eq!(
@@ -807,9 +762,7 @@ async fn cache_hints_mark_breakpoints_and_send_the_prompt_cache_key() {
 
 #[tokio::test]
 async fn disabled_cache_hints_leave_the_request_unmarked() {
-    let Some(body) = cache_hint_request_body(false).await else {
-        return;
-    };
+    let body = cache_hint_request_body(false).await;
     assert!(body.get("prompt_cache_key").is_none());
     assert!(!body.to_string().contains("cache_control"));
 }

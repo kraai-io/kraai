@@ -3,7 +3,6 @@ use serde_json::Value;
 
 use crate::wire::ChatCompletionUsage;
 
-/// Reads token usage from a Chat Completions `usage` object.
 pub fn usage_from_json(usage: &Value, reported_costs: bool) -> Option<TokenUsage> {
     serde_json::from_value::<ChatCompletionUsage>(usage.clone())
         .ok()

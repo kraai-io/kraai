@@ -119,27 +119,14 @@ async fn clipboard_helper_reports_missing_image_without_an_error() -> color_eyre
 #[cfg(unix)]
 #[tokio::test]
 async fn clipboard_helper_timeout_kills_and_reaps_the_process() -> color_eyre::Result<()> {
-    let directory = tempfile::tempdir()?;
-    let path = directory.path().join("helper-pid");
-    // Under load the helper can time out before the shell records its pid; retry with a longer timeout.
-    let mut timeout = Duration::from_millis(200);
-    let pid = loop {
-        let mut command = shell("echo $$ > \"$KRAAI_CLIPBOARD_TEST_PID\"; exec sleep 60");
-        command.env("KRAAI_CLIPBOARD_TEST_PID", &path);
-        let result = read_helper(command, timeout, 8).await;
-        assert!(result.is_err_and(|error| error.to_string().contains("timed out")));
-        let pid = std::fs::read_to_string(&path).unwrap_or_default();
-        if !pid.trim().is_empty() {
-            break pid;
-        }
-        assert!(
-            timeout < kraai_test_support::HANG_TIMEOUT,
-            "helper never recorded its pid"
-        );
-        timeout *= 2;
-    };
+    let child = spawn_helper(shell("exec sleep 60"))?;
+    let pid = child
+        .id()
+        .ok_or_else(|| color_eyre::eyre::eyre!("helper exited early"))?;
+    let result = read_child(child, Duration::from_millis(50), 8).await;
+    assert!(result.is_err_and(|error| error.to_string().contains("timed out")));
     let status = std::process::Command::new("kill")
-        .args(["-0", pid.trim()])
+        .args(["-0", &pid.to_string()])
         .stderr(Stdio::null())
         .status()?;
     assert!(!status.success());

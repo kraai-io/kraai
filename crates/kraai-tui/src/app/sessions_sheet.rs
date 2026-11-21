@@ -4,7 +4,6 @@ use kraai_types::SessionId;
 use super::*;
 
 impl AppState {
-    /// The sessions the session list shows, with the ones from this workspace first.
     pub(super) fn listed_sessions(&self) -> Vec<&Session> {
         let query = self.sheet_query.as_str().to_lowercase();
         let (here, elsewhere): (Vec<_>, Vec<_>) = self
@@ -28,7 +27,6 @@ impl AppState {
         !self.workspace_dir.is_empty() && session.workspace_dir == self.workspace_dir
     }
 
-    /// The session list starts with a row that opens a new chat until something is typed.
     pub(super) fn offers_new_chat(&self) -> bool {
         self.sheet_query.is_empty()
     }
@@ -50,8 +48,6 @@ impl App {
         self.request(RuntimeRequest::ListSessions);
     }
 
-    /// Replaces the known sessions and keeps the session list on the session it highlighted. A
-    /// delete waiting to be confirmed is dropped when that session leaves the list.
     pub(super) fn replace_sessions(&mut self, sessions: Vec<Session>) {
         let highlighted = (self.state.mode == UiMode::Sessions)
             .then(|| self.state.highlighted_session())

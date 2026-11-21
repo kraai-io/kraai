@@ -10,7 +10,6 @@ use super::actor::{
 use crate::api::Event;
 use crate::{RuntimeError, RuntimeResult, SubmitMessageOutcome};
 
-/// What a preparation child asks the agent to build.
 enum PrepareRequest {
     Start {
         message: MessageContent,
@@ -172,7 +171,6 @@ impl SessionActor {
         self.start_continuation(false).await;
     }
 
-    /// Starts queued messages when the session has nothing else to do.
     pub(in crate::runtime) async fn drain(&mut self) {
         if self.stopping
             || !matches!(self.state, TurnState::Idle)
@@ -208,7 +206,6 @@ impl SessionActor {
         );
     }
 
-    /// Claims the session lease if needed, finishing executions an earlier owner left behind.
     pub(super) async fn ensure_lease(&self) -> Result<()> {
         if self
             .runtime
@@ -412,7 +409,6 @@ impl super::actor::CancelRequest {
         }
     }
 
-    /// Joins another cancellation of the same preparation.
     pub(super) fn merge(&mut self, discarded: bool, response: Option<Responder<bool>>) {
         self.discarded |= discarded;
         self.waiters.extend(response);

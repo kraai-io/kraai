@@ -24,8 +24,7 @@ pub(crate) fn watch() -> io::Result<Receiver<()>> {
     Ok(crossbeam_channel::never())
 }
 
-/// Once the terminal hangs up, points stdout and stderr at /dev/null so that
-/// cleanup and panic reporting cannot fail writing to it.
+/// Cleanup and panic reporting must not fail writing to a terminal that hung up.
 #[cfg(unix)]
 pub(crate) fn detach_if_lost() -> bool {
     use std::io::IsTerminal;

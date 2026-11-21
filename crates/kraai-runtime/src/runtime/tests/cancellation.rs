@@ -13,8 +13,7 @@ async fn finished_execution() -> Result<(RuntimeTestHarness, SessionId, Complete
         "cancel-call",
         "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
     )]])
-    .await
-    .expect("runtime regression fixture must initialize");
+    .await;
     let session = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -161,9 +160,7 @@ async fn cancellation_during_continuation_preparation_cancels_the_started_stream
 }
 #[tokio::test]
 async fn cancel_turn_discards_prompt_queued_during_preparation() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime fixture");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session = create_session_with_profile(&harness.handle, "test-profile").await?;
     let mut events = harness.handle.subscribe();
     super::harness::hold_preparation(&harness.runtime, &session).await;
@@ -200,9 +197,7 @@ async fn cancel_turn_discards_prompt_queued_during_preparation() -> Result<()> {
 
 #[tokio::test]
 async fn overlapping_cancellations_during_preparation_are_all_answered() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime fixture");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session = create_session_with_profile(&harness.handle, "test-profile").await?;
     super::harness::hold_preparation(&harness.runtime, &session).await;
     let cancellations: Vec<_> = (0..2)
@@ -234,9 +229,7 @@ async fn overlapping_cancellations_during_preparation_are_all_answered() -> Resu
 
 #[tokio::test]
 async fn cancel_stream_preserves_queued_messages() -> Result<()> {
-    let harness = RuntimeTestHarness::new(Vec::new())
-        .await
-        .expect("runtime fixture");
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session = create_session_with_profile(&harness.handle, "test-profile").await?;
     super::harness::enqueue(
         &harness.runtime,

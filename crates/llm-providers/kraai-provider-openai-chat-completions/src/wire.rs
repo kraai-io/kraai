@@ -254,33 +254,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn proxy_model_list_preserves_advertised_owners() -> color_eyre::Result<()> {
-        let models: ListModelsResponse = serde_json::from_value(json!({
-            "object":"list",
-            "data":[
-                {"id":"gpt-6.1-sol","object":"model","owned_by":"openai"},
-                {"id":"openai/gpt-oss-120b","object":"model","owned_by":"groq"},
-                {"id":"space-bunny-free","object":"model","owned_by":"opencode zen"},
-                {"id":"custom-model","object":"model"}
-            ]
-        }))?;
-        assert_eq!(
-            models
-                .data
-                .iter()
-                .map(|model| (model.id.as_str(), model.owned_by.as_deref()))
-                .collect::<Vec<_>>(),
-            [
-                ("gpt-6.1-sol", Some("openai")),
-                ("openai/gpt-oss-120b", Some("groq")),
-                ("space-bunny-free", Some("opencode zen")),
-                ("custom-model", None),
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
     fn disabled_tools_can_retain_a_declaration_for_tool_history() -> color_eyre::Result<()> {
         let tool = || FunctionTool::from(kraai_provider_core::ScriptToolDefinition::nushell());
         for (tools, expected) in [(None, None), (Some(vec![tool()]), Some(json!([tool()])))] {

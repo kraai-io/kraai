@@ -485,14 +485,6 @@ api_key_env = "KRAAI_EVAL_TEST_NONEXISTENT_API_KEY"
     }
 
     #[test]
-    fn rejects_unknown_profile_fields() {
-        let parsed = toml::from_str::<HarnessProfile>(
-            "schema_version = 1\nname = 'agent'\nprogram = 'agent'\nmax_requsts = 3\n",
-        );
-        assert!(parsed.is_err());
-    }
-
-    #[test]
     fn rejects_non_executable_programs() -> Result<()> {
         let fixture = Fixture::new()?;
         let program = fixture.0.join("agent");

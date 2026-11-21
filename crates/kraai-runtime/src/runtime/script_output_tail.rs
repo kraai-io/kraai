@@ -4,13 +4,9 @@ use kraai_execution_types::ScriptOutputStream;
 
 use crate::ScriptOutputLine;
 
-/// How many finished lines the tail keeps.
 const LINES: usize = 8;
-/// How much of one line the tail keeps. The rest of a longer line is dropped.
 const LINE_BYTES: usize = 512;
 
-/// The last lines a running script printed, across both of its streams, in the order they
-/// ended. A carriage return starts its line over, the way a terminal draws a progress bar.
 #[derive(Default)]
 pub(crate) struct OutputTail {
     lines: VecDeque<ScriptOutputLine>,
@@ -21,9 +17,7 @@ pub(crate) struct OutputTail {
 #[derive(Default)]
 struct OpenLine {
     bytes: Vec<u8>,
-    /// The line held more than `LINE_BYTES`.
     cut: bool,
-    /// The last byte was a carriage return that a line feed has not yet followed.
     carriage_return: bool,
 }
 
@@ -77,7 +71,6 @@ impl OutputTail {
         }
     }
 
-    /// The finished lines, then whatever each stream has printed of a line it has not ended.
     pub(crate) fn lines(&self) -> Vec<ScriptOutputLine> {
         let open = [
             (ScriptOutputStream::Stdout, &self.stdout),

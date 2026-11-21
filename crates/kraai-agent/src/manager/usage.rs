@@ -53,8 +53,6 @@ impl AgentManager {
         Ok(request)
     }
 
-    /// Discards a stream's partial response before its request is issued again, counting the
-    /// failed attempt as unpriced. Returns `None` when the stream is no longer active.
     pub async fn reset_streaming_message(
         &self,
         message_id: &MessageId,

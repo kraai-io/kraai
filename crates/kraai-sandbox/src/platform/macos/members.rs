@@ -51,9 +51,9 @@ fn c_name(name: &str) -> Result<CString, SandboxError> {
     CString::new(name).map_err(|error| SandboxError::Wait(error.to_string()))
 }
 
-/// Signals every member and returns whether the pass proved none are left. A listed process that
-/// exits before its membership check may have forked a member this pass never listed, so a
-/// pass only counts once every process that exited during it was already gone before.
+/// A listed process that exits before its membership check may have forked a member this pass
+/// never listed, so a pass only counts once every process that exited during it was already
+/// gone before.
 fn kill_members(
     marker: &CStr,
     decoy: &CStr,

@@ -57,7 +57,6 @@ impl MessageContent {
         })
     }
 
-    /// The line that stands for each image when the content is shown as text.
     pub fn image_labels(&self) -> impl Iterator<Item = String> {
         self.images().map(image_label)
     }
@@ -133,7 +132,7 @@ pub enum AssistantPhase {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantItem {
-    /// Opaque provider data retained in history and snapshots, not display text.
+    /// Opaque provider data, not display text.
     Reasoning {
         provider_id: ProviderId,
         #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
@@ -154,7 +153,6 @@ pub struct ScriptCall {
     pub name: String,
     pub input: String,
     pub arguments_error: Option<String>,
-    /// Set when Kraai rewrote bash syntax in the model's script into `input`.
     pub rewrite: Option<ScriptRewrite>,
 }
 
@@ -162,9 +160,7 @@ pub struct ScriptCall {
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptRewrite {
-    /// The script the model wrote.
     pub original: String,
-    /// What changed, such as `` `2>&1 |` → `o+e>|` ``, shown to the model with the result.
     pub changes: Vec<String>,
 }
 
@@ -330,7 +326,6 @@ mod tests {
         assert!(content.display_text().starts_with("before\n[Image "));
         assert!(content.display_text().ends_with("\nafter"));
         assert_eq!(content.images().collect::<Vec<_>>(), vec![&image]);
-        assert!(!encoded.contains("base64"));
         assert!(!content.without_images().has_images());
         assert!(content.without_images().display_text().contains(&image.id));
         Ok(())

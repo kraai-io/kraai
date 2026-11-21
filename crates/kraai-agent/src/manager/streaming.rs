@@ -282,7 +282,6 @@ impl AgentManager {
         .await
     }
 
-    /// Appends `item` when `allowed` accepts the message's current items.
     async fn append_item(
         &self,
         message_id: &MessageId,
@@ -303,9 +302,7 @@ impl AgentManager {
         Some(StreamedItem::Started { index, item })
     }
 
-    /// Gives every other script call of the response that `result` answers a result saying it
-    /// did not run, since only the first call of a response runs. Providers require a result for
-    /// every call. Safe to repeat.
+    /// Only the first call of a response runs, and providers require a result for every call.
     pub(super) async fn answer_skipped_calls(
         &self,
         session_id: &SessionId,

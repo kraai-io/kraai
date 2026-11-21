@@ -220,7 +220,6 @@ impl SqliteSessionStore {
 }
 
 impl SqliteSessionStore {
-    /// Sessions whose owner stopped without releasing a lease that has since expired.
     pub async fn expired_leases(&self) -> Result<Vec<SessionId>> {
         self.database
             .read(|connection, _| {
@@ -235,7 +234,6 @@ impl SqliteSessionStore {
     }
 }
 
-/// What a session leased by another runtime is doing, as far as this runtime can observe.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ForeignSessionActivity {
     pub awaiting_approval: bool,

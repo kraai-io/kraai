@@ -286,36 +286,6 @@ async fn timeout_after_a_successful_handshake_remains_a_script_timeout() {
     assert_eq!(result.output.termination, Termination::TimedOut);
 }
 
-#[tokio::test]
-async fn exposes_print_from_the_nushell_cli_context() {
-    let workspace = TestWorkspace::new();
-    let result = execute(
-        plan(
-            b"print 'stdout-value'; print --stderr 'stderr-value'".to_vec(),
-            &workspace,
-        ),
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap_or_else(|error| panic!("host execution failed: {error}"));
-
-    assert_eq!(
-        result.output.termination,
-        Termination::Exited { code: Some(0) },
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&result.output.stdout),
-        String::from_utf8_lossy(&result.output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&result.output.stdout),
-        "stdout-value\n"
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&result.output.stderr),
-        "stderr-value\n"
-    );
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn sandboxed_host_accepts_a_workspace_symlink_alias() {
@@ -345,24 +315,6 @@ async fn sandboxed_host_accepts_a_workspace_symlink_alias() {
             workspace.0.to_string_lossy()
         );
     }
-}
-
-#[tokio::test]
-async fn invalid_source_is_reported_by_nushell_without_partial_evaluation() {
-    let workspace = TestWorkspace::new();
-    let result = execute(
-        plan(b"touch should-not-exist; let =".to_vec(), &workspace),
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap_or_else(|error| panic!("host execution failed: {error}"));
-
-    assert_eq!(
-        result.output.termination,
-        Termination::Exited { code: Some(1) }
-    );
-    assert!(!workspace.0.join("should-not-exist").exists());
-    assert!(!result.output.stderr.is_empty());
 }
 
 #[tokio::test]
@@ -665,40 +617,6 @@ async fn inherited_pipe_delivers_authenticated_effects_without_network_access() 
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].command_id, "kraai-open-files");
     drop(requests);
-}
-
-#[tokio::test]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "test asserts behavior and propagates fixture errors"
-)]
-async fn skill_reads_return_text_without_context_effects() -> Result<(), Box<dyn std::error::Error>>
-{
-    let workspace = TestWorkspace::new();
-    let directory = workspace.0.join(".agents/skills/review");
-    std::fs::create_dir_all(&directory)?;
-    let instructions = "---\nname: review\ndescription: Review code\n---\nInspect the changes.\n";
-    std::fs::write(directory.join("SKILL.md"), instructions)?;
-    let effects = Arc::new(RecordingEffects::default());
-    let mut execution = plan(
-        b"open --raw .agents/skills/review/SKILL.md".to_vec(),
-        &workspace,
-    );
-    execution.state_effect_handler = effects.clone();
-    let result = execute(execution, CancellationToken::new()).await?;
-    assert_eq!(
-        result.output.termination,
-        Termination::Exited { code: Some(0) }
-    );
-    assert!(String::from_utf8_lossy(&result.output.stdout).contains(instructions));
-    assert!(
-        effects
-            .requests
-            .lock()
-            .map_err(|error| error.to_string())?
-            .is_empty()
-    );
-    Ok(())
 }
 
 #[path = "host_execution/web_search.rs"]

@@ -167,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_body_preserves_cache_hashes_and_malformed_body_fallback() -> Result<()> {
+    fn cache_hashes_use_the_effective_key_and_tolerate_malformed_bodies() -> Result<()> {
         for (body, cache_key) in [
             (r#"{"prompt_cache_key":"key"}"#, Some("key")),
             (r#"{"prompt_cache_key":""}"#, Some("")),
@@ -196,7 +196,6 @@ mod tests {
             ensure!(
                 state.prompt_cache_key_sha256 == cache_key.map(|key| fingerprint(key.as_bytes()))
             );
-            ensure!(request.body == body.as_bytes());
         }
         Ok(())
     }

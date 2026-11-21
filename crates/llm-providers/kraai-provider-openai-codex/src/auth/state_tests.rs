@@ -14,14 +14,7 @@ async fn credential_retries_finish_syncing_the_original_bootstrap_ancestor() {
     let anchor = fixture.parent().unwrap();
     let path = anchor.join("parent/credentials/auth.json");
     let options = OpenAiCodexAuthControllerOptions::new(anchor.to_path_buf(), path.clone());
-    let controller = match OpenAiCodexAuthController::new_with_options(options.clone()) {
-        Ok(controller) => controller,
-        Err(error) if is_missing_system_ca_error(&error) => {
-            fs::remove_dir_all(anchor).unwrap();
-            return;
-        }
-        Err(error) => panic!("unexpected auth controller init error: {error}"),
-    };
+    let controller = OpenAiCodexAuthController::new_with_options(options.clone()).unwrap();
     fs::set_permissions(anchor, fs::Permissions::from_mode(0o300)).unwrap();
     if fs::read_dir(anchor).is_ok() {
         fs::set_permissions(anchor, fs::Permissions::from_mode(0o700)).unwrap();
@@ -66,9 +59,7 @@ async fn credential_retries_finish_syncing_the_original_bootstrap_ancestor() {
 
 #[tokio::test]
 async fn status_reads_and_broadcasts_share_capture_order() {
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
     let mut updates = controller.subscribe();
     let first = controller.get_status().await;
     let emitted = controller.emit_status().await.unwrap();
@@ -89,9 +80,7 @@ async fn status_reads_and_broadcasts_share_capture_order() {
 
 #[tokio::test]
 async fn cancelled_auth_commit_leaves_disk_and_memory_unchanged() {
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
     let path = controller.inner.config.auth_path.clone();
     let original = stored_auth("original@example.com", "pro", "workspace_123", unix_now());
     let original_generation = original.generation.clone();
@@ -129,9 +118,7 @@ async fn cancelled_auth_commit_leaves_disk_and_memory_unchanged() {
 
 #[tokio::test]
 async fn failed_auth_commit_preserves_memory_and_error() {
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
     let path = controller.inner.config.auth_path.clone();
     let original = stored_auth("original@example.com", "pro", "workspace_123", unix_now());
     let generation = original.generation.clone();
@@ -159,9 +146,7 @@ async fn failed_auth_commit_preserves_memory_and_error() {
 
 #[tokio::test]
 async fn cancelled_started_commit_retains_both_locks_until_disk_and_state_are_published() {
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
     let path = controller.inner.config.auth_path.clone();
     let original = stored_auth("original@example.com", "pro", "workspace_123", unix_now());
     controller.replace_auth_for_test(original).await.unwrap();
@@ -226,9 +211,7 @@ async fn status_snapshot_cannot_change_before_its_broadcast() {
         }
     }
 
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
     controller.inner.state.lock().await.error = Some(String::from("status marker"));
     let mut updates = controller.subscribe();
     let mut receive = Box::pin(updates.recv());
@@ -256,9 +239,7 @@ async fn status_snapshot_cannot_change_before_its_broadcast() {
 
 #[tokio::test]
 async fn directory_sync_failure_keeps_rotated_auth_and_exposes_warning() {
-    let Some(controller) = auth_controller_or_skip() else {
-        return;
-    };
+    let controller = auth_controller();
     let auth = stored_auth("rotated@example.com", "pro", "workspace_123", unix_now());
     let generation = auth.generation.clone();
     let result = controller.inner.state.lock().await.publish_auth(

@@ -26,8 +26,6 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-/// Creates a directory that only the current user and SYSTEM can open. Entries created inside
-/// it inherit the same access.
 pub fn create_private_dir(path: &Path) -> io::Result<()> {
     let path = wide_path(path)?;
     let descriptor = OwnerOnlyDescriptor::new(true)?;
@@ -39,7 +37,6 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Creates a new file that only the current user and SYSTEM can open, failing if it exists.
 pub(super) fn create_private_file(path: &Path) -> io::Result<File> {
     let path = wide_path(path)?;
     let descriptor = OwnerOnlyDescriptor::new(false)?;
@@ -140,7 +137,6 @@ fn current_user_sid() -> io::Result<String> {
     Ok(unsafe { take_local_string(text) })
 }
 
-/// Returns the SDDL of the DACL on `path`.
 #[cfg(test)]
 pub(super) fn dacl_sddl(path: &Path) -> io::Result<String> {
     use windows_sys::Win32::Security::Authorization::{
@@ -188,8 +184,6 @@ pub(super) fn dacl_sddl(path: &Path) -> io::Result<String> {
     result
 }
 
-/// Copies a NUL-terminated string that Windows allocated with LocalAlloc, then frees it.
-///
 /// # Safety
 ///
 /// `text` must be a NUL-terminated LocalAlloc string that the caller owns.

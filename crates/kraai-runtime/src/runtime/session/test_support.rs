@@ -8,7 +8,6 @@ impl SessionActor {
         self.state.kind()
     }
 
-    /// Removes a pending approval as if the runtime had stopped before deciding it.
     pub(in crate::runtime) fn take_pending_approval(&mut self) -> Option<PendingScriptApproval> {
         match std::mem::replace(&mut self.state, TurnState::Idle) {
             TurnState::AwaitingApproval(pending) => Some(*pending),
@@ -28,7 +27,6 @@ impl SessionActor {
 }
 
 impl SessionActor {
-    /// Marks the session as preparing a turn without starting one.
     pub(in crate::runtime) fn begin_test_preparation(&mut self) {
         let generation = self.generation();
         self.state = TurnState::Preparing(super::actor::Preparation {
@@ -65,7 +63,6 @@ impl SessionActor {
         self.mailbox()
     }
 
-    /// Captures a snapshot at this point in the actor's message order.
     pub(in crate::runtime) async fn request_snapshot(
         &mut self,
     ) -> tokio::sync::oneshot::Receiver<crate::RuntimeResult<crate::SessionSnapshot>> {
@@ -74,7 +71,6 @@ impl SessionActor {
         snapshot
     }
 
-    /// Marks the session as running a script whose result the test reports.
     pub(in crate::runtime) fn begin_test_script(
         &mut self,
     ) -> (u64, tokio_util::sync::CancellationToken) {

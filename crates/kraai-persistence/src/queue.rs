@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use crate::SqliteSessionStore;
 use crate::database::assert_owner;
 
-/// A user message waiting for the session's current work to finish.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueuedMessage {
     pub content: MessageContent,
@@ -32,7 +31,6 @@ pub(crate) fn consume_queued_messages(
 }
 
 impl SqliteSessionStore {
-    /// Queues a message and returns its one-based position.
     pub async fn enqueue_message(
         &self,
         session_id: &SessionId,
@@ -92,7 +90,6 @@ impl SqliteSessionStore {
             .await
     }
 
-    /// Discards every queued message and reports whether any existed.
     pub async fn clear_queued_messages(&self, session_id: &SessionId) -> Result<bool> {
         let session = session_id.clone();
         self.database

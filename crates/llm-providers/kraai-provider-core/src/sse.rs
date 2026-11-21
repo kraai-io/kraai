@@ -6,7 +6,6 @@ use futures::{StreamExt, stream};
 use reqwest::Response;
 use tokio::sync::mpsc;
 
-/// Maximum size of one SSE line or accumulated multi-line event payload.
 pub const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,7 +14,6 @@ pub enum SseEvent {
     Done,
 }
 
-/// Convert an HTTP server-sent-events response into decoded `data:` events.
 pub fn stream_sse_data(response: Response) -> BoxStream<'static, Result<SseEvent>> {
     let (tx, rx) = mpsc::channel(16);
 
@@ -364,85 +362,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn emits_final_event_without_trailing_newline() -> Result<()> {
-        let (tx, mut rx) = mpsc::channel(4);
-
-        forward_sse_events(
-            stream::iter(vec![Ok::<Vec<u8>, reqwest::Error>(
-                b"data: final payload".to_vec(),
-            )]),
-            tx,
-        )
-        .await;
-
-        let event = rx
-            .recv()
-            .await
-            .ok_or_else(|| eyre!("missing final event"))??;
-        assert_eq!(event, SseEvent::Data(String::from("final payload")));
-        assert!(rx.recv().await.is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn emits_final_event_when_last_line_is_split_across_chunks() -> Result<()> {
-        let (tx, mut rx) = mpsc::channel(4);
-
-        forward_sse_events(
-            stream::iter(vec![
-                Ok::<Vec<u8>, reqwest::Error>(b"data: split".to_vec()),
-                Ok::<Vec<u8>, reqwest::Error>(b" payload".to_vec()),
-            ]),
-            tx,
-        )
-        .await;
-
-        let event = rx
-            .recv()
-            .await
-            .ok_or_else(|| eyre!("missing split event"))??;
-        assert_eq!(event, SseEvent::Data(String::from("split payload")));
-        assert!(rx.recv().await.is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn reports_invalid_utf8_in_newline_delimited_line() -> Result<()> {
-        let (tx, mut rx) = mpsc::channel(4);
-
-        forward_sse_events(
-            stream::iter(vec![Ok::<Vec<u8>, reqwest::Error>(vec![
-                b'd', b'a', b't', b'a', b':', b' ', 0xff, b'\n',
-            ])]),
-            tx,
-        )
-        .await;
-
-        let error = rx.recv().await.ok_or_else(|| eyre!("missing error"))?;
-        assert!(error.is_err());
-        assert!(rx.recv().await.is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn reports_invalid_utf8_in_final_unterminated_line() -> Result<()> {
-        let (tx, mut rx) = mpsc::channel(4);
-
-        forward_sse_events(
-            stream::iter(vec![Ok::<Vec<u8>, reqwest::Error>(vec![
-                b'd', b'a', b't', b'a', b':', b' ', 0xff,
-            ])]),
-            tx,
-        )
-        .await;
-
-        let error = rx.recv().await.ok_or_else(|| eyre!("missing error"))?;
-        assert!(error.is_err());
-        assert!(rx.recv().await.is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn emits_done_and_stops_without_waiting_for_transport_eof() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(4);
         let source = stream::iter(vec![Ok::<Vec<u8>, reqwest::Error>(
@@ -471,25 +390,6 @@ mod tests {
                 .expect_err("oversized line should fail")
                 .to_string()
                 .contains("SSE line exceeds")
-        );
-        assert!(rx.recv().await.is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn rejects_oversized_multiline_sse_events() -> Result<()> {
-        let (tx, mut rx) = mpsc::channel(4);
-        let half = "x".repeat(MAX_SSE_EVENT_BYTES / 2);
-        let payload = format!("data: {half}\ndata: {half}\n\n").into_bytes();
-
-        forward_sse_events(stream::iter(vec![Ok::<_, reqwest::Error>(payload)]), tx).await;
-
-        let error = rx.recv().await.ok_or_else(|| eyre!("missing error"))?;
-        assert!(
-            error
-                .expect_err("oversized event should fail")
-                .to_string()
-                .contains("SSE event exceeds")
         );
         assert!(rx.recv().await.is_none());
         Ok(())

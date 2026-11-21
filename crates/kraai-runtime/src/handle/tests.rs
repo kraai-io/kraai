@@ -99,25 +99,41 @@ async fn cancellation_preserves_the_enqueue_boundary() {
 async fn invalid_identifiers_fail_before_waiting_for_queue_capacity() {
     let (client, mut commands) = handle();
     client.command_tx.try_send(Command::LoadConfig).unwrap();
-    let mut send = Box::pin(client.send_message(
-        SessionId::new("session"),
-        "message".into(),
-        String::new(),
-        "provider".into(),
-        Default::default(),
-    ));
-    let std::task::Poll::Ready(Err(error)) = futures::poll!(&mut send) else {
-        panic!("invalid model must fail before enqueueing");
+    let session = || SessionId::new("session");
+    let send = |model: &str, provider: &str| {
+        client.send_message(
+            session(),
+            "message".into(),
+            model.into(),
+            provider.into(),
+            Default::default(),
+        )
     };
-    assert_eq!(error.kind, crate::RuntimeErrorKind::InvalidArgument);
-    assert!(error.message.starts_with("invalid model_id: "));
-
-    let mut approve = Box::pin(client.approve_script(SessionId::new("session"), String::new()));
-    let std::task::Poll::Ready(Err(error)) = futures::poll!(&mut approve) else {
-        panic!("invalid execution must fail before enqueueing");
-    };
-    assert_eq!(error.kind, crate::RuntimeErrorKind::InvalidArgument);
-    assert!(error.message.starts_with("invalid execution_id: "));
+    let requests: [(&str, futures::future::BoxFuture<'_, RuntimeResult<()>>); 4] = [
+        (
+            "model_id",
+            Box::pin(async { send("", "provider").await.map(drop) }),
+        ),
+        (
+            "provider_id",
+            Box::pin(async { send("model", "").await.map(drop) }),
+        ),
+        (
+            "execution_id",
+            Box::pin(client.approve_script(session(), String::new())),
+        ),
+        (
+            "execution_id",
+            Box::pin(client.deny_script(session(), String::new())),
+        ),
+    ];
+    for (field, mut request) in requests {
+        let std::task::Poll::Ready(Err(error)) = futures::poll!(&mut request) else {
+            panic!("invalid {field} must fail before enqueueing");
+        };
+        assert_eq!(error.kind, crate::RuntimeErrorKind::InvalidArgument);
+        assert!(error.message.starts_with(&format!("invalid {field}: ")));
+    }
     assert!(matches!(commands.recv().await, Some(Command::LoadConfig)));
     assert!(matches!(
         commands.try_recv(),

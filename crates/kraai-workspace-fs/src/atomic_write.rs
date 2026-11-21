@@ -10,8 +10,6 @@ pub(super) enum WriteMode {
     Replace { permissions: fs::Permissions },
 }
 
-/// Publishes `contents` at `path`. `Ok(Some(error))` means the file was published but its parent
-/// directory could not be synced.
 pub(super) fn atomic_write(
     path: &Path,
     contents: &[u8],

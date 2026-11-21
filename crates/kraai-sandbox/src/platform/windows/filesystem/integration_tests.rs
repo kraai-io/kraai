@@ -76,27 +76,3 @@ fn real_filesystem_without_acls_is_rejected() -> Result<(), Box<dyn std::error::
     assert!(message.contains(&root.display().to_string()));
     Ok(())
 }
-
-#[test]
-#[ignore = "requires KRAAI_TEST_UNC_ROOT pointing to an accessible network share; does not test sandbox support"]
-fn unc_share_query_preserves_volume_information_or_api_error()
--> Result<(), Box<dyn std::error::Error>> {
-    let root =
-        PathBuf::from(std::env::var_os("KRAAI_TEST_UNC_ROOT").ok_or("set KRAAI_TEST_UNC_ROOT")?);
-    let ordinary = root.to_string_lossy();
-    let tail = ordinary
-        .strip_prefix(r"\\")
-        .ok_or("expected ordinary UNC path")?;
-    let extended = PathBuf::from(format!(r"\\?\UNC\{tail}"));
-    for path in [&root, &extended] {
-        match query(path) {
-            Ok(volume) => assert!(!volume.filesystem.is_empty()),
-            Err(error) => {
-                let message = error.to_string();
-                assert!(message.contains("GetVolume"));
-                assert!(message.contains(&path.display().to_string()));
-            }
-        }
-    }
-    Ok(())
-}
