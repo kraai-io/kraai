@@ -19236,9 +19236,9 @@ rec {
       };
       "quinn-udp" = rec {
         crateName = "quinn-udp";
-        version = "0.5.15";
+        version = "0.5.16";
         edition = "2021";
-        sha256 = "15063ji7443y4z8i4pdxlid2vn0kkxjc51d6c6dfiaysavwk789m";
+        sha256 = "05phk0ragk1655pxkbfvjxxb5i5b1i4nbjjnvgsdqfc6y5yr0rmg";
         libName = "quinn_udp";
         license = "MIT OR Apache-2.0";
         dependencies = [
