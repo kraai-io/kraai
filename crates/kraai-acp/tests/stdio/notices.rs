@@ -36,10 +36,10 @@ async fn output_limit_stop_is_shown_as_a_completed_notice() -> Result<()> {
             .and_then(|value| value.pointer("/result/stopReason")),
         Some(&json!("end_turn"))
     );
-    assert!(
-        updates(&response, "agent_message_chunk")
-            .all(|update| update.pointer("/content/text") == Some(&json!("Cut off")))
-    );
+    let reply = updates(&response, "agent_message_chunk")
+        .filter_map(|update| update.pointer("/content/text").and_then(Value::as_str))
+        .collect::<String>();
+    assert_eq!(reply, "Cut off");
     let notice = notice(&response, "output token limit").ok_or_else(|| eyre!("missing notice"))?;
     assert_eq!(notice.get("status"), Some(&json!("completed")));
     harness.stop().await

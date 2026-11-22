@@ -17,8 +17,8 @@ pub struct HttpRetryPolicy {
     /// Attempts must enforce their own timeout; one started within this budget may complete
     /// after it expires. Time spent waiting out rate limits does not count.
     pub max_elapsed: Duration,
-    /// Rate-limited responses don't count toward `max_attempts` or `max_elapsed`; this caps the
-    /// total time spent waiting them out instead.
+    /// Rate-limited attempts and the waits after them don't count toward `max_attempts` or
+    /// `max_elapsed`; this caps their total time instead.
     pub max_rate_limit_wait: Duration,
 }
 
@@ -115,6 +115,7 @@ where
         if let Some(observer) = request_context.retry_observer() {
             observer.before_attempt(unpriced_prior_attempts).await?;
         }
+        let attempt_started = Instant::now();
         match send().await {
             Ok(response) => {
                 let status = response.status();
@@ -129,7 +130,9 @@ where
                     cooldown.defer(retry_after);
                 }
                 let is_rate_limit = status == StatusCode::TOO_MANY_REQUESTS;
-                if !is_rate_limit {
+                if is_rate_limit {
+                    rate_limited += attempt_started.elapsed();
+                } else {
                     failed_attempts += 1;
                 }
                 if !is_retryable_status(status) || failed_attempts >= max_attempts {

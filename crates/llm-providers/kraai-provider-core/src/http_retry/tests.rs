@@ -547,6 +547,73 @@ async fn returns_rate_limit_once_waits_exceed_the_rate_limit_budget() -> Result<
 }
 
 #[tokio::test]
+async fn zero_delay_rate_limits_stop_at_the_rate_limit_budget() -> Result<()> {
+    let url = spawn_server(vec![ScriptedResponse::Status {
+        status_line: "429 Too Many Requests",
+        headers: Vec::new(),
+        body: "slow down",
+    }])
+    .await?;
+    let policy = HttpRetryPolicy {
+        max_attempts: 20,
+        initial_backoff: Duration::ZERO,
+        max_delay: Duration::ZERO,
+        max_elapsed: kraai_test_support::HANG_TIMEOUT,
+        max_rate_limit_wait: Duration::ZERO,
+    };
+    let collector = Arc::new(RetryCollector::default());
+    let client = reqwest::Client::builder().build()?;
+
+    let response = send_with_retry(
+        "test",
+        &policy,
+        &ProviderRequestContext::with_retry_observer(collector.clone()),
+        || client.get(&url).send(),
+    )
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(collector.snapshot().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn slow_rate_limited_responses_leave_the_error_budget_alone() -> Result<()> {
+    let url = spawn_server(vec![
+        ScriptedResponse::DelayedStatus {
+            delay: Duration::from_millis(400),
+            status_line: "429 Too Many Requests",
+            headers: Vec::new(),
+            body: "slow down",
+        },
+        ScriptedResponse::Status {
+            status_line: "500 Internal Server Error",
+            headers: Vec::new(),
+            body: "try again",
+        },
+        ScriptedResponse::Status {
+            status_line: "200 OK",
+            headers: Vec::new(),
+            body: "ok",
+        },
+    ])
+    .await?;
+    let policy = HttpRetryPolicy {
+        max_elapsed: Duration::from_millis(300),
+        ..test_policy()
+    };
+    let client = reqwest::Client::builder().build()?;
+
+    let response = send_with_retry("test", &policy, &ProviderRequestContext::default(), || {
+        client.get(&url).send()
+    })
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    Ok(())
+}
+
+#[tokio::test]
 async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
     let url = spawn_server(vec![
         ScriptedResponse::Status {
