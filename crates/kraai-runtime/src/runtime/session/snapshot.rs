@@ -24,6 +24,7 @@ struct CapturedSnapshot {
     queued_messages: usize,
     event_sequence: u64,
     turn_timer: crate::TurnTimer,
+    turn_outcome: Option<crate::TurnOutcome>,
 }
 
 impl SessionActor {
@@ -72,8 +73,8 @@ impl SessionActor {
             .await?;
         let is_running =
             self.runtime.agent_manager.is_turn_active(&self.session_id) || foreign_owner;
-        let (event_sequence, local_timer) = self.runtime.event_tx.timer_snapshot(&self.session_id);
-        let turn_timer = stored_timer.unwrap_or(local_timer);
+        let turn = self.runtime.event_tx.turn_snapshot(&self.session_id);
+        let turn_timer = stored_timer.unwrap_or(turn.timer);
         drop(guard);
         Ok(CapturedSnapshot {
             reader,
@@ -83,8 +84,9 @@ impl SessionActor {
             executing_script: matches!(self.state, TurnState::RunningScript(_)),
             active_stream: matches!(self.state, TurnState::Streaming(_)),
             queued_messages,
-            event_sequence,
+            event_sequence: turn.sequence,
             turn_timer,
+            turn_outcome: turn.outcome,
         })
     }
 }
@@ -121,6 +123,7 @@ async fn finish_snapshot(
         queued_messages,
         event_sequence,
         turn_timer,
+        turn_outcome,
     } = captured;
     let mut data = reader.load().await?;
     data.profiles.profile_locked |= foreign_owner;
@@ -178,5 +181,6 @@ async fn finish_snapshot(
         profiles: data.profiles,
         activity,
         queued_messages,
+        turn_outcome,
     })
 }

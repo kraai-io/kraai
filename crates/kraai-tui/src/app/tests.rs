@@ -263,6 +263,7 @@ fn session_snapshot_at(
         },
         activity,
         queued_messages: 0,
+        turn_outcome: None,
     }
 }
 

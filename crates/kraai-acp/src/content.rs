@@ -56,6 +56,18 @@ pub(crate) fn script_call(call_id: String, source: String) -> acp::ToolCall {
         .raw_input(script_input(source))
 }
 
+pub(crate) fn notice(title: String) -> acp::ToolCall {
+    status_row(title).status(acp::ToolCallStatus::Completed)
+}
+
+pub(crate) fn retry(title: String) -> acp::ToolCall {
+    status_row(title).status(acp::ToolCallStatus::InProgress)
+}
+
+fn status_row(title: String) -> acp::ToolCall {
+    acp::ToolCall::new(format!("notice-{}", ulid::Ulid::generate()), title)
+}
+
 pub(crate) fn text(value: impl Into<String>) -> acp::ContentBlock {
     acp::ContentBlock::Text(acp::TextContent::new(value))
 }

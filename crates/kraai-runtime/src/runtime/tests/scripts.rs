@@ -317,7 +317,7 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
         Some(42)
     );
 
-    let (_, paused_timer) = harness.runtime.event_tx.timer_snapshot(&session_id);
+    let paused_timer = harness.runtime.event_tx.turn_snapshot(&session_id).timer;
     assert!(
         harness
             .handle
@@ -326,7 +326,7 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
             .is_err()
     );
     assert_eq!(
-        harness.runtime.event_tx.timer_snapshot(&session_id).1,
+        harness.runtime.event_tx.turn_snapshot(&session_id).timer,
         paused_timer
     );
     let barrier = harness.runtime.sessions.barrier(&session_id);
@@ -339,8 +339,8 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
     let elapsed_before_delay = harness
         .runtime
         .event_tx
-        .timer_snapshot(&session_id)
-        .1
+        .turn_snapshot(&session_id)
+        .timer
         .elapsed(delay_started)
         .expect("active timer");
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -348,8 +348,8 @@ async fn escalation_prompt_is_execution_scoped_and_denial_continues() -> Result<
     let elapsed_after_delay = harness
         .runtime
         .event_tx
-        .timer_snapshot(&session_id)
-        .1
+        .turn_snapshot(&session_id)
+        .timer
         .elapsed(delay_finished)
         .expect("active timer");
     assert_eq!(
@@ -530,6 +530,11 @@ async fn pre_boundary_stream_error_remains_a_failure() -> Result<()> {
     assert!(!events.iter().any(|event| {
         matches!(event, Event::ScriptApprovalRequested { session_id: event_session, .. } if event_session == &session_id)
     }));
+    let snapshot = harness.handle.get_session_snapshot(session_id).await?;
+    assert!(matches!(
+        snapshot.turn_outcome,
+        Some(crate::TurnOutcome::Failed { error }) if error.message.contains("operation timed out")
+    ));
 
     harness.shutdown().await;
     Ok(())

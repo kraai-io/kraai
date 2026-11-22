@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use agent_client_protocol::{Result, v1::schema as acp};
-use kraai_runtime::{Event, PendingScriptInfo, RuntimeHandle};
+use kraai_runtime::{Event, PendingScriptInfo, RuntimeHandle, TurnOutcome};
 use kraai_types::{AssistantItem, ConversationItem, MessageId, ScriptCall, SessionId};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -96,6 +96,10 @@ async fn finish_prompt(
             }
         }
     }
+    output.settle_retry(match result {
+        Ok(acp::StopReason::EndTurn) => acp::ToolCallStatus::Completed,
+        _ => acp::ToolCallStatus::Failed,
+    })?;
     let reason = result?;
     Ok(acp::PromptResponse::new(reason))
 }
@@ -168,8 +172,7 @@ struct Output {
     open: HashSet<String>,
     prompt_start: Option<MessageId>,
     covered: u64,
-    streaming: Option<String>,
-    open_text: Option<String>,
+    retry: Option<String>,
 }
 
 impl Output {
@@ -185,8 +188,7 @@ impl Output {
             open: HashSet::new(),
             prompt_start,
             covered: 0,
-            streaming: None,
-            open_text: None,
+            retry: None,
         }
     }
 
@@ -212,12 +214,6 @@ impl Output {
     }
 
     fn update(&mut self, update: acp::SessionUpdate) -> Result<()> {
-        self.open_text = match &update {
-            acp::SessionUpdate::AgentMessageChunk(chunk) => {
-                chunk.message_id.as_ref().map(ToString::to_string)
-            }
-            _ => None,
-        };
         self.connection
             .send_notification(acp::SessionNotification::new(self.id.clone(), update))
     }
@@ -226,6 +222,7 @@ impl Output {
         if text.is_empty() {
             return Ok(());
         }
+        self.settle_retry(acp::ToolCallStatus::Completed)?;
         self.update(acp::SessionUpdate::AgentMessageChunk(
             acp::ContentChunk::new(content::text(text)).message_id(acp::MessageId::new(message_id)),
         ))
@@ -249,19 +246,38 @@ impl Output {
         self.text(message_id, text)
     }
 
-    fn notice(&mut self, message_id: Option<&str>, notice: &str) -> Result<()> {
-        let mut chunk = acp::ContentChunk::new(content::text(format!("\n\n[{notice}]\n\n")));
-        if let Some(message_id) = message_id.filter(|id| self.open_text.as_deref() == Some(*id)) {
-            self.shown.remove(message_id);
-            chunk = chunk.message_id(acp::MessageId::new(message_id));
+    fn notice(&mut self, notice: String) -> Result<()> {
+        self.settle_retry(acp::ToolCallStatus::Completed)?;
+        self.update(acp::SessionUpdate::ToolCall(content::notice(notice)))
+    }
+
+    fn retry(&mut self, title: String) -> Result<()> {
+        match &self.retry {
+            Some(id) => self.update(acp::SessionUpdate::ToolCallUpdate(
+                acp::ToolCallUpdate::new(id.clone(), acp::ToolCallUpdateFields::new().title(title)),
+            )),
+            None => {
+                let call = content::retry(title);
+                self.retry = Some(call.tool_call_id.to_string());
+                self.update(acp::SessionUpdate::ToolCall(call))
+            }
         }
-        self.update(acp::SessionUpdate::AgentMessageChunk(chunk))
+    }
+
+    fn settle_retry(&mut self, status: acp::ToolCallStatus) -> Result<()> {
+        let Some(id) = self.retry.take() else {
+            return Ok(());
+        };
+        self.update(acp::SessionUpdate::ToolCallUpdate(
+            acp::ToolCallUpdate::new(id, acp::ToolCallUpdateFields::new().status(status)),
+        ))
     }
 
     fn announce(&mut self, call_id: String, input: String) -> Result<()> {
         if !self.announced.insert(call_id.clone()) {
             return Ok(());
         }
+        self.settle_retry(acp::ToolCallStatus::Completed)?;
         self.open.insert(call_id.clone());
         self.update(acp::SessionUpdate::ToolCall(content::script_call(
             call_id, input,
@@ -307,25 +323,31 @@ impl Output {
             Event::ReasoningDelta {
                 message_id, delta, ..
             } => {
+                self.settle_retry(acp::ToolCallStatus::Completed)?;
                 self.update(acp::SessionUpdate::AgentThoughtChunk(
                     acp::ContentChunk::new(content::text(delta))
                         .message_id(acp::MessageId::new(message_id)),
                 ))?;
             }
-            Event::StreamStart { message_id, .. } => self.streaming = Some(message_id),
             Event::StreamRestarted { message_id, .. } => {
                 self.sent.retain(|(id, _), _| id != &message_id);
-                self.notice(
-                    Some(&message_id),
+                self.notice(String::from(
                     "Provider stream failed; retrying the response.",
-                )?;
+                ))?;
             }
             Event::ContextStateChanged { notifications, .. } => {
-                let message_id = self.streaming.clone();
                 for notification in notifications {
-                    self.notice(message_id.as_deref(), &notification)?;
+                    self.notice(notification)?;
                 }
             }
+            Event::ProviderRetryScheduled {
+                retry_number,
+                delay_seconds,
+                reason,
+                ..
+            } => self.retry(format!(
+                "{reason}, retrying in {delay_seconds} s (retry {retry_number})"
+            ))?,
             Event::ScriptPrepared {
                 execution_id,
                 call_id,
@@ -410,7 +432,14 @@ impl Output {
             }
             return Ok(None);
         }
-        Ok((!snapshot.session.is_running).then_some(acp::StopReason::EndTurn))
+        if snapshot.session.is_running {
+            return Ok(None);
+        }
+        match snapshot.turn_outcome {
+            Some(TurnOutcome::Failed { error }) => Err(error::runtime(error)),
+            Some(TurnOutcome::Cancelled) => Ok(Some(acp::StopReason::Cancelled)),
+            Some(TurnOutcome::Completed) | None => Ok(Some(acp::StopReason::EndTurn)),
+        }
     }
 
     async fn approve(

@@ -270,6 +270,16 @@ pub enum SessionActivity {
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnOutcome {
+    Completed,
+    Cancelled,
+    Failed { error: RuntimeError },
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistoryPage {
     pub messages: BTreeMap<MessageId, Message>,
@@ -293,6 +303,9 @@ pub struct SessionSnapshot {
     pub profiles: kraai_types::AgentProfilesState,
     pub activity: SessionActivity,
     pub queued_messages: usize,
+    /// How the last turn this process ran for the session ended. `None` once a message is
+    /// submitted or a stream starts.
+    pub turn_outcome: Option<TurnOutcome>,
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

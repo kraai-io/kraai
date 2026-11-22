@@ -15,8 +15,11 @@ pub struct HttpRetryPolicy {
     pub initial_backoff: Duration,
     pub max_delay: Duration,
     /// Attempts must enforce their own timeout; one started within this budget may complete
-    /// after it expires.
+    /// after it expires. Time spent waiting out rate limits does not count.
     pub max_elapsed: Duration,
+    /// Rate-limited attempts and the waits after them don't count toward `max_attempts` or
+    /// `max_elapsed`; this caps their total time instead.
+    pub max_rate_limit_wait: Duration,
 }
 
 impl HttpRetryPolicy {
@@ -73,6 +76,7 @@ pub const DEFAULT_HTTP_RETRY_POLICY: HttpRetryPolicy = HttpRetryPolicy {
     initial_backoff: Duration::from_secs(1),
     max_delay: Duration::from_secs(15),
     max_elapsed: Duration::from_secs(300),
+    max_rate_limit_wait: Duration::from_secs(30 * 60),
 };
 
 pub async fn send_with_retry<F, Fut>(
@@ -90,12 +94,15 @@ where
         .max_attempts
         .max(1)
         .min(request_context.max_attempts().unwrap_or(u32::MAX));
+    let mut failed_attempts = 0;
+    let mut retry_number = 0;
+    let mut rate_limited = Duration::ZERO;
     let mut unpriced_prior_attempts = 0;
 
-    for attempt_number in 1..=max_attempts {
+    loop {
         if let Some(cooldown) = request_context.cooldown() {
             let remaining = cooldown.remaining();
-            if !retry_fits_budget(policy, started, remaining) {
+            if !fits_budget(rate_limited, remaining, policy.max_rate_limit_wait) {
                 return Err(ProviderError::RateLimited {
                     message: format!("{operation} is paused by an earlier rate limit"),
                     retry_after: Some(remaining),
@@ -103,36 +110,52 @@ where
                 .into());
             }
             tokio::time::sleep(remaining).await;
+            rate_limited += remaining;
         }
         if let Some(observer) = request_context.retry_observer() {
             observer.before_attempt(unpriced_prior_attempts).await?;
         }
+        let attempt_started = Instant::now();
         match send().await {
             Ok(response) => {
+                let status = response.status();
                 let retry_after = parse_retry_after(&response);
                 if let (Some(cooldown), Some(retry_after)) =
                     (request_context.cooldown(), retry_after)
                     && matches!(
-                        response.status(),
+                        status,
                         StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
                     )
                 {
                     cooldown.defer(retry_after);
                 }
-                if !is_retryable_status(response.status()) || attempt_number >= max_attempts {
+                let is_rate_limit = status == StatusCode::TOO_MANY_REQUESTS;
+                if is_rate_limit {
+                    rate_limited += attempt_started.elapsed();
+                } else {
+                    failed_attempts += 1;
+                }
+                if !is_retryable_status(status) || failed_attempts >= max_attempts {
                     return Ok(response);
                 }
 
-                let retry_number = attempt_number;
-                let reason = format!("HTTP {}", response.status());
+                retry_number += 1;
+                let reason = format!("HTTP {status}");
                 let backoff = policy.jittered_backoff_for_retry(retry_number);
                 let delay = retry_after.map_or(backoff, |retry_after| retry_after.max(backoff));
-                if !retry_fits_budget(policy, started, delay) {
+                let fits = if is_rate_limit {
+                    fits_budget(rate_limited, delay, policy.max_rate_limit_wait)
+                } else {
+                    fits_budget(
+                        started.elapsed().saturating_sub(rate_limited),
+                        delay,
+                        policy.max_elapsed,
+                    )
+                };
+                if !fits {
                     return Ok(response);
                 }
-                if response.status().is_server_error()
-                    || response.status() == StatusCode::REQUEST_TIMEOUT
-                {
+                if status.is_server_error() || status == StatusCode::REQUEST_TIMEOUT {
                     unpriced_prior_attempts += 1;
                 }
                 notify_retry(request_context, operation, retry_number, delay, &reason);
@@ -144,15 +167,23 @@ where
                     "Retrying provider HTTP request after retryable response",
                 );
                 tokio::time::sleep(delay).await;
+                if is_rate_limit {
+                    rate_limited += delay;
+                }
             }
             Err(error) => {
-                if !is_retryable_error(&error) || attempt_number >= max_attempts {
+                failed_attempts += 1;
+                if !is_retryable_error(&error) || failed_attempts >= max_attempts {
                     return Err(error.into());
                 }
 
-                let retry_number = attempt_number;
+                retry_number += 1;
                 let delay = policy.jittered_backoff_for_retry(retry_number);
-                if !retry_fits_budget(policy, started, delay) {
+                if !fits_budget(
+                    started.elapsed().saturating_sub(rate_limited),
+                    delay,
+                    policy.max_elapsed,
+                ) {
                     return Err(error.into());
                 }
                 if !error.is_connect() {
@@ -171,15 +202,12 @@ where
             }
         }
     }
-
-    unreachable!("max_attempts is normalized to at least one")
 }
 
-fn retry_fits_budget(policy: &HttpRetryPolicy, started: Instant, delay: Duration) -> bool {
-    started
-        .elapsed()
+fn fits_budget(spent: Duration, delay: Duration, budget: Duration) -> bool {
+    spent
         .checked_add(delay)
-        .is_some_and(|elapsed| elapsed <= policy.max_elapsed)
+        .is_some_and(|total| total <= budget)
 }
 
 fn apply_jitter(delay: Duration, percent: u32) -> Duration {

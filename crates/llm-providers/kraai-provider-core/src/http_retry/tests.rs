@@ -136,6 +136,7 @@ fn test_policy() -> HttpRetryPolicy {
         initial_backoff: Duration::from_millis(5),
         max_delay: Duration::from_millis(50),
         max_elapsed: kraai_test_support::HANG_TIMEOUT,
+        max_rate_limit_wait: kraai_test_support::HANG_TIMEOUT,
     }
 }
 
@@ -450,6 +451,7 @@ async fn stops_after_max_attempts() -> Result<()> {
         initial_backoff: Duration::from_millis(1),
         max_delay: Duration::from_millis(10),
         max_elapsed: kraai_test_support::HANG_TIMEOUT,
+        max_rate_limit_wait: kraai_test_support::HANG_TIMEOUT,
     };
     let collector = Arc::new(RetryCollector::default());
     let client = reqwest::Client::builder().build()?;
@@ -464,6 +466,150 @@ async fn stops_after_max_attempts() -> Result<()> {
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(collector.snapshot().len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rate_limits_retry_past_the_attempt_and_elapsed_limits() -> Result<()> {
+    let rate_limited = || ScriptedResponse::Status {
+        status_line: "429 Too Many Requests",
+        headers: Vec::new(),
+        body: "slow down",
+    };
+    let url = spawn_server(vec![
+        rate_limited(),
+        rate_limited(),
+        rate_limited(),
+        ScriptedResponse::Status {
+            status_line: "200 OK",
+            headers: Vec::new(),
+            body: "ok",
+        },
+    ])
+    .await?;
+    let policy = HttpRetryPolicy {
+        max_attempts: 1,
+        initial_backoff: Duration::from_millis(1),
+        max_delay: Duration::from_millis(10),
+        max_elapsed: Duration::ZERO,
+        max_rate_limit_wait: kraai_test_support::HANG_TIMEOUT,
+    };
+    let collector = Arc::new(RetryCollector::default());
+    let client = reqwest::Client::builder().build()?;
+
+    let response = send_with_retry(
+        "test",
+        &policy,
+        &ProviderRequestContext::with_retry_observer(collector.clone()),
+        || client.get(&url).send(),
+    )
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(collector.snapshot().len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn returns_rate_limit_once_waits_exceed_the_rate_limit_budget() -> Result<()> {
+    let url = spawn_server(vec![
+        ScriptedResponse::Status {
+            status_line: "429 Too Many Requests",
+            headers: vec![("Retry-After", String::from("1"))],
+            body: "first",
+        },
+        ScriptedResponse::Status {
+            status_line: "429 Too Many Requests",
+            headers: vec![("Retry-After", String::from("1"))],
+            body: "second",
+        },
+    ])
+    .await?;
+    let policy = HttpRetryPolicy {
+        max_rate_limit_wait: Duration::from_millis(1_500),
+        ..test_policy()
+    };
+    let collector = Arc::new(RetryCollector::default());
+    let client = reqwest::Client::builder().build()?;
+
+    let response = send_with_retry(
+        "test",
+        &policy,
+        &ProviderRequestContext::with_retry_observer(collector.clone()),
+        || client.get(&url).send(),
+    )
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.text().await?, "second");
+    assert_eq!(collector.snapshot().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn zero_delay_rate_limits_stop_at_the_rate_limit_budget() -> Result<()> {
+    let url = spawn_server(vec![ScriptedResponse::Status {
+        status_line: "429 Too Many Requests",
+        headers: Vec::new(),
+        body: "slow down",
+    }])
+    .await?;
+    let policy = HttpRetryPolicy {
+        max_attempts: 20,
+        initial_backoff: Duration::ZERO,
+        max_delay: Duration::ZERO,
+        max_elapsed: kraai_test_support::HANG_TIMEOUT,
+        max_rate_limit_wait: Duration::ZERO,
+    };
+    let collector = Arc::new(RetryCollector::default());
+    let client = reqwest::Client::builder().build()?;
+
+    let response = send_with_retry(
+        "test",
+        &policy,
+        &ProviderRequestContext::with_retry_observer(collector.clone()),
+        || client.get(&url).send(),
+    )
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(collector.snapshot().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn slow_rate_limited_responses_leave_the_error_budget_alone() -> Result<()> {
+    let url = spawn_server(vec![
+        ScriptedResponse::DelayedStatus {
+            delay: Duration::from_millis(400),
+            status_line: "429 Too Many Requests",
+            headers: Vec::new(),
+            body: "slow down",
+        },
+        ScriptedResponse::Status {
+            status_line: "500 Internal Server Error",
+            headers: Vec::new(),
+            body: "try again",
+        },
+        ScriptedResponse::Status {
+            status_line: "200 OK",
+            headers: Vec::new(),
+            body: "ok",
+        },
+    ])
+    .await?;
+    let policy = HttpRetryPolicy {
+        max_elapsed: Duration::from_millis(300),
+        ..test_policy()
+    };
+    let client = reqwest::Client::builder().build()?;
+
+    let response = send_with_retry("test", &policy, &ProviderRequestContext::default(), || {
+        client.get(&url).send()
+    })
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
     Ok(())
 }
 
@@ -492,6 +638,7 @@ async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
         initial_backoff: Duration::from_millis(7),
         max_delay: Duration::from_millis(20),
         max_elapsed: kraai_test_support::HANG_TIMEOUT,
+        max_rate_limit_wait: kraai_test_support::HANG_TIMEOUT,
     };
     let collector = Arc::new(RetryCollector::default());
     let client = reqwest::Client::builder().build()?;
@@ -578,6 +725,7 @@ async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
         initial_backoff: Duration::from_millis(11),
         max_delay: Duration::from_millis(20),
         max_elapsed: kraai_test_support::HANG_TIMEOUT,
+        max_rate_limit_wait: kraai_test_support::HANG_TIMEOUT,
     };
     let client = reqwest::Client::builder().build()?;
 
@@ -687,6 +835,7 @@ async fn zero_attempt_policy_is_normalized_to_one_attempt() -> Result<()> {
         initial_backoff: Duration::ZERO,
         max_delay: Duration::ZERO,
         max_elapsed: Duration::ZERO,
+        max_rate_limit_wait: Duration::ZERO,
     };
 
     let response = send_with_retry("test", &policy, &ProviderRequestContext::default(), || {

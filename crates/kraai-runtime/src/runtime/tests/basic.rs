@@ -462,14 +462,14 @@ async fn deleting_session_removes_only_its_timer() -> Result<()> {
     let retained = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness.runtime.event_tx.resume_timer(&deleted);
     harness.runtime.event_tx.resume_timer(&retained);
-    let (_, retained_timer) = harness.runtime.event_tx.timer_snapshot(&retained);
+    let retained_timer = harness.runtime.event_tx.turn_snapshot(&retained).timer;
     harness.handle.delete_session(deleted.clone()).await?;
     assert_eq!(
-        harness.runtime.event_tx.timer_snapshot(&deleted).1,
+        harness.runtime.event_tx.turn_snapshot(&deleted).timer,
         crate::TurnTimer::default()
     );
     assert_eq!(
-        harness.runtime.event_tx.timer_snapshot(&retained).1,
+        harness.runtime.event_tx.turn_snapshot(&retained).timer,
         retained_timer
     );
     harness.shutdown().await;

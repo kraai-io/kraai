@@ -68,6 +68,7 @@ impl SessionActor {
             .await;
             match position {
                 Ok(position) => {
+                    self.runtime.event_tx.clear_outcome(&self.session_id);
                     let _ = response.send(Ok(SubmitMessageOutcome::Queued { position }));
                     if !busy {
                         self.drain().await;
@@ -83,6 +84,7 @@ impl SessionActor {
             let _ = response.send(Err(RuntimeError::from(error)));
             return;
         }
+        self.runtime.event_tx.clear_outcome(&self.session_id);
         self.begin_preparation(
             StreamKind::Initial,
             PreparationOrigin::Send(response),
