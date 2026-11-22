@@ -303,8 +303,8 @@ pub struct SessionSnapshot {
     pub profiles: kraai_types::AgentProfilesState,
     pub activity: SessionActivity,
     pub queued_messages: usize,
-    /// How the last turn this process saw end for the session ended. `None` once a stream starts
-    /// or another process changes the session.
+    /// How the last turn this process ran for the session ended. `None` once a message is
+    /// submitted or a stream starts.
     pub turn_outcome: Option<TurnOutcome>,
 }
 

@@ -37,6 +37,7 @@ impl SessionActor {
             let _ = response.send(Err(error));
             return;
         }
+        self.runtime.event_tx.clear_outcome(&self.session_id);
         let busy = !matches!(self.state, TurnState::Idle)
             || self.runtime.agent_manager.is_turn_active(&self.session_id);
         let queued = match self

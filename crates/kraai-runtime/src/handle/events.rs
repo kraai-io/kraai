@@ -95,7 +95,7 @@ impl RuntimeEventSender {
             return;
         };
         let outcome = match event {
-            Event::StreamStart { .. } | Event::HistoryUpdated { .. } => {
+            Event::StreamStart { .. } => {
                 state.outcomes.remove(session_id);
                 return;
             }
@@ -112,6 +112,14 @@ impl RuntimeEventSender {
             _ => return,
         };
         state.outcomes.insert(session_id.clone(), outcome);
+    }
+
+    pub(crate) fn clear_outcome(&self, session_id: &SessionId) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .outcomes
+            .remove(session_id);
     }
 
     pub(crate) fn forget_session(&self, session_id: &SessionId) {
@@ -322,9 +330,7 @@ mod tests {
             message_id: "message".into(),
         });
         assert_eq!(outcome(), Some(crate::TurnOutcome::Cancelled));
-        sender.send(Event::HistoryUpdated {
-            session_id: session.clone(),
-        });
+        sender.clear_outcome(&session);
         assert_eq!(outcome(), None);
         sender.send(Event::TurnCompleted {
             session_id: session.clone(),
