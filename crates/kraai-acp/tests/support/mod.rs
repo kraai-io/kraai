@@ -8,6 +8,7 @@ use axum::{
     Router,
     body::{Body, Bytes},
     http::header,
+    response::IntoResponse,
     routing::{get, post},
 };
 use color_eyre::eyre::{Result, eyre};
@@ -24,6 +25,7 @@ pub enum Reply {
     Streaming,
     Truncated(String),
     Chunks(usize),
+    RateLimited,
 }
 
 impl From<&str> for Reply {
@@ -68,6 +70,9 @@ impl Harness {
                     async move {
                         payloads.lock().await.push(payload);
                         let reply = replies.lock().await.pop_front();
+                        if let Some(Reply::RateLimited) = reply {
+                            return (axum::http::StatusCode::TOO_MANY_REQUESTS, "slow down").into_response();
+                        }
                         if let Some(Reply::Chunks(count)) = reply {
                             let chunks = (0..count).map(|index| {
                                 let chunk = json!({"choices":[{"index":0,"delta":{"content":format!("chunk-{index} ")},"finish_reason":null}]});
@@ -77,7 +82,7 @@ impl Harness {
                                 tokio::time::sleep(Duration::from_millis(1)).await;
                                 chunk
                             });
-                            return ([(header::CONTENT_TYPE, "text/event-stream")], Body::from_stream(paced));
+                            return ([(header::CONTENT_TYPE, "text/event-stream")], Body::from_stream(paced)).into_response();
                         }
                         let (delta, finish_reason) = match reply {
                             Some(Reply::Text(text)) => (json!({"content":text}), Some("stop")),
@@ -87,7 +92,7 @@ impl Harness {
                             ),
                             Some(Reply::Streaming) => (json!({"content":"partial"}), None),
                             Some(Reply::Truncated(text)) => (json!({"content":text}), Some("length")),
-                            Some(Reply::Chunks(_)) => unreachable!(),
+                            Some(Reply::Chunks(_) | Reply::RateLimited) => unreachable!(),
                             None => (json!({"content":"Unexpected extra model request"}), Some("stop")),
                         };
                         let chunk =
@@ -100,7 +105,7 @@ impl Harness {
                         };
                         let body =
                             Body::from_stream(stream::iter([Ok(Bytes::from(first))]).chain(tail));
-                        ([(header::CONTENT_TYPE, "text/event-stream")], body)
+                        ([(header::CONTENT_TYPE, "text/event-stream")], body).into_response()
                     }
                 }),
             );
