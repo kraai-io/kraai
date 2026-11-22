@@ -9,7 +9,7 @@ use tokio::task::{JoinHandle, JoinSet};
 impl RuntimeCore {
     pub(crate) async fn release_turn(&self, session_id: &SessionId) {
         self.agent_manager.discard_streaming_state(session_id).await;
-        let mut timer = self.event_tx.timer_snapshot(session_id).1;
+        let mut timer = self.event_tx.turn_snapshot(session_id).timer;
         timer.finish(std::time::Instant::now());
         let released = match serde_json::to_string(&timer) {
             Ok(timer) => {
@@ -49,7 +49,7 @@ impl RuntimeCore {
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
                 for session_id in sessions {
-                    let timer = runtime.event_tx.timer_snapshot(&session_id).1;
+                    let timer = runtime.event_tx.turn_snapshot(&session_id).timer;
                     let saved = match serde_json::to_string(&timer) {
                         Ok(timer) => {
                             runtime

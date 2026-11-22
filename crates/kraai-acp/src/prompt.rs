@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use agent_client_protocol::{Result, v1::schema as acp};
-use kraai_runtime::{Event, PendingScriptInfo, RuntimeHandle};
+use kraai_runtime::{Event, PendingScriptInfo, RuntimeHandle, TurnOutcome};
 use kraai_types::{AssistantItem, ConversationItem, MessageId, ScriptCall, SessionId};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -432,7 +432,14 @@ impl Output {
             }
             return Ok(None);
         }
-        Ok((!snapshot.session.is_running).then_some(acp::StopReason::EndTurn))
+        if snapshot.session.is_running {
+            return Ok(None);
+        }
+        match snapshot.turn_outcome {
+            Some(TurnOutcome::Failed { error }) => Err(error::runtime(error)),
+            Some(TurnOutcome::Cancelled) => Ok(Some(acp::StopReason::Cancelled)),
+            Some(TurnOutcome::Completed) | None => Ok(Some(acp::StopReason::EndTurn)),
+        }
     }
 
     async fn approve(

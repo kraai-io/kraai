@@ -5,6 +5,12 @@ use tokio::sync::broadcast;
 
 use crate::{Event, RuntimeEvent};
 
+pub(crate) struct TurnSnapshot {
+    pub(crate) sequence: u64,
+    pub(crate) timer: crate::TurnTimer,
+    pub(crate) outcome: Option<crate::TurnOutcome>,
+}
+
 #[derive(Clone)]
 pub(crate) struct RuntimeEventSender {
     state: Arc<Mutex<EventState>>,
@@ -16,6 +22,7 @@ struct EventState {
     capacity: usize,
     sequence: u64,
     timers: std::collections::HashMap<SessionId, crate::TurnTimer>,
+    outcomes: std::collections::HashMap<SessionId, crate::TurnOutcome>,
 }
 
 impl RuntimeEventSender {
@@ -28,12 +35,14 @@ impl RuntimeEventSender {
                 capacity,
                 sequence: 0,
                 timers: Default::default(),
+                outcomes: Default::default(),
             })),
         }
     }
 
     pub(crate) fn send(&self, event: Event) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        Self::record_outcome(&mut state, &event);
         if matches!(
             &event,
             Event::StreamStart { .. } | Event::ScriptApprovalRequested { .. }
@@ -81,12 +90,34 @@ impl RuntimeEventSender {
         let _ = state.tx.send(event);
     }
 
-    pub(crate) fn remove_timer(&self, session_id: &SessionId) {
-        self.state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .timers
-            .remove(session_id);
+    fn record_outcome(state: &mut EventState, event: &Event) {
+        let Some(session_id) = event.session_id() else {
+            return;
+        };
+        let outcome = match event {
+            Event::StreamStart { .. } | Event::HistoryUpdated { .. } => {
+                state.outcomes.remove(session_id);
+                return;
+            }
+            Event::TurnCompleted { .. } => crate::TurnOutcome::Completed,
+            Event::StreamCancelled { .. } => crate::TurnOutcome::Cancelled,
+            Event::StreamError { error, .. } | Event::ContinuationFailed { error, .. } => {
+                crate::TurnOutcome::Failed {
+                    error: crate::RuntimeError::internal(error),
+                }
+            }
+            Event::SessionError { error, .. } => crate::TurnOutcome::Failed {
+                error: error.clone(),
+            },
+            _ => return,
+        };
+        state.outcomes.insert(session_id.clone(), outcome);
+    }
+
+    pub(crate) fn forget_session(&self, session_id: &SessionId) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.timers.remove(session_id);
+        state.outcomes.remove(session_id);
     }
 
     pub(crate) fn finish_timer(&self, session_id: &SessionId) {
@@ -114,12 +145,13 @@ impl RuntimeEventSender {
         drop(state);
     }
 
-    pub(crate) fn timer_snapshot(&self, session_id: &SessionId) -> (u64, crate::TurnTimer) {
+    pub(crate) fn turn_snapshot(&self, session_id: &SessionId) -> TurnSnapshot {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        (
-            state.sequence,
-            state.timers.get(session_id).copied().unwrap_or_default(),
-        )
+        TurnSnapshot {
+            sequence: state.sequence,
+            timer: state.timers.get(session_id).copied().unwrap_or_default(),
+            outcome: state.outcomes.get(session_id).cloned(),
+        }
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {
@@ -228,7 +260,7 @@ mod tests {
     fn terminal_events_do_not_finish_a_turn_before_cleanup() {
         let sender = RuntimeEventSender::new(16);
         sender.resume_timer(&SessionId::new("session"));
-        let (_, timer) = sender.timer_snapshot(&SessionId::new("session"));
+        let timer = sender.turn_snapshot(&SessionId::new("session")).timer;
         for event in [
             Event::StreamError {
                 session_id: SessionId::new("session"),
@@ -245,16 +277,60 @@ mod tests {
             },
         ] {
             sender.send(event);
-            assert_eq!(sender.timer_snapshot(&SessionId::new("session")).1, timer);
+            assert_eq!(
+                sender.turn_snapshot(&SessionId::new("session")).timer,
+                timer
+            );
         }
         sender.finish_timer(&SessionId::new("session"));
         assert!(
             sender
-                .timer_snapshot(&SessionId::new("session"))
-                .1
+                .turn_snapshot(&SessionId::new("session"))
+                .timer
                 .elapsed(std::time::Instant::now())
                 .is_none()
         );
+    }
+
+    #[test]
+    fn turn_outcome_follows_the_latest_turn() {
+        let sender = RuntimeEventSender::new(16);
+        let session = SessionId::new("session");
+        let outcome = || sender.turn_snapshot(&session).outcome;
+        let start = || Event::StreamStart {
+            session_id: session.clone(),
+            message_id: "message".into(),
+        };
+        sender.send(Event::StreamError {
+            session_id: session.clone(),
+            message_id: "message".into(),
+            error: "rate limited".into(),
+        });
+        assert!(matches!(
+            outcome(),
+            Some(crate::TurnOutcome::Failed { error }) if error.message == "rate limited"
+        ));
+        sender.send(start());
+        assert_eq!(outcome(), None);
+        sender.send(Event::TurnCompleted {
+            session_id: session.clone(),
+        });
+        assert_eq!(outcome(), Some(crate::TurnOutcome::Completed));
+        sender.send(start());
+        sender.send(Event::StreamCancelled {
+            session_id: session.clone(),
+            message_id: "message".into(),
+        });
+        assert_eq!(outcome(), Some(crate::TurnOutcome::Cancelled));
+        sender.send(Event::HistoryUpdated {
+            session_id: session.clone(),
+        });
+        assert_eq!(outcome(), None);
+        sender.send(Event::TurnCompleted {
+            session_id: session.clone(),
+        });
+        sender.forget_session(&session);
+        assert_eq!(outcome(), None);
     }
 
     #[test]
@@ -265,7 +341,7 @@ mod tests {
             session_id: SessionId::new("first"),
             message_id: "message".into(),
         });
-        let (_, first) = sender.timer_snapshot(&SessionId::new("first"));
+        let first = sender.turn_snapshot(&SessionId::new("first")).timer;
         drop(receiver);
         sender.send(Event::StreamStart {
             session_id: SessionId::new("second"),
@@ -276,10 +352,10 @@ mod tests {
             message_id: "other".into(),
         });
         let _receiver = sender.subscribe();
-        assert_eq!(sender.timer_snapshot(&SessionId::new("first")).1, first);
+        assert_eq!(sender.turn_snapshot(&SessionId::new("first")).timer, first);
         assert!(first.elapsed(std::time::Instant::now()).is_some());
         sender.finish_timer(&SessionId::new("first"));
-        let finished = sender.timer_snapshot(&SessionId::new("first")).1;
+        let finished = sender.turn_snapshot(&SessionId::new("first")).timer;
         assert!(finished.elapsed(std::time::Instant::now()).is_none());
         assert!(finished.last_duration().is_some());
     }

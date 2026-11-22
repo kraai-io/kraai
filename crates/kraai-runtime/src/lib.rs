@@ -13,7 +13,7 @@ pub use api::{
     LoginMethod, Model, PROTOCOL_VERSION, PendingBrowserLogin, PendingDeviceCodeLogin,
     PendingScriptInfo, ProviderAuthStatus, ProviderLoginState, RuntimeError, RuntimeErrorKind,
     RuntimeEvent, RuntimeResult, RuntimeStartupState, ScriptOutputLine, Session, SessionActivity,
-    SessionContextUsage, SessionSnapshot, SubmitMessageOutcome, WorkspaceState,
+    SessionContextUsage, SessionSnapshot, SubmitMessageOutcome, TurnOutcome, WorkspaceState,
 };
 pub use handle::RuntimeHandle;
 pub use kraai_mcp::{McpAuthState, McpAuthStatus, McpConfig};
