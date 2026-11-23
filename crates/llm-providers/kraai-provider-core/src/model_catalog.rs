@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use kraai_types::{TokenRates, TokenUsage, Usd};
 use serde::{Deserialize, Serialize};
@@ -74,7 +73,6 @@ pub(crate) enum CatalogPricingSource {
 
 pub struct ModelCatalog {
     snapshot: RwLock<Snapshot>,
-    attempted_at: AtomicU64,
     initialized: tokio::sync::OnceCell<()>,
     revision: watch::Sender<u64>,
 }
@@ -83,7 +81,6 @@ impl Default for ModelCatalog {
     fn default() -> Self {
         Self {
             snapshot: RwLock::default(),
-            attempted_at: AtomicU64::default(),
             initialized: tokio::sync::OnceCell::default(),
             revision: watch::channel(0).0,
         }
@@ -113,12 +110,7 @@ impl ModelCatalog {
     }
 
     pub async fn initialize(&self) {
-        self.initialized
-            .get_or_init(|| async {
-                self.load().await;
-                self.refresh().await;
-            })
-            .await;
+        self.initialized.get_or_init(|| self.load()).await;
     }
 
     async fn load(&self) {
@@ -138,23 +130,13 @@ impl ModelCatalog {
         }
     }
 
-    pub async fn refresh(&self) {
-        let now = crate::pricing::now();
-        if self.snapshot.read().await.is_fresh(now) {
-            return;
-        }
-        let last = self.attempted_at.load(Ordering::Relaxed);
-        if (now >= last && now - last < 3600)
-            || self
-                .attempted_at
-                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
-                .is_err()
+    pub async fn refresh(&self) -> bool {
+        if !self.snapshot.read().await.is_fresh(crate::pricing::now())
+            && let Err(error) = self.fetch().await
         {
-            return;
-        }
-        if let Err(error) = self.fetch().await {
             tracing::debug!(%error, "Could not refresh model catalog; retaining cached metadata");
         }
+        self.snapshot.read().await.is_fresh(crate::pricing::now())
     }
 
     async fn fetch(&self) -> color_eyre::Result<()> {

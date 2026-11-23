@@ -61,6 +61,7 @@ async fn saving_publishes_the_list_and_only_its_readers_can_claim_it() -> Result
             &json!({"data": []}),
         )
         .await?;
+    store.release(&provider, 200).await?;
     ensure!(!store.claim(&provider, None, 130, 230).await?);
     ensure!(
         !store
@@ -131,5 +132,48 @@ async fn claimed_rows_without_data_are_not_listed() -> Result<()> {
     ensure!(store.claim(&claimed, None, 100, 200).await?);
     ensure!(store.versions().await?.is_empty());
     ensure!(store.read(&claimed).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn any_version_claims_wait_only_for_a_live_claim() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let store = Persistence::open(directory.path())
+        .await?
+        .model_lists()
+        .clone();
+    let provider = ProviderId::new("provider");
+
+    ensure!(store.claim_any_version(&provider, 100, 200).await?);
+    ensure!(!store.claim_any_version(&provider, 150, 250).await?);
+    store
+        .save(&provider, &version("https://api.test", 160), &json!([]))
+        .await?;
+    ensure!(!store.claim_any_version(&provider, 170, 270).await?);
+    store.release(&provider, 200).await?;
+    ensure!(store.claim_any_version(&provider, 170, 270).await?);
+    ensure!(!store.claim(&provider, None, 200, 300).await?);
+    store.release(&provider, 270).await?;
+    ensure!(store.claim_any_version(&provider, 200, 300).await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn only_the_current_holder_can_renew_a_claim() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let store = Persistence::open(directory.path())
+        .await?
+        .model_lists()
+        .clone();
+    let provider = ProviderId::new("provider");
+
+    ensure!(store.claim(&provider, None, 100, 200).await?);
+    ensure!(store.renew(&provider, 200, 300).await?);
+    ensure!(!store.claim_any_version(&provider, 250, 350).await?);
+    ensure!(!store.renew(&provider, 200, 400).await?);
+    ensure!(store.claim_any_version(&provider, 300, 400).await?);
+    ensure!(!store.renew(&provider, 300, 500).await?);
+    store.release(&provider, 300).await?;
+    ensure!(!store.claim_any_version(&provider, 350, 450).await?);
     Ok(())
 }

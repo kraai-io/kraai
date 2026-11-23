@@ -57,6 +57,10 @@ impl App {
             RuntimeResponse::Models(Err(err)) => {
                 self.set_error(format!("Failed loading models: {err}"));
             }
+            RuntimeResponse::ModelListsRefresh | RuntimeResponse::ModelListRefetch(Ok(())) => {}
+            RuntimeResponse::ModelListRefetch(Err(err)) => {
+                self.set_error(format!("Failed refreshing models: {err}"));
+            }
             RuntimeResponse::AgentProfileCatalog(result) => match result {
                 Ok(catalog) => {
                     self.state.agent_profiles = catalog.profiles;

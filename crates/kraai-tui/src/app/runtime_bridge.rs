@@ -194,6 +194,13 @@ impl RequestBridge {
                 let result = self.execute(|runtime| runtime.list_models());
                 RuntimeResponse::Models(result)
             }
+            RuntimeRequest::RefreshModelLists => {
+                let _ = self.execute(|runtime| runtime.refresh_model_lists());
+                RuntimeResponse::ModelListsRefresh
+            }
+            RuntimeRequest::RefetchModelList { provider_id } => RuntimeResponse::ModelListRefetch(
+                self.execute(|runtime| runtime.refetch_model_list(provider_id)),
+            ),
             RuntimeRequest::GetAgentProfileCatalog => {
                 let result = self.execute(|runtime| runtime.get_agent_profile_catalog(None));
                 RuntimeResponse::AgentProfileCatalog(result)

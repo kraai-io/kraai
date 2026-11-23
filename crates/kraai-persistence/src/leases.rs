@@ -5,7 +5,8 @@ use kraai_types::SessionId;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::time::Duration;
 
-pub const TURN_LEASE_DURATION: Duration = Duration::from_secs(30);
+pub const LEASE_DURATION: Duration = Duration::from_secs(30);
+pub const LEASE_RENEWAL_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionObservation {

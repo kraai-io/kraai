@@ -80,7 +80,7 @@ impl SqliteSessionStore {
             message_store
                 .sqlite_database()
                 .unwrap_or_else(|| Database::new(data_dir)),
-            crate::TURN_LEASE_DURATION,
+            crate::LEASE_DURATION,
         )
     }
 

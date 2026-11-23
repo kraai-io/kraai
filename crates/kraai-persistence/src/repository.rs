@@ -1,9 +1,9 @@
 use crate::database::Database;
 use crate::{
-    ContextStateStore, ConversationStore, FileImageStore, MessageStore, RequestUsageStore,
-    SessionStore, SqliteCompactionStore, SqliteContextStateStore, SqliteMessageStore,
-    SqliteModelListStore, SqliteRequestUsageStore, SqliteScriptExecutionStore, SqliteSessionStore,
-    TURN_LEASE_DURATION,
+    ContextStateStore, ConversationStore, FileImageStore, LEASE_DURATION, MessageStore,
+    RequestUsageStore, SessionStore, SqliteCompactionStore, SqliteContextStateStore,
+    SqliteMessageStore, SqliteModelListStore, SqliteRequestUsageStore, SqliteScriptExecutionStore,
+    SqliteSessionStore,
 };
 use color_eyre::eyre::{Result, ensure};
 use kraai_types::SessionId;
@@ -25,7 +25,7 @@ pub struct Persistence {
 
 impl Persistence {
     pub async fn open(data_dir: &Path) -> Result<Self> {
-        Self::open_with_turn_lease(data_dir, TURN_LEASE_DURATION).await
+        Self::open_with_turn_lease(data_dir, LEASE_DURATION).await
     }
     pub async fn open_with_turn_lease(
         data_dir: &Path,
@@ -46,7 +46,7 @@ impl Persistence {
         let database = messages
             .sqlite_database()
             .unwrap_or_else(|| Database::new(data_dir));
-        Self::with_database(data_dir, database, messages, TURN_LEASE_DURATION).await
+        Self::with_database(data_dir, database, messages, LEASE_DURATION).await
     }
     async fn with_database(
         data_dir: &Path,

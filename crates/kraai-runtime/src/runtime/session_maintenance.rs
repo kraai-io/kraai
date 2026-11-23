@@ -70,7 +70,7 @@ impl RuntimeCore {
     pub(crate) fn spawn_lease_heartbeat(&self) -> JoinHandle<()> {
         let runtime = self.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            let mut interval = tokio::time::interval(kraai_persistence::LEASE_RENEWAL_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut cancelling = BTreeSet::new();
             let mut cancellations: JoinSet<(SessionId, color_eyre::Result<bool>)> = JoinSet::new();

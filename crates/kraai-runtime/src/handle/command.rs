@@ -29,6 +29,13 @@ pub(crate) enum Command {
     ListModels {
         response: oneshot::Sender<RuntimeResult<HashMap<String, Vec<Model>>>>,
     },
+    RefreshModelLists {
+        response: oneshot::Sender<RuntimeResult<()>>,
+    },
+    RefetchModelList {
+        provider_id: ProviderId,
+        response: oneshot::Sender<RuntimeResult<()>>,
+    },
     ListProviderDefinitions {
         response: oneshot::Sender<RuntimeResult<Vec<ProviderDefinition>>>,
     },
