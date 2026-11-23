@@ -95,3 +95,20 @@ fn loading_models_never_saves_over_the_session_model() {
         );
     }
 }
+
+#[test]
+fn opening_the_model_sheet_refreshes_the_model_lists() {
+    let mut harness = test_harness();
+    harness.app.open_model_sheet(String::new());
+    let requests = harness.drain_requests();
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, RuntimeRequest::ListModels))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, RuntimeRequest::RefreshModelLists))
+    );
+}

@@ -3,6 +3,7 @@ mod policy;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use futures::{StreamExt, stream::BoxStream};
 use kraai_types::{ModelId, ProviderId, RequestCost, TokenRates, TokenUsage};
@@ -14,6 +15,9 @@ use config::PricingConfig;
 
 pub use config::{pricing_fields, validate_pricing_config};
 pub use policy::{ProviderPricingCatalog, ProviderPricingPolicy};
+
+const REFRESH_INTERVAL: Duration = Duration::from_secs(3600);
+const RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Default)]
 pub struct Pricing {
@@ -63,28 +67,25 @@ impl Pricing {
             .any(|config| config.api.is_some() || config.provider.is_some())
     }
 
-    pub async fn refresh(&self) {
-        if !self.uses_catalog() {
-            return;
-        }
-        self.catalog.initialize().await;
-        self.catalog.refresh().await;
-    }
-
     pub async fn start(&self) {
         if !self.uses_catalog() {
             return;
         }
-        self.refresh().await;
+        self.catalog.initialize().await;
         let catalog = Arc::downgrade(&self.catalog);
         self.start_refresh_task(async move {
             loop {
                 let Some(current) = catalog.upgrade() else {
                     break;
                 };
-                current.refresh().await;
+                let fresh = current.refresh().await;
                 drop(current);
-                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                let interval = if fresh {
+                    REFRESH_INTERVAL
+                } else {
+                    RETRY_INTERVAL
+                };
+                tokio::time::sleep(interval).await;
             }
         });
     }

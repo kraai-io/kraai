@@ -102,6 +102,22 @@ impl RuntimeHandle {
             .await
     }
 
+    pub async fn refresh_model_lists(&self) -> RuntimeResult<()> {
+        self.request(|response| Command::RefreshModelLists { response })
+            .await
+    }
+
+    pub async fn refetch_model_list(&self, provider_id: String) -> RuntimeResult<()> {
+        let provider_id = ProviderId::try_new(provider_id).map_err(|error| {
+            RuntimeError::invalid_argument(format!("invalid provider_id: {error}"))
+        })?;
+        self.request(|response| Command::RefetchModelList {
+            provider_id,
+            response,
+        })
+        .await
+    }
+
     pub async fn list_provider_definitions(&self) -> RuntimeResult<Vec<ProviderDefinition>> {
         self.request(|response| Command::ListProviderDefinitions { response })
             .await

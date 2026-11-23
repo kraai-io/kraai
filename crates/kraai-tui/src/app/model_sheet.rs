@@ -44,6 +44,7 @@ impl App {
         }
         self.settle_highlighted_model();
         self.request(RuntimeRequest::ListModels);
+        self.request(RuntimeRequest::RefreshModelLists);
     }
 
     pub(super) fn return_to_model_sheet(&mut self, provider_id: &str, model_id: &str) {

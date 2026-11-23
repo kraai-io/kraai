@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use kraai_agent::AgentManager;
 use kraai_persistence::{ContextStateStore, ScriptExecutionStore};
-use kraai_provider_core::{ProviderError, ProviderRegistry};
+use kraai_provider_core::ProviderRegistry;
 use kraai_types::SessionId;
 use tokio::sync::{Mutex, mpsc};
 
@@ -185,6 +185,7 @@ impl RuntimeCore {
 
     pub(crate) async fn stop_active_work(&self) {
         self.stopping.store(true, Ordering::Release);
+        self.stop_model_list_refetches().await;
         self.sessions.stop().await;
         self.stream_tasks.close();
         self.stream_tasks.wait().await;
@@ -205,10 +206,13 @@ impl RuntimeCore {
             .await;
         let synced = match &result {
             Ok(()) => {
-                self.model_lists.reset().await;
+                self.model_lists.reset();
                 Some(
-                    self.sync_model_lists(super::model_lists::unix_millis())
-                        .await,
+                    self.sync_model_lists(
+                        super::model_lists::unix_millis(),
+                        super::model_lists::Refetch::Never,
+                    )
+                    .await,
                 )
             }
             Err(_) => None,
@@ -223,19 +227,11 @@ impl RuntimeCore {
             }
         });
         result?;
-        let failures = match synced {
-            Some(synced) => synced?.failures,
-            None => Vec::new(),
-        };
+        synced.transpose()?;
         tracing::info!("Loaded config");
         self.send_event(Event::ConfigLoaded);
-        // Configured models remain usable while the background sync retries an unavailable
-        // provider, so report the refresh failure without preventing startup.
-        if !failures.is_empty() {
-            let error = ProviderError::ModelCacheRefreshFailed(failures);
-            tracing::warn!(%error, "Loaded config without every provider's model list");
-            self.send_service_error(error);
-        }
+        self.model_lists
+            .request_sync(super::model_lists::SyncRequest::CONFIG_LOADED);
         Ok(())
     }
 }

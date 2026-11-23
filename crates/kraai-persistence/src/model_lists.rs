@@ -84,18 +84,58 @@ impl SqliteModelListStore {
         now: i64,
         until: i64,
     ) -> Result<bool> {
-        let provider = provider.to_string();
-        let (source, fetched_at) = seen.map_or((String::new(), 0), |seen| {
+        let seen = seen.map_or((String::new(), 0), |seen| {
             (seen.source.clone(), seen.fetched_at)
         });
+        self.claim_row(provider, Some(seen), now, until).await
+    }
+
+    pub async fn claim_any_version(
+        &self,
+        provider: &ProviderId,
+        now: i64,
+        until: i64,
+    ) -> Result<bool> {
+        self.claim_row(provider, None, now, until).await
+    }
+
+    async fn claim_row(
+        &self,
+        provider: &ProviderId,
+        seen: Option<(String, i64)>,
+        now: i64,
+        until: i64,
+    ) -> Result<bool> {
+        let provider = provider.to_string();
+        let (source, fetched_at) = seen.unzip();
         self.database
             .run(move |connection, _| {
                 let changed = connection.execute(
                     "INSERT INTO model_lists (provider_id, claimed_until) VALUES (?1, ?3)
                      ON CONFLICT(provider_id) DO UPDATE SET claimed_until = excluded.claimed_until
                      WHERE model_lists.claimed_until <= ?2
-                         AND model_lists.source = ?4 AND model_lists.fetched_at = ?5",
+                         AND (?4 IS NULL
+                             OR (model_lists.source = ?4 AND model_lists.fetched_at = ?5))",
                     params![provider, now, until, source, fetched_at],
+                )?;
+                Ok(changed > 0)
+            })
+            .await
+    }
+
+    pub async fn renew(
+        &self,
+        provider: &ProviderId,
+        claimed_until: i64,
+        until: i64,
+    ) -> Result<bool> {
+        let provider = provider.to_string();
+        self.database
+            .run(move |connection, _| {
+                let changed = connection.execute(
+                    "UPDATE model_lists SET claimed_until = ?3
+                     WHERE provider_id = ?1 AND claimed_until = ?2",
+                    params![provider, claimed_until, until],
                 )?;
                 Ok(changed > 0)
             })
@@ -119,23 +159,26 @@ impl SqliteModelListStore {
     pub async fn save(
         &self,
         provider: &ProviderId,
+        claimed_until: i64,
         version: &ModelListVersion,
         data: &serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<Option<ModelListVersion>> {
         let provider = provider.to_string();
         let ModelListVersion { source, fetched_at } = version.clone();
         let data = serde_json::to_string(data)?;
         self.database
             .run(move |connection, _| {
-                connection.execute(
-                    "INSERT INTO model_lists (provider_id, source, fetched_at, data, claimed_until)
-                     VALUES (?1, ?2, ?3, ?4, 0)
-                     ON CONFLICT(provider_id) DO UPDATE SET source = excluded.source,
-                         fetched_at = excluded.fetched_at, data = excluded.data, claimed_until = 0
-                     WHERE excluded.fetched_at > model_lists.fetched_at",
-                    params![provider, source, fetched_at, data],
-                )?;
-                Ok(())
+                let fetched_at = connection
+                    .query_row(
+                        "UPDATE model_lists SET source = ?2,
+                             fetched_at = MAX(?3, fetched_at + 1), data = ?4
+                         WHERE provider_id = ?1 AND claimed_until = ?5
+                         RETURNING fetched_at",
+                        params![provider, source, fetched_at, data, claimed_until],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                Ok(fetched_at.map(|fetched_at| ModelListVersion { source, fetched_at }))
             })
             .await
     }

@@ -27,7 +27,9 @@ pub use compaction::{CompactionCheckpoint, SqliteCompactionStore};
 pub use database::Database as SqliteDatabase;
 pub use history::{HistoryCursor, history_by_id};
 pub use images::FileImageStore;
-pub use leases::{ForeignSessionActivity, SessionObservation, TURN_LEASE_DURATION};
+pub use leases::{
+    ForeignSessionActivity, LEASE_DURATION, LEASE_RENEWAL_INTERVAL, SessionObservation,
+};
 pub use messages::{ConversationSnapshot, LinkRequest, MessageStore, SqliteMessageStore};
 pub use model_lists::{ModelListVersion, SqliteModelListStore, StoredModelList};
 pub use preferences::{WorkspacePreferences, WorkspacePreferencesStore};

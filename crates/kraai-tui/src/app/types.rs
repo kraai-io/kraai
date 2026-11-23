@@ -101,6 +101,10 @@ pub(super) struct UsageModelKey {
 pub(super) enum RuntimeRequest {
     FinishStartupSync,
     ListModels,
+    RefreshModelLists,
+    RefetchModelList {
+        provider_id: String,
+    },
     GetAgentProfileCatalog,
     ListProviderDefinitions,
     GetSettings,
@@ -189,6 +193,8 @@ pub(super) enum RuntimeRequest {
 pub(super) enum RuntimeResponse {
     StartupSyncComplete,
     Models(RuntimeResult<HashMap<String, Vec<Model>>>),
+    ModelListsRefresh,
+    ModelListRefetch(RuntimeResult<()>),
     AgentProfileCatalog(RuntimeResult<AgentProfileCatalog>),
     ProviderDefinitions(RuntimeResult<Vec<ProviderDefinition>>),
     Settings(RuntimeResult<SettingsDocument>),

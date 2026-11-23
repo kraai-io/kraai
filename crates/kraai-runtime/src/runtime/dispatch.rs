@@ -198,6 +198,36 @@ impl RuntimeCore {
                     .collect();
                 let _ = response.send(Ok(models));
             }
+            Command::RefreshModelLists { response } => {
+                self.model_lists
+                    .request_sync(super::model_lists::SyncRequest::REFRESH);
+                let _ = response.send(Ok(()));
+            }
+            Command::RefetchModelList {
+                provider_id,
+                response,
+            } => {
+                let lists = self
+                    .agent_manager
+                    .cloned_provider_manager()
+                    .get_provider(&provider_id)
+                    .map(|provider| provider.model_list_source().is_some());
+                let error = match lists {
+                    None => Some(crate::RuntimeError::not_found(format!(
+                        "Provider {provider_id} is not loaded"
+                    ))),
+                    Some(false) => Some(crate::RuntimeError::invalid_argument(format!(
+                        "Provider {provider_id} does not list models"
+                    ))),
+                    Some(true) => None,
+                };
+                if let Some(error) = error {
+                    let _ = response.send(Err(error));
+                    return Ok(());
+                }
+                let _ = response.send(Ok(()));
+                self.spawn_model_list_refetch(provider_id);
+            }
             Command::ListProviderDefinitions { response } => {
                 let _ = response.send(Ok(self.provider_registry.list_definitions()));
             }

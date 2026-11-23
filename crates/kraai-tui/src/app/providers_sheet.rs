@@ -216,10 +216,6 @@ impl App {
 
     fn handle_provider_list_key(&mut self, key: KeyEvent) {
         let armed = std::mem::take(&mut self.state.sheet_armed);
-        if key.code == KeyCode::Char('r') && key.modifiers == KeyModifiers::CONTROL {
-            self.refresh_provider_models();
-            return;
-        }
         let providers: Vec<usize> = self
             .state
             .listed_providers()
@@ -307,7 +303,16 @@ impl App {
                 RuntimeRequest::LogoutProvider { provider_type },
                 "Logging out",
             ),
-            ProviderAction::RefreshModels => return self.refresh_provider_models(),
+            ProviderAction::RefreshModels => {
+                let Some(provider_id) = self
+                    .state
+                    .open_provider()
+                    .map(|provider| provider.id.clone())
+                else {
+                    return;
+                };
+                return self.refetch_model_list(provider_id);
+            }
             ProviderAction::OpenBrowser => return self.open_pending_sign_in(),
             ProviderAction::CopySignIn => return self.copy_pending_sign_in(),
             ProviderAction::EditConfig => return self.show_providers_view(ProvidersView::Config),
@@ -331,8 +336,10 @@ impl App {
         }
     }
 
-    fn refresh_provider_models(&mut self) {
-        if self.request(RuntimeRequest::ListModels) == RuntimeRequestDelivery::Delivered {
+    fn refetch_model_list(&mut self, provider_id: String) {
+        if self.request(RuntimeRequest::RefetchModelList { provider_id })
+            == RuntimeRequestDelivery::Delivered
+        {
             self.provider_feedback("Refreshing models");
         }
     }

@@ -18,7 +18,7 @@ pub(super) fn hints(state: &AppState) -> String {
             String::from("del remove this provider · any other key keeps it")
         }
         (ProvidersView::List, false) => {
-            String::from("tab or ↑↓ select · enter open · del remove · ctrl+r refresh · esc close")
+            String::from("tab or ↑↓ select · enter open · del remove · esc close")
         }
         (ProvidersView::Connect, _) => String::from("tab or ↑↓ select · enter connect · esc back"),
         (ProvidersView::Provider, true) => {

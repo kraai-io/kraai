@@ -167,27 +167,18 @@ fn provider_list_waits_for_settings_then_lists_providers_and_a_connect_row() {
     );
     assert_eq!(
         hints(&harness),
-        "tab or ↑↓ select · enter open · del remove · ctrl+r refresh · esc close"
+        "tab or ↑↓ select · enter open · del remove · esc close"
     );
     assert_eq!(composer(&harness), "/providers");
     let [_, status, _] = screen_parts(&harness, 80);
     assert_eq!(
         status,
         [
-            " tab or ↑↓ select · enter open · del remove · ctrl+r refresh · esc close",
+            " tab or ↑↓ select · enter open · del remove · esc close",
             " No model selected  0 tokens  $0.0000",
         ]
     );
 
-    ctrl(&mut harness, 'r');
-    assert!(matches!(
-        harness.drain_requests().as_slice(),
-        [RuntimeRequest::ListModels]
-    ));
-    assert_eq!(
-        sheet(&harness, 70).last().map(String::as_str),
-        Some("  Refreshing models")
-    );
     type_text(&mut harness, "chat");
     assert_eq!(
         sheet(&harness, 70).get(1..).unwrap_or_default(),
@@ -278,6 +269,16 @@ fn a_provider_offers_the_actions_its_sign_in_allows_and_typing_narrows_them() {
             String::from("  Edit configuration"),
             String::from("  Remove provider"),
         ]
+    );
+    harness.drain_requests();
+    key(&mut harness, KeyCode::Enter);
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [RuntimeRequest::RefetchModelList { provider_id }] if provider_id == "local"
+    ));
+    assert_eq!(
+        sheet(&harness, 70).last().map(String::as_str),
+        Some("  Refreshing models")
     );
     key(&mut harness, KeyCode::Backspace);
     assert_eq!(harness.app.state.providers_view, ProvidersView::List);
