@@ -23,6 +23,7 @@ pub(super) fn edits(working_set: &StateWorkingSet, source: &str, offset: usize) 
         source: source.as_bytes(),
         edits: Vec::new(),
         commands: Vec::new(),
+        variables: Vec::new(),
     };
     scan.block(0, source.len());
     for error in &working_set.parse_errors {
@@ -67,6 +68,7 @@ struct Scan<'a> {
     source: &'a [u8],
     edits: Vec<Edit>,
     commands: Vec<Command>,
+    variables: Vec<String>,
 }
 
 struct Command {
@@ -121,6 +123,11 @@ impl Scan<'_> {
                             pipe,
                         }),
                     );
+                    command.clear();
+                }
+                TokenContents::Pipe if self.bytes(token.span) == b"&&" => {
+                    self.edit(token.span.start, token.span.end, ";", change("&&", ";"));
+                    self.command(&command, None);
                     command.clear();
                 }
                 TokenContents::Pipe
@@ -191,6 +198,12 @@ impl Scan<'_> {
             if token.contents == TokenContents::Item {
                 self.nested(token.span);
             }
+        }
+        if let [keyword, name, ..] = tokens
+            && matches!(self.bytes(keyword.span), b"let" | b"mut" | b"const")
+        {
+            let name = String::from_utf8_lossy(self.bytes(name.span));
+            self.variables.push(name.trim_end_matches(':').to_owned());
         }
         let Some(head_index) = self.head_index(tokens) else {
             return;
@@ -308,7 +321,11 @@ impl Scan<'_> {
         };
         if env_error {
             let end = self.word_end(end);
-            if let Some((replacement, label)) = self.source.get(start..end).and_then(env_variable) {
+            if let Some((replacement, label)) = self
+                .source
+                .get(start..end)
+                .and_then(|bytes| variable_path(bytes, &self.variables))
+            {
                 self.edit(start, end, replacement, label);
             }
             return;
@@ -390,9 +407,22 @@ fn redirect(operator: &str, target: &str, has_target: bool) -> Option<String> {
     Some(format!("{operator} {target}"))
 }
 
-fn env_variable(bytes: &[u8]) -> Option<(String, String)> {
+fn variable_path(bytes: &[u8], declared: &[String]) -> Option<(String, String)> {
     let text = std::str::from_utf8(bytes).ok()?.strip_prefix('$')?;
     let (name, rest) = text.split_at(text.find('/').unwrap_or(text.len()));
+    let plain_path = rest
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'));
+    if declared.iter().any(|variable| variable == name) {
+        if rest.is_empty() || !plain_path {
+            return None;
+        }
+        let replacement = format!("$\"(${name}){rest}\"");
+        return Some((
+            replacement.clone(),
+            change(&format!("${name}{rest}"), &replacement),
+        ));
+    }
     let is_env_name = name.bytes().any(|byte| byte.is_ascii_uppercase())
         && name
             .bytes()
@@ -405,7 +435,5 @@ fn env_variable(bytes: &[u8]) -> Option<(String, String)> {
     if rest.is_empty() {
         return Some((format!("$env.{name}"), label));
     }
-    rest.bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))
-        .then(|| (format!("$\"($env.{name}){rest}\""), label))
+    plain_path.then(|| (format!("$\"($env.{name}){rest}\""), label))
 }

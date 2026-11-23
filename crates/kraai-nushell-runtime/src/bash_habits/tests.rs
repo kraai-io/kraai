@@ -17,7 +17,17 @@ fn rewrite_with_startup(script: &str, config: &str) -> Option<String> {
     rewrite_bash_habits(script, &every_command(), startup.as_slice()).map(|rewrite| rewrite.source)
 }
 
-const REWRITES: [(&str, &str); 19] = [
+const REWRITES: [(&str, &str); 26] = [
+    ("git status && git diff", "git status ; git diff"),
+    (
+        "cd src && cargo test 2>&1 | tail -5",
+        "cd src ; cargo test o+e>| tail -5",
+    ),
+    ("cargo build 2>&1 && ls", "cargo build o+e>| collect ; ls"),
+    (
+        "if true { git add . && git commit -m x }",
+        "if true { git add . ; git commit -m x }",
+    ),
     (
         "grep -rn foo src 2>/dev/null",
         "grep -rn foo src e> /dev/null",
@@ -38,6 +48,18 @@ const REWRITES: [(&str, &str); 19] = [
     ("make &>/dev/null", "make o+e> /dev/null"),
     ("print $HOME", "print $env.HOME"),
     ("ls $HOME/.config", "ls $\"($env.HOME)/.config\""),
+    (
+        "let DIR = '/tmp'\nls $DIR/.git",
+        "let DIR = '/tmp'\nls $\"($DIR)/.git\"",
+    ),
+    (
+        "let dir = 'src'; ls $dir/lib",
+        "let dir = 'src'; ls $\"($dir)/lib\"",
+    ),
+    (
+        "let HOME: string = '/x'; ls $HOME/.config",
+        "let HOME: string = '/x'; ls $\"($HOME)/.config\"",
+    ),
     (
         "let out = (^cargo --version 2>&1)",
         "let out = (^cargo --version o+e>| collect)",
@@ -61,7 +83,12 @@ const REWRITES: [(&str, &str); 19] = [
 ];
 
 #[cfg(not(windows))]
-const ROUTED: [(&str, &str); 6] = [
+const ROUTED: [(&str, &str); 8] = [
+    (
+        "do {\nfind . -name x 2>/dev/null\n}",
+        "do {\n^find . -name x e> /dev/null\n}",
+    ),
+    ("find . -name x && ls", "^find . -name x ; ls"),
     ("find . -name '*.rs'", "^find . -name '*.rs'"),
     ("ps aux | head", "^ps aux | head"),
     ("mkdir -p a/b", "^mkdir -p a/b"),
@@ -112,10 +139,9 @@ fn leaves_nushell_and_ambiguous_bash_alone() {
         "date now | format date '%Y'",
         "^echo hi >&2",
         "kraai-open-files src/lib.rs",
-        // `&&` and `||` have no Nushell form with the same failure behavior.
-        "git status && git diff",
+        // `||` has no Nushell form with the same failure behavior.
         "git diff 2>/dev/null || git status",
-        "find . -name x && ls",
+        "print 'a && b'",
         "print $undefined_lowercase",
     ] {
         assert_eq!(rewrite(input), None, "{input}");

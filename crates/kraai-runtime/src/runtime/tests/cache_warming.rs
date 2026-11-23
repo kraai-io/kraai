@@ -189,7 +189,7 @@ async fn warming_discards_outputs_and_accounts_separately_before_the_real_reques
     let result =
         super::harness::drive_stream(harness.runtime.clone(), session.clone(), providers, request)
             .await;
-    assert!(matches!(result, StreamDriveResult::Completed(output) if output.call_id.is_none()));
+    assert!(matches!(result, StreamDriveResult::Completed(output) if output.call.is_none()));
     {
         let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
@@ -330,7 +330,7 @@ async fn warming_waits_for_stream_completion_and_usage_before_the_real_request()
             calls.lock().unwrap().len()
         )
     })??;
-    assert!(matches!(result, StreamDriveResult::Completed(output) if output.call_id.is_none()));
+    assert!(matches!(result, StreamDriveResult::Completed(output) if output.call.is_none()));
     assert_eq!(calls.lock().unwrap().len(), 2);
     let requests = store.load(&session).await?;
     assert_eq!(requests.len(), 2);

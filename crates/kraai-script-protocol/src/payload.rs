@@ -1,7 +1,7 @@
 use kraai_execution_types::{SandboxCapabilities, SandboxCapability};
 
 use crate::ProtocolError;
-use crate::duration::parse_duration;
+use crate::duration::{format_duration, parse_duration};
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +55,45 @@ pub fn parse_script_input(input: &str) -> Result<ScriptBlock, ProtocolError> {
         timeout,
         requested_capabilities,
     })
+}
+
+pub fn merge_scripts(scripts: &[ScriptBlock]) -> String {
+    let timeout = scripts
+        .iter()
+        .map(|script| script.timeout)
+        .sum::<Duration>()
+        .min(MAX_SCRIPT_TIMEOUT);
+    let capabilities = SandboxCapabilities::new(
+        scripts
+            .iter()
+            .flat_map(|script| script.requested_capabilities.iter()),
+    );
+    let mut fields = Vec::new();
+    if timeout != DEFAULT_SCRIPT_TIMEOUT {
+        fields.push(format!("timeout={}", format_duration(timeout)));
+    }
+    let permissions = capabilities
+        .without_implied()
+        .map(SandboxCapability::as_str)
+        .collect::<Vec<_>>();
+    if !permissions.is_empty() {
+        fields.push(format!("permissions={}", permissions.join(",")));
+    }
+    let mut merged = String::new();
+    if !fields.is_empty() {
+        merged.push_str(&format!("# {}\n", fields.join(" ")));
+    }
+    let sources = scripts
+        .iter()
+        .map(|script| {
+            format!(
+                "do {{\n{}\n}}",
+                String::from_utf8_lossy(&script.source).trim_end()
+            )
+        })
+        .collect::<Vec<_>>();
+    merged.push_str(&sources.join("\n\n"));
+    merged
 }
 
 pub fn split_script_header(input: &str) -> (Option<&str>, &str) {
@@ -279,5 +318,32 @@ mod tests {
         ] {
             assert_eq!(parse_script_input(input), Err(expected), "{input:?}");
         }
+    }
+
+    #[test]
+    fn merged_scripts_run_in_order_with_summed_timeouts_and_every_permission() {
+        let scripts = [
+            "# timeout=2min permissions=network\nls\n\n",
+            "git status",
+            "# permissions=workspace-write\njj st",
+        ]
+        .map(|input| parse_script_input(input).expect("valid script input"));
+        let merged = merge_scripts(&scripts);
+        assert_eq!(
+            merged,
+            "# timeout=3min permissions=workspace-write,network\ndo {\nls\n}\n\ndo {\ngit status\n}\n\ndo {\njj st\n}"
+        );
+        let reparsed = parse_script_input(&merged).expect("merged script parses");
+        assert_eq!(reparsed.timeout, Duration::from_secs(180));
+    }
+
+    #[test]
+    fn merged_default_scripts_keep_a_header_for_the_longer_timeout() {
+        let scripts =
+            ["ls", "pwd"].map(|input| parse_script_input(input).expect("valid script input"));
+        assert_eq!(
+            merge_scripts(&scripts),
+            "# timeout=1min\ndo {\nls\n}\n\ndo {\npwd\n}"
+        );
     }
 }

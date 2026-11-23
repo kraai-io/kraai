@@ -62,6 +62,30 @@ value
 }
 
 #[tokio::test]
+async fn top_level_do_blocks_emit_statements_and_keep_their_changes() {
+    assert_script(
+        r#"
+let root = $env.PWD
+do {
+cd ..
+"moved"
+$env.PWD == $root
+$env.MARK = "set"
+let quiet = if true { "hidden"; "kept" }
+$quiet
+}
+
+do {
+$env.PWD == $root
+"MARK" in $env
+}
+"#,
+        "moved\nfalse\nkept\ntrue\nfalse\n",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn redirects_and_ignored_results_stay_silent() {
     assert_script(
         r#"

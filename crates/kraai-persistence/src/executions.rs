@@ -2,7 +2,7 @@ use crate::database::{Database, assert_owner, list_records, read_record, write_r
 use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_execution_types::{
     SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot,
+    ScriptOutputStream, ScriptProfileSnapshot, ScriptRewrites,
 };
 use kraai_types::{MessageId, SessionId, ToolCallId};
 use rusqlite::{Connection, params};
@@ -18,7 +18,7 @@ pub struct NewScriptExecution {
     pub call_id: ToolCallId,
     pub profile: ScriptProfileSnapshot,
     pub source: Vec<u8>,
-    pub rewrites: Vec<String>,
+    pub rewrites: ScriptRewrites,
     pub requested_capabilities: SandboxCapabilities,
     pub effective_capabilities: SandboxCapabilities,
     pub timeout: Option<Duration>,
@@ -33,8 +33,8 @@ pub struct ScriptExecutionRecord {
     pub source_message_id: MessageId,
     pub call_id: ToolCallId,
     pub profile: ScriptProfileSnapshot,
-    #[serde(default)]
-    pub rewrites: Vec<String>,
+    #[serde(flatten)]
+    pub rewrites: ScriptRewrites,
     pub requested_capabilities: SandboxCapabilities,
     pub effective_capabilities: SandboxCapabilities,
     pub timeout: Option<Duration>,

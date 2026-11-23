@@ -6,7 +6,7 @@ use std::time::Duration;
 use color_eyre::eyre::{Context, Result, eyre};
 use kraai_execution_types::{
     SandboxCapabilities, SandboxCapability, ScriptExecutionId, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot,
+    ScriptOutputStream, ScriptProfileSnapshot, ScriptRewrites,
 };
 use kraai_nushell_runtime::{RuntimeError, ScriptExecutionPlan};
 use kraai_persistence::{
@@ -35,7 +35,7 @@ pub(crate) struct EffectiveScriptRequest {
     pub(crate) call_id: ToolCallId,
     pub(crate) profile: ScriptProfileSnapshot,
     pub(crate) source: Vec<u8>,
-    pub(crate) rewrites: Vec<String>,
+    pub(crate) rewrites: ScriptRewrites,
     pub(crate) workspace_root: PathBuf,
     pub(crate) requested_capabilities: SandboxCapabilities,
     pub(crate) effective_capabilities: SandboxCapabilities,

@@ -31,7 +31,7 @@ fn execution(id: &ScriptExecutionId) -> NewScriptExecution {
             path: kraai_execution_types::PathPolicy::Inherit,
         },
         source: b"1 + 1".to_vec(),
-        rewrites: Vec::new(),
+        rewrites: ScriptRewrites::default(),
         requested_capabilities: SandboxCapabilities::default(),
         effective_capabilities: SandboxCapabilities::new([SandboxCapability::WorkspaceRead]),
         timeout: Some(Duration::from_secs(10)),
@@ -180,4 +180,24 @@ async fn batched_output_keeps_each_stream_in_order() {
         vec![(ScriptOutputStream::Stdout, b"abc".to_vec())]
     );
     let _ = fs::remove_dir_all(data_dir).await;
+}
+
+#[tokio::test]
+async fn records_from_before_merged_calls_keep_their_bash_rewrites() {
+    let data_dir = test_dir("rewrite-records");
+    let store = SqliteScriptExecutionStore::new(&data_dir);
+    let id = ScriptExecutionId::new(Ulid::generate());
+    let record = store.create(execution(&id)).await.unwrap();
+    let mut json = serde_json::to_value(&record).unwrap();
+    let object = json.as_object_mut().unwrap();
+    object.remove("merged_calls");
+    object.remove("dropped_calls");
+    object.insert(
+        String::from("rewrites"),
+        serde_json::json!(["`find` → `^find`"]),
+    );
+    let old: ScriptExecutionRecord = serde_json::from_value(json).unwrap();
+    assert_eq!(old.rewrites.bash, [String::from("`find` → `^find`")]);
+    assert_eq!(old.rewrites.merged_calls, 0);
+    fs::remove_dir_all(data_dir).await.unwrap();
 }

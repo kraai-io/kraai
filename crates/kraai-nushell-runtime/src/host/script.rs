@@ -54,14 +54,19 @@ fn evaluate_source(
                 abort: false,
             }));
         }
-        let mut template = (*block).clone();
-        let pipelines = std::mem::take(&mut template.pipelines);
-        template.ir_block = None;
         let emit = super::statement_output::emit_decl(&working_set).ok_or_else(|| {
             Box::new(ShellError::NushellFailed {
                 msg: "statement output command is missing".into(),
             })
         })?;
+        for pipeline in &block.pipelines {
+            if let Some(body) = super::statement_output::do_body(&working_set, pipeline) {
+                super::statement_output::emit_body_statements(&mut working_set, body, emit);
+            }
+        }
+        let mut template = (*block).clone();
+        let pipelines = std::mem::take(&mut template.pipelines);
+        template.ir_block = None;
         let mut blocks = Vec::with_capacity(pipelines.len());
         for pipeline in pipelines {
             let assignment = super::statement_output::is_assignment(&working_set, &pipeline);

@@ -1,7 +1,7 @@
 use nu_engine::command_prelude::*;
-use nu_protocol::DeclId;
 use nu_protocol::ast::{Expr, Operator, Pipeline};
 use nu_protocol::ir::{Instruction, IrBlock};
+use nu_protocol::{BlockId, DeclId};
 use std::sync::Arc;
 
 use super::HostError;
@@ -43,12 +43,54 @@ pub(super) fn is_assignment(working_set: &StateWorkingSet<'_>, pipeline: &Pipeli
 }
 
 pub(super) fn emit_drained_statements(ir: &mut IrBlock, emit: DeclId) {
+    emit_drains(ir, emit, &[]);
+}
+
+pub(super) fn do_body(working_set: &StateWorkingSet<'_>, pipeline: &Pipeline) -> Option<BlockId> {
+    let [element] = pipeline.elements.as_slice() else {
+        return None;
+    };
+    let Expr::Call(call) = &element.expr.expr else {
+        return None;
+    };
+    if working_set.get_decl(call.decl_id).name() != "do" {
+        return None;
+    }
+    match call.positional_iter().next()?.expr {
+        Expr::Closure(block_id) | Expr::Block(block_id) => Some(block_id),
+        _ => None,
+    }
+}
+
+pub(super) fn emit_body_statements(
+    working_set: &mut StateWorkingSet<'_>,
+    body: BlockId,
+    emit: DeclId,
+) {
+    let assignments: Vec<Span> = working_set
+        .get_block(body)
+        .pipelines
+        .iter()
+        .filter(|pipeline| is_assignment(working_set, pipeline))
+        .filter_map(|pipeline| Some(pipeline.elements.first()?.expr.span))
+        .collect();
+    if let Some(ir) = working_set.get_block_mut(body).ir_block.as_mut() {
+        emit_drains(ir, emit, &assignments);
+    }
+}
+
+fn emit_drains(ir: &mut IrBlock, emit: DeclId, assignments: &[Span]) {
     let drains: Vec<usize> = ir
         .instructions
         .iter()
+        .zip(&ir.spans)
         .enumerate()
-        .filter_map(|(index, instruction)| {
-            matches!(instruction, Instruction::Drain { .. }).then_some(index)
+        .filter_map(|(index, (instruction, span))| {
+            (matches!(instruction, Instruction::Drain { .. })
+                && !assignments
+                    .iter()
+                    .any(|assignment| assignment.contains_span(*span)))
+            .then_some(index)
         })
         .collect();
     let length = ir.instructions.len();
@@ -63,8 +105,10 @@ pub(super) fn emit_drained_statements(ir: &mut IrBlock, emit: DeclId) {
         .into_iter()
         .zip(std::mem::take(&mut ir.spans))
         .zip(std::mem::take(&mut ir.comments));
-    for ((mut instruction, span), comment) in old {
-        if let Instruction::Drain { src } = instruction {
+    for (index, ((mut instruction, span), comment)) in old.enumerate() {
+        if let Instruction::Drain { src } = instruction
+            && drains.binary_search(&index).is_ok()
+        {
             instructions.push(Instruction::Call {
                 decl_id: emit,
                 src_dst: src,

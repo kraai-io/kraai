@@ -2,7 +2,7 @@ use crate::*;
 use color_eyre::eyre::{Result, ensure};
 use kraai_execution_types::{
     SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot,
+    ScriptOutputStream, ScriptProfileSnapshot, ScriptRewrites,
 };
 use kraai_types::{
     ContextStateMutation, ConversationItem, MessageId, MessageStatus, PinnedFileScope, SessionId,
@@ -59,7 +59,7 @@ fn execution(session: &str) -> NewScriptExecution {
             path: kraai_execution_types::PathPolicy::Inherit,
         },
         source: b"print hello".to_vec(),
-        rewrites: Vec::new(),
+        rewrites: ScriptRewrites::default(),
         requested_capabilities: SandboxCapabilities::default(),
         effective_capabilities: SandboxCapabilities::default(),
         timeout: Some(Duration::from_secs(30)),

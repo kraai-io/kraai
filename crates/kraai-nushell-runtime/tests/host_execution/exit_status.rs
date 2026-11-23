@@ -77,3 +77,36 @@ $env.LAST_EXIT_CODE
     )
     .await;
 }
+
+#[tokio::test]
+async fn a_failed_statement_stops_the_script() {
+    for failing in [
+        "^/bin/sh -c 'exit 3'",
+        "ls missing-file",
+        "error make {msg: boom}",
+    ] {
+        for script in [
+            format!("print before; {failing}; print after"),
+            format!("do {{\nprint before\n{failing}\nprint inside\n}}\n\ndo {{\nprint after\n}}"),
+        ] {
+            let workspace = super::TestWorkspace::new();
+            let result = super::execute(
+                super::plan(script.clone(), &workspace),
+                super::CancellationToken::new(),
+            )
+            .await
+            .expect("execute fixture")
+            .output;
+            assert_eq!(
+                String::from_utf8_lossy(&result.stdout),
+                "before\n",
+                "{script}"
+            );
+            assert_ne!(
+                result.termination,
+                super::Termination::Exited { code: Some(0) },
+                "{script}"
+            );
+        }
+    }
+}

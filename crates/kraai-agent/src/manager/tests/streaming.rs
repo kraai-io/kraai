@@ -88,7 +88,7 @@ async fn cancelling_reasoning_only_stream_does_not_leave_an_orphan() -> Result<(
         .await
         .expect("reasoning");
     manager
-        .cancel_streaming_message(&request.message_id, "cancelled")
+        .cancel_streaming_message(&request.message_id)
         .await?;
     assert!(
         !manager
@@ -137,7 +137,7 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
     assert!(manager.complete_message(&request.message_id).await.is_err());
     assert!(
         manager
-            .cancel_streaming_message(&request.message_id, "cancelled")
+            .cancel_streaming_message(&request.message_id)
             .await
             .is_err()
     );
@@ -425,9 +425,7 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
         .as_deref(),
         Some("I am partway through.")
     );
-    manager
-        .cancel_streaming_message(&first.message_id, "cancelled")
-        .await?;
+    manager.cancel_streaming_message(&first.message_id).await?;
     manager.clear_active_turn(&session_id);
 
     let second = manager

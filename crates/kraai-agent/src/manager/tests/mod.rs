@@ -1,5 +1,4 @@
 mod ancestry;
-mod cancellation;
 mod common;
 mod compaction;
 mod continuation;

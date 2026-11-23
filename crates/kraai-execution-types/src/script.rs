@@ -63,3 +63,19 @@ pub enum ScriptOutputStream {
     Stdout,
     Stderr,
 }
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptRewrites {
+    #[serde(default, rename = "rewrites")]
+    pub bash: Vec<String>,
+    #[serde(default)]
+    pub merged_calls: usize,
+    #[serde(default)]
+    pub dropped_calls: usize,
+}
+
+impl ScriptRewrites {
+    pub fn is_empty(&self) -> bool {
+        self.bash.is_empty() && self.merged_calls == 0 && self.dropped_calls == 0
+    }
+}

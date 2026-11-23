@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use kraai_execution_types::{SandboxCapabilities, SandboxCapability, ScriptExecutionStatus};
+use kraai_execution_types::{
+    SandboxCapabilities, SandboxCapability, ScriptExecutionStatus, ScriptRewrites,
+};
 
 const BINARY_OUTPUT_MESSAGE: &str = "Binary output was preserved by Kraai. Decode an existing output file if available. Rerun only if repeating the command's effects is safe, decoding its output with the appropriate encoding before returning text.";
 
@@ -22,7 +24,7 @@ pub struct ToolCallResultView<'a> {
     pub stdout_file: Option<&'a Path>,
     pub stderr_file: Option<&'a Path>,
     pub sandbox_blocked: Option<&'a SandboxCapabilities>,
-    pub rewrites: &'a [String],
+    pub rewrites: &'a ScriptRewrites,
 }
 
 pub fn render_tool_call_result(result: ToolCallResultView<'_>) -> String {
@@ -43,10 +45,7 @@ pub fn render_tool_call_result(result: ToolCallResultView<'_>) -> String {
     if has_body {
         rendered.push('\n');
         if !result.rewrites.is_empty() {
-            rendered.push_str(&format!(
-                "<notice>Note: Kraai rewrote Bash syntax to Nushell before running: {}. This shell is Nushell.</notice>\n",
-                result.rewrites.join(", ")
-            ));
+            push_rewrite_notice(&mut rendered, result.rewrites);
         }
         render_channel(&mut rendered, "stdout", result.stdout, result.stdout_file);
         render_channel(&mut rendered, "stderr", result.stderr, result.stderr_file);
@@ -61,6 +60,35 @@ pub fn render_tool_call_result(result: ToolCallResultView<'_>) -> String {
     }
     rendered.push_str("</tool_call_result>");
     rendered
+}
+
+fn push_rewrite_notice(rendered: &mut String, rewrites: &ScriptRewrites) {
+    let mut notes = Vec::new();
+    if rewrites.merged_calls > 1 {
+        notes.push(format!(
+            "Kraai combined your {} script calls into the call above.",
+            rewrites.merged_calls
+        ));
+    }
+    if rewrites.dropped_calls > 0 {
+        let plural = if rewrites.dropped_calls == 1 { "" } else { "s" };
+        notes.push(format!(
+            "Kraai dropped {} invalid script call{plural} from your response.",
+            rewrites.dropped_calls
+        ));
+    }
+    if !notes.is_empty() {
+        notes.push(String::from("Send exactly one call per response."));
+    }
+    if !rewrites.bash.is_empty() {
+        notes.push(format!(
+            "Kraai rewrote Bash syntax to Nushell before running: {}. This shell is Nushell.",
+            rewrites.bash.join(", ")
+        ));
+    }
+    rendered.push_str("<notice>Note: ");
+    rendered.push_str(&notes.join(" "));
+    rendered.push_str("</notice>\n");
 }
 
 fn render_channel(rendered: &mut String, name: &str, bytes: &[u8], file: Option<&Path>) {
@@ -154,7 +182,7 @@ fn push_excerpt(rendered: &mut String, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::{ToolCallResultView, render_tool_call_result};
-    use kraai_execution_types::ScriptExecutionStatus;
+    use kraai_execution_types::{ScriptExecutionStatus, ScriptRewrites};
 
     #[test]
     fn preserves_text_channels_exactly_even_when_they_resemble_protocol() {
@@ -168,7 +196,7 @@ mod tests {
             stdout_file: None,
             stderr_file: None,
             sandbox_blocked: None,
-            rewrites: &[],
+            rewrites: &ScriptRewrites::default(),
         });
         assert_eq!(
             rendered,
@@ -181,10 +209,14 @@ mod tests {
 
     #[test]
     fn rewrites_are_announced_before_the_output() {
-        let rewrites = [
-            String::from("`2>&1 |` → `o+e>|`"),
-            String::from("`find` → `^find`"),
-        ];
+        let rewrites = ScriptRewrites {
+            bash: vec![
+                String::from("`2>&1 |` → `o+e>|`"),
+                String::from("`find` → `^find`"),
+            ],
+            merged_calls: 2,
+            dropped_calls: 1,
+        };
         let rendered = render_tool_call_result(ToolCallResultView {
             status: ScriptExecutionStatus::Completed,
             exit_code: Some(0),
@@ -200,7 +232,7 @@ mod tests {
         assert_eq!(
             rendered,
             "<tool_call_result status=\"completed\" exit_code=\"0\">\n\
-<notice>Note: Kraai rewrote Bash syntax to Nushell before running: `2>&1 |` → `o+e>|`, `find` → `^find`. This shell is Nushell.</notice>\n\
+<notice>Note: Kraai combined your 2 script calls into the call above. Kraai dropped 1 invalid script call from your response. Send exactly one call per response. Kraai rewrote Bash syntax to Nushell before running: `2>&1 |` → `o+e>|`, `find` → `^find`. This shell is Nushell.</notice>\n\
 </tool_call_result>"
         );
     }
@@ -217,7 +249,7 @@ mod tests {
             stdout_file: None,
             stderr_file: None,
             sandbox_blocked: None,
-            rewrites: &[],
+            rewrites: &ScriptRewrites::default(),
         });
         assert!(rendered.contains("encoding=\"binary\" byte_count=\"3\""));
         assert!(rendered.contains(super::BINARY_OUTPUT_MESSAGE));
@@ -237,7 +269,7 @@ mod tests {
                 stdout_file: None,
                 stderr_file: None,
                 sandbox_blocked: None,
-                rewrites: &[],
+                rewrites: &ScriptRewrites::default(),
             }),
             "<tool_call_result status=\"denied\"></tool_call_result>"
         );
@@ -256,7 +288,7 @@ mod tests {
                 stdout_file: None,
                 stderr_file: None,
                 sandbox_blocked: Some(&granted),
-                rewrites: &[],
+                rewrites: &ScriptRewrites::default(),
             })
         };
         assert_eq!(
@@ -288,7 +320,7 @@ mod tests {
             stdout_file: Some(std::path::Path::new("/out/a \"b\".stdout")),
             stderr_file: None,
             sandbox_blocked: None,
-            rewrites: &[],
+            rewrites: &ScriptRewrites::default(),
         });
         assert!(rendered.len() < super::CHANNEL_DISPLAY_LIMIT + 512);
         assert!(rendered.contains(&format!(

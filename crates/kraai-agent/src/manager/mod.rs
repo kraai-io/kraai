@@ -170,7 +170,6 @@ struct StreamingMessageState {
     previous_tip: Option<MessageId>,
     previous_title: Option<String>,
     message: Message,
-    cancellation_result_id: Option<MessageId>,
     text_item_ids: HashMap<String, usize>,
     pending_deltas: Vec<kraai_persistence::StreamDelta>,
     first_pending_sequence: u64,
