@@ -1,6 +1,6 @@
 use nu_parser::{Token, TokenContents, lex};
 use nu_protocol::engine::StateWorkingSet;
-use nu_protocol::{ParseError, Span};
+use nu_protocol::{ParseError, Span, Type};
 
 /// A bash-style call to one of these built-ins fails to parse, so it runs the external program
 /// instead.
@@ -162,6 +162,26 @@ impl Scan<'_> {
             bytes.first().is_some_and(|byte| {
                 byte.is_ascii_alphabetic() || matches!(byte, b'^' | b'.' | b'/' | b'_' | b'~')
             }) && bytes != b"false"
+        }) && !self.returns_a_bool(tokens)
+    }
+
+    fn returns_a_bool(&self, tokens: &[&Token]) -> bool {
+        let mut name = Vec::new();
+        let mut decl = None;
+        for token in tokens {
+            if !name.is_empty() {
+                name.push(b' ');
+            }
+            name.extend_from_slice(self.bytes(token.span));
+            decl = self.working_set.find_decl(&name).or(decl);
+        }
+        decl.is_some_and(|decl| {
+            self.working_set
+                .get_decl(decl)
+                .signature()
+                .input_output_types
+                .iter()
+                .any(|(_, output)| *output == Type::Bool)
         })
     }
 

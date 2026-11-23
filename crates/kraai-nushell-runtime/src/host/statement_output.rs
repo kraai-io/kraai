@@ -84,7 +84,11 @@ pub(super) fn do_body(working_set: &StateWorkingSet<'_>, pipeline: &Pipeline) ->
         return None;
     }
     match call.positional_iter().next()?.expr {
-        Expr::Closure(block_id) | Expr::Block(block_id) => Some(block_id),
+        Expr::Closure(block_id) | Expr::Block(block_id)
+            if block_id.get() >= working_set.permanent().num_blocks() =>
+        {
+            Some(block_id)
+        }
         _ => None,
     }
 }

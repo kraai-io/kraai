@@ -59,8 +59,12 @@ fn evaluate_source(
                 msg: "statement output command is missing".into(),
             })
         })?;
+        let mut bodies = Vec::new();
         for pipeline in &block.pipelines {
-            if let Some(body) = super::statement_output::do_body(&working_set, pipeline) {
+            if let Some(body) = super::statement_output::do_body(&working_set, pipeline)
+                && !bodies.contains(&body)
+            {
+                bodies.push(body);
                 super::statement_output::emit_body_statements(&mut working_set, body, emit);
             }
         }
