@@ -11,7 +11,7 @@ use kraai_provider_core::{
 };
 use kraai_types::ProviderId;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use super::core::RuntimeCore;
 use crate::Event;
@@ -61,6 +61,7 @@ pub(crate) struct ModelListSync {
     store: SqliteModelListStore,
     state: Mutex<SyncState>,
     requested: Notify,
+    refetches: Mutex<JoinSet<()>>,
 }
 
 #[derive(Default)]
@@ -89,11 +90,18 @@ impl ModelListSync {
             store,
             state: Mutex::default(),
             requested: Notify::new(),
+            refetches: Mutex::default(),
         }
     }
 
     fn state(&self) -> MutexGuard<'_, SyncState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn refetches(&self) -> MutexGuard<'_, JoinSet<()>> {
+        self.refetches
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) fn reset(&self) {
@@ -151,7 +159,7 @@ impl ModelListSync {
                 refetch,
             })
         });
-        let mut tasks = tokio::task::JoinSet::new();
+        let mut tasks = JoinSet::new();
         let mut outcome = SyncOutcome {
             changed: false,
             failures: Vec::new(),
@@ -253,14 +261,15 @@ impl ProviderSyncTask {
         if !due {
             return (self.id, result);
         }
-        let claimed_until = self.now.saturating_add(millis(LEASE_DURATION));
+        let now = unix_millis().max(self.now);
+        let claimed_until = now.saturating_add(millis(LEASE_DURATION));
         let claimed = if self.refetch == Refetch::Always {
             self.store
-                .claim_any_version(&self.id, self.now, claimed_until)
+                .claim_any_version(&self.id, now, claimed_until)
                 .await
         } else {
             self.store
-                .claim(&self.id, seen.as_ref(), self.now, claimed_until)
+                .claim(&self.id, seen.as_ref(), now, claimed_until)
                 .await
         };
         match claimed {
@@ -289,9 +298,24 @@ impl ProviderSyncTask {
                     source: self.source.clone(),
                     fetched_at: unix_millis().max(self.now),
                 };
-                let saved = self.store.save(&self.id, &version, &list).await;
-                result.installed = Some(version);
-                saved
+                match self
+                    .store
+                    .save(&self.id, claimed_until, &version, &list)
+                    .await
+                {
+                    Ok(Some(saved)) => {
+                        result.installed = Some(saved);
+                        Ok(())
+                    }
+                    Ok(None) => {
+                        tracing::warn!(id = %self.id, "Lost the model list claim before saving");
+                        Ok(())
+                    }
+                    Err(error) => {
+                        result.installed = Some(version);
+                        Err(error)
+                    }
+                }
             }
             Err(error) => Err(error),
         };
@@ -366,6 +390,21 @@ impl RuntimeCore {
             .await;
         drop(reload);
         self.report_model_list_sync(outcome, request.report_failures);
+    }
+
+    pub(crate) fn spawn_model_list_refetch(&self, provider: ProviderId) {
+        let mut refetches = self.model_lists.refetches();
+        if self.is_stopping() {
+            return;
+        }
+        while refetches.try_join_next().is_some() {}
+        let runtime = self.clone();
+        refetches.spawn(async move { runtime.refetch_model_list(&provider).await });
+    }
+
+    pub(crate) async fn stop_model_list_refetches(&self) {
+        let mut refetches = std::mem::take(&mut *self.model_lists.refetches());
+        refetches.shutdown().await;
     }
 
     pub(crate) async fn refetch_model_list(&self, provider: &ProviderId) {

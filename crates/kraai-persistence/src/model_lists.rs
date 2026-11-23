@@ -159,23 +159,26 @@ impl SqliteModelListStore {
     pub async fn save(
         &self,
         provider: &ProviderId,
+        claimed_until: i64,
         version: &ModelListVersion,
         data: &serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<Option<ModelListVersion>> {
         let provider = provider.to_string();
         let ModelListVersion { source, fetched_at } = version.clone();
         let data = serde_json::to_string(data)?;
         self.database
             .run(move |connection, _| {
-                connection.execute(
-                    "INSERT INTO model_lists (provider_id, source, fetched_at, data)
-                     VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT(provider_id) DO UPDATE SET source = excluded.source,
-                         fetched_at = excluded.fetched_at, data = excluded.data
-                     WHERE excluded.fetched_at > model_lists.fetched_at",
-                    params![provider, source, fetched_at, data],
-                )?;
-                Ok(())
+                let fetched_at = connection
+                    .query_row(
+                        "UPDATE model_lists SET source = ?2,
+                             fetched_at = MAX(?3, fetched_at + 1), data = ?4
+                         WHERE provider_id = ?1 AND claimed_until = ?5
+                         RETURNING fetched_at",
+                        params![provider, source, fetched_at, data, claimed_until],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                Ok(fetched_at.map(|fetched_at| ModelListVersion { source, fetched_at }))
             })
             .await
     }

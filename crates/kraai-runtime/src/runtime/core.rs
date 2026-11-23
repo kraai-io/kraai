@@ -185,6 +185,7 @@ impl RuntimeCore {
 
     pub(crate) async fn stop_active_work(&self) {
         self.stopping.store(true, Ordering::Release);
+        self.stop_model_list_refetches().await;
         self.sessions.stop().await;
         self.stream_tasks.close();
         self.stream_tasks.wait().await;

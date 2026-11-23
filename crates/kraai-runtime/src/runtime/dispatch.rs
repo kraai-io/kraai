@@ -226,7 +226,7 @@ impl RuntimeCore {
                     return Ok(());
                 }
                 let _ = response.send(Ok(()));
-                self.refetch_model_list(&provider_id).await;
+                self.spawn_model_list_refetch(provider_id);
             }
             Command::ListProviderDefinitions { response } => {
                 let _ = response.send(Ok(self.provider_registry.list_definitions()));

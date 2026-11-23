@@ -131,9 +131,8 @@ impl ModelCatalog {
     }
 
     pub async fn refresh(&self) -> bool {
-        if !self.snapshot.read().await.is_fresh(crate::pricing::now())
-            && let Err(error) = self.fetch().await
-        {
+        let fresh = self.snapshot.read().await.is_fresh(crate::pricing::now());
+        if !fresh && let Err(error) = self.fetch().await {
             tracing::debug!(%error, "Could not refresh model catalog; retaining cached metadata");
         }
         self.snapshot.read().await.is_fresh(crate::pricing::now())
