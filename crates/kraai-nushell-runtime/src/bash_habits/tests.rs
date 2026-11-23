@@ -155,6 +155,7 @@ fn leaves_nushell_and_ambiguous_bash_alone() {
         "[ -d build ] && rm -rf build",
         "{ ls; } && pwd",
         "$ready && make",
+        "(false) && echo x",
         "'x' && make",
         "print $undefined_lowercase",
     ] {

@@ -83,8 +83,10 @@ $env.PWD == $root
 if true { let nested = if true { "hidden"; "top" }; $nested }
 do { "private"; "saved" } out> result.txt
 open --raw result.txt
+do { "first"; "last" } err> errors.txt
+do { echo ("hidden"; "argument") }
 "#,
-        "moved\nfalse\nkept\nnested\ntrue\nfalse\ntop\nsaved\n",
+        "moved\nfalse\nkept\nnested\ntrue\nfalse\ntop\nsaved\nfirst\nlast\nargument\n",
     )
     .await;
 }

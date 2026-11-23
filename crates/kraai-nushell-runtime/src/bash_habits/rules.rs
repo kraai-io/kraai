@@ -160,8 +160,7 @@ impl Scan<'_> {
         tokens.first().is_some_and(|first| {
             let bytes = self.bytes(first.span);
             bytes.first().is_some_and(|byte| {
-                byte.is_ascii_alphabetic()
-                    || matches!(byte, b'^' | b'.' | b'/' | b'_' | b'~' | b'(')
+                byte.is_ascii_alphabetic() || matches!(byte, b'^' | b'.' | b'/' | b'_' | b'~')
             }) && bytes != b"false"
         })
     }
