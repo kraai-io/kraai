@@ -1,5 +1,5 @@
 use nu_engine::command_prelude::*;
-use nu_protocol::ast::{Expr, Operator, Pipeline};
+use nu_protocol::ast::{Block, Expr, Expression, Operator, Pipeline, Traverse};
 use nu_protocol::ir::{Instruction, IrBlock};
 use nu_protocol::{BlockId, DeclId};
 use std::sync::Arc;
@@ -26,30 +26,47 @@ pub(super) fn emit_decl(working_set: &StateWorkingSet<'_>) -> Option<DeclId> {
     working_set.find_decl(EMIT_COMMAND.as_bytes())
 }
 
-pub(super) fn is_assignment(working_set: &StateWorkingSet<'_>, pipeline: &Pipeline) -> bool {
-    let [element] = pipeline.elements.as_slice() else {
-        return false;
-    };
-    match &element.expr.expr {
-        Expr::Call(call) => matches!(
-            working_set.get_decl(call.decl_id).name(),
-            "let" | "mut" | "const"
-        ),
-        Expr::BinaryOp(_, operator, _) => {
-            matches!(operator.expr, Expr::Operator(Operator::Assignment(_)))
-        }
-        _ => false,
-    }
+pub(super) fn emit_drained_statements(
+    working_set: &StateWorkingSet<'_>,
+    statement: &Block,
+    ir: &mut IrBlock,
+    emit: DeclId,
+) {
+    emit_drains(ir, emit, &assignment_spans(working_set, statement));
 }
 
-pub(super) fn emit_drained_statements(ir: &mut IrBlock, emit: DeclId) {
-    emit_drains(ir, emit, &[]);
+fn assignment_spans(working_set: &StateWorkingSet<'_>, block: &Block) -> Vec<Span> {
+    let mut spans = Vec::new();
+    block.flat_map(
+        working_set,
+        &|expression: &Expression| match &expression.expr {
+            Expr::Call(call)
+                if matches!(
+                    working_set.get_decl(call.decl_id).name(),
+                    "let" | "mut" | "const"
+                ) =>
+            {
+                vec![expression.span]
+            }
+            Expr::BinaryOp(_, operator, _)
+                if matches!(operator.expr, Expr::Operator(Operator::Assignment(_))) =>
+            {
+                vec![expression.span]
+            }
+            _ => Vec::new(),
+        },
+        &mut spans,
+    );
+    spans
 }
 
 pub(super) fn do_body(working_set: &StateWorkingSet<'_>, pipeline: &Pipeline) -> Option<BlockId> {
     let [element] = pipeline.elements.as_slice() else {
         return None;
     };
+    if element.redirection.is_some() {
+        return None;
+    }
     let Expr::Call(call) = &element.expr.expr else {
         return None;
     };
@@ -67,13 +84,7 @@ pub(super) fn emit_body_statements(
     body: BlockId,
     emit: DeclId,
 ) {
-    let assignments: Vec<Span> = working_set
-        .get_block(body)
-        .pipelines
-        .iter()
-        .filter(|pipeline| is_assignment(working_set, pipeline))
-        .filter_map(|pipeline| Some(pipeline.elements.first()?.expr.span))
-        .collect();
+    let assignments = assignment_spans(working_set, working_set.get_block(body));
     if let Some(ir) = working_set.get_block_mut(body).ir_block.as_mut() {
         emit_drains(ir, emit, &assignments);
     }

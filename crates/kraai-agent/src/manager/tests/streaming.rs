@@ -453,3 +453,69 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
     cleanup_dir(data_dir).await;
     Ok(())
 }
+
+#[tokio::test]
+async fn cancelling_after_a_failed_completion_drops_the_unrun_call() -> Result<()> {
+    let (mut manager, data_dir) = test_manager().await;
+    let session_id = manager.create_session().await?;
+    let request = manager
+        .prepare_start_stream(
+            &session_id,
+            String::from("start").into(),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+            Default::default(),
+        )
+        .await?;
+    manager
+        .append_text_chunk(
+            &request.message_id,
+            "answer",
+            AssistantPhase::Commentary,
+            "checking",
+        )
+        .await
+        .expect("text should be appended");
+    manager
+        .append_script_call(
+            &request.message_id,
+            ScriptCall {
+                call_id: ToolCallId::new("call-1"),
+                name: String::from("kraai_nushell"),
+                input: String::from("ls"),
+                arguments_error: None,
+                rewrite: None,
+            },
+        )
+        .await
+        .expect("script call should be appended");
+    let blocked_root = data_dir.join("blocked-storage");
+    tokio::fs::write(&blocked_root, b"not a directory").await?;
+    let working_store = std::mem::replace(
+        &mut manager.message_store,
+        Arc::new(kraai_persistence::SqliteMessageStore::new(&blocked_root)),
+    );
+    assert!(manager.complete_message(&request.message_id).await.is_err());
+    manager.message_store = working_store;
+
+    manager
+        .cancel_streaming_message(&request.message_id)
+        .await?;
+    let saved = manager
+        .message_store
+        .get(&request.message_id)
+        .await?
+        .expect("cancelled message");
+    assert_eq!(
+        saved.content.assistant_items(),
+        Some(
+            [AssistantItem::Text {
+                phase: AssistantPhase::Commentary,
+                text: String::from("checking"),
+            }]
+            .as_slice()
+        )
+    );
+    cleanup_dir(data_dir).await;
+    Ok(())
+}

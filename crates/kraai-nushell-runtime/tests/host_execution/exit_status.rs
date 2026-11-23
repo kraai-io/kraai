@@ -102,10 +102,10 @@ async fn a_failed_statement_stops_the_script() {
                 "before\n",
                 "{script}"
             );
-            assert_ne!(
-                result.termination,
-                super::Termination::Exited { code: Some(0) },
-                "{script}"
+            assert!(
+                matches!(result.termination, super::Termination::Exited { code: Some(code) } if code != 0),
+                "{script}: {:?}",
+                result.termination
             );
         }
     }

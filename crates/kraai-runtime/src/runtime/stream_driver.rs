@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -19,7 +19,6 @@ use super::session::{SessionMessage, StreamEvent};
 use crate::api::Event;
 use crate::handle::RuntimeEventSender;
 
-const POST_BOUNDARY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_STREAM_REISSUES: u32 = 2;
 pub(super) const POST_BOUNDARY_DRAIN_YIELD_INTERVAL: usize = 256;
 
@@ -467,23 +466,9 @@ impl StreamReader {
         provider_id: &ProviderId,
         response: &mut ResponseState,
     ) -> ResponseEnd {
-        let mut drain_deadline = None;
         let mut drained_events = 0_usize;
         loop {
-            let next = match drain_deadline {
-                Some(deadline) => match tokio::time::timeout_at(deadline, stream.next()).await {
-                    Ok(event) => event,
-                    Err(_) => {
-                        tracing::warn!(
-                            timeout_millis = POST_BOUNDARY_DRAIN_TIMEOUT.as_millis(),
-                            "Stopping provider stream drain after timeout"
-                        );
-                        return ResponseEnd::Finished;
-                    }
-                },
-                None => stream.next().await,
-            };
-            let Some(event) = next else {
+            let Some(event) = stream.next().await else {
                 return ResponseEnd::Finished;
             };
             let draining = !response.calls.is_empty();
@@ -538,16 +523,14 @@ impl StreamReader {
                     })
                 }
                 Ok(ProviderStreamEvent::ScriptCall(call)) => {
-                    if !draining {
-                        if call.arguments_error.is_none() && call.name != ScriptToolDefinition::NAME
-                        {
-                            return ResponseEnd::Failed(format!(
-                                "provider called unexpected tool '{}'",
-                                call.name
-                            ));
-                        }
-                        drain_deadline =
-                            Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
+                    if !draining
+                        && call.arguments_error.is_none()
+                        && call.name != ScriptToolDefinition::NAME
+                    {
+                        return ResponseEnd::Failed(format!(
+                            "provider called unexpected tool '{}'",
+                            call.name
+                        ));
                     }
                     response.calls.push(call);
                     true

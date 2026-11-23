@@ -73,14 +73,18 @@ $env.PWD == $root
 $env.MARK = "set"
 let quiet = if true { "hidden"; "kept" }
 $quiet
+if true { let nested = if true { "hidden"; "nested" }; $nested }
 }
 
 do {
 $env.PWD == $root
 "MARK" in $env
 }
+if true { let nested = if true { "hidden"; "top" }; $nested }
+do { "private"; "saved" } out> result.txt
+open --raw result.txt
 "#,
-        "moved\nfalse\nkept\ntrue\nfalse\n",
+        "moved\nfalse\nkept\nnested\ntrue\nfalse\ntop\nsaved\n",
     )
     .await;
 }

@@ -17,7 +17,7 @@ use crate::{Event, SessionActivity};
 struct HandoffProvider {
     requests: tokio::sync::mpsc::UnboundedSender<kraai_provider_core::ProviderRequest>,
     first_request: AtomicBool,
-    hold_after_call: bool,
+    hold_after_call: Option<Arc<tokio::sync::Notify>>,
     text_before_call: Option<&'static str>,
 }
 
@@ -64,10 +64,12 @@ impl kraai_provider_core::Provider for HandoffProvider {
                 },
             )));
             let events = futures::stream::iter(events);
-            if self.hold_after_call {
-                Ok(Box::pin(events.chain(futures::stream::pending())))
-            } else {
-                Ok(Box::pin(events))
+            match self.hold_after_call.clone() {
+                Some(call_taken) => Ok(Box::pin(events.chain(futures::stream::once(async move {
+                    call_taken.notify_one();
+                    futures::future::pending().await
+                })))),
+                None => Ok(Box::pin(events)),
             }
         } else {
             Ok(Box::pin(futures::stream::pending()))
@@ -78,13 +80,14 @@ impl kraai_provider_core::Provider for HandoffProvider {
 #[tokio::test]
 async fn cancelling_while_a_call_drains_keeps_the_text_and_drops_the_unrun_call() -> Result<()> {
     let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let call_taken = Arc::new(tokio::sync::Notify::new());
     let mut providers = kraai_provider_core::ProviderManager::new();
     providers.register_provider(
         kraai_types::ProviderId::new("mock"),
         Box::new(HandoffProvider {
             requests,
             first_request: AtomicBool::new(true),
-            hold_after_call: true,
+            hold_after_call: Some(call_taken.clone()),
             text_before_call: Some("I am partway through."),
         }),
     );
@@ -111,6 +114,7 @@ async fn cancelling_while_a_call_drains_keeps_the_text_and_drops_the_unrun_call(
             })
         })
         .await;
+    hang_guard(call_taken.notified()).await?;
     assert!(harness.handle.cancel_stream(session_id.clone()).await?);
     assert!(!harness.handle.cancel_stream(session_id.clone()).await?);
     assert!(harness.runtime.execution_store.list_all().await?.is_empty());
@@ -211,7 +215,7 @@ fn idle_provider() -> kraai_provider_core::ProviderManager {
         Box::new(HandoffProvider {
             requests,
             first_request: AtomicBool::new(false),
-            hold_after_call: false,
+            hold_after_call: None,
             text_before_call: None,
         }),
     );

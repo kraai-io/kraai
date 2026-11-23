@@ -24,6 +24,7 @@ pub(super) fn edits(working_set: &StateWorkingSet, source: &str, offset: usize) 
         edits: Vec::new(),
         commands: Vec::new(),
         variables: Vec::new(),
+        scope_end: source.len(),
     };
     scan.block(0, source.len());
     for error in &working_set.parse_errors {
@@ -68,7 +69,13 @@ struct Scan<'a> {
     source: &'a [u8],
     edits: Vec<Edit>,
     commands: Vec<Command>,
-    variables: Vec<String>,
+    variables: Vec<Variable>,
+    scope_end: usize,
+}
+
+struct Variable {
+    name: String,
+    visible: std::ops::Range<usize>,
 }
 
 struct Command {
@@ -101,6 +108,7 @@ impl Scan<'_> {
         let Some(input) = self.source.get(start..end) else {
             return;
         };
+        let outer_scope = std::mem::replace(&mut self.scope_end, end);
         let (tokens, _) = lex(input, start, &[], &[], false);
         let mut tokens = tokens
             .iter()
@@ -126,7 +134,9 @@ impl Scan<'_> {
                     command.clear();
                 }
                 TokenContents::Pipe if self.bytes(token.span) == b"&&" => {
-                    self.edit(token.span.start, token.span.end, ";", change("&&", ";"));
+                    if self.runs_a_command(&command) {
+                        self.edit(token.span.start, token.span.end, ";", change("&&", ";"));
+                    }
                     self.command(&command, None);
                     command.clear();
                 }
@@ -143,6 +153,14 @@ impl Scan<'_> {
             }
         }
         self.command(&command, None);
+        self.scope_end = outer_scope;
+    }
+
+    fn runs_a_command(&self, tokens: &[&Token]) -> bool {
+        tokens.first().is_some_and(|first| {
+            let bytes = self.bytes(first.span);
+            !matches!(bytes.first(), Some(b'[' | b'{')) && bytes != b"false"
+        })
     }
 
     fn nested(&mut self, span: Span) {
@@ -201,9 +219,13 @@ impl Scan<'_> {
         }
         if let [keyword, name, ..] = tokens
             && matches!(self.bytes(keyword.span), b"let" | b"mut" | b"const")
+            && let Some(last) = tokens.last()
         {
             let name = String::from_utf8_lossy(self.bytes(name.span));
-            self.variables.push(name.trim_end_matches(':').to_owned());
+            self.variables.push(Variable {
+                name: name.trim_end_matches(':').to_owned(),
+                visible: last.span.end..self.scope_end,
+            });
         }
         let Some(head_index) = self.head_index(tokens) else {
             return;
@@ -321,10 +343,16 @@ impl Scan<'_> {
         };
         if env_error {
             let end = self.word_end(end);
+            let declared: Vec<&str> = self
+                .variables
+                .iter()
+                .filter(|variable| variable.visible.contains(&start))
+                .map(|variable| variable.name.as_str())
+                .collect();
             if let Some((replacement, label)) = self
                 .source
                 .get(start..end)
-                .and_then(|bytes| variable_path(bytes, &self.variables))
+                .and_then(|bytes| variable_path(bytes, &declared))
             {
                 self.edit(start, end, replacement, label);
             }
@@ -407,13 +435,13 @@ fn redirect(operator: &str, target: &str, has_target: bool) -> Option<String> {
     Some(format!("{operator} {target}"))
 }
 
-fn variable_path(bytes: &[u8], declared: &[String]) -> Option<(String, String)> {
+fn variable_path(bytes: &[u8], declared: &[&str]) -> Option<(String, String)> {
     let text = std::str::from_utf8(bytes).ok()?.strip_prefix('$')?;
     let (name, rest) = text.split_at(text.find('/').unwrap_or(text.len()));
     let plain_path = rest
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'));
-    if declared.iter().any(|variable| variable == name) {
+    if declared.contains(&name) {
         if rest.is_empty() || !plain_path {
             return None;
         }

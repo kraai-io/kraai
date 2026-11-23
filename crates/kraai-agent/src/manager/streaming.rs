@@ -355,6 +355,9 @@ impl AgentManager {
             return Ok(None);
         };
         let original_status = state.message.status.clone();
+        if let ConversationItem::Assistant { items } = &mut state.message.content {
+            items.retain(|item| !matches!(item, AssistantItem::ScriptCall(_)));
+        }
 
         let persisted = state
             .message

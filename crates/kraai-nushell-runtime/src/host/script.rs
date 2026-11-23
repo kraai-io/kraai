@@ -69,14 +69,16 @@ fn evaluate_source(
         template.ir_block = None;
         let mut blocks = Vec::with_capacity(pipelines.len());
         for pipeline in pipelines {
-            let assignment = super::statement_output::is_assignment(&working_set, &pipeline);
             let mut statement = template.clone();
             statement.pipelines.push(pipeline);
             match nu_engine::compile(&working_set, &statement) {
                 Ok(mut ir) => {
-                    if !assignment {
-                        super::statement_output::emit_drained_statements(&mut ir, emit);
-                    }
+                    super::statement_output::emit_drained_statements(
+                        &working_set,
+                        &statement,
+                        &mut ir,
+                        emit,
+                    );
                     statement.ir_block = Some(ir);
                 }
                 Err(error) => {

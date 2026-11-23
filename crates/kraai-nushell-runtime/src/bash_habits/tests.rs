@@ -17,8 +17,17 @@ fn rewrite_with_startup(script: &str, config: &str) -> Option<String> {
     rewrite_bash_habits(script, &every_command(), startup.as_slice()).map(|rewrite| rewrite.source)
 }
 
-const REWRITES: [(&str, &str); 26] = [
+const REWRITES: [(&str, &str); 29] = [
     ("git status && git diff", "git status ; git diff"),
+    ("test -f x && echo y", "test -f x ; echo y"),
+    (
+        "let HOME = $HOME; print $HOME",
+        "let HOME = $env.HOME; print $HOME",
+    ),
+    (
+        "do { let DIR = 'x' }; ls $DIR/.git",
+        "do { let DIR = 'x' }; ls $\"($env.DIR)/.git\"",
+    ),
     (
         "cd src && cargo test 2>&1 | tail -5",
         "cd src ; cargo test o+e>| tail -5",
@@ -142,6 +151,9 @@ fn leaves_nushell_and_ambiguous_bash_alone() {
         // `||` has no Nushell form with the same failure behavior.
         "git diff 2>/dev/null || git status",
         "print 'a && b'",
+        "false && echo unexpected",
+        "[ -d build ] && rm -rf build",
+        "{ ls; } && pwd",
         "print $undefined_lowercase",
     ] {
         assert_eq!(rewrite(input), None, "{input}");
