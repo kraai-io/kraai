@@ -335,3 +335,44 @@ async fn validates_initialization_workspace_and_mcp_transport() {
     harness.session().await;
     harness.stop().await
 }
+
+#[tokio::test]
+async fn a_running_script_shows_its_output_before_it_finishes() {
+    let mut harness = Harness::new(vec![
+        Reply::Script(
+            "# timeout=10min permissions=no-sandbox\nprint 'live line'; sleep 1sec; print 'last line'"
+                .into(),
+        ),
+        "Finished.".into(),
+    ])
+    .await;
+    harness.initialize().await;
+    let session = harness.session().await;
+    harness
+        .send(json!({"jsonrpc":"2.0","id":2,"method":"session/prompt","params":prompt(&session)}))
+        .await;
+    let pending = harness
+        .until(|value| value.get("method") == Some(&json!("session/request_permission")))
+        .await;
+    let approval = pending.last().expect("missing approval");
+    harness.send(json!({"jsonrpc":"2.0","id":approval.get("id"),"result":{"outcome":{"outcome":"selected","optionId":"allow"}}})).await;
+    let values = harness
+        .until(|value| value.get("id") == Some(&json!(2)))
+        .await;
+    let tool_update = |value: &Value| {
+        value.pointer("/params/update/sessionUpdate") == Some(&json!("tool_call_update"))
+    };
+    let live = values.iter().position(|value| {
+        tool_update(value)
+            && value.pointer("/params/update/status").is_none()
+            && value.pointer("/params/update/content/0/content/text") == Some(&json!("live line"))
+    });
+    let finished = values.iter().position(|value| {
+        tool_update(value) && value.pointer("/params/update/status") == Some(&json!("completed"))
+    });
+    assert!(
+        live.is_some() && live < finished,
+        "live output must arrive before the result: {values:#?}"
+    );
+    harness.stop().await
+}

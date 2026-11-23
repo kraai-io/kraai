@@ -26,7 +26,7 @@ impl ProviderRetryObserver for RuntimeRetryObserver {
                 model_id: self.model_id.to_string(),
                 operation: event.operation.to_string(),
                 retry_number: event.retry_number,
-                delay_seconds: event.delay.as_secs(),
+                delay_seconds: event.delay.as_secs() + u64::from(event.delay.subsec_nanos() > 0),
                 reason: event.reason.clone(),
             },
         );

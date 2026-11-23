@@ -5,6 +5,7 @@ use axum::{
     Router,
     body::{Body, Bytes},
     http::StatusCode,
+    response::IntoResponse,
     routing::{get, post},
 };
 use futures::{StreamExt, stream};
@@ -109,4 +110,31 @@ async fn a_rejected_response_fails_the_run() {
         failure.is_some(),
         "a run whose response failed reported success"
     );
+}
+
+#[tokio::test]
+async fn a_scheduled_provider_retry_is_written_to_the_output() {
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let (RunOutcome { failure, .. }, output) = run_against(Router::new().route(
+        "/chat/completions",
+        post(async move || {
+            if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return (StatusCode::SERVICE_UNAVAILABLE, "overloaded").into_response();
+            }
+            let chunk =
+                json!({"choices":[{"index":0,"delta":{"content":"Done."},"finish_reason":"stop"}]});
+            (
+                [("content-type", "text/event-stream")],
+                format!("data: {chunk}\n\ndata: [DONE]\n\n"),
+            )
+                .into_response()
+        }),
+    ))
+    .await;
+    assert!(failure.is_none(), "{failure:?}");
+    assert!(
+        output.starts_with("\n\n[HTTP 503 Service Unavailable, retrying in "),
+        "{output}"
+    );
+    assert!(output.contains(" s (retry 1)]\n\nDone."), "{output}");
 }
