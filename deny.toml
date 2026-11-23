@@ -72,7 +72,6 @@ feature-depth = 1
 ignore = [
   # ignore for now
   "RUSTSEC-2025-0141",
-  "RUSTSEC-2026-0173",
   "RUSTSEC-2026-0195",
   "RUSTSEC-2026-0194",
 
