@@ -133,7 +133,6 @@ impl ModelListSync {
         now: i64,
         refetch: Refetch,
     ) -> Result<SyncOutcome> {
-        let stored = self.store.versions().await?;
         let (installed, backoff_until, generation) = {
             let state = self.state();
             (
@@ -142,6 +141,7 @@ impl ModelListSync {
                 state.generation,
             )
         };
+        let stored = self.store.versions().await?;
         let mut pending = providers.providers().filter_map(|(id, provider)| {
             if only.is_some_and(|only| only != id) {
                 return None;
@@ -323,7 +323,8 @@ impl ProviderSyncTask {
             tracing::warn!(id = %self.id, error = %format!("{error:#}"), "Unable to release model list claim");
         }
         if let Err(error) = saved {
-            result.backoff_until = Some(self.now.saturating_add(millis(FAILURE_BACKOFF)));
+            let failed_at = unix_millis().max(self.now);
+            result.backoff_until = Some(failed_at.saturating_add(millis(FAILURE_BACKOFF)));
             result.failure = Some(format!("{error:#}"));
         }
         (self.id, result)
