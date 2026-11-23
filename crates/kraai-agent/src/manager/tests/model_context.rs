@@ -49,10 +49,10 @@ impl Provider for ContextProvider {
 }
 
 #[tokio::test]
-async fn model_switches_use_current_context_limits_after_restarting() -> Result<()> {
+async fn model_switches_use_current_context_limits_after_restarting() {
     let (mut manager, data_dir) = test_manager().await;
     for (id, standard_limit) in [("first", 10_000), ("second", 30_000)] {
-        super::super::write(&manager.providers).register_provider(
+        write(&manager.providers).register_provider(
             ProviderId::new(id),
             Box::new(ContextProvider {
                 id: ProviderId::new(id),
@@ -60,7 +60,7 @@ async fn model_switches_use_current_context_limits_after_restarting() -> Result<
             }),
         );
     }
-    let session = manager.create_session().await?;
+    let session = manager.create_session().await.unwrap();
     let mut previous_usage = None;
     for (provider, model, max_context, compact) in [
         ("first", "standard", Some(10_000), false),
@@ -77,16 +77,19 @@ async fn model_switches_use_current_context_limits_after_restarting() -> Result<
         };
         manager
             .set_session_model(&session, selection.clone())
-            .await?;
+            .await
+            .unwrap();
         let providers = manager.cloned_provider_manager();
         drop(manager);
-        let persistence = open_persistence(&data_dir).await?;
+        let persistence = open_persistence(&data_dir).await;
         manager = AgentManager::new(providers, data_dir.clone(), persistence, data_dir.clone());
         let snapshot = manager
             .capture_session_snapshot(&session)
-            .await?
+            .await
+            .unwrap()
             .load()
-            .await?;
+            .await
+            .unwrap();
         assert_eq!(snapshot.session.selected_model, Some(selection.clone()));
         assert_eq!(snapshot.context_usage, previous_usage);
 
@@ -98,11 +101,13 @@ async fn model_switches_use_current_context_limits_after_restarting() -> Result<
                 selection.provider_id.clone(),
                 selection.options,
             )
-            .await?;
+            .await
+            .unwrap();
         assert_eq!(request.compact_first, compact);
         let generation = manager
             .get_chat_history(&session)
-            .await?
+            .await
+            .unwrap()
             .remove(&request.message_id)
             .expect("prepared message")
             .generation
@@ -119,15 +124,17 @@ async fn model_switches_use_current_context_limits_after_restarting() -> Result<
                     ..Default::default()
                 },
             )
-            .await?;
-        manager.complete_message(&request.message_id).await?;
+            .await
+            .unwrap();
+        manager.complete_message(&request.message_id).await.unwrap();
         manager.clear_active_turn(&session);
         manager
             .persistence
             .sessions()
             .release_turn(&session)
-            .await?;
-        previous_usage = manager.get_session_context_usage(&session).await?;
+            .await
+            .unwrap();
+        previous_usage = manager.get_session_context_usage(&session).await.unwrap();
         assert_eq!(
             previous_usage
                 .as_ref()
@@ -137,5 +144,4 @@ async fn model_switches_use_current_context_limits_after_restarting() -> Result<
         );
     }
     cleanup_dir(data_dir).await;
-    Ok(())
 }

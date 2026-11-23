@@ -337,7 +337,9 @@ fn links_directly(path: &Path, target: &Path, resolved: &Path) -> bool {
                 direct.pop();
             }
             Component::CurDir => {}
-            component => direct.push(component),
+            component @ (Component::Prefix(_) | Component::RootDir | Component::Normal(_)) => {
+                direct.push(component);
+            }
         }
     }
     direct.ancestors().all(|ancestor| {

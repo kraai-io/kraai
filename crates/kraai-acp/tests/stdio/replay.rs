@@ -1,4 +1,3 @@
-use color_eyre::eyre::{Result, eyre};
 use kraai_persistence::{Persistence, SessionStore};
 use kraai_types::{
     AssistantItem, AssistantPhase, ConversationItem, Message, MessageId, MessageStatus,
@@ -8,15 +7,15 @@ use serde_json::{Value, json};
 use crate::support::Harness;
 
 #[tokio::test]
-async fn reading_client_loads_history_larger_than_output_capacity() -> Result<()> {
+async fn reading_client_loads_history_larger_than_output_capacity() {
     const MESSAGES: usize = 80;
     const TEXT_BYTES: usize = 1024 * 1024;
-    let mut harness = Harness::new(vec![]).await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
-    harness.stop().await?;
+    let mut harness = Harness::new(vec![]).await;
+    harness.initialize().await;
+    let session = harness.session().await;
+    harness.stop().await;
     let state = harness.root.path().join("state/data");
-    let persistence = Persistence::open(&state).await?;
+    let persistence = Persistence::open(&state).await.unwrap();
     let mut parent_id = None;
     for index in 0..MESSAGES {
         let text = format!("{index:03}:{}", "x".repeat(TEXT_BYTES));
@@ -40,22 +39,23 @@ async fn reading_client_loads_history_larger_than_output_capacity() -> Result<()
             agent_profile_id: None,
             generation: None,
         };
-        persistence.messages().save(&message).await?;
+        persistence.messages().save(&message).await.unwrap();
         parent_id = Some(message.id);
     }
     let mut metadata = persistence
         .sessions()
         .get(&kraai_types::SessionId::new(session.as_str()))
-        .await?
-        .ok_or_else(|| eyre!("missing persisted session"))?;
+        .await
+        .unwrap()
+        .expect("missing persisted session");
     metadata.tip_id = parent_id;
-    persistence.sessions().save(&metadata).await?;
-    harness.restart().await?;
-    harness.initialize().await?;
-    harness.send(json!({"jsonrpc":"2.0","id":2,"method":"session/load","params":{"sessionId":session,"cwd":harness.root.path(),"mcpServers":[]}})).await?;
+    persistence.sessions().save(&metadata).await.unwrap();
+    harness.restart().await;
+    harness.initialize().await;
+    harness.send(json!({"jsonrpc":"2.0","id":2,"method":"session/load","params":{"sessionId":session,"cwd":harness.root.path(),"mcpServers":[]}})).await;
     let mut received = 0;
     loop {
-        let value = harness.read().await?;
+        let value = harness.read().await;
         if value.get("id") == Some(&json!(2)) {
             assert!(value.get("result").is_some(), "{value}");
             break;
@@ -75,6 +75,6 @@ async fn reading_client_loads_history_larger_than_output_capacity() -> Result<()
         }
     }
     assert_eq!(received, MESSAGES);
-    harness.session().await?;
+    harness.session().await;
     harness.stop().await
 }

@@ -87,15 +87,4 @@ fn reachable_address(value: &str) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn container_addresses_must_be_reachable() -> Result<()> {
-        for invalid in ["", "127.0.0.1", "::1", "0.0.0.0", "::"] {
-            ensure!(reachable_address(invalid).is_err());
-        }
-        ensure!(reachable_address("169.254.1.2")? == "169.254.1.2");
-        Ok(())
-    }
-}
+mod tests;

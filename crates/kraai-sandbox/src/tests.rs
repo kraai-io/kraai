@@ -18,39 +18,30 @@ use crate::{
     is_likely_sandbox_denied, run,
 };
 
-#[path = "tests/git_worktree.rs"]
 pub(crate) mod git_worktree;
 
 #[cfg(target_os = "macos")]
-#[path = "tests/macos.rs"]
 mod macos;
 
 #[cfg(unix)]
-#[path = "tests/process.rs"]
 mod process;
 
 #[cfg(target_os = "linux")]
-#[path = "tests/seccomp.rs"]
 mod seccomp;
 
 #[cfg(target_os = "linux")]
-#[path = "tests/landlock.rs"]
 mod landlock;
 
 #[cfg(target_os = "linux")]
-#[path = "tests/config_guard.rs"]
 mod config_guard;
 
 #[cfg(target_os = "linux")]
-#[path = "tests/policy.rs"]
 mod policy;
 
 #[cfg(target_os = "linux")]
-#[path = "tests/dns.rs"]
 mod dns;
 
 #[cfg(target_os = "linux")]
-#[path = "tests/runtime_mounts.rs"]
 mod runtime_mounts;
 
 fn temp_dir(name: &str) -> PathBuf {

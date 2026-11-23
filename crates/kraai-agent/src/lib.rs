@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 mod compaction;
 mod error;
 pub use error::{AgentError, AgentResult};

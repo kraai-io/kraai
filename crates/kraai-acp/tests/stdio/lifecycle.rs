@@ -1,20 +1,22 @@
 use std::sync::atomic::Ordering;
 
-use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
 use tokio::io::AsyncBufReadExt;
 
 use crate::support::{Harness, Reply, prompt};
 
 #[tokio::test]
-async fn eof_with_a_nonreading_client_still_terminates() -> Result<()> {
-    let mut harness = Harness::new(vec![Reply::Text("large output ".repeat(32 * 1024))]).await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
+async fn eof_with_a_nonreading_client_still_terminates() {
+    let mut harness = Harness::new(vec![Reply::Text("large output ".repeat(32 * 1024))]).await;
+    harness.initialize().await;
+    let session = harness.session().await;
     harness
         .send(json!({"jsonrpc":"2.0","id":2,"method":"session/prompt","params":prompt(&session)}))
-        .await?;
-    let buffered = kraai_test_support::hang_guard(harness.output.fill_buf()).await??;
+        .await;
+    let buffered = kraai_test_support::hang_guard(harness.output.fill_buf())
+        .await
+        .unwrap()
+        .unwrap();
     assert!(!buffered.is_empty());
     assert!(
         String::from_utf8_lossy(buffered).contains("large output"),
@@ -22,32 +24,34 @@ async fn eof_with_a_nonreading_client_still_terminates() -> Result<()> {
         String::from_utf8_lossy(buffered)
     );
     drop(harness.input.take());
-    let status = kraai_test_support::hang_guard(harness.child.wait()).await??;
+    let status = kraai_test_support::hang_guard(harness.child.wait())
+        .await
+        .unwrap()
+        .unwrap();
     assert!(!status.success());
     assert_eq!(harness.model_requests.load(Ordering::SeqCst), 1);
-    Ok(())
 }
 
 #[tokio::test]
-async fn eof_stops_active_stream_and_restart_does_not_resume_it() -> Result<()> {
-    let mut harness = Harness::new(vec![Reply::Streaming, "After EOF".into()]).await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
+async fn eof_stops_active_stream_and_restart_does_not_resume_it() {
+    let mut harness = Harness::new(vec![Reply::Streaming, "After EOF".into()]).await;
+    harness.initialize().await;
+    let session = harness.session().await;
     harness
         .send(json!({"jsonrpc":"2.0","id":2,"method":"session/prompt","params":prompt(&session)}))
-        .await?;
+        .await;
     harness
         .until(|value| value.pointer("/params/update/content/text") == Some(&json!("partial")))
-        .await?;
-    harness.restart().await?;
-    harness.initialize().await?;
+        .await;
+    harness.restart().await;
+    harness.initialize().await;
     let replay = harness
         .request(
             3,
             "session/load",
             json!({"sessionId":session,"cwd":harness.root.path(),"mcpServers":[]}),
         )
-        .await?;
+        .await;
     assert!(
         replay
             .iter()
@@ -60,9 +64,7 @@ async fn eof_stops_active_stream_and_restart_does_not_resume_it() -> Result<()> 
             .any(|value| value.pointer("/params/update/content/text") == Some(&json!("partial")))
     );
     assert_eq!(harness.model_requests.load(Ordering::SeqCst), 1);
-    let values = harness
-        .request(4, "session/prompt", prompt(&session))
-        .await?;
+    let values = harness.request(4, "session/prompt", prompt(&session)).await;
     assert!(
         values
             .iter()
@@ -72,30 +74,30 @@ async fn eof_stops_active_stream_and_restart_does_not_resume_it() -> Result<()> 
 }
 
 #[tokio::test]
-async fn eof_stops_an_active_embedded_script() -> Result<()> {
-    let mut harness = Harness::new(vec![Reply::Script("# timeout=20min permissions=no-sandbox\nsleep 10min; 'should not exist' | save marker.txt".into()), "After script EOF".into()]).await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
+async fn eof_stops_an_active_embedded_script() {
+    let mut harness = Harness::new(vec![Reply::Script("# timeout=20min permissions=no-sandbox\nsleep 10min; 'should not exist' | save marker.txt".into()), "After script EOF".into()]).await;
+    harness.initialize().await;
+    let session = harness.session().await;
     harness
         .send(json!({"jsonrpc":"2.0","id":2,"method":"session/prompt","params":prompt(&session)}))
-        .await?;
+        .await;
     let pending = harness
         .until(|value| value.get("method") == Some(&json!("session/request_permission")))
-        .await?;
-    let approval = pending.last().ok_or_else(|| eyre!("missing approval"))?;
-    harness.send(json!({"jsonrpc":"2.0","id":approval["id"],"result":{"outcome":{"outcome":"selected","optionId":"allow"}}})).await?;
+        .await;
+    let approval = pending.last().expect("missing approval");
+    harness.send(json!({"jsonrpc":"2.0","id":approval["id"],"result":{"outcome":{"outcome":"selected","optionId":"allow"}}})).await;
     harness
         .until(|value| value.pointer("/params/update/status") == Some(&json!("in_progress")))
-        .await?;
-    harness.restart().await?;
-    harness.initialize().await?;
+        .await;
+    harness.restart().await;
+    harness.initialize().await;
     let replay = harness
         .request(
             3,
             "session/load",
             json!({"sessionId":session,"cwd":harness.root.path(),"mcpServers":[]}),
         )
-        .await?;
+        .await;
     assert!(
         replay
             .iter()
@@ -103,9 +105,7 @@ async fn eof_stops_an_active_embedded_script() -> Result<()> {
     );
     assert_eq!(harness.model_requests.load(Ordering::SeqCst), 1);
     assert!(!harness.root.path().join("marker.txt").exists());
-    let values = harness
-        .request(4, "session/prompt", prompt(&session))
-        .await?;
+    let values = harness.request(4, "session/prompt", prompt(&session)).await;
     assert!(
         values
             .iter()
@@ -117,26 +117,24 @@ async fn eof_stops_an_active_embedded_script() -> Result<()> {
 }
 
 #[tokio::test]
-async fn pending_permission_is_isolated_from_other_session_traffic() -> Result<()> {
+async fn pending_permission_is_isolated_from_other_session_traffic() {
     let mut harness = Harness::new(vec![
         Reply::Script("# timeout=10min permissions=no-sandbox\nprint 'approved'".into()),
         Reply::Chunks(2048),
         "After approval".into(),
     ])
-    .await?;
-    harness.initialize().await?;
-    let first = harness.session().await?;
-    let second = harness.session().await?;
+    .await;
+    harness.initialize().await;
+    let first = harness.session().await;
+    let second = harness.session().await;
     harness
         .send(json!({"jsonrpc":"2.0","id":2,"method":"session/prompt","params":prompt(&first)}))
-        .await?;
+        .await;
     let pending = harness
         .until(|value| value.get("method") == Some(&json!("session/request_permission")))
-        .await?;
-    let approval = pending.last().ok_or_else(|| eyre!("missing approval"))?;
-    let values = harness
-        .request(3, "session/prompt", prompt(&second))
-        .await?;
+        .await;
+    let approval = pending.last().expect("missing approval");
+    let values = harness.request(3, "session/prompt", prompt(&second)).await;
     assert_eq!(
         values
             .last()
@@ -156,10 +154,10 @@ async fn pending_permission_is_isolated_from_other_session_traffic() -> Result<(
     for index in 0..2048 {
         assert!(text.contains(&format!("chunk-{index} ")));
     }
-    harness.send(json!({"jsonrpc":"2.0","id":approval["id"],"result":{"outcome":{"outcome":"selected","optionId":"allow"}}})).await?;
+    harness.send(json!({"jsonrpc":"2.0","id":approval["id"],"result":{"outcome":{"outcome":"selected","optionId":"allow"}}})).await;
     let values = harness
         .until(|value| value.get("id") == Some(&json!(2)))
-        .await?;
+        .await;
     assert_eq!(
         values
             .last()
@@ -173,35 +171,35 @@ async fn pending_permission_is_isolated_from_other_session_traffic() -> Result<(
 }
 
 #[tokio::test]
-async fn cancellation_is_isolated_between_concurrent_sessions() -> Result<()> {
+async fn cancellation_is_isolated_between_concurrent_sessions() {
     let mut harness = Harness::new(vec![
         Reply::Streaming,
         Reply::Streaming,
         "Second still works".into(),
     ])
-    .await?;
-    harness.initialize().await?;
-    let first = harness.session().await?;
-    let second = harness.session().await?;
+    .await;
+    harness.initialize().await;
+    let first = harness.session().await;
+    let second = harness.session().await;
     for (id, session) in [(2, &first), (3, &second)] {
         harness
             .send(
                 json!({"jsonrpc":"2.0","id":id,"method":"session/prompt","params":prompt(session)}),
             )
-            .await?;
+            .await;
         harness
             .until(|value| {
                 value.pointer("/params/sessionId") == Some(&json!(session))
                     && value.pointer("/params/update/content/text") == Some(&json!("partial"))
             })
-            .await?;
+            .await;
     }
     harness
         .send(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":first}}))
-        .await?;
+        .await;
     let values = harness
         .until(|value| value.get("id") == Some(&json!(2)))
-        .await?;
+        .await;
     assert_eq!(
         values
             .last()
@@ -213,19 +211,15 @@ async fn cancellation_is_isolated_between_concurrent_sessions() -> Result<()> {
             .iter()
             .any(|value| value.get("id") == Some(&json!(3)))
     );
-    let busy = harness
-        .request(4, "session/prompt", prompt(&second))
-        .await?;
+    let busy = harness.request(4, "session/prompt", prompt(&second)).await;
     assert!(busy.last().and_then(|value| value.get("error")).is_some());
     harness
         .send(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":second}}))
-        .await?;
+        .await;
     harness
         .until(|value| value.get("id") == Some(&json!(3)))
-        .await?;
-    let values = harness
-        .request(5, "session/prompt", prompt(&second))
-        .await?;
+        .await;
+    let values = harness.request(5, "session/prompt", prompt(&second)).await;
     assert!(
         values
             .iter()

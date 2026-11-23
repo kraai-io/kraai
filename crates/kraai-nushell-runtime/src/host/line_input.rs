@@ -2,9 +2,7 @@ use std::io::BufRead;
 use std::sync::OnceLock;
 
 use nu_engine::command_prelude::*;
-use nu_protocol::{
-    ByteStreamType, CompareTypes, ListStream, PipelineMetadata, shell_error::io::IoError,
-};
+use nu_protocol::{CompareTypes, ListStream, PipelineMetadata};
 
 use super::HostError;
 
@@ -114,7 +112,7 @@ impl Command for LineInput {
         &self,
         engine: &EngineState,
         stack: &mut Stack,
-        call: &Call,
+        call: &Call<'_>,
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         let input = match input {
@@ -123,7 +121,10 @@ impl Command for LineInput {
             {
                 text_lines(stream, metadata).map_err(|error| *error)?
             }
-            input => input,
+            input @ (PipelineData::Empty
+            | PipelineData::Value(..)
+            | PipelineData::ListStream(..)
+            | PipelineData::ByteStream(..)) => input,
         };
         check_input(&input, &self.signatures().original, call.head).map_err(|error| *error)?;
         self.original.run(engine, stack, call, input)

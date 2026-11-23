@@ -25,9 +25,7 @@ impl kraai_nushell_runtime::ImageAttachmentHandler for DurableImageAttachments {
         &'a self,
         sequence: u64,
         bytes: Vec<u8>,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<ImageAttachment, String>> + Send + 'a>,
-    > {
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<ImageAttachment, String>> + Send + 'a>> {
         Box::pin(async move {
             let record = self
                 .executions
@@ -70,9 +68,7 @@ impl kraai_nushell_runtime::ImageAttachmentHandler for DurableImageAttachments {
         &'a self,
         sequence: u64,
         id: String,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<ImageAttachment, String>> + Send + 'a>,
-    > {
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<ImageAttachment, String>> + Send + 'a>> {
         Box::pin(async move {
             let history = self
                 .agent
@@ -85,7 +81,10 @@ impl kraai_nushell_runtime::ImageAttachmentHandler for DurableImageAttachments {
                     let content = match &message.content {
                         kraai_types::ConversationItem::User { content } => content,
                         kraai_types::ConversationItem::ScriptResult { output, .. } => output,
-                        _ => return None,
+                        kraai_types::ConversationItem::FileContext { .. }
+                        | kraai_types::ConversationItem::Compaction { .. }
+                        | kraai_types::ConversationItem::System { .. }
+                        | kraai_types::ConversationItem::Assistant { .. } => return None,
                     };
                     content.images().find(|image| image.id == id).cloned()
                 })

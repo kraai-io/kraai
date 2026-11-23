@@ -144,7 +144,36 @@ pub(super) fn route_requests(
     while let Ok(request) = requests.recv() {
         match request {
             RuntimeRequest::PasteImage { request_id } => paste_image(request_id),
-            request => {
+            request @ (RuntimeRequest::FinishStartupSync
+            | RuntimeRequest::ListModels
+            | RuntimeRequest::RefreshModelLists
+            | RuntimeRequest::RefetchModelList { .. }
+            | RuntimeRequest::GetAgentProfileCatalog
+            | RuntimeRequest::ListProviderDefinitions
+            | RuntimeRequest::GetSettings
+            | RuntimeRequest::GetProviderAuthStatuses
+            | RuntimeRequest::GetMcpAuthStatuses
+            | RuntimeRequest::StartMcpLogin { .. }
+            | RuntimeRequest::CancelMcpLogin { .. }
+            | RuntimeRequest::LogoutMcp { .. }
+            | RuntimeRequest::StartProviderLogin { .. }
+            | RuntimeRequest::CancelProviderLogin { .. }
+            | RuntimeRequest::LogoutProvider { .. }
+            | RuntimeRequest::CreateSession { .. }
+            | RuntimeRequest::SetSessionProfile { .. }
+            | RuntimeRequest::SetSessionModel { .. }
+            | RuntimeRequest::SendMessage { .. }
+            | RuntimeRequest::SaveSettings { .. }
+            | RuntimeRequest::GetHistoryPage { .. }
+            | RuntimeRequest::GetSessionSnapshot { .. }
+            | RuntimeRequest::UndoLastUserMessage { .. }
+            | RuntimeRequest::LoadSession { .. }
+            | RuntimeRequest::ListSessions
+            | RuntimeRequest::ListUserInputHistory { .. }
+            | RuntimeRequest::DeleteSession { .. }
+            | RuntimeRequest::ApproveScript { .. }
+            | RuntimeRequest::DenyScript { .. }
+            | RuntimeRequest::CancelStream { .. }) => {
                 if ordered.send(request).is_err() {
                     return;
                 }
@@ -405,9 +434,4 @@ impl RequestBridge {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "bridge tests propagate fixture errors and assert event ordering"
-)]
-#[path = "runtime_bridge_tests.rs"]
 mod tests;

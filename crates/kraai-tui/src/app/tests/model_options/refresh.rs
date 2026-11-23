@@ -1,25 +1,24 @@
 use super::*;
-use kraai_types::SessionId;
 
 fn refreshed_models(
     harness: &TestHarness,
     update: impl FnOnce(&mut kraai_runtime::Model),
-) -> color_eyre::Result<HashMap<String, Vec<kraai_runtime::Model>>> {
+) -> HashMap<String, Vec<kraai_runtime::Model>> {
     let mut models = harness.app.state.models_by_provider.clone();
     let model = models
         .get_mut("provider")
         .and_then(|models| models.first_mut())
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing model"))?;
+        .expect("missing model");
     update(model);
-    Ok(models)
+    models
 }
 
 #[test]
-fn metadata_reordering_keeps_the_highlight_on_the_same_setting() -> color_eyre::Result<()> {
+fn metadata_reordering_keeps_the_highlight_on_the_same_setting() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    open_settings(&mut harness, "effort")?;
-    let models = refreshed_models(&harness, |model| model.options.reverse())?;
+    configure_optional(&mut harness);
+    open_settings(&mut harness, "effort");
+    let models = refreshed_models(&harness, |model| model.options.reverse());
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models)));
@@ -34,21 +33,20 @@ fn metadata_reordering_keeps_the_highlight_on_the_same_setting() -> color_eyre::
         ])
     );
     assert!(harness.app.state.last_error.is_none());
-    Ok(())
 }
 
 #[test]
-fn changed_choice_order_steps_from_the_current_value() -> color_eyre::Result<()> {
+fn changed_choice_order_steps_from_the_current_value() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    open_settings(&mut harness, "effort")?;
+    configure_optional(&mut harness);
+    open_settings(&mut harness, "effort");
     let models = refreshed_models(&harness, |model| {
         for option in &mut model.options {
             if let ModelOptionKind::Choice { choices } = &mut option.kind {
                 choices.reverse();
             }
         }
-    })?;
+    });
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models)));
@@ -61,18 +59,17 @@ fn changed_choice_order_steps_from_the_current_value() -> color_eyre::Result<()>
         value(&harness, "effort"),
         Some(&ModelOptionValue::Choice("low".into()))
     );
-    Ok(())
 }
 
 #[test]
-fn disappearing_setting_keeps_the_remaining_settings_reachable() -> color_eyre::Result<()> {
+fn disappearing_setting_keeps_the_remaining_settings_reachable() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    open_settings(&mut harness, "budget")?;
+    configure_optional(&mut harness);
+    open_settings(&mut harness, "budget");
     type_text(&mut harness, "7");
     let models = refreshed_models(&harness, |model| {
         model.options.retain(|option| option.id != "budget");
-    })?;
+    });
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models)));
@@ -92,15 +89,14 @@ fn disappearing_setting_keeps_the_remaining_settings_reachable() -> color_eyre::
         value(&harness, "effort"),
         Some(&ModelOptionValue::Choice("low".into()))
     );
-    Ok(())
 }
 
 #[test]
-fn losing_every_setting_leaves_an_empty_sheet_that_enter_closes() -> color_eyre::Result<()> {
+fn losing_every_setting_leaves_an_empty_sheet_that_enter_closes() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    open_settings(&mut harness, "budget")?;
-    let models = refreshed_models(&harness, |model| model.options.clear())?;
+    configure_optional(&mut harness);
+    open_settings(&mut harness, "budget");
+    let models = refreshed_models(&harness, |model| model.options.clear());
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models)));
@@ -112,21 +108,20 @@ fn losing_every_setting_leaves_an_empty_sheet_that_enter_closes() -> color_eyre:
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert!(harness.app.state.last_error.is_none());
-    Ok(())
 }
 
 #[test]
-fn a_session_switching_models_keeps_the_sheet_on_the_model_it_names() -> color_eyre::Result<()> {
+fn a_session_switching_models_keeps_the_sheet_on_the_model_it_names() {
     for (provider, model_id) in [("provider", "other-model"), ("other-provider", "model")] {
         let mut harness = test_harness();
-        configure_optional(&mut harness)?;
-        open_settings(&mut harness, "effort")?;
+        configure_optional(&mut harness);
+        open_settings(&mut harness, "effort");
         let mut model = harness
             .app
             .state
             .selected_model()
             .cloned()
-            .ok_or_else(|| color_eyre::eyre::eyre!("missing model"))?;
+            .expect("missing model");
         model.id = model_id.into();
         harness
             .app
@@ -174,5 +169,4 @@ fn a_session_switching_models_keeps_the_sheet_on_the_model_it_names() -> color_e
             Some(&ModelOptionValue::Choice("low".into()))
         );
     }
-    Ok(())
 }

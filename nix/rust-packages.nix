@@ -14,6 +14,7 @@
         ../.cargo
         ../Cargo.lock
         ../Cargo.toml
+        ../clippy.toml
         ../Cargo.nix
         ../crates
         ../evals
@@ -440,19 +441,15 @@
           '';
         };
 
-        audit = mkCargoCheck {
-          name = "audit";
-          nativeBuildInputs = [pkgs.cargo-audit];
-          command = ''
-            cargo audit --db ${inputs.advisory-db} --no-fetch
-          '';
-        };
-
         deny = mkCargoCheck {
           name = "deny";
           nativeBuildInputs = [pkgs.cargo-deny];
           command = ''
-            cargo deny check bans licenses sources
+            db="$HOME/.cargo/advisory-dbs/advisory-db-3157b0e258782691"
+            mkdir -p "$db/.git"
+            ln -s ${inputs.advisory-db}/* "$db"
+            touch -d @${toString inputs.advisory-db.lastModified} "$db/.git/FETCH_HEAD"
+            cargo deny --offline check --allow index-failure
           '';
         };
       };

@@ -117,9 +117,12 @@ fn saved(harness: &TestHarness) -> Vec<SettingsDocument> {
     harness
         .drain_requests()
         .into_iter()
-        .filter_map(|request| match request {
-            RuntimeRequest::SaveSettings { settings } => Some(settings),
-            _ => None,
+        .filter_map(|request| {
+            if let RuntimeRequest::SaveSettings { settings } = request {
+                Some(settings)
+            } else {
+                None
+            }
         })
         .collect()
 }

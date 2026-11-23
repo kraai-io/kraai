@@ -1,16 +1,10 @@
-#![expect(
-    clippy::panic_in_result_fn,
-    reason = "clipboard worker tests propagate setup errors and assert isolation"
-)]
-
 use super::super::{RuntimeRequest, runtime_bridge::route_requests};
 use super::*;
 use crossbeam_channel::unbounded;
 use kraai_types::SessionId;
 
 #[test]
-fn clipboard_work_does_not_block_ordered_requests_and_rejects_queued_pastes()
--> color_eyre::Result<()> {
+fn clipboard_work_does_not_block_ordered_requests_and_rejects_queued_pastes() {
     let (requests, receiver) = unbounded();
     let (ordered, ordinary) = unbounded();
     let (responses, results) = unbounded();
@@ -33,26 +27,40 @@ fn clipboard_work_does_not_block_ordered_requests_and_rejects_queued_pastes()
     });
     let router =
         std::thread::spawn(move || route_requests(receiver, ordered, |id| worker.submit(id)));
-    requests.send(RuntimeRequest::PasteImage { request_id: 1 })?;
-    started.recv_timeout(kraai_test_support::HANG_TIMEOUT)?;
-    requests.send(RuntimeRequest::PasteImage { request_id: 2 })?;
-    requests.send(RuntimeRequest::CancelStream {
-        session_id: SessionId::new("session"),
-    })?;
+    requests
+        .send(RuntimeRequest::PasteImage { request_id: 1 })
+        .unwrap();
+    started
+        .recv_timeout(kraai_test_support::HANG_TIMEOUT)
+        .unwrap();
+    requests
+        .send(RuntimeRequest::PasteImage { request_id: 2 })
+        .unwrap();
+    requests
+        .send(RuntimeRequest::CancelStream {
+            session_id: SessionId::new("session"),
+        })
+        .unwrap();
     assert!(matches!(
-        ordinary.recv_timeout(kraai_test_support::HANG_TIMEOUT)?,
+        ordinary
+            .recv_timeout(kraai_test_support::HANG_TIMEOUT)
+            .unwrap(),
         RuntimeRequest::CancelStream { .. }
     ));
     assert!(matches!(
-        results.recv_timeout(kraai_test_support::HANG_TIMEOUT)?,
+        results
+            .recv_timeout(kraai_test_support::HANG_TIMEOUT)
+            .unwrap(),
         RuntimeResponse::PasteImage {
             request_id: 2,
             result: Err(_)
         }
     ));
-    release.send(())?;
+    release.send(()).unwrap();
     assert!(matches!(
-        results.recv_timeout(kraai_test_support::HANG_TIMEOUT)?,
+        results
+            .recv_timeout(kraai_test_support::HANG_TIMEOUT)
+            .unwrap(),
         RuntimeResponse::PasteImage {
             request_id: 1,
             result: Ok(_)
@@ -60,7 +68,6 @@ fn clipboard_work_does_not_block_ordered_requests_and_rejects_queued_pastes()
     ));
     drop(requests);
     assert!(router.join().is_ok());
-    Ok(())
 }
 
 #[cfg(unix)]
@@ -72,14 +79,14 @@ fn shell(script: &str) -> tokio::process::Command {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn clipboard_helper_caps_both_output_streams_and_returns_complete_bytes()
--> color_eyre::Result<()> {
+async fn clipboard_helper_caps_both_output_streams_and_returns_complete_bytes() {
     let bytes = read_helper(
         shell("printf image; printf diagnostic >&2"),
         kraai_test_support::HANG_TIMEOUT,
         8,
     )
-    .await?;
+    .await
+    .unwrap();
     assert_eq!(bytes.as_deref(), Some(b"image".as_slice()));
     for script in [
         "while :; do printf 0123456789; done",
@@ -98,37 +105,34 @@ async fn clipboard_helper_caps_both_output_streams_and_returns_complete_bytes()
             .await
             .is_err()
     );
-    Ok(())
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn clipboard_helper_reports_missing_image_without_an_error() -> color_eyre::Result<()> {
+async fn clipboard_helper_reports_missing_image_without_an_error() {
     let command = shell(&format!(
         "exit {}",
         crate::clipboard_image::NO_IMAGE_EXIT_CODE
     ));
     assert!(
         read_helper(command, kraai_test_support::HANG_TIMEOUT, 8)
-            .await?
+            .await
+            .unwrap()
             .is_none()
     );
-    Ok(())
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn clipboard_helper_timeout_kills_and_reaps_the_process() -> color_eyre::Result<()> {
-    let child = spawn_helper(shell("exec sleep 60"))?;
-    let pid = child
-        .id()
-        .ok_or_else(|| color_eyre::eyre::eyre!("helper exited early"))?;
+async fn clipboard_helper_timeout_kills_and_reaps_the_process() {
+    let child = spawn_helper(shell("exec sleep 60")).unwrap();
+    let pid = child.id().expect("helper exited early");
     let result = read_child(child, Duration::from_millis(50), 8).await;
     assert!(result.is_err_and(|error| error.to_string().contains("timed out")));
     let status = std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
         .stderr(Stdio::null())
-        .status()?;
+        .status()
+        .unwrap();
     assert!(!status.success());
-    Ok(())
 }

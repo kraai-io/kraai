@@ -98,7 +98,10 @@ impl App {
             .get(server)
             .and_then(|status| match &status.state {
                 McpAuthState::Pending { auth_url } => Some(auth_url.clone()),
-                _ => None,
+                McpAuthState::Unavailable
+                | McpAuthState::SignedOut
+                | McpAuthState::Starting
+                | McpAuthState::Authenticated => None,
             });
         let request = match action {
             McpAction::SignIn => {

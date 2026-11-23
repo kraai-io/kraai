@@ -94,7 +94,11 @@ impl AgentManager {
                 ConversationItem::User { content } => ConversationItem::User {
                     content: content.without_images(),
                 },
-                other => other.clone(),
+                other @ (ConversationItem::FileContext { .. }
+                | ConversationItem::Compaction { .. }
+                | ConversationItem::System { .. }
+                | ConversationItem::Assistant { .. }
+                | ConversationItem::ScriptResult { .. }) => other.clone(),
             });
         let latest = history
             .last()

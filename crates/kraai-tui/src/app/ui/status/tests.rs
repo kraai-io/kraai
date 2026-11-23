@@ -61,7 +61,9 @@ fn the_line_starts_one_column_in_with_what_the_turn_is_doing() {
     assert_eq!(colour_at(&state, 60, "Retrying"), Some(theme::WAITING));
 
     state.palette.muted = Some(Color::Rgb(88, 82, 115));
-    state.breath_origin = Instant::now() - Duration::from_millis(800);
+    state.breath_origin = Instant::now()
+        .checked_sub(Duration::from_millis(800))
+        .unwrap();
     assert_eq!(colour_at(&state, 60, "Retrying"), Some(theme::WAITING));
     state.retry_waiting = false;
     assert_eq!(

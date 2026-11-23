@@ -159,7 +159,9 @@ impl kraai_commands::McpClient for DescriptorClient {
     ) -> Result<serde_json::Value, String> {
         match self.call(|_| Request::Mcp(request))? {
             Response::Mcp(result) => result,
-            _ => Err(String::from("unexpected MCP host response")),
+            Response::StateEffect(_) | Response::WebSearch(_) | Response::ImageAttachment(_) => {
+                Err(String::from("unexpected MCP host response"))
+            }
         }
     }
 }
@@ -169,7 +171,9 @@ impl ImageAttachmentClient for DescriptorClient {
         validate_image_id(&id)?;
         match self.call(|_| Request::ExistingImage { id })? {
             Response::ImageAttachment(result) => result,
-            _ => Err(String::from("unexpected host response")),
+            Response::Mcp(_) | Response::StateEffect(_) | Response::WebSearch(_) => {
+                Err(String::from("unexpected host response"))
+            }
         }
     }
 
@@ -180,7 +184,9 @@ impl ImageAttachmentClient for DescriptorClient {
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         match self.call(|_| Request::ImageAttachment { base64: encoded })? {
             Response::ImageAttachment(result) => result,
-            _ => Err(String::from("unexpected host response")),
+            Response::Mcp(_) | Response::StateEffect(_) | Response::WebSearch(_) => {
+                Err(String::from("unexpected host response"))
+            }
         }
     }
 }
@@ -220,7 +226,11 @@ pub(crate) async fn serve(
                 let _ = services.output.send(output).await;
                 continue;
             }
-            request => request,
+            request @ (Request::Mcp(_)
+            | Request::StateEffect(_)
+            | Request::WebSearch(_)
+            | Request::ImageAttachment { .. }
+            | Request::ExistingImage { .. }) => request,
         };
         let response = tokio::select! {
             biased;

@@ -1,18 +1,17 @@
-use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
 
 use crate::support::{Harness, prompt};
 
-async fn configure(harness: &mut Harness, options: &str) -> Result<()> {
-    harness.stop().await?;
+async fn configure(harness: &mut Harness, options: &str) {
+    harness.stop().await;
     let path = harness.root.path().join("providers.toml");
-    let config = tokio::fs::read_to_string(&path).await?;
+    let config = tokio::fs::read_to_string(&path).await.unwrap();
     let base = config
         .split_once("[[model.options]]")
         .map_or(config.as_str(), |(base, _)| base);
     tokio::fs::write(path, format!("{base}{options}"))
         .await
-        .map_err(Into::into)
+        .unwrap();
 }
 
 async fn set(
@@ -21,7 +20,7 @@ async fn set(
     id: u64,
     option: &str,
     value: &str,
-) -> Result<Vec<Value>> {
+) -> Vec<Value> {
     harness
         .request(
             id,
@@ -97,14 +96,14 @@ path = "/custom/limit"
 "#;
 
 #[tokio::test]
-async fn optional_controls_clear_and_persist_omission_across_restart() -> Result<()> {
-    let mut harness = Harness::new(vec!["Configured".into(), "Cleared".into()]).await?;
-    configure(&mut harness, OPTIONAL_OPTIONS).await?;
+async fn optional_controls_clear_and_persist_omission_across_restart() {
+    let mut harness = Harness::new(vec!["Configured".into(), "Cleared".into()]).await;
+    configure(&mut harness, OPTIONAL_OPTIONS).await;
     harness
         .restart_with_selection(Some("mock"), Some("mock-alternate"))
-        .await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
+        .await;
+    harness.initialize().await;
+    let session = harness.session().await;
     for (request_id, (id, input)) in (10..).zip([
         ("effort", "high"),
         ("processing", "true"),
@@ -112,31 +111,31 @@ async fn optional_controls_clear_and_persist_omission_across_restart() -> Result
         ("style", "fast"),
         ("limit", "0"),
     ]) {
-        let configured = set(&mut harness, &session, request_id, id, input).await?;
+        let configured = set(&mut harness, &session, request_id, id, input).await;
         assert_eq!(
             value(&configured, &format!("option:{id}")),
             Some(&json!(input))
         );
     }
-    let configured = harness.load_session(&session, 20).await?;
+    let configured = harness.load_session(&session, 20).await;
     for id in ["processing", "style", "limit"] {
         let control =
-            option(&configured, &format!("option:{id}")).ok_or_else(|| eyre!("missing {id}"))?;
+            option(&configured, &format!("option:{id}")).unwrap_or_else(|| panic!("missing {id}"));
         assert_eq!(control.get("type"), Some(&json!("select")));
         assert_eq!(control.pointer("/options/0/value"), Some(&json!("")));
         assert_eq!(control.pointer("/options/0/name"), Some(&json!("Unset")));
     }
     harness
         .request(21, "session/prompt", prompt(&session))
-        .await?;
-    let cleared = set(&mut harness, &session, 22, "processing", "").await?;
+        .await;
+    let cleared = set(&mut harness, &session, 22, "processing", "").await;
     assert_eq!(value(&cleared, "option:processing"), Some(&json!("")));
     assert!(option(&cleared, "option:budget").is_none());
-    let cleared = set(&mut harness, &session, 23, "style", "").await?;
+    let cleared = set(&mut harness, &session, 23, "style", "").await;
     assert_eq!(value(&cleared, "option:style"), Some(&json!("")));
-    let cleared = set(&mut harness, &session, 24, "limit", "").await?;
+    let cleared = set(&mut harness, &session, 24, "limit", "").await;
     assert_eq!(value(&cleared, "option:limit"), Some(&json!("")));
-    let rejected = set(&mut harness, &session, 25, "effort", "").await?;
+    let rejected = set(&mut harness, &session, 25, "effort", "").await;
     assert_eq!(
         rejected
             .last()
@@ -144,9 +143,9 @@ async fn optional_controls_clear_and_persist_omission_across_restart() -> Result
         Some(&json!(-32602))
     );
     assert_eq!(harness.provider_payloads.lock().await.len(), 1);
-    harness.restart_with_selection(None, None).await?;
-    harness.initialize().await?;
-    let restored = harness.load_session(&session, 26).await?;
+    harness.restart_with_selection(None, None).await;
+    harness.initialize().await;
+    let restored = harness.load_session(&session, 26).await;
     assert_eq!(value(&restored, "option:effort"), Some(&json!("high")));
     for id in ["processing", "style", "limit"] {
         assert_eq!(value(&restored, &format!("option:{id}")), Some(&json!("")));
@@ -154,20 +153,16 @@ async fn optional_controls_clear_and_persist_omission_across_restart() -> Result
     assert!(option(&restored, "option:budget").is_none());
     harness
         .request(27, "session/prompt", prompt(&session))
-        .await?;
+        .await;
     {
         let payloads = harness.provider_payloads.lock().await.clone();
         assert_eq!(payloads.len(), 2);
-        let first = payloads
-            .first()
-            .ok_or_else(|| eyre!("missing configured request"))?;
+        let first = payloads.first().expect("missing configured request");
         assert_eq!(first.pointer("/custom/processing"), Some(&json!(true)));
         assert_eq!(first.pointer("/custom/budget"), Some(&json!(80)));
         assert_eq!(first.pointer("/custom/style"), Some(&json!("fast")));
         assert_eq!(first.pointer("/custom/limit"), Some(&json!(0)));
-        let last = payloads
-            .last()
-            .ok_or_else(|| eyre!("missing cleared request"))?;
+        let last = payloads.last().expect("missing cleared request");
         assert_eq!(last.get("reasoning_effort"), Some(&json!("high")));
         assert!(last.get("custom").is_none());
     }
@@ -250,15 +245,14 @@ path = "/custom/retained"
 }
 
 #[tokio::test]
-async fn saved_options_reconcile_metadata_drift_without_accepting_invalid_explicit_overrides()
--> Result<()> {
-    let mut harness = Harness::new(vec!["Reconciled".into()]).await?;
-    configure(&mut harness, &changing_options(false)).await?;
+async fn saved_options_reconcile_metadata_drift_without_accepting_invalid_explicit_overrides() {
+    let mut harness = Harness::new(vec!["Reconciled".into()]).await;
+    configure(&mut harness, &changing_options(false)).await;
     harness
         .restart_with_selection(Some("mock"), Some("mock-alternate"))
-        .await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
+        .await;
+    harness.initialize().await;
+    let session = harness.session().await;
     for (request_id, (id, input)) in (10..).zip([
         ("effort", "high"),
         ("budget", "80"),
@@ -267,17 +261,17 @@ async fn saved_options_reconcile_metadata_drift_without_accepting_invalid_explic
         ("retained", "0"),
         ("removed", "7"),
     ]) {
-        let configured = set(&mut harness, &session, request_id, id, input).await?;
+        let configured = set(&mut harness, &session, request_id, id, input).await;
         assert!(
             configured
                 .last()
                 .is_some_and(|message| message.get("result").is_some())
         );
     }
-    configure(&mut harness, &changing_options(true)).await?;
-    harness.restart_with_selection(None, None).await?;
-    harness.initialize().await?;
-    let restored = harness.load_session(&session, 20).await?;
+    configure(&mut harness, &changing_options(true)).await;
+    harness.restart_with_selection(None, None).await;
+    harness.initialize().await;
+    let restored = harness.load_session(&session, 20).await;
     assert_eq!(
         restored
             .last()
@@ -293,16 +287,16 @@ async fn saved_options_reconcile_metadata_drift_without_accepting_invalid_explic
     }
     let rejected = harness
         .request(21, "session/prompt", prompt(&session))
-        .await?;
+        .await;
     assert!(
         rejected
             .last()
             .is_some_and(|message| message.get("error").is_some())
     );
     for invalid in ["effort=high", "budget=80", "gate=true"] {
-        harness.restart_with_options(None, None, &[invalid]).await?;
-        harness.initialize().await?;
-        let rejected = harness.load_session(&session, 22).await?;
+        harness.restart_with_options(None, None, &[invalid]).await;
+        harness.initialize().await;
+        let rejected = harness.load_session(&session, 22).await;
         assert_eq!(
             rejected
                 .last()
@@ -314,20 +308,18 @@ async fn saved_options_reconcile_metadata_drift_without_accepting_invalid_explic
     assert!(harness.provider_payloads.lock().await.is_empty());
     harness
         .restart_with_options(None, None, &["effort=low"])
-        .await?;
-    harness.initialize().await?;
-    let restored = harness.load_session(&session, 23).await?;
+        .await;
+    harness.initialize().await;
+    let restored = harness.load_session(&session, 23).await;
     assert_eq!(value(&restored, "option:effort"), Some(&json!("low")));
     assert_eq!(value(&restored, "option:retained"), Some(&json!("0")));
     harness
         .request(24, "session/prompt", prompt(&session))
-        .await?;
+        .await;
     {
         let payloads = harness.provider_payloads.lock().await.clone();
         assert_eq!(payloads.len(), 1);
-        let payload = payloads
-            .first()
-            .ok_or_else(|| eyre!("missing reconciled request"))?;
+        let payload = payloads.first().expect("missing reconciled request");
         assert_eq!(payload.get("reasoning_effort"), Some(&json!("low")));
         assert_eq!(payload.get("custom"), Some(&json!({"retained":0})));
     }

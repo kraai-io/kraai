@@ -59,36 +59,40 @@ impl Provider for CatalogProvider {
 }
 
 #[tokio::test]
-async fn installed_provider_catalog_rebinds_even_when_discovery_fails() -> Result<()> {
+async fn installed_provider_catalog_rebinds_even_when_discovery_fails() {
     let mut harness = RuntimeTestHarness::new(Vec::new()).await;
     for (type_id, fail_cache, fail_creation) in [
         ("catalog-success", false, false),
         ("catalog-discovery-failure", true, false),
         ("catalog-creation-failure", false, true),
     ] {
-        harness.runtime.provider_registry.register_dynamic_factory(
-            type_id,
-            ProviderDefinition {
-                type_id: type_id.into(),
-                display_name: type_id.into(),
-                protocol_family: "test".into(),
-                description: String::new(),
-                provider_fields: Vec::new(),
-                model_fields: Vec::new(),
-                supports_model_discovery: true,
-                default_provider_id_prefix: type_id.into(),
-            },
-            ProviderPricingPolicy::default(),
-            move |id, _| {
-                if fail_creation {
-                    Err(ProviderError::ConfigParseError("creation failed".into()))
-                } else {
-                    Ok(Box::new(CatalogProvider { id, fail_cache }))
-                }
-            },
-            |_| Vec::new(),
-            |_| Vec::new(),
-        )?;
+        harness
+            .runtime
+            .provider_registry
+            .register_dynamic_factory(
+                type_id,
+                ProviderDefinition {
+                    type_id: type_id.into(),
+                    display_name: type_id.into(),
+                    protocol_family: "test".into(),
+                    description: String::new(),
+                    provider_fields: Vec::new(),
+                    model_fields: Vec::new(),
+                    supports_model_discovery: true,
+                    default_provider_id_prefix: type_id.into(),
+                },
+                ProviderPricingPolicy::default(),
+                move |id, _| {
+                    if fail_creation {
+                        Err(ProviderError::ConfigParseError("creation failed".into()))
+                    } else {
+                        Ok(Box::new(CatalogProvider { id, fail_cache }))
+                    }
+                },
+                |_| Vec::new(),
+                |_| Vec::new(),
+            )
+            .unwrap();
     }
     let forwarder = harness.runtime.spawn_model_catalog_forwarder();
     harness.maintenance_tasks.push(forwarder);
@@ -100,17 +104,18 @@ async fn installed_provider_catalog_rebinds_even_when_discovery_fails() -> Resul
             &harness.runtime.config.provider_config_path,
             format!("[[provider]]\nid = \"{type_id}\"\ntype = \"{type_id}\"\n"),
         )
-        .await?;
+        .await
+        .unwrap();
         let result = harness.runtime.load_providers_config_and_emit().await;
         assert!(result.is_ok());
-        assert!(sources.has_changed()?);
+        assert!(sources.has_changed().unwrap());
         let current = sources.borrow_and_update().clone();
         assert!(!current.same_channel(&previous));
         let installed = harness.runtime.agent_manager.cloned_provider_manager();
         assert!(current.same_channel(&installed.subscribe_model_catalog()));
         assert!(installed.has_provider(&ProviderId::new(type_id)));
         assert_eq!(
-            harness.handle.list_models().await?[type_id]
+            harness.handle.list_models().await.unwrap()[type_id]
                 .first()
                 .and_then(|model| model.max_context),
             Some(5_000)
@@ -118,14 +123,16 @@ async fn installed_provider_catalog_rebinds_even_when_discovery_fails() -> Resul
         let mut config_loaded = false;
         hang_guard(async {
             loop {
-                match events.recv().await?.event {
-                    Event::ConfigLoaded => config_loaded = true,
-                    Event::ModelsUpdated => return Ok::<_, color_eyre::Report>(()),
-                    _ => {}
+                let event = events.recv().await?.event;
+                config_loaded |= matches!(event, Event::ConfigLoaded);
+                if matches!(event, Event::ModelsUpdated) {
+                    return Ok::<_, color_eyre::Report>(());
                 }
             }
         })
-        .await??;
+        .await
+        .unwrap()
+        .unwrap();
         while let Ok(event) = events.try_recv() {
             config_loaded |= matches!(event.event, Event::ConfigLoaded);
         }
@@ -136,7 +143,8 @@ async fn installed_provider_catalog_rebinds_even_when_discovery_fails() -> Resul
         &harness.runtime.config.provider_config_path,
         "[[provider]]\nid = \"invalid\"\ntype = \"catalog-creation-failure\"\n",
     )
-    .await?;
+    .await
+    .unwrap();
     assert!(
         harness
             .runtime
@@ -144,8 +152,7 @@ async fn installed_provider_catalog_rebinds_even_when_discovery_fails() -> Resul
             .await
             .is_err()
     );
-    assert!(!sources.has_changed()?);
+    assert!(!sources.has_changed().unwrap());
     assert!(sources.borrow().same_channel(&previous));
     harness.shutdown().await;
-    Ok(())
 }

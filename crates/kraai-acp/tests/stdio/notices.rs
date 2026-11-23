@@ -1,6 +1,5 @@
 use std::sync::atomic::Ordering;
 
-use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
 
 use crate::support::{Harness, Reply, text_prompt};
@@ -22,14 +21,14 @@ fn notice<'a>(response: &'a [Value], text: &str) -> Option<&'a Value> {
 }
 
 #[tokio::test]
-async fn output_limit_stop_is_shown_as_a_completed_notice() -> Result<()> {
-    let mut harness = Harness::new(vec![Reply::Truncated("Cut off".into())]).await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
+async fn output_limit_stop_is_shown_as_a_completed_notice() {
+    let mut harness = Harness::new(vec![Reply::Truncated("Cut off".into())]).await;
+    harness.initialize().await;
+    let session = harness.session().await;
 
     let response = harness
         .request(2, "session/prompt", text_prompt(&session, "Run the task"))
-        .await?;
+        .await;
     assert_eq!(
         response
             .last()
@@ -40,38 +39,38 @@ async fn output_limit_stop_is_shown_as_a_completed_notice() -> Result<()> {
         .filter_map(|update| update.pointer("/content/text").and_then(Value::as_str))
         .collect::<String>();
     assert_eq!(reply, "Cut off");
-    let notice = notice(&response, "output token limit").ok_or_else(|| eyre!("missing notice"))?;
+    let notice = notice(&response, "output token limit").expect("missing notice");
     assert_eq!(notice.get("status"), Some(&json!("completed")));
     harness.stop().await
 }
 
 #[tokio::test]
-async fn compaction_is_shown_as_notices() -> Result<()> {
-    let mut harness = Harness::new(vec!["First".into(), "Summary".into(), "Second".into()]).await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
+async fn compaction_is_shown_as_notices() {
+    let mut harness = Harness::new(vec!["First".into(), "Summary".into(), "Second".into()]).await;
+    harness.initialize().await;
+    let session = harness.session().await;
     harness
         .request(2, "session/prompt", text_prompt(&session, "Start"))
-        .await?;
+        .await;
     let tokens = harness
         .provider_payloads
         .lock()
         .await
         .first()
-        .ok_or_else(|| eyre!("missing first model request"))?
+        .expect("missing first model request")
         .to_string()
         .len()
         / 4;
     let config = harness.root.path().join("providers.toml");
-    let providers = tokio::fs::read_to_string(&config).await?.replacen(
+    let providers = tokio::fs::read_to_string(&config).await.unwrap().replacen(
         "id = \"mock-model\"\n",
         &format!("id = \"mock-model\"\nmax_context = {}\n", tokens * 4),
         1,
     );
-    tokio::fs::write(&config, providers).await?;
-    harness.restart().await?;
-    harness.initialize().await?;
-    harness.load_session(&session, 3).await?;
+    tokio::fs::write(&config, providers).await.unwrap();
+    harness.restart().await;
+    harness.initialize().await;
+    harness.load_session(&session, 3).await;
 
     let response = harness
         .request(
@@ -79,30 +78,30 @@ async fn compaction_is_shown_as_notices() -> Result<()> {
             "session/prompt",
             text_prompt(&session, &"filler ".repeat(tokens * 10 / 7)),
         )
-        .await?;
+        .await;
     assert_eq!(harness.model_requests.load(Ordering::SeqCst), 3);
     assert!(
         updates(&response, "agent_message_chunk")
             .any(|update| update.pointer("/content/text") == Some(&json!("Second")))
     );
     for text in ["Compacting", "compacted"] {
-        notice(&response, text).ok_or_else(|| eyre!("missing notice: {text}"))?;
+        notice(&response, text).unwrap_or_else(|| panic!("missing notice: {text}"));
     }
     harness.stop().await
 }
 
 #[tokio::test]
-async fn rate_limit_retries_show_one_row_that_completes_when_the_reply_starts() -> Result<()> {
-    let mut harness = Harness::new(vec![Reply::RateLimited, "Done".into()]).await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
+async fn rate_limit_retries_show_one_row_that_completes_when_the_reply_starts() {
+    let mut harness = Harness::new(vec![Reply::RateLimited, "Done".into()]).await;
+    harness.initialize().await;
+    let session = harness.session().await;
 
     let response = harness
         .request(2, "session/prompt", text_prompt(&session, "Start"))
-        .await?;
+        .await;
     let rows = updates(&response, "tool_call").collect::<Vec<_>>();
     let [row] = rows.as_slice() else {
-        return Err(eyre!("expected one retry row, got {rows:?}"));
+        panic!("expected one retry row, got {rows:?}");
     };
     assert_eq!(row.get("status"), Some(&json!("in_progress")));
     assert!(
@@ -120,9 +119,9 @@ async fn rate_limit_retries_show_one_row_that_completes_when_the_reply_starts() 
         update.get("toolCallId") == row.get("toolCallId")
             && update.get("status") == Some(&json!("completed"))
     })
-    .ok_or_else(|| eyre!("retry row never completed"))?;
+    .expect("retry row never completed");
     let reply = position(&|update| update.pointer("/content/text") == Some(&json!("Done")))
-        .ok_or_else(|| eyre!("missing reply"))?;
+        .expect("missing reply");
     assert!(completed < reply);
     harness.stop().await
 }

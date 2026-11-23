@@ -36,10 +36,10 @@ impl MessageStore for ControlledSaves {
 }
 
 #[tokio::test]
-async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() -> Result<()> {
+async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() {
     for terminal in ["complete", "abort", "cancel"] {
         let (mut manager, data_dir) = test_manager().await;
-        let session = manager.create_session().await?;
+        let session = manager.create_session().await.unwrap();
         let request = manager
             .prepare_start_stream(
                 &session,
@@ -48,7 +48,8 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() -> Result<()> 
                 ProviderId::new("mock"),
                 Default::default(),
             )
-            .await?;
+            .await
+            .unwrap();
         manager
             .append_text_chunk(&request.message_id, "text", AssistantPhase::FinalAnswer, "")
             .await;
@@ -68,7 +69,8 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() -> Result<()> 
             AssistantPhase::FinalAnswer,
             "new chunk",
         ))
-        .await?;
+        .await
+        .unwrap();
         assert_eq!(
             super::common::streamed_text(chunk).as_deref(),
             Some("new chunk")
@@ -92,14 +94,14 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() -> Result<()> 
         tokio::pin!(finishing);
         assert!(futures::poll!(&mut finishing).is_pending());
         store.release.notify_one();
-        publication.await?;
+        publication.await.unwrap();
         assert!(
             !manager.streaming_messages.read().await[&request.message_id]
                 .pending_deltas
                 .is_empty()
         );
-        finishing.await?;
-        let saved = store.get(&request.message_id).await?;
+        finishing.await.unwrap();
+        let saved = store.get(&request.message_id).await.unwrap();
         if terminal == "abort" {
             assert!(saved.is_none());
         } else {
@@ -109,13 +111,12 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() -> Result<()> 
         }
         cleanup_dir(data_dir).await;
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn failed_or_cancelled_snapshot_saves_remain_retryable() -> Result<()> {
+async fn failed_or_cancelled_snapshot_saves_remain_retryable() {
     let (mut manager, data_dir) = test_manager().await;
-    let session = manager.create_session().await?;
+    let session = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session,
@@ -124,7 +125,8 @@ async fn failed_or_cancelled_snapshot_saves_remain_retryable() -> Result<()> {
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     manager
         .append_text_chunk(
             &request.message_id,
@@ -151,21 +153,23 @@ async fn failed_or_cancelled_snapshot_saves_remain_retryable() -> Result<()> {
             .pending_deltas
             .is_empty()
     );
-    manager.publish_streaming_snapshots().await?;
+    manager.publish_streaming_snapshots().await.unwrap();
     assert!(
         manager.streaming_messages.read().await[&request.message_id]
             .pending_deltas
             .is_empty()
     );
-    manager.abort_streaming_message(&request.message_id).await?;
+    manager
+        .abort_streaming_message(&request.message_id)
+        .await
+        .unwrap();
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn usage_only_updates_reach_observers_and_reopened_storage() -> Result<()> {
+async fn usage_only_updates_reach_observers_and_reopened_storage() {
     let (manager, data_dir) = test_manager().await;
-    let session = manager.create_session().await?;
+    let session = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session,
@@ -174,7 +178,8 @@ async fn usage_only_updates_reach_observers_and_reopened_storage() -> Result<()>
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     manager
         .append_text_chunk(
             &request.message_id,
@@ -183,11 +188,11 @@ async fn usage_only_updates_reach_observers_and_reopened_storage() -> Result<()>
             "response",
         )
         .await;
-    manager.publish_streaming_snapshots().await?;
+    manager.publish_streaming_snapshots().await.unwrap();
     let observer = AgentManager::new(
         manager.cloned_provider_manager(),
         data_dir.clone(),
-        open_persistence(&data_dir).await?,
+        open_persistence(&data_dir).await,
         data_dir.clone(),
     );
     let usage = TokenUsage {
@@ -198,12 +203,15 @@ async fn usage_only_updates_reach_observers_and_reopened_storage() -> Result<()>
     };
     manager
         .set_streaming_message_usage(&request.message_id, usage.clone())
-        .await?;
+        .await
+        .unwrap();
     let before = observer
         .capture_session_snapshot(&session)
-        .await?
+        .await
+        .unwrap()
         .load()
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
         before.history[&request.message_id]
             .generation
@@ -217,18 +225,21 @@ async fn usage_only_updates_reach_observers_and_reopened_storage() -> Result<()>
     );
     assert!(before.context_usage.is_none());
 
-    manager.publish_streaming_snapshots().await?;
+    manager.publish_streaming_snapshots().await.unwrap();
     let published = observer
         .capture_session_snapshot(&session)
-        .await?
+        .await
+        .unwrap()
         .load()
-        .await?;
-    let reopened = open_persistence(&data_dir).await?;
+        .await
+        .unwrap();
+    let reopened = open_persistence(&data_dir).await;
     let reopened = reopened
         .messages()
         .read_conversation(&session)
-        .await?
-        .ok_or_else(|| eyre!("reopened conversation missing"))?;
+        .await
+        .unwrap()
+        .expect("reopened conversation missing");
     for history in [&published.history, &reopened.history] {
         let message = &history[&request.message_id];
         assert_eq!(
@@ -245,12 +256,14 @@ async fn usage_only_updates_reach_observers_and_reopened_storage() -> Result<()>
     assert_eq!(published.requests, before.requests);
     assert_eq!(reopened.requests, before.requests);
 
-    manager.complete_message(&request.message_id).await?;
+    manager.complete_message(&request.message_id).await.unwrap();
     let completed = observer
         .capture_session_snapshot(&session)
-        .await?
+        .await
+        .unwrap()
         .load()
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
         completed.history[&request.message_id].status,
         MessageStatus::Complete
@@ -261,5 +274,4 @@ async fn usage_only_updates_reach_observers_and_reopened_storage() -> Result<()>
     );
     drop((manager, observer));
     cleanup_dir(data_dir).await;
-    Ok(())
 }

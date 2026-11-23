@@ -105,7 +105,7 @@ pub(super) fn option_value_label(
                 .iter()
                 .find(|choice| &choice.id == id)
                 .map_or_else(|| id.clone(), |choice| choice.label.clone()),
-            _ => id.clone(),
+            ModelOptionKind::Boolean { .. } | ModelOptionKind::Integer { .. } => id.clone(),
         },
         Some(ModelOptionValue::Boolean(true)) => String::from("on"),
         Some(ModelOptionValue::Boolean(false)) => String::from("off"),
@@ -352,6 +352,10 @@ impl App {
         let len = active.len();
         let index = self.state.sheet_index.min(len.saturating_sub(1));
         let option = active.get(index);
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "every other key does nothing in the model settings sheet"
+        )]
         match key.code {
             KeyCode::Up | KeyCode::BackTab => {
                 self.state.sheet_index = previous_wrapping(index, len)

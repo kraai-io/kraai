@@ -1,19 +1,14 @@
-#![expect(
-    clippy::panic_in_result_fn,
-    reason = "tests assert metadata-defined request effects"
-)]
-
-use color_eyre::Result;
-use kraai_types::{ModelOptionValue, ModelOptionValues};
+use kraai_types::ModelOptionValues;
 use serde_json::json;
 
 use super::*;
 
 #[test]
-fn concrete_efforts_come_from_metadata_and_omitted_default_markers_are_removed() -> Result<()> {
+fn concrete_efforts_come_from_metadata_and_omitted_default_markers_are_removed() {
     let metadata: DiscoveredModelOptions = serde_json::from_value(json!({
         "reasoning_options":[{"type":"effort","values":[null,"future-effort"]}]
-    }))?;
+    }))
+    .unwrap();
     let definitions = metadata.definitions(ModelOptionsProtocol::OpenAiChatCompletions);
     let mut body = json!({});
     crate::apply_model_options(
@@ -23,16 +18,16 @@ fn concrete_efforts_come_from_metadata_and_omitted_default_markers_are_removed()
             ModelOptionValue::Choice("future-effort".into()),
         )]),
         &mut body,
-    )?;
+    )
+    .unwrap();
     assert_eq!(body, json!({"reasoning_effort":"future-effort"}));
     assert!(
         crate::apply_model_options(&definitions, &ModelOptionValues::new(), &mut body).is_err()
     );
-    Ok(())
 }
 
 #[test]
-fn native_reasoning_levels_preserve_explicit_option_descriptors() -> Result<()> {
+fn native_reasoning_levels_preserve_explicit_option_descriptors() {
     let metadata: DiscoveredModelOptions = serde_json::from_value(json!({
         "options":[
             {"id":"reasoning_enabled","label":"Thinking","type":"boolean","required":true,
@@ -43,7 +38,8 @@ fn native_reasoning_levels_preserve_explicit_option_descriptors() -> Result<()> 
                 "active_when":{"option":"custom_gate","value":true},
                 "choices":[{"id":"endpoint-effort","label":"Endpoint effort"}]}
         ]
-    }))?;
+    }))
+    .unwrap();
     let definitions = metadata.definitions_with_reasoning_levels(
         ModelOptionsProtocol::OpenAiChatCompletions,
         ["native-effort".into()],
@@ -69,23 +65,24 @@ fn native_reasoning_levels_preserve_explicit_option_descriptors() -> Result<()> 
             ),
         ]),
         &mut body,
-    )?;
+    )
+    .unwrap();
     assert_eq!(
         body,
         json!({"thinking":{"enabled":false},"custom":{"effort":"endpoint-effort"}})
     );
-    Ok(())
 }
 
 #[test]
-fn explicit_descriptors_from_each_source_preserve_conditions_over_native_shorthand() -> Result<()> {
+fn explicit_descriptors_from_each_source_preserve_conditions_over_native_shorthand() {
     let catalog: DiscoveredModelOptions = serde_json::from_value(json!({
         "reasoning_options":[
             {"type":"toggle"},
             {"type":"effort","values":["catalog-effort"]},
             {"type":"budget_tokens","min":1024,"max":16384}
         ]
-    }))?;
+    }))
+    .unwrap();
     let explicit: DiscoveredModelOptions = serde_json::from_value(json!({
         "options":[
             {"id":"custom_gate","label":"Custom gate","type":"boolean","required":true},
@@ -96,7 +93,8 @@ fn explicit_descriptors_from_each_source_preserve_conditions_over_native_shortha
                 "min":1,"max":10000,"binding":{"type":"body","path":"/custom/budget"},
                 "active_when":{"option":"custom_gate","value":true}}
         ]
-    }))?;
+    }))
+    .unwrap();
     for catalog_explicit in [false, true] {
         let mut catalog = catalog.clone();
         let mut native = DiscoveredModelOptions::default();
@@ -129,23 +127,24 @@ fn explicit_descriptors_from_each_source_preserve_conditions_over_native_shortha
                 ("reasoning_budget".into(), ModelOptionValue::Integer(4096)),
             ]),
             &mut body,
-        )?;
+        )
+        .unwrap();
         assert_eq!(
             body,
             json!({"reasoning":{"enabled":false},"custom":{"effort":"custom-effort","budget":4096}})
         );
     }
-    Ok(())
 }
 
 #[test]
-fn independent_modes_allow_explicit_off_and_compose_body_and_header_effects() -> Result<()> {
+fn independent_modes_allow_explicit_off_and_compose_body_and_header_effects() {
     let metadata: DiscoveredModelOptions = serde_json::from_value(json!({
         "experimental":{"modes":{
             "fast":{"provider":{"body":{"speed":"fast"},"headers":{"x-speed":"fast"}}},
             "pro":{"provider":{"body":{"quality":"pro"}}}
         }}
-    }))?;
+    }))
+    .unwrap();
     let definitions = metadata.definitions(ModelOptionsProtocol::OpenAiChatCompletions);
     for enabled in [false, true] {
         let mut body = json!({"model":"custom"});
@@ -156,7 +155,8 @@ fn independent_modes_allow_explicit_off_and_compose_body_and_header_effects() ->
                 ("mode:pro".into(), ModelOptionValue::Boolean(true)),
             ]),
             &mut body,
-        )?;
+        )
+        .unwrap();
         assert_eq!(body.get("speed"), enabled.then_some(&json!("fast")));
         assert_eq!(body.get("quality"), Some(&json!("pro")));
         assert_eq!(
@@ -164,15 +164,14 @@ fn independent_modes_allow_explicit_off_and_compose_body_and_header_effects() ->
             enabled.then_some("fast")
         );
     }
-    Ok(())
 }
 
 #[test]
-fn unsupported_protocol_controls_are_not_exposed_and_toggle_gates_dependent_controls() -> Result<()>
-{
+fn unsupported_protocol_controls_are_not_exposed_and_toggle_gates_dependent_controls() {
     let metadata: DiscoveredModelOptions = serde_json::from_value(json!({
         "reasoning_options":[{"type":"toggle"},{"type":"budget_tokens","min":1024,"max":16384}]
-    }))?;
+    }))
+    .unwrap();
     assert!(crate::model_options::only_optional_reasoning(
         &metadata.definitions(ModelOptionsProtocol::OpenAiChatCompletions),
         ModelOptionsProtocol::OpenAiChatCompletions
@@ -183,19 +182,20 @@ fn unsupported_protocol_controls_are_not_exposed_and_toggle_gates_dependent_cont
         &definitions,
         &ModelOptionValues::from([("reasoning_enabled".into(), ModelOptionValue::Boolean(false))]),
         &mut body,
-    )?;
+    )
+    .unwrap();
     assert_eq!(body, json!({"reasoning":{"enabled":false}}));
     let options = ModelOptionValues::from([
         ("reasoning_enabled".into(), ModelOptionValue::Boolean(true)),
         ("reasoning_budget".into(), ModelOptionValue::Integer(4096)),
     ]);
-    crate::apply_model_options(&definitions, &options, &mut body)?;
+    crate::apply_model_options(&definitions, &options, &mut body).unwrap();
     assert_eq!(
         body,
         json!({"reasoning":{"enabled":true,"max_tokens":4096}})
     );
     let toggle_only: DiscoveredModelOptions =
-        serde_json::from_value(json!({"reasoning_options":[{"type":"toggle"}]}))?;
+        serde_json::from_value(json!({"reasoning_options":[{"type":"toggle"}]})).unwrap();
     let definitions = toggle_only.definitions(ModelOptionsProtocol::OpenRouterChatCompletions);
     assert!(
         crate::apply_model_options(
@@ -208,23 +208,22 @@ fn unsupported_protocol_controls_are_not_exposed_and_toggle_gates_dependent_cont
         )
         .is_err()
     );
-    Ok(())
 }
 
 #[test]
-fn models_without_reasoning_metadata_still_send_explicit_reasoning_settings() -> Result<()> {
+fn models_without_reasoning_metadata_still_send_explicit_reasoning_settings() {
     let definitions =
         DiscoveredModelOptions::default().definitions(ModelOptionsProtocol::OpenAiChatCompletions);
     let mut body = json!({});
-    crate::apply_model_options(&definitions, &ModelOptionValues::new(), &mut body)?;
+    crate::apply_model_options(&definitions, &ModelOptionValues::new(), &mut body).unwrap();
     assert_eq!(body, json!({}));
     let values = kraai_types::parse_model_option_assignments(
         &definitions,
         &["reasoning_effort=xhigh".into()],
         ModelOptionValues::new(),
     )
-    .map_err(|error| color_eyre::eyre::eyre!(error))?;
-    crate::apply_model_options(&definitions, &values, &mut body)?;
+    .unwrap();
+    crate::apply_model_options(&definitions, &values, &mut body).unwrap();
     assert_eq!(body, json!({"reasoning_effort":"xhigh"}));
     let router = DiscoveredModelOptions::default()
         .definitions(ModelOptionsProtocol::OpenRouterChatCompletions);
@@ -239,10 +238,10 @@ fn models_without_reasoning_metadata_still_send_explicit_reasoning_settings() ->
             ("reasoning_budget".into(), ModelOptionValue::Integer(2048)),
         ]),
         &mut body,
-    )?;
+    )
+    .unwrap();
     assert_eq!(
         body,
         json!({"reasoning":{"effort":"high","max_tokens":2048}})
     );
-    Ok(())
 }

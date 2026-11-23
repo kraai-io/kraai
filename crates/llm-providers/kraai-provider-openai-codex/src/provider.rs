@@ -28,8 +28,7 @@ const CODEX_CLIENT_VERSION: &str = "0.159.2";
 const BACKEND_URL_ERROR: &str = "OpenAI Codex backend URL must be an http or https URL with a host and without a query or a fragment";
 
 #[cfg(test)]
-#[path = "discovery_tests.rs"]
-mod discovery_tests;
+mod tests;
 
 fn valid_backend_url(value: &str) -> bool {
     Url::parse(value).is_ok_and(|url| {

@@ -23,7 +23,7 @@ pub(super) struct AppState {
     pub(super) launch_requests: BTreeMap<MessageId, kraai_types::RequestUsage>,
     pub(super) launched_at: u64,
     pub(super) cost_recovery_list_pending: bool,
-    pub(super) cost_recovery_sessions: std::collections::BTreeSet<SessionId>,
+    pub(super) cost_recovery_sessions: BTreeSet<SessionId>,
     pub(super) exit: bool,
     pub(super) sheet_query: super::line_edit::LineEdit,
     pub(super) sheet_index: usize,

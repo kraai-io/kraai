@@ -14,6 +14,10 @@ impl App {
             return false;
         }
         let scroll = self.state.error_scroll.get();
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the error view swallows every other key"
+        )]
         match key.code {
             KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
                 self.state.error_open = false;

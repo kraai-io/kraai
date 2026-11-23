@@ -201,25 +201,18 @@ impl Completion {
             .into_iter()
             .map(|call| finish_call(call, tool_name, truncated))
             .collect::<Result<_>>()?;
-        let mut ids: Vec<_> = calls
-            .iter()
-            .filter_map(|call| match call {
-                ProviderStreamEvent::ScriptCall(ScriptCall { call_id, .. }) => Some(call_id),
-                _ => None,
-            })
-            .collect();
+        let mut ids: Vec<_> = calls.iter().map(|call| &call.call_id).collect();
         ids.sort_unstable();
         ids.dedup();
         ensure!(ids.len() == calls.len(), "Provider reused a tool call ID");
-        Ok(calls)
+        Ok(calls
+            .into_iter()
+            .map(ProviderStreamEvent::ScriptCall)
+            .collect())
     }
 }
 
-fn finish_call(
-    call: PendingCall,
-    tool_name: Option<&str>,
-    truncated: bool,
-) -> Result<ProviderStreamEvent> {
+fn finish_call(call: PendingCall, tool_name: Option<&str>, truncated: bool) -> Result<ScriptCall> {
     let tool_name =
         tool_name.ok_or_else(|| eyre!("Provider called a tool when tools were disabled"))?;
     let id = call.id.ok_or_else(|| eyre!("Tool call omitted ID"))?;
@@ -229,13 +222,13 @@ fn finish_call(
     } else if call.name == tool_name {
         match serde_json::from_str::<ScriptArguments>(&call.arguments) {
             Ok(arguments) => {
-                return Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
+                return Ok(ScriptCall {
                     call_id,
                     name: call.name,
                     input: arguments.input,
                     arguments_error: None,
                     rewrite: None,
-                }));
+                });
             }
             Err(error) => {
                 format!("arguments must be a JSON object with one string field \"input\": {error}")
@@ -247,13 +240,13 @@ fn finish_call(
             call.name
         )
     };
-    Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
+    Ok(ScriptCall {
         call_id,
         name: call.name,
         input: call.arguments,
         arguments_error: Some(arguments_error),
         rewrite: None,
-    }))
+    })
 }
 
 pub(super) fn adapt_chat_completion_stream(
@@ -287,5 +280,4 @@ pub(super) fn adapt_chat_completion_stream(
 }
 
 #[cfg(test)]
-#[path = "streaming_tests.rs"]
 mod tests;

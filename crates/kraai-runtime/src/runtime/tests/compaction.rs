@@ -21,7 +21,7 @@ struct TestSummarizer {
 }
 
 #[tokio::test]
-async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<()> {
+async fn failed_compaction_preserves_the_underlying_provider_error() {
     let mut providers = ProviderManager::new();
     providers.register_provider(
         ProviderId::new("mock"),
@@ -32,7 +32,7 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
         }),
     );
     let harness = RuntimeTestHarness::new_with_parts(providers).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let (request, providers) = {
         let agent = &harness.runtime.agent_manager;
         let previous = agent
@@ -43,7 +43,8 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
                 ProviderId::new("mock"),
                 Default::default(),
             )
-            .await?;
+            .await
+            .unwrap();
         agent
             .set_streaming_message_usage(
                 &previous.message_id,
@@ -52,8 +53,9 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
                     ..Default::default()
                 },
             )
-            .await?;
-        agent.complete_message(&previous.message_id).await?;
+            .await
+            .unwrap();
+        agent.complete_message(&previous.message_id).await.unwrap();
         agent.clear_active_turn(&session_id);
         let request = agent
             .prepare_start_stream(
@@ -63,7 +65,8 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
                 ProviderId::new("mock"),
                 Default::default(),
             )
-            .await?;
+            .await
+            .unwrap();
         (request, agent.cloned_provider_manager())
     };
     let result = super::harness::drive_stream(
@@ -74,14 +77,11 @@ async fn failed_compaction_preserves_the_underlying_provider_error() -> Result<(
     )
     .await;
     let super::super::stream_driver::StreamDriveResult::FailedToStart { error } = result else {
-        return Err(color_eyre::eyre::eyre!(
-            "expected compaction failure, got {result:?}"
-        ));
+        panic!("expected compaction failure, got {result:?}");
     };
     assert!(error.contains("Context compaction failed"));
     assert!(error.contains("summary provider rejected request"));
     harness.shutdown().await;
-    Ok(())
 }
 
 #[async_trait]
@@ -134,8 +134,7 @@ impl Provider for TestSummarizer {
 }
 
 #[tokio::test]
-async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_history() -> Result<()>
-{
+async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_history() {
     let entered = CancellationToken::new();
     let dropped = CancellationToken::new();
     let mut providers = ProviderManager::new();
@@ -148,8 +147,8 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
         }),
     );
     let harness = RuntimeTestHarness::new_with_parts(providers).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let other_session = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
+    let other_session = create_session_with_profile(&harness.handle, "test-profile").await;
     {
         let agent = &harness.runtime.agent_manager;
         let request = agent
@@ -160,7 +159,8 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
                 ProviderId::new("mock"),
                 Default::default(),
             )
-            .await?;
+            .await
+            .unwrap();
         agent
             .set_streaming_message_usage(
                 &request.message_id,
@@ -169,8 +169,9 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
                     ..Default::default()
                 },
             )
-            .await?;
-        agent.complete_message(&request.message_id).await?;
+            .await
+            .unwrap();
+        agent.complete_message(&request.message_id).await.unwrap();
         agent.clear_active_turn(&session_id);
     }
     harness
@@ -182,8 +183,9 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
             String::from("mock"),
             Default::default(),
         )
-        .await?;
-    hang_guard(entered.cancelled()).await?;
+        .await
+        .unwrap();
+    hang_guard(entered.cancelled()).await.unwrap();
     hang_guard(harness.handle.send_message(
         other_session.clone(),
         String::from("hello"),
@@ -191,26 +193,36 @@ async fn stalled_compaction_allows_other_sessions_and_cancels_without_losing_his
         String::from("mock"),
         Default::default(),
     ))
-    .await??;
+    .await
+    .unwrap()
+    .unwrap();
     harness.events.wait_for("other session response", |events| {
         events.iter().any(|event| matches!(event, Event::StreamComplete { session_id, .. } if session_id == &other_session))
     }).await;
-    assert!(hang_guard(harness.handle.cancel_stream(session_id.clone()),).await??);
-    hang_guard(dropped.cancelled()).await?;
+    assert!(
+        hang_guard(harness.handle.cancel_stream(session_id.clone()),)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    hang_guard(dropped.cancelled()).await.unwrap();
     harness.events.wait_for("cancelled summary usage", |events| {
         events.iter().any(|event| matches!(event, Event::RequestUsageUpdated { session_id: id, request } if id == &session_id && request.message_id.as_str().starts_with("compaction-")))
     }).await;
-    let snapshot = harness.handle.get_session_snapshot(session_id).await?;
+    let snapshot = harness
+        .handle
+        .get_session_snapshot(session_id)
+        .await
+        .unwrap();
     assert!(!snapshot.session.is_running);
     assert!(snapshot.history.values().any(|message| {
         matches!(&message.content, ConversationItem::User { content: text } if text.display_text().len() == 99000)
     }));
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
+async fn summary_usage_cannot_cross_a_snapshot_barrier() {
     let entered = CancellationToken::new();
     let dropped = CancellationToken::new();
     let mut providers = ProviderManager::new();
@@ -223,7 +235,7 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
         }),
     );
     let harness = RuntimeTestHarness::new_with_parts(providers).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let (request, providers) = {
         let agent = &harness.runtime.agent_manager;
         let previous = agent
@@ -234,7 +246,8 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
                 ProviderId::new("mock"),
                 Default::default(),
             )
-            .await?;
+            .await
+            .unwrap();
         agent
             .set_streaming_message_usage(
                 &previous.message_id,
@@ -243,8 +256,9 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
                     ..Default::default()
                 },
             )
-            .await?;
-        agent.complete_message(&previous.message_id).await?;
+            .await
+            .unwrap();
+        agent.complete_message(&previous.message_id).await.unwrap();
         agent.clear_active_turn(&session_id);
         let request = agent
             .prepare_start_stream(
@@ -254,7 +268,8 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
                 ProviderId::new("mock"),
                 Default::default(),
             )
-            .await?;
+            .await
+            .unwrap();
         (request, agent.cloned_provider_manager())
     };
     let barrier = harness.runtime.sessions.barrier(&session_id);
@@ -277,15 +292,14 @@ async fn summary_usage_cannot_cross_a_snapshot_barrier() -> Result<()> {
         matches!(event, Event::RequestUsageUpdated { request, .. } if request.message_id.as_str().starts_with("compaction-"))
     }));
     drop(snapshot_guard);
-    hang_guard(entered.cancelled()).await?;
+    hang_guard(entered.cancelled()).await.unwrap();
     harness.events.wait_for("summary usage after snapshot", |events| {
         events.iter().any(|event| matches!(event, Event::RequestUsageUpdated { request, .. } if request.message_id.as_str().starts_with("compaction-")))
     }).await;
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
-    hang_guard(dropped.cancelled()).await?;
+    hang_guard(dropped.cancelled()).await.unwrap();
     harness.shutdown().await;
-    Ok(())
 }
 
 struct OverflowingProvider {
@@ -354,10 +368,10 @@ impl Provider for OverflowingProvider {
 async fn drive_overflowing(
     in_stream: bool,
     always_overflow: bool,
-) -> Result<(
+) -> (
     super::super::stream_driver::StreamDriveResult,
     Vec<&'static str>,
-)> {
+) {
     let provider = std::sync::Arc::new(OverflowingProvider {
         requests: std::sync::Mutex::default(),
         in_stream,
@@ -369,7 +383,7 @@ async fn drive_overflowing(
         Box::new(SharedProvider(provider.clone())),
     );
     let harness = RuntimeTestHarness::new_with_parts(providers).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let agent = &harness.runtime.agent_manager;
     let request = agent
         .prepare_start_stream(
@@ -379,7 +393,8 @@ async fn drive_overflowing(
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert!(!request.compact_first);
     let result = super::harness::drive_stream(
         harness.runtime.clone(),
@@ -392,9 +407,9 @@ async fn drive_overflowing(
     let requests = provider
         .requests
         .lock()
-        .map_err(|error| color_eyre::eyre::eyre!("{error}"))?
+        .unwrap_or_else(|error| panic!("{error}"))
         .clone();
-    Ok((result, requests))
+    (result, requests)
 }
 
 struct SharedProvider(std::sync::Arc<OverflowingProvider>);
@@ -426,9 +441,9 @@ impl Provider for SharedProvider {
 }
 
 #[tokio::test]
-async fn context_overflow_compacts_once_and_retries_the_request() -> Result<()> {
+async fn context_overflow_compacts_once_and_retries_the_request() {
     for in_stream in [false, true] {
-        let (result, requests) = drive_overflowing(in_stream, false).await?;
+        let (result, requests) = drive_overflowing(in_stream, false).await;
         assert!(
             matches!(
                 result,
@@ -438,13 +453,10 @@ async fn context_overflow_compacts_once_and_retries_the_request() -> Result<()> 
         );
         assert_eq!(requests, ["original", "summary", "compacted"]);
     }
-    let (result, requests) = drive_overflowing(false, true).await?;
+    let (result, requests) = drive_overflowing(false, true).await;
     let super::super::stream_driver::StreamDriveResult::FailedToStart { error } = result else {
-        return Err(color_eyre::eyre::eyre!(
-            "expected the second overflow to fail, got {result:?}"
-        ));
+        panic!("expected the second overflow to fail, got {result:?}");
     };
     assert!(error.contains("too long"));
     assert_eq!(requests, ["original", "summary", "compacted"]);
-    Ok(())
 }

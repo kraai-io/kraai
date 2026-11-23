@@ -1,16 +1,15 @@
 use std::sync::atomic::Ordering;
 
-use color_eyre::eyre::Result;
 use serde_json::{Value, json};
 
 use crate::support::{Harness, PROFILE_ID, Reply, client_prompt, prompt, text_prompt};
 
 #[tokio::test]
-async fn commands_are_rejected_during_active_prompts_and_model_changes_apply_next() -> Result<()> {
-    let mut harness = Harness::new(vec![Reply::Streaming, "Next reply".into()]).await?;
-    harness.install_profile().await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
+async fn commands_are_rejected_during_active_prompts_and_model_changes_apply_next() {
+    let mut harness = Harness::new(vec![Reply::Streaming, "Next reply".into()]).await;
+    harness.install_profile().await;
+    harness.initialize().await;
+    let session = harness.session().await;
 
     let selected = harness
         .request(
@@ -18,7 +17,7 @@ async fn commands_are_rejected_during_active_prompts_and_model_changes_apply_nex
             "session/set_config_option",
             json!({"sessionId":session,"configId":"profile","value":PROFILE_ID}),
         )
-        .await?;
+        .await;
     assert_eq!(
         selected
             .last()
@@ -34,17 +33,17 @@ async fn commands_are_rejected_during_active_prompts_and_model_changes_apply_nex
 
     harness
         .send(json!({"jsonrpc":"2.0","id":4,"method":"session/prompt","params":prompt(&session)}))
-        .await?;
+        .await;
     harness
         .until(|value| value.pointer("/params/update/content/text") == Some(&json!("partial")))
-        .await?;
+        .await;
     let rejected = harness
         .request(
             5,
             "session/set_config_option",
             json!({"sessionId":session,"configId":"profile","value":"coding"}),
         )
-        .await?;
+        .await;
     assert!(
         rejected
             .last()
@@ -52,7 +51,7 @@ async fn commands_are_rejected_during_active_prompts_and_model_changes_apply_nex
     );
     let undo = harness
         .request(8, "session/prompt", text_prompt(&session, "/undo"))
-        .await?;
+        .await;
     assert!(
         undo.last()
             .is_some_and(|value| value.get("error").is_some())
@@ -60,10 +59,10 @@ async fn commands_are_rejected_during_active_prompts_and_model_changes_apply_nex
     assert_eq!(harness.model_requests.load(Ordering::SeqCst), 1);
     harness
         .send(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}}))
-        .await?;
+        .await;
     let cancelled = harness
         .until(|value| value.get("id") == Some(&json!(4)))
-        .await?;
+        .await;
     assert_eq!(
         cancelled
             .last()
@@ -77,7 +76,7 @@ async fn commands_are_rejected_during_active_prompts_and_model_changes_apply_nex
             "session/set_config_option",
             json!({"sessionId":session,"configId":"model","value":"4:mock:mock-alternate"}),
         )
-        .await?;
+        .await;
     assert_eq!(
         model
             .last()
@@ -86,7 +85,7 @@ async fn commands_are_rejected_during_active_prompts_and_model_changes_apply_nex
     );
     let next = harness
         .request(7, "session/prompt", text_prompt(&session, "Next"))
-        .await?;
+        .await;
     assert_eq!(
         next.last()
             .and_then(|value| value.pointer("/result/stopReason")),
@@ -111,14 +110,14 @@ async fn commands_are_rejected_during_active_prompts_and_model_changes_apply_nex
 }
 
 #[tokio::test]
-async fn empty_undo_and_rejected_commands_do_not_call_the_provider() -> Result<()> {
-    let mut harness = Harness::new(vec![]).await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
+async fn empty_undo_and_rejected_commands_do_not_call_the_provider() {
+    let mut harness = Harness::new(vec![]).await;
+    harness.initialize().await;
+    let session = harness.session().await;
 
     let empty = harness
         .request(2, "session/prompt", client_prompt(&session, "/undo"))
-        .await?;
+        .await;
     assert_eq!(
         empty
             .last()
@@ -133,7 +132,7 @@ async fn empty_undo_and_rejected_commands_do_not_call_the_provider() -> Result<(
     }));
     let rejected = harness
         .request(3, "session/prompt", client_prompt(&session, "/undo extra"))
-        .await?;
+        .await;
     assert_eq!(
         rejected
             .last()

@@ -138,7 +138,7 @@ async fn drive(
     cut_off: CutOff,
     obeys_notice: bool,
     compaction_fails: bool,
-) -> Result<(StreamDriveResult, Vec<&'static str>, Vec<String>)> {
+) -> (StreamDriveResult, Vec<&'static str>, Vec<String>) {
     let provider = Arc::new(TruncatingProvider {
         model: Model {
             max_context,
@@ -154,7 +154,7 @@ async fn drive(
     let mut providers = ProviderManager::new();
     providers.register_provider(ProviderId::new("mock"), Box::new(Shared(provider.clone())));
     let harness = RuntimeTestHarness::new_with_parts(providers).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let agent = &harness.runtime.agent_manager;
     let request = agent
         .prepare_start_stream(
@@ -164,7 +164,8 @@ async fn drive(
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let result = super::harness::drive_stream(
         harness.runtime.clone(),
         session_id,
@@ -176,43 +177,42 @@ async fn drive(
     let requests = provider
         .requests
         .lock()
-        .map_err(|error| eyre!("{error}"))?
+        .unwrap_or_else(|error| panic!("{error}"))
         .clone();
     let notices = provider
         .notices
         .lock()
-        .map_err(|error| eyre!("{error}"))?
+        .unwrap_or_else(|error| panic!("{error}"))
         .clone();
-    Ok((result, requests, notices))
+    (result, requests, notices)
 }
 
 fn reached_output_limit(result: &StreamDriveResult) -> Option<bool> {
-    match result {
-        StreamDriveResult::Completed(output) => Some(output.reached_output_limit),
-        _ => None,
+    if let StreamDriveResult::Completed(output) = result {
+        Some(output.reached_output_limit)
+    } else {
+        None
     }
 }
 
 #[tokio::test]
-async fn a_response_cut_off_by_the_context_left_compacts_and_retries() -> Result<()> {
-    let (result, requests, _) = drive(Some(32_768), None, CutOff::Text, true, false).await?;
+async fn a_response_cut_off_by_the_context_left_compacts_and_retries() {
+    let (result, requests, _) = drive(Some(32_768), None, CutOff::Text, true, false).await;
     assert_eq!(reached_output_limit(&result), Some(false), "{result:?}");
     assert_eq!(requests, ["original", "summary", "compacted"]);
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_cut_off_response_stands_when_compaction_fails() -> Result<()> {
-    let (result, requests, _) = drive(Some(32_768), None, CutOff::Text, true, true).await?;
+async fn a_cut_off_response_stands_when_compaction_fails() {
+    let (result, requests, _) = drive(Some(32_768), None, CutOff::Text, true, true).await;
     assert_eq!(reached_output_limit(&result), Some(true), "{result:?}");
     assert_eq!(requests, ["original", "summary"]);
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_response_cut_off_by_the_model_limit_retries_with_a_notice() -> Result<()> {
+async fn a_response_cut_off_by_the_model_limit_retries_with_a_notice() {
     let (result, requests, notices) =
-        drive(Some(1_000_000), Some(1_000), CutOff::Nothing, true, false).await?;
+        drive(Some(1_000_000), Some(1_000), CutOff::Nothing, true, false).await;
     assert_eq!(reached_output_limit(&result), Some(false), "{result:?}");
     assert_eq!(requests, ["original", "warned"]);
     assert!(
@@ -220,35 +220,31 @@ async fn a_response_cut_off_by_the_model_limit_retries_with_a_notice() -> Result
             .iter()
             .all(|notice| notice.contains("output limit of 1000 tokens"))
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_second_cut_off_after_the_notice_ends_the_response() -> Result<()> {
-    let (result, requests, _) = drive(None, Some(1_000), CutOff::Nothing, false, false).await?;
+async fn a_second_cut_off_after_the_notice_ends_the_response() {
+    let (result, requests, _) = drive(None, Some(1_000), CutOff::Nothing, false, false).await;
     assert_eq!(reached_output_limit(&result), Some(true), "{result:?}");
     assert_eq!(requests, ["original", "warned"]);
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_cut_off_answer_stands_when_compacting_would_not_help() -> Result<()> {
-    let (result, requests, _) = drive(None, Some(1_000), CutOff::Text, true, false).await?;
+async fn a_cut_off_answer_stands_when_compacting_would_not_help() {
+    let (result, requests, _) = drive(None, Some(1_000), CutOff::Text, true, false).await;
     assert_eq!(reached_output_limit(&result), Some(true), "{result:?}");
     assert_eq!(requests, ["original"]);
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_cut_off_call_reaches_the_model_as_an_invalid_call() -> Result<()> {
-    let (result, requests, _) = drive(None, Some(1_000), CutOff::Call, true, false).await?;
+async fn a_cut_off_call_reaches_the_model_as_an_invalid_call() {
+    let (result, requests, _) = drive(None, Some(1_000), CutOff::Call, true, false).await;
     let StreamDriveResult::Completed(output) = &result else {
-        return Err(eyre!("expected a completed response, got {result:?}"));
+        panic!("expected a completed response, got {result:?}");
     };
     assert!(output.protocol_error.is_some());
     assert_eq!(requests, ["original"]);
-    let (result, requests, _) = drive(Some(32_768), None, CutOff::Call, true, false).await?;
+    let (result, requests, _) = drive(Some(32_768), None, CutOff::Call, true, false).await;
     assert_eq!(reached_output_limit(&result), Some(false), "{result:?}");
     assert_eq!(requests, ["original", "summary", "compacted"]);
-    Ok(())
 }

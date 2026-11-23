@@ -17,7 +17,6 @@
               cargo-edit
               cargo-msrv
               cargo-watch
-              cargo-audit
               cargo-deny
               cargo-nextest
               # Its tests build with nixpkgs rustc 1.99, which links LLVM 22 instead of 23 and

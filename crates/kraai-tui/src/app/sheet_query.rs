@@ -111,6 +111,10 @@ impl App {
         handled.is_some()
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only Up, Down, Tab and BackTab walk a sheet, and other keys are left to the caller"
+    )]
     pub(super) fn walk_sheet(&mut self, key: KeyEvent, len: usize) -> bool {
         let index = self.state.sheet_index.min(len.saturating_sub(1));
         self.state.sheet_index = match key.code {

@@ -75,8 +75,7 @@ impl kraai_web::WebSearch for StalledSearch {
 }
 
 #[tokio::test]
-async fn cancelling_execution_drops_host_search()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn cancelling_execution_drops_host_search() {
     let workspace = TestWorkspace::new();
     let entered = CancellationToken::new();
     let dropped = CancellationToken::new();
@@ -89,16 +88,15 @@ async fn cancelling_execution_drops_host_search()
     let cancellation = CancellationToken::new();
     let mut task = Box::pin(execute(execution, cancellation.clone()));
     tokio::select! {
-        result = &mut task => return Err(format!("search exited early: {result:?}").into()),
-        result = hang_guard(entered.cancelled()) => result?,
+        result = &mut task => panic!("search exited early: {result:?}"),
+        result = hang_guard(entered.cancelled()) => result.unwrap(),
     }
     cancellation.cancel();
-    let result = hang_guard(task).await??;
+    let result = hang_guard(task).await.unwrap().unwrap();
     if result.output.termination != Termination::Cancelled {
-        return Err(format!("unexpected termination: {:?}", result.output.termination).into());
+        panic!("unexpected termination: {:?}", result.output.termination);
     }
-    hang_guard(dropped.cancelled()).await?;
-    Ok(())
+    hang_guard(dropped.cancelled()).await.unwrap();
 }
 
 #[cfg(target_os = "linux")]

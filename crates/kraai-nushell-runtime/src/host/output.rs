@@ -2,7 +2,7 @@ use nu_engine::command_prelude::*;
 use std::io::Write;
 use std::sync::Arc;
 
-use nu_protocol::{ByteStream, ByteStreamSource};
+use nu_protocol::ByteStreamSource;
 
 use super::HostError;
 use super::sink::OutputSink;
@@ -46,7 +46,7 @@ impl Command for ModelPrint {
         &self,
         engine: &EngineState,
         stack: &mut Stack,
-        call: &Call,
+        call: &Call<'_>,
         mut input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         if call.has_flag(engine, stack, "raw")? {
@@ -87,7 +87,7 @@ pub(super) fn emit(
 ) -> Result<(), Box<ShellError>> {
     let stream_span = match &input {
         PipelineData::ByteStream(stream, _) => Some(stream.span()),
-        _ => None,
+        PipelineData::Empty | PipelineData::Value(..) | PipelineData::ListStream(..) => None,
     };
     let result = render(sink, engine, input, false, false);
     if let Some(span) = stream_span {
@@ -237,7 +237,7 @@ pub(super) fn configure(engine: &mut EngineState, stack: &mut Stack) {
             .map(|key| (key, Value::record(Record::new(), Span::unknown()))),
     );
     stack.add_env_var("config".into(), config.clone().into_value(Span::unknown()));
-    let config = std::sync::Arc::new(config);
+    let config = Arc::new(config);
     stack.config = Some(config.clone());
     engine.set_config(config);
 }

@@ -3,11 +3,7 @@ use kraai_test_support::http;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "test propagates fixture errors and asserts results"
-)]
-async fn anonymous_request_and_http_failures() -> Result<(), Box<dyn std::error::Error>> {
+async fn anonymous_request_and_http_failures() {
     for (status, body, expected) in [
         (
             "200 OK",
@@ -18,8 +14,8 @@ async fn anonymous_request_and_http_failures() -> Result<(), Box<dyn std::error:
         ("401 Unauthorized", "", "anonymous access"),
         ("503 Unavailable", "", "HTTP error"),
     ] {
-        let mut listener = http::Listener::bind(http::PATH).await?;
-        let endpoint = listener.url()?;
+        let mut listener = http::Listener::bind(http::PATH).await.unwrap();
+        let endpoint = listener.url().unwrap();
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await?;
             let mut request = vec![0; 8192];
@@ -34,27 +30,26 @@ async fn anonymous_request_and_http_failures() -> Result<(), Box<dyn std::error:
             );
             stream.write_all(response.as_bytes()).await
         });
-        let client = reqwest::Client::builder().no_proxy().build()?;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let request = WebSearchRequest {
             query: String::from("test"),
             limit: 5,
             max_chars: 6000,
         };
         let result = search(&client, &endpoint, &request).await;
-        server.await??;
+        server.await.unwrap().unwrap();
         let text = result
             .map(|result| result.content)
             .unwrap_or_else(|error| error);
         assert!(text.contains(expected), "{text}");
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn oversized_stream_is_rejected_before_eof() -> Result<(), Box<dyn std::error::Error>> {
+async fn oversized_stream_is_rejected_before_eof() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut listener = http::Listener::bind(http::PATH).await?;
-    let endpoint = listener.url()?;
+    let mut listener = http::Listener::bind(http::PATH).await.unwrap();
+    let endpoint = listener.url().unwrap();
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await?;
         let mut request = vec![0; 8192];
@@ -67,7 +62,7 @@ async fn oversized_stream_is_rejected_before_eof() -> Result<(), Box<dyn std::er
         stream.write_all(&vec![b'x'; MAX_BYTES + 1]).await?;
         std::future::pending::<std::io::Result<()>>().await
     });
-    let client = reqwest::Client::builder().no_proxy().build()?;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let request = WebSearchRequest {
         query: String::from("test"),
         limit: 5,
@@ -75,8 +70,8 @@ async fn oversized_stream_is_rejected_before_eof() -> Result<(), Box<dyn std::er
     };
     let result = kraai_test_support::hang_guard(search(&client, &endpoint, &request)).await;
     server.abort();
-    match result? {
-        Err(error) if error.contains("exceeds 1 MiB") => Ok(()),
-        other => Err(format!("unexpected result: {other:?}").into()),
+    match result.unwrap() {
+        Err(error) if error.contains("exceeds 1 MiB") => {}
+        other => panic!("unexpected result: {other:?}"),
     }
 }

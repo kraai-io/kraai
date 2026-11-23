@@ -93,7 +93,7 @@ impl App {
     ) -> Result<()> {
         self.state.palette.request();
         let mut needs_redraw = true;
-        let mut cursor = super::cursor::CursorBlink::new(Instant::now());
+        let mut cursor = cursor::CursorBlink::new(Instant::now());
         let input = self.input.receiver().clone();
         self.hangup = crate::terminal_loss::watch()?;
         self.input.start()?;

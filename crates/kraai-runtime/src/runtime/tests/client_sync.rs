@@ -1,18 +1,17 @@
-use color_eyre::eyre::Result;
 use kraai_types::{AssistantItem, ConversationItem, MessageId};
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::{Event, SessionActivity};
 
 #[tokio::test]
-async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<()> {
+async fn a_turn_reaches_clients_as_item_events_and_message_upserts() {
     let harness = RuntimeTestHarness::new(vec![vec![
         ScriptedChunk::reasoning(serde_json::json!({"secret": "opaque"})),
         ScriptedChunk::plain("Looking"),
         ScriptedChunk::plain(" done."),
     ]])
     .await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     harness
         .handle
         .send_message(
@@ -22,7 +21,8 @@ async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<(
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let events = harness
         .events
         .wait_for("idle session", |events| {
@@ -38,11 +38,15 @@ async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<(
 
     let started: Vec<_> = session_events
         .iter()
-        .filter_map(|event| match event {
-            Event::ItemStarted {
+        .filter_map(|event| {
+            if let Event::ItemStarted {
                 item_index, item, ..
-            } => Some((*item_index, item.clone())),
-            _ => None,
+            } = event
+            {
+                Some((*item_index, item.clone()))
+            } else {
+                None
+            }
         })
         .collect();
     assert!(matches!(
@@ -61,9 +65,12 @@ async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<(
 
     let upserted: Vec<_> = session_events
         .iter()
-        .filter_map(|event| match event {
-            Event::MessageUpserted { message, .. } => Some(message.as_ref().clone()),
-            _ => None,
+        .filter_map(|event| {
+            if let Event::MessageUpserted { message, .. } = event {
+                Some(message.as_ref().clone())
+            } else {
+                None
+            }
         })
         .collect();
     assert!(matches!(
@@ -72,7 +79,7 @@ async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<(
     ));
     let completed = upserted.last().expect("completed assistant message");
     assert_eq!(completed.status, kraai_types::MessageStatus::Complete);
-    assert!(!serde_json::to_string(completed)?.contains("opaque"));
+    assert!(!serde_json::to_string(completed).unwrap().contains("opaque"));
     assert!(
         !session_events
             .iter()
@@ -81,13 +88,17 @@ async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<(
 
     let states: Vec<_> = session_events
         .iter()
-        .filter_map(|event| match event {
-            Event::SessionStateChanged {
+        .filter_map(|event| {
+            if let Event::SessionStateChanged {
                 activity,
                 is_running,
                 ..
-            } => Some((*activity, *is_running)),
-            _ => None,
+            } = event
+            {
+                Some((*activity, *is_running))
+            } else {
+                None
+            }
         })
         .collect();
     assert!(states.contains(&(SessionActivity::Streaming, true)));
@@ -113,23 +124,26 @@ async fn a_turn_reaches_clients_as_item_events_and_message_upserts() -> Result<(
     harness
         .handle
         .undo_last_user_message(session_id.clone())
-        .await?;
+        .await
+        .unwrap();
     let removed = std::iter::from_fn(|| events.try_recv().ok())
-        .find_map(|event| match event.event {
-            Event::MessagesRemoved { message_ids, .. } => Some(message_ids),
-            _ => None,
+        .find_map(|event| {
+            if let Event::MessagesRemoved { message_ids, .. } = event.event {
+                Some(message_ids)
+            } else {
+                None
+            }
         })
         .expect("removal event");
     assert_eq!(removed.len(), 2);
     assert!(removed.contains(&completed.id));
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn snapshots_carry_the_latest_history_and_pages_reach_the_first_message() -> Result<()> {
+async fn snapshots_carry_the_latest_history_and_pages_reach_the_first_message() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let total = crate::runtime::session::SNAPSHOT_HISTORY_LIMIT + 5;
     let mut first = None;
     for index in 0..total {
@@ -149,12 +163,14 @@ async fn snapshots_carry_the_latest_history_and_pages_reach_the_first_message() 
                     exit_code: Some(0),
                 },
             )
-            .await?;
+            .await
+            .unwrap();
     }
     let snapshot = harness
         .handle
         .get_session_snapshot(session_id.clone())
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
         snapshot.history.len(),
         crate::runtime::session::SNAPSHOT_HISTORY_LIMIT
@@ -163,10 +179,10 @@ async fn snapshots_carry_the_latest_history_and_pages_reach_the_first_message() 
     let page = harness
         .handle
         .get_history_page(session_id.clone(), Some(older), 100)
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(page.messages.len(), 5);
     assert!(page.older_history.is_none());
     assert!(page.messages.contains_key(&first.expect("first message")));
     harness.shutdown().await;
-    Ok(())
 }

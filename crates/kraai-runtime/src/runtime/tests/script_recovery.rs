@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use color_eyre::eyre::Result;
 use kraai_agent::AgentManager;
 use kraai_execution_types::ScriptExecutionStatus;
 use kraai_persistence::{
@@ -14,39 +13,45 @@ use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_prof
 use crate::Event;
 use crate::runtime::script_execution::CompletedScriptExecution;
 
-async fn completed_script() -> Result<(RuntimeTestHarness, SessionId, CompletedScriptExecution)> {
+async fn completed_script() -> (RuntimeTestHarness, SessionId, CompletedScriptExecution) {
     completed_script_with_image(false).await
 }
 
 #[tokio::test]
-async fn recovery_can_restore_results_without_resuming_the_turn() -> Result<()> {
-    let (mut harness, session_id, completed) = completed_script().await?;
-    reopen_agent(&mut harness).await?;
+async fn recovery_can_restore_results_without_resuming_the_turn() {
+    let (mut harness, session_id, completed) = completed_script().await;
+    reopen_agent(&mut harness).await;
     let runtime = harness.runtime.clone();
 
-    runtime.recover_session_executions(&session_id).await?;
+    runtime
+        .recover_session_executions(&session_id)
+        .await
+        .unwrap();
 
     assert!(!runtime.agent_manager.is_profile_locked(&session_id));
-    let snapshot = harness.handle.get_session_snapshot(session_id).await?;
+    let snapshot = harness
+        .handle
+        .get_session_snapshot(session_id)
+        .await
+        .unwrap();
     assert!(!snapshot.session.is_running);
-    let expected = completed.record.outcome()?;
+    let expected = completed.record.outcome().unwrap();
     assert!(matches!(
         snapshot.history.get(&completed.record.result_message_id).map(|message| &message.content),
         Some(ConversationItem::ScriptResult { outcome, .. }) if *outcome == expected
     ));
     harness.shutdown().await;
-    Ok(())
 }
 
 pub(super) async fn completed_script_with_image(
     include_image: bool,
-) -> Result<(RuntimeTestHarness, SessionId, CompletedScriptExecution)> {
+) -> (RuntimeTestHarness, SessionId, CompletedScriptExecution) {
     let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::native_call(
         "call-1",
         "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
     )]])
     .await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     harness
         .handle
         .send_message(
@@ -56,7 +61,8 @@ pub(super) async fn completed_script_with_image(
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     harness.events.wait_for("script approval", |events| {
         events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id: id, .. } if id == &session_id))
     }).await;
@@ -65,13 +71,16 @@ pub(super) async fn completed_script_with_image(
         .runtime
         .execution_store
         .mark_running(&pending.request.id)
-        .await?;
+        .await
+        .unwrap();
     if include_image {
         use kraai_nushell_runtime::ImageAttachmentHandler;
         let mut bytes = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::new_rgb8(2, 3).write_to(&mut bytes, image::ImageFormat::Png)?;
+        image::DynamicImage::new_rgb8(2, 3)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
         let path = harness.data_dir.join("workspace/screenshot.png");
-        tokio::fs::write(&path, bytes.get_ref()).await?;
+        tokio::fs::write(&path, bytes.get_ref()).await.unwrap();
         let attachments = crate::runtime::images::DurableImageAttachments {
             execution_id: pending.request.id.clone(),
             session_id: session_id.clone(),
@@ -80,10 +89,10 @@ pub(super) async fn completed_script_with_image(
             executions: harness.runtime.execution_store.clone(),
         };
         attachments
-            .attach(1, tokio::fs::read(&path).await?)
+            .attach(1, tokio::fs::read(&path).await.unwrap())
             .await
-            .map_err(|error| color_eyre::eyre::eyre!(error))?;
-        tokio::fs::remove_file(path).await?;
+            .unwrap();
+        tokio::fs::remove_file(path).await.unwrap();
     }
     let record = harness
         .runtime
@@ -99,13 +108,15 @@ pub(super) async fn completed_script_with_image(
                 stderr: Vec::new(),
             },
         )
-        .await?;
+        .await
+        .unwrap();
     let completed = CompletedScriptExecution {
         output: harness
             .runtime
             .execution_store
             .read_output(&record.id)
-            .await?,
+            .await
+            .unwrap(),
         record,
     };
     {
@@ -116,29 +127,35 @@ pub(super) async fn completed_script_with_image(
                 completed.record.result_message_id.clone(),
                 completed.record.profile.id.clone(),
                 completed.record.call_id.clone(),
-                harness.runtime.render_script_result(&completed).await?,
-                completed.record.outcome()?,
+                harness
+                    .runtime
+                    .render_script_result(&completed)
+                    .await
+                    .unwrap(),
+                completed.record.outcome().unwrap(),
             )
-            .await?;
+            .await
+            .unwrap();
         manager.clear_active_turn(&session_id);
     }
-    Ok((harness, session_id, completed))
+    (harness, session_id, completed)
 }
 
 pub(super) async fn reopen_agent(
     harness: &mut RuntimeTestHarness,
-) -> Result<(Arc<SqliteMessageStore>, Arc<SqliteSessionStore>)> {
+) -> (Arc<SqliteMessageStore>, Arc<SqliteSessionStore>) {
     let messages = Arc::new(SqliteMessageStore::with_database(
         harness.runtime.session_store.sqlite_database(),
     ));
     let persistence =
         kraai_persistence::Persistence::open_with_messages(&harness.data_dir, messages.clone())
-            .await?;
+            .await
+            .unwrap();
     let sessions = persistence.sessions().clone();
-    let available = sessions.list().await?;
+    let available = sessions.list().await.unwrap();
     for session in available {
-        if !sessions.owns_turn(&session.id).await? {
-            sessions.claim_turn(&session.id).await?;
+        if !sessions.owns_turn(&session.id).await.unwrap() {
+            sessions.claim_turn(&session.id).await.unwrap();
         }
     }
     let providers = harness.runtime.agent_manager.cloned_provider_manager();
@@ -148,69 +165,83 @@ pub(super) async fn reopen_agent(
         persistence,
         harness.data_dir.clone(),
     ));
-    Ok((messages, sessions))
+    (messages, sessions)
 }
 
-async fn assert_undone_turn_not_replayed(retained_by_other_session: bool) -> Result<()> {
-    let (mut harness, session_id, completed) = completed_script().await?;
+async fn assert_undone_turn_not_replayed(retained_by_other_session: bool) {
+    let (mut harness, session_id, completed) = completed_script().await;
     if retained_by_other_session {
-        let (_, sessions) = reopen_agent(&mut harness).await?;
-        let mut retained = sessions.get(&session_id).await?.unwrap();
+        let (_, sessions) = reopen_agent(&mut harness).await;
+        let mut retained = sessions.get(&session_id).await.unwrap().unwrap();
         retained.id = SessionId::new("retained");
         retained.revision = 0;
-        sessions.save(&retained).await?;
+        sessions.save(&retained).await.unwrap();
     }
     assert_eq!(
         harness
             .handle
             .undo_last_user_message(session_id.clone())
-            .await?,
+            .await
+            .unwrap(),
         Some("change it".into())
     );
     assert!(
         harness
             .handle
             .get_chat_history(session_id.clone())
-            .await?
+            .await
             .is_empty()
     );
 
-    let (messages, sessions) = reopen_agent(&mut harness).await?;
+    let (messages, sessions) = reopen_agent(&mut harness).await;
     assert_eq!(
-        messages.exists(&completed.record.source_message_id).await?,
+        messages
+            .exists(&completed.record.source_message_id)
+            .await
+            .unwrap(),
         retained_by_other_session
     );
     assert_eq!(
-        messages.exists(&completed.record.result_message_id).await?,
+        messages
+            .exists(&completed.record.result_message_id)
+            .await
+            .unwrap(),
         retained_by_other_session
     );
-    assert!(sessions.get(&session_id).await?.unwrap().tip_id.is_none());
+    assert!(
+        sessions
+            .get(&session_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .tip_id
+            .is_none()
+    );
     let recovered = harness
         .runtime
         .recover_session_executions(&session_id)
         .await;
-    let history = harness.handle.get_chat_history(session_id).await?;
+    let history = harness.handle.get_chat_history(session_id).await;
     assert!(history.is_empty(), "replayed an undone script result");
-    recovered?;
+    recovered.unwrap();
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn restart_does_not_replay_script_results_from_an_undone_turn() -> Result<()> {
+async fn restart_does_not_replay_script_results_from_an_undone_turn() {
     assert_undone_turn_not_replayed(false).await
 }
 
 #[tokio::test]
-async fn restart_ignores_undone_script_sources_retained_by_another_session() -> Result<()> {
+async fn restart_ignores_undone_script_sources_retained_by_another_session() {
     assert_undone_turn_not_replayed(true).await
 }
 
 async fn append_later_message(
     harness: &mut RuntimeTestHarness,
     session_id: &SessionId,
-) -> Result<Arc<SqliteMessageStore>> {
-    let (messages, sessions) = reopen_agent(harness).await?;
+) -> Arc<SqliteMessageStore> {
+    let (messages, sessions) = reopen_agent(harness).await;
     ConversationStore::new(messages.clone(), sessions)
         .append_message(AppendMessageRequest {
             session_id: session_id.to_owned(),
@@ -222,40 +253,41 @@ async fn append_later_message(
             generation: None,
             title_if_first_message: None,
         })
-        .await?;
-    Ok(messages)
+        .await
+        .unwrap();
+    messages
 }
 
 #[tokio::test]
-async fn recovery_retains_script_sources_in_the_current_history_ancestry() -> Result<()> {
-    let (mut harness, session_id, completed) = completed_script().await?;
-    append_later_message(&mut harness, &session_id).await?;
-    reopen_agent(&mut harness).await?;
-    let before = harness.handle.get_chat_history(session_id.clone()).await?;
+async fn recovery_retains_script_sources_in_the_current_history_ancestry() {
+    let (mut harness, session_id, completed) = completed_script().await;
+    append_later_message(&mut harness, &session_id).await;
+    reopen_agent(&mut harness).await;
+    let before = harness.handle.get_chat_history(session_id.clone()).await;
     assert!(before.contains_key(&completed.record.source_message_id));
     assert!(before.contains_key(&completed.record.result_message_id));
 
     harness
         .runtime
         .recover_session_executions(&session_id)
-        .await?;
+        .await
+        .unwrap();
 
     assert_eq!(
-        serde_json::to_value(harness.handle.get_chat_history(session_id).await?)?,
-        serde_json::to_value(before)?
+        serde_json::to_value(harness.handle.get_chat_history(session_id).await).unwrap(),
+        serde_json::to_value(before).unwrap()
     );
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn recovery_keeps_delivered_script_results_as_written_even_when_they_disagree() -> Result<()>
-{
-    let (mut harness, session_id, completed) = completed_script().await?;
-    let messages = append_later_message(&mut harness, &session_id).await?;
+async fn recovery_keeps_delivered_script_results_as_written_even_when_they_disagree() {
+    let (mut harness, session_id, completed) = completed_script().await;
+    let messages = append_later_message(&mut harness, &session_id).await;
     let mut message = messages
         .get(&completed.record.result_message_id)
-        .await?
+        .await
+        .unwrap()
         .unwrap();
     let ConversationItem::ScriptResult {
         output, outcome, ..
@@ -267,19 +299,24 @@ async fn recovery_keeps_delivered_script_results_as_written_even_when_they_disag
         text: "rendered by an older build".into(),
     });
     outcome.exit_code = Some(7);
-    messages.save(&message).await?;
-    rusqlite::Connection::open(harness.data_dir.join("kraai.sqlite3"))?.execute(
+    messages.save(&message).await.unwrap();
+    rusqlite::Connection::open(harness.data_dir.join("kraai.sqlite3")).unwrap().execute(
         "INSERT INTO execution_output(execution_id, stream, bytes) VALUES (?1, 'corrupt', x'00')",
         [completed.record.id.as_str()],
-    )?;
-    reopen_agent(&mut harness).await?;
+    ).unwrap();
+    reopen_agent(&mut harness).await;
 
     harness
         .runtime
         .recover_session_executions(&session_id)
-        .await?;
+        .await
+        .unwrap();
 
-    let snapshot = harness.handle.get_session_snapshot(session_id).await?;
+    let snapshot = harness
+        .handle
+        .get_session_snapshot(session_id)
+        .await
+        .unwrap();
     assert_eq!(
         snapshot
             .history
@@ -288,5 +325,4 @@ async fn recovery_keeps_delivered_script_results_as_written_even_when_they_disag
         Some(&message.content)
     );
     harness.shutdown().await;
-    Ok(())
 }

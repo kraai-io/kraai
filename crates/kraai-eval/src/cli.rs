@@ -1,0 +1,281 @@
+mod display;
+mod in_house;
+mod pricing;
+mod proxy;
+mod proxy_bridge;
+mod tasks;
+mod terminal_bench;
+mod viewer;
+
+use std::io::Write as _;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use color_eyre::eyre::{Result, ensure};
+use kraai_eval::{EvalRoot, HarnessDir, HarnessProfile, ModelPrice, Prices, ResolvedHarness};
+use serde::Serialize;
+
+#[derive(Debug, Parser)]
+#[command(
+    about = "Run agent benchmarks and keep every attempt under ~/.kraai/eval",
+    after_help = "Examples:\n  kraai-eval run in-house --model MODEL --reasoning high --tasks 3 --attempts 5 --price-input 10 --price-output 50\n  kraai-eval run terminal-bench --model MODEL --tasks 20 --harness evals/harnesses/codex.toml\n  kraai-eval check in-house repository-repair\n  kraai-eval view\n\nRerunning the same command resumes it. Raising --tasks or --attempts only runs the new attempts. A model needs a saved price before it runs; --price-* flags save it in prices.json for every later run."
+)]
+struct Cli {
+    #[arg(
+        long,
+        global = true,
+        help = "Results directory; defaults to ~/.kraai/eval"
+    )]
+    eval_dir: Option<PathBuf>,
+    #[arg(
+        long,
+        global = true,
+        help = "In-house task directory; defaults to evals/tasks or bundled tasks"
+    )]
+    tasks_dir: Option<PathBuf>,
+    #[arg(long, global = true, help = "Print machine-readable JSON to stdout")]
+    json: bool,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    #[command(about = "Run a benchmark, resuming any saved attempts for the same harness")]
+    Run(Box<RunArgs>),
+    #[command(
+        about = "Verify tasks without a model: baselines must fail and reference solutions pass"
+    )]
+    Check(CheckArgs),
+    #[command(about = "Open saved results in a local browser")]
+    View(viewer::ViewerArgs),
+    #[command(
+        hide = true,
+        about = "Run a credential proxy until stdin closes; writes private readiness and public metrics files"
+    )]
+    Proxy(Box<proxy::ProxyArgs>),
+    #[command(
+        hide = true,
+        name = kraai_eval::PROXY_BRIDGE_COMMAND,
+        about = "Run a command in the evaluation sandbox with a loopback port forwarded to the model proxy socket"
+    )]
+    ProxyBridge(proxy_bridge::ProxyBridgeArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum Benchmark {
+    InHouse,
+    TerminalBench,
+}
+
+impl Benchmark {
+    fn directory(self) -> &'static str {
+        match self {
+            Self::InHouse => "in-house",
+            Self::TerminalBench => "terminal-bench-4.0.0",
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct RunArgs {
+    benchmark: Benchmark,
+    #[arg(long, help = "Model ID passed to the harness")]
+    model: String,
+    #[arg(
+        long,
+        help = "Reasoning effort, passed through the harness profile's reasoning_args"
+    )]
+    reasoning: Option<String>,
+    #[arg(
+        long,
+        help = "Kraai provider ID from providers.toml; its type picks the proxy. Inferred when there is only one openai-codex or openai-chat-completions provider"
+    )]
+    provider: Option<String>,
+    #[arg(
+        long,
+        help = "Kraai providers.toml path; defaults to the normal agent state directory"
+    )]
+    provider_config: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Harness TOML profile; defaults to Kraai",
+        long_help = "Harness TOML profile with schema_version = 1, name, program, and args. Arguments support {model}, {prompt}, {workspace}, and {proxy_url}. reasoning_args use {reasoning} and go before args when --reasoning is set. Set proxy to none, openai, or codex_subscription. Kraai profiles set sanitize_kraai_provider = true instead, use {provider_id} and {provider_config}, and get the proxy that matches the selected provider's type. Relative executable paths resolve from the profile directory; bare names resolve on PATH. See evals/harnesses for examples."
+    )]
+    harness: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Override the profile's executable, useful for a local build"
+    )]
+    runner: Option<PathBuf>,
+    #[arg(
+        long,
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Number of tasks, taken in a fixed order; in-house defaults to every task, terminal-bench requires it"
+    )]
+    tasks: Option<u64>,
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
+    attempts: u64,
+    #[arg(
+        long,
+        help = "Terminal-Bench only: controller IP reachable from benchmark containers; defaults to the local Docker bridge gateway"
+    )]
+    proxy_host: Option<String>,
+    #[command(flatten)]
+    pricing: pricing::PricingArgs,
+    #[arg(long, help = "Print the resolved plan without calling a model")]
+    dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+struct CheckArgs {
+    benchmark: Benchmark,
+    #[arg(help = "Task names to check; defaults to every task")]
+    tasks: Vec<String>,
+}
+
+struct Prepared {
+    root: EvalRoot,
+    profile: HarnessProfile,
+    harness: ResolvedHarness,
+    directory: HarnessDir,
+    price: ModelPrice,
+    prices: Prices,
+}
+
+pub(super) fn run() -> Result<ExitCode> {
+    let cli = Cli::parse();
+    let eval_dir = || cli.eval_dir.clone().map_or_else(EvalRoot::default_path, Ok);
+    let tasks_dir = || {
+        cli.tasks_dir
+            .clone()
+            .unwrap_or_else(tasks::default_directory)
+    };
+    match cli.command {
+        Command::Run(args) => {
+            let prepared = prepare(&args, &eval_dir()?)?;
+            match args.benchmark {
+                Benchmark::InHouse => in_house::run(*args, prepared, &tasks_dir(), cli.json),
+                Benchmark::TerminalBench => terminal_bench::run(*args, prepared, cli.json),
+            }
+        }
+        Command::Check(args) => match args.benchmark {
+            Benchmark::InHouse => in_house::check(&tasks_dir(), &args.tasks, cli.json),
+            Benchmark::TerminalBench => {
+                terminal_bench::check(&EvalRoot::open(&eval_dir()?)?, &args.tasks)
+            }
+        },
+        Command::View(args) => viewer::execute(args, eval_dir()?, cli.json),
+        Command::Proxy(args) => proxy::execute(*args),
+        Command::ProxyBridge(args) => proxy_bridge::execute(args),
+    }
+}
+
+fn prepare(args: &RunArgs, eval_dir: &std::path::Path) -> Result<Prepared> {
+    let profile = args
+        .harness
+        .as_deref()
+        .map(HarnessProfile::load)
+        .transpose()?
+        .unwrap_or_else(HarnessProfile::kraai);
+    ensure!(
+        profile.sanitize_kraai_provider
+            || (args.provider.is_none() && args.provider_config.is_none()),
+        "--provider and --provider-config require a harness profile with sanitize_kraai_provider = true"
+    );
+    ensure!(
+        args.benchmark == Benchmark::TerminalBench || args.proxy_host.is_none(),
+        "--proxy-host only applies to terminal-bench"
+    );
+    if args.benchmark == Benchmark::TerminalBench {
+        ensure!(
+            profile.has_model_proxy(),
+            "terminal-bench needs a harness with a model proxy for usage accounting"
+        );
+        ensure!(args.tasks.is_some(), "terminal-bench needs --tasks N");
+    }
+    let harness = profile.resolve(
+        &args.model,
+        args.reasoning.as_deref(),
+        args.runner.as_deref(),
+    )?;
+    let root = EvalRoot::open(eval_dir)?;
+    let directory = root.harness_dir(
+        args.benchmark.directory(),
+        &kraai_eval::model_dir(&harness.model, harness.reasoning.as_deref()),
+        &harness.name,
+        &harness.version,
+    )?;
+    let price = model_price(&root, &harness.model, args)?;
+    Ok(Prepared {
+        prices: Prices::load(root.path())?,
+        root,
+        profile,
+        harness,
+        directory,
+        price,
+    })
+}
+
+fn model_price(root: &EvalRoot, model: &str, args: &RunArgs) -> Result<ModelPrice> {
+    let saved = root.model_price(model)?;
+    let Some(price) = args.pricing.price() else {
+        return saved.ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "{model} has no saved price; pass --price-input and --price-output in USD per million tokens to save one"
+            )
+        });
+    };
+    price.rates()?;
+    if saved != Some(price) && !args.dry_run {
+        root.save_model_price(model, price)?;
+        let mut stderr = std::io::stderr().lock();
+        match saved {
+            Some(saved) => writeln!(
+                stderr,
+                "Replaced the price for {model}, was {saved}, now {price}"
+            )?,
+            None => writeln!(stderr, "Saved the price for {model}: {price}")?,
+        }
+    }
+    Ok(price)
+}
+
+fn provider_config_path(args: &RunArgs) -> Result<PathBuf> {
+    args.provider_config.clone().map_or_else(
+        || kraai_persistence::agent_state_root().map(|root| root.join("providers.toml")),
+        Ok,
+    )
+}
+
+fn lock(root: &EvalRoot, directory: &HarnessDir) -> Result<kraai_io::lock::FileLock> {
+    let path = root.lock_path(directory);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    kraai_io::lock::FileLock::try_acquire(file).map_err(|error| {
+        color_eyre::eyre::eyre!("{} is already running: {error}", directory.path.display())
+    })
+}
+
+fn print_json(value: &impl Serialize) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+fn exit_code(success: bool) -> ExitCode {
+    if success {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -1,6 +1,5 @@
 use super::*;
 use crate::Persistence;
-use color_eyre::eyre::ensure;
 use serde_json::json;
 
 fn version(source: &str, fetched_at: i64) -> ModelListVersion {
@@ -11,49 +10,76 @@ fn version(source: &str, fetched_at: i64) -> ModelListVersion {
 }
 
 #[tokio::test]
-async fn claims_are_exclusive_until_they_expire() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let first = Persistence::open(directory.path()).await?;
-    let second = Persistence::open(directory.path()).await?;
+async fn claims_are_exclusive_until_they_expire() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = Persistence::open(directory.path()).await.unwrap();
+    let second = Persistence::open(directory.path()).await.unwrap();
     let provider = ProviderId::new("provider");
 
-    ensure!(first.model_lists().claim(&provider, None, 100, 200).await?);
-    ensure!(
+    assert!(
+        first
+            .model_lists()
+            .claim(&provider, None, 100, 200)
+            .await
+            .unwrap()
+    );
+    assert!(
         !second
             .model_lists()
             .claim(&provider, None, 150, 250)
-            .await?
+            .await
+            .unwrap()
     );
-    ensure!(!first.model_lists().claim(&provider, None, 199, 299).await?);
-    ensure!(
+    assert!(
+        !first
+            .model_lists()
+            .claim(&provider, None, 199, 299)
+            .await
+            .unwrap()
+    );
+    assert!(
         second
             .model_lists()
             .claim(&provider, None, 200, 300)
-            .await?
+            .await
+            .unwrap()
     );
-    first.model_lists().release(&provider, 200).await?;
-    ensure!(!first.model_lists().claim(&provider, None, 250, 350).await?);
-    second.model_lists().release(&provider, 300).await?;
-    ensure!(first.model_lists().claim(&provider, None, 250, 350).await?);
-    ensure!(
+    first.model_lists().release(&provider, 200).await.unwrap();
+    assert!(
+        !first
+            .model_lists()
+            .claim(&provider, None, 250, 350)
+            .await
+            .unwrap()
+    );
+    second.model_lists().release(&provider, 300).await.unwrap();
+    assert!(
+        first
+            .model_lists()
+            .claim(&provider, None, 250, 350)
+            .await
+            .unwrap()
+    );
+    assert!(
         first
             .model_lists()
             .claim(&ProviderId::new("other"), None, 150, 250)
-            .await?
+            .await
+            .unwrap()
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn saving_publishes_the_list_and_only_its_readers_can_claim_it() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+async fn saving_publishes_the_list_and_only_its_readers_can_claim_it() {
+    let directory = tempfile::tempdir().unwrap();
     let store = Persistence::open(directory.path())
-        .await?
+        .await
+        .unwrap()
         .model_lists()
         .clone();
     let provider = ProviderId::new("provider");
 
-    ensure!(store.claim(&provider, None, 100, 200).await?);
+    assert!(store.claim(&provider, None, 100, 200).await.unwrap());
     store
         .save(
             &provider,
@@ -61,21 +87,24 @@ async fn saving_publishes_the_list_and_only_its_readers_can_claim_it() -> Result
             &version("https://api.test", 120),
             &json!({"data": []}),
         )
-        .await?;
-    store.release(&provider, 200).await?;
-    ensure!(!store.claim(&provider, None, 130, 230).await?);
-    ensure!(
+        .await
+        .unwrap();
+    store.release(&provider, 200).await.unwrap();
+    assert!(!store.claim(&provider, None, 130, 230).await.unwrap());
+    assert!(
         !store
             .claim(&provider, Some(&version("https://api.test", 110)), 130, 230)
-            .await?
+            .await
+            .unwrap()
     );
-    ensure!(
+    assert!(
         store
             .claim(&provider, Some(&version("https://api.test", 120)), 130, 230)
-            .await?
+            .await
+            .unwrap()
     );
-    ensure!(
-        store.read(&provider).await?
+    assert!(
+        store.read(&provider).await.unwrap()
             == Some(StoredModelList {
                 version: version("https://api.test", 120),
                 data: json!({"data": []}),
@@ -89,31 +118,33 @@ async fn saving_publishes_the_list_and_only_its_readers_can_claim_it() -> Result
             &version("https://other.test", 140),
             &json!({"data": [1]}),
         )
-        .await?;
-    ensure!(
-        store.versions().await?
+        .await
+        .unwrap();
+    assert!(
+        store.versions().await.unwrap()
             == BTreeMap::from([(provider.clone(), version("https://other.test", 140))])
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn only_the_claim_holder_saves_and_each_save_moves_the_version_forward() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+async fn only_the_claim_holder_saves_and_each_save_moves_the_version_forward() {
+    let directory = tempfile::tempdir().unwrap();
     let store = Persistence::open(directory.path())
-        .await?
+        .await
+        .unwrap()
         .model_lists()
         .clone();
     let provider = ProviderId::new("provider");
 
-    ensure!(
+    assert!(
         store
             .save(&provider, 0, &version("https://api.test", 100), &json!([0]))
-            .await?
+            .await
+            .unwrap()
             .is_none()
     );
-    ensure!(store.claim(&provider, None, 100, 200).await?);
-    ensure!(
+    assert!(store.claim(&provider, None, 100, 200).await.unwrap());
+    assert!(
         store
             .save(
                 &provider,
@@ -121,10 +152,11 @@ async fn only_the_claim_holder_saves_and_each_save_moves_the_version_forward() -
                 &version("https://api.test", 140),
                 &json!([2])
             )
-            .await?
+            .await
+            .unwrap()
             == Some(version("https://api.test", 140))
     );
-    ensure!(
+    assert!(
         store
             .save(
                 &provider,
@@ -132,11 +164,12 @@ async fn only_the_claim_holder_saves_and_each_save_moves_the_version_forward() -
                 &version("https://api.test", 120),
                 &json!([1])
             )
-            .await?
+            .await
+            .unwrap()
             == Some(version("https://api.test", 141))
     );
-    ensure!(store.renew(&provider, 200, 300).await?);
-    ensure!(
+    assert!(store.renew(&provider, 200, 300).await.unwrap());
+    assert!(
         store
             .save(
                 &provider,
@@ -144,45 +177,46 @@ async fn only_the_claim_holder_saves_and_each_save_moves_the_version_forward() -
                 &version("https://api.test", 150),
                 &json!([3])
             )
-            .await?
+            .await
+            .unwrap()
             .is_none()
     );
-    ensure!(
-        store.read(&provider).await?
+    assert!(
+        store.read(&provider).await.unwrap()
             == Some(StoredModelList {
                 version: version("https://api.test", 141),
                 data: json!([1]),
             })
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn claimed_rows_without_data_are_not_listed() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+async fn claimed_rows_without_data_are_not_listed() {
+    let directory = tempfile::tempdir().unwrap();
     let store = Persistence::open(directory.path())
-        .await?
+        .await
+        .unwrap()
         .model_lists()
         .clone();
     let claimed = ProviderId::new("claimed");
 
-    ensure!(store.claim(&claimed, None, 100, 200).await?);
-    ensure!(store.versions().await?.is_empty());
-    ensure!(store.read(&claimed).await?.is_none());
-    Ok(())
+    assert!(store.claim(&claimed, None, 100, 200).await.unwrap());
+    assert!(store.versions().await.unwrap().is_empty());
+    assert!(store.read(&claimed).await.unwrap().is_none());
 }
 
 #[tokio::test]
-async fn any_version_claims_wait_only_for_a_live_claim() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+async fn any_version_claims_wait_only_for_a_live_claim() {
+    let directory = tempfile::tempdir().unwrap();
     let store = Persistence::open(directory.path())
-        .await?
+        .await
+        .unwrap()
         .model_lists()
         .clone();
     let provider = ProviderId::new("provider");
 
-    ensure!(store.claim_any_version(&provider, 100, 200).await?);
-    ensure!(!store.claim_any_version(&provider, 150, 250).await?);
+    assert!(store.claim_any_version(&provider, 100, 200).await.unwrap());
+    assert!(!store.claim_any_version(&provider, 150, 250).await.unwrap());
     store
         .save(
             &provider,
@@ -190,32 +224,32 @@ async fn any_version_claims_wait_only_for_a_live_claim() -> Result<()> {
             &version("https://api.test", 160),
             &json!([]),
         )
-        .await?;
-    ensure!(!store.claim_any_version(&provider, 170, 270).await?);
-    store.release(&provider, 200).await?;
-    ensure!(store.claim_any_version(&provider, 170, 270).await?);
-    ensure!(!store.claim(&provider, None, 200, 300).await?);
-    store.release(&provider, 270).await?;
-    ensure!(store.claim_any_version(&provider, 200, 300).await?);
-    Ok(())
+        .await
+        .unwrap();
+    assert!(!store.claim_any_version(&provider, 170, 270).await.unwrap());
+    store.release(&provider, 200).await.unwrap();
+    assert!(store.claim_any_version(&provider, 170, 270).await.unwrap());
+    assert!(!store.claim(&provider, None, 200, 300).await.unwrap());
+    store.release(&provider, 270).await.unwrap();
+    assert!(store.claim_any_version(&provider, 200, 300).await.unwrap());
 }
 
 #[tokio::test]
-async fn only_the_current_holder_can_renew_a_claim() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+async fn only_the_current_holder_can_renew_a_claim() {
+    let directory = tempfile::tempdir().unwrap();
     let store = Persistence::open(directory.path())
-        .await?
+        .await
+        .unwrap()
         .model_lists()
         .clone();
     let provider = ProviderId::new("provider");
 
-    ensure!(store.claim(&provider, None, 100, 200).await?);
-    ensure!(store.renew(&provider, 200, 300).await?);
-    ensure!(!store.claim_any_version(&provider, 250, 350).await?);
-    ensure!(!store.renew(&provider, 200, 400).await?);
-    ensure!(store.claim_any_version(&provider, 300, 400).await?);
-    ensure!(!store.renew(&provider, 300, 500).await?);
-    store.release(&provider, 300).await?;
-    ensure!(!store.claim_any_version(&provider, 350, 450).await?);
-    Ok(())
+    assert!(store.claim(&provider, None, 100, 200).await.unwrap());
+    assert!(store.renew(&provider, 200, 300).await.unwrap());
+    assert!(!store.claim_any_version(&provider, 250, 350).await.unwrap());
+    assert!(!store.renew(&provider, 200, 400).await.unwrap());
+    assert!(store.claim_any_version(&provider, 300, 400).await.unwrap());
+    assert!(!store.renew(&provider, 300, 500).await.unwrap());
+    store.release(&provider, 300).await.unwrap();
+    assert!(!store.claim_any_version(&provider, 350, 450).await.unwrap());
 }

@@ -1,5 +1,5 @@
 use kraai_runtime::{RuntimeErrorKind, RuntimeResult, SessionSnapshot};
-use kraai_types::{ModelId, ModelSelection, ProviderId, SessionId};
+use kraai_types::{ModelId, ModelSelection, ProviderId};
 
 use super::*;
 

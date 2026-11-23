@@ -76,101 +76,11 @@ impl RequestMeasurement {
 fn take_string(event: &mut Value, key: &str) -> Option<String> {
     match event.get_mut(key)? {
         Value::String(value) => Some(std::mem::take(value)),
-        _ => None,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
+            None
+        }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn decodes_request_metadata_and_context_without_coercing_fields() -> Result<()> {
-        let event = json!({
-            "method": "POST", "path": "/v1/chat/completions", "timestamp_ms": 42,
-            "model": " model ", "reasoning_effort": "low", "service_tier": "default",
-            "reported_cost": 1200,
-            "usage": {"total_tokens": 15, "input_tokens": 5, "cache_read_tokens": 2,
-                "cache_write_tokens": 3, "output_tokens": 4, "reasoning_tokens": 1},
-        });
-        let measurement = RequestMeasurement::from_event(7, event)?;
-        ensure!(
-            serde_json::to_value(measurement)?
-                == json!({
-                    "event_index": 7, "timestamp_ms": 42, "model": " model ",
-                    "reasoning_effort": "low", "service_tier": "default",
-                    "input_context_tokens": 10,
-                    "usage": {"total_tokens": 15, "input_tokens": 5, "cache_read_tokens": 2,
-                        "cache_write_tokens": 3, "output_tokens": 4, "reasoning_tokens": 1},
-                    "reported_cost": 1200,
-                }),
-            "request metadata or context changed"
-        );
-        let event = json!({
-            "method": "POST", "path": "/responses", "timestamp_ms": -1,
-            "model": 17, "reasoning_effort": true, "service_tier": [], "usage": null,
-            "reported_cost": "free",
-        });
-        let measurement = RequestMeasurement::from_event(8, event)?;
-        ensure!(
-            serde_json::to_value(measurement)?
-                == json!({
-                    "event_index": 8, "timestamp_ms": null, "model": null,
-                    "reasoning_effort": null, "service_tier": null, "input_context_tokens": null,
-                    "usage": null, "reported_cost": null,
-                }),
-            "request fields were coerced"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn ignores_non_model_events_before_validating_usage() -> Result<()> {
-        for event in [
-            Value::Null,
-            json!([]),
-            json!({"method": "GET", "path": "/responses", "usage": "invalid"}),
-            json!({"method": "post", "path": "/responses", "usage": "invalid"}),
-            json!({"method": "POST", "path": "/models", "usage": "invalid"}),
-            json!({"method": "POST", "path": "/responses?stream=true", "usage": "invalid"}),
-        ] {
-            ensure!(
-                RequestMeasurement::from_event(0, event)?.is_none(),
-                "non-model event was accepted"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn preserves_usage_errors_and_validation_order() {
-        for (usage, expected) in [
-            (
-                json!("invalid"),
-                "invalid type: string \"invalid\", expected struct UsageMetrics",
-            ),
-            (
-                json!({"total_tokens": 1, "input_tokens": 2, "output_tokens": 0,
-                    "reasoning_tokens": 0, "cache_read_tokens": 0}),
-                "request usage subdivisions disagree with total",
-            ),
-            (
-                json!({"total_tokens": u64::MAX, "input_tokens": u64::MAX,
-                    "output_tokens": 0, "reasoning_tokens": 0, "cache_read_tokens": 1}),
-                "request input tokens overflow",
-            ),
-        ] {
-            let result = RequestMeasurement::from_event(
-                0,
-                json!({
-                    "method": "POST", "path": "/responses", "usage": usage,
-                }),
-            );
-            assert_eq!(
-                result.err().map(|error| error.to_string()).as_deref(),
-                Some(expected)
-            );
-        }
-    }
-}
+mod tests;

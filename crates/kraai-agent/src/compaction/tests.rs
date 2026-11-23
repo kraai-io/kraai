@@ -130,7 +130,7 @@ fn files(text: &str) -> RefreshedContextState {
         snapshots: vec![FileContextSnapshot {
             path: "file.rs".into(),
             opened_event: "open".into(),
-            anchor: kraai_types::MessageId::new("result"),
+            anchor: MessageId::new("result"),
             text: text.into(),
         }],
         ..Default::default()
@@ -177,10 +177,6 @@ impl std::ops::DerefMut for Prepared {
     }
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "compaction fixtures require an initialized data directory"
-)]
 fn fixture(
     native: bool,
     mut events: Vec<ProviderStreamEvent>,
@@ -283,8 +279,7 @@ fn message(id: &str, content: ConversationItem) -> Message {
 }
 
 #[tokio::test]
-async fn native_compaction_preserves_encrypted_input_and_persists_replayable_output() -> Result<()>
-{
+async fn native_compaction_preserves_encrypted_input_and_persists_replayable_output() {
     let payload = serde_json::json!({"type":"compaction","encrypted_content":"opaque-checkpoint","id":"cmp-1"});
     let (context, providers, requests, root) = fixture(
         true,
@@ -295,21 +290,23 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
     );
     let outcome = context
         .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
-        .await?;
+        .await
+        .unwrap();
     {
-        let requests = requests.lock().map_err(|e| eyre!("{e}"))?;
-        ensure!(requests.len() == 1);
-        let sent = requests.first().ok_or_else(|| eyre!("missing request"))?;
-        ensure!(sent.messages == context.original.messages);
-        ensure!(sent.script_tool == context.original.script_tool);
+        let requests = requests.lock().unwrap();
+        assert!(requests.len() == 1);
+        let sent = requests.first().expect("missing request");
+        assert!(sent.messages == context.original.messages);
+        assert!(sent.script_tool == context.original.script_tool);
         drop(requests);
     }
-    ensure!(outcome.requests.len() == 1 && outcome.requests.iter().all(|r| r.usage.is_some()));
+    assert!(outcome.requests.len() == 1 && outcome.requests.iter().all(|r| r.usage.is_some()));
     let saved = SqliteCompactionStore::new(&root)
         .get(&MessageId::new("result"))
-        .await?
-        .ok_or_else(|| eyre!("missing checkpoint"))?;
-    ensure!(
+        .await
+        .unwrap()
+        .expect("missing checkpoint");
+    assert!(
         saved.replacement
             == vec![
                 ConversationItem::User {
@@ -321,9 +318,9 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
                 },
             ]
     );
-    ensure!(saved.compatible_with(&ProviderId::new("test"), &ModelId::new("model")));
-    ensure!(!saved.compatible_with(&ProviderId::new("other"), &ModelId::new("model")));
-    ensure!(!saved.compatible_with(&ProviderId::new("test"), &ModelId::new("other")));
+    assert!(saved.compatible_with(&ProviderId::new("test"), &ModelId::new("model")));
+    assert!(!saved.compatible_with(&ProviderId::new("other"), &ModelId::new("model")));
+    assert!(!saved.compatible_with(&ProviderId::new("test"), &ModelId::new("other")));
     let replay = assemble(
         "new instructions",
         &files("updated files"),
@@ -332,12 +329,12 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
         context.original.script_tool.clone(),
         &Default::default(),
     );
-    ensure!(replay.messages.get(1..3) == Some(saved.replacement.as_slice()));
-    ensure!(outcome.request.cacheable_messages.is_none());
-    ensure!(
+    assert!(replay.messages.get(1..3) == Some(saved.replacement.as_slice()));
+    assert!(outcome.request.cacheable_messages.is_none());
+    assert!(
         matches!(outcome.request.messages.last(), Some(ConversationItem::FileContext { text }) if text == "pinned files")
     );
-    ensure!(
+    assert!(
         outcome
             .request
             .messages
@@ -346,18 +343,17 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
             .count()
             == 1
     );
-    ensure!(
+    assert!(
         !saved
             .replacement
             .iter()
             .any(|item| matches!(item, ConversationItem::FileContext { .. }))
     );
-    tokio::fs::remove_dir_all(root).await?;
-    Ok(())
+    tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
 #[tokio::test]
-async fn fallback_uses_one_conversation_request_and_accepts_large_summary() -> Result<()> {
+async fn fallback_uses_one_conversation_request_and_accepts_large_summary() {
     let summary = "Important progress and next steps. ".repeat(3000);
     let (context, providers, requests, root) = fixture(
         false,
@@ -370,41 +366,40 @@ async fn fallback_uses_one_conversation_request_and_accepts_large_summary() -> R
     );
     let outcome = context
         .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
-        .await?;
+        .await
+        .unwrap();
     {
-        let requests = requests.lock().map_err(|e| eyre!("{e}"))?;
-        ensure!(requests.len() == 1);
-        let sent = requests.first().ok_or_else(|| eyre!("missing request"))?;
+        let requests = requests.lock().unwrap();
+        assert!(requests.len() == 1);
+        let sent = requests.first().expect("missing request");
         let expected = &context.original.messages;
-        ensure!(sent.messages.get(..expected.len()) == Some(expected.as_slice()));
-        ensure!(sent.messages.len() == expected.len() + 1);
-        ensure!(sent.script_tool == context.original.script_tool);
-        ensure!(
+        assert!(sent.messages.get(..expected.len()) == Some(expected.as_slice()));
+        assert!(sent.messages.len() == expected.len() + 1);
+        assert!(sent.script_tool == context.original.script_tool);
+        assert!(
             matches!(sent.messages.last(), Some(ConversationItem::User { content: text }) if text.display_text().contains("CONTEXT CHECKPOINT"))
         );
         drop(requests);
     }
-    ensure!(
+    assert!(
         outcome
             .request
             .messages
             .iter()
             .any(|item| item.display_text().contains(&summary))
     );
-    ensure!(
+    assert!(
         !outcome
             .request
             .messages
             .iter()
             .any(|item| matches!(item, ConversationItem::ScriptResult { .. }))
     );
-    tokio::fs::remove_dir_all(root).await?;
-    Ok(())
+    tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
 #[tokio::test]
-async fn failed_or_malformed_native_compaction_never_replaces_history_or_uses_text_fallback()
--> Result<()> {
+async fn failed_or_malformed_native_compaction_never_replaces_history_or_uses_text_fallback() {
     let payload = serde_json::json!({"type":"compaction","encrypted_content":"opaque"});
     for (events, fail) in [
         (vec![], false),
@@ -420,31 +415,32 @@ async fn failed_or_malformed_native_compaction_never_replaces_history_or_uses_te
         (vec![ProviderStreamEvent::Compaction { payload }], true),
     ] {
         let (context, providers, requests, root) = fixture(true, events, fail);
-        ensure!(
+        assert!(
             context
                 .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
                 .await
                 .is_err()
         );
-        ensure!(requests.lock().map_err(|e| eyre!("{e}"))?.len() == 1);
-        ensure!(
+        assert!(requests.lock().unwrap().len() == 1);
+        assert!(
             context
                 .store
                 .get(&MessageId::new("result"))
-                .await?
+                .await
+                .unwrap()
                 .is_none()
         );
-        ensure!(
+        assert!(
             context
                 .usage_store
                 .load(&SessionId::new("session"))
-                .await?
+                .await
+                .unwrap()
                 .len()
                 == 1
         );
-        tokio::fs::remove_dir_all(root).await?;
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
-    Ok(())
 }
 
 #[test]
@@ -466,15 +462,13 @@ fn user_retention_prioritizes_recent_requests_and_preserves_unicode_boundaries()
 }
 
 #[tokio::test]
-async fn fallback_context_overflow_trims_complete_exchanges_and_keeps_original_user() -> Result<()>
-{
+async fn fallback_context_overflow_trims_complete_exchanges_and_keeps_original_user() {
     for overflow in [Overflow::Rejected, Overflow::Truncated] {
-        trims_complete_exchanges_after(overflow).await?;
+        trims_complete_exchanges_after(overflow).await;
     }
-    Ok(())
 }
 
-async fn trims_complete_exchanges_after(overflow: Overflow) -> Result<()> {
+async fn trims_complete_exchanges_after(overflow: Overflow) {
     let (context, mut providers, requests, root) = fixture(false, vec![], false);
     providers.register_provider(
         ProviderId::new("test"),
@@ -494,26 +488,26 @@ async fn trims_complete_exchanges_after(overflow: Overflow) -> Result<()> {
     );
     let outcome = context
         .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
-        .await?;
+        .await
+        .unwrap();
     {
-        let requests = requests.lock().map_err(|e| eyre!("{e}"))?;
-        ensure!(requests.len() == 3);
-        let last = requests.last().ok_or_else(|| eyre!("missing request"))?;
-        ensure!(!last.messages.iter().any(|item| matches!(
+        let requests = requests.lock().unwrap();
+        assert!(requests.len() == 3);
+        let last = requests.last().expect("missing request");
+        assert!(!last.messages.iter().any(|item| matches!(
             item,
             ConversationItem::ScriptResult { .. } | ConversationItem::Assistant { .. }
         )));
         drop(requests);
     }
-    ensure!(outcome.request.messages.iter().any(
+    assert!(outcome.request.messages.iter().any(
         |item| matches!(item, ConversationItem::User { content: text } if text.display_text() == "Preserve the filesystem")
     ));
-    tokio::fs::remove_dir_all(root).await?;
-    Ok(())
+    tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn native_stream_retries_are_bounded_and_each_attempt_is_accounted() -> Result<()> {
+async fn native_stream_retries_are_bounded_and_each_attempt_is_accounted() {
     let (context, mut providers, requests, root) = fixture(true, vec![], false);
     providers.register_provider(
         ProviderId::new("test"),
@@ -530,28 +524,32 @@ async fn native_stream_retries_are_bounded_and_each_attempt_is_accounted() -> Re
             })],
         }),
     );
-    ensure!(
+    assert!(
         context
             .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
             .await
             .is_err()
     );
-    ensure!(requests.lock().map_err(|e| eyre!("{e}"))?.len() == 3);
-    let usage = context.usage_store.load(&SessionId::new("session")).await?;
-    ensure!(usage.len() == 3);
-    ensure!(
+    assert!(requests.lock().unwrap().len() == 3);
+    let usage = context
+        .usage_store
+        .load(&SessionId::new("session"))
+        .await
+        .unwrap();
+    assert!(usage.len() == 3);
+    assert!(
         context
             .store
             .get(&MessageId::new("result"))
-            .await?
+            .await
+            .unwrap()
             .is_none()
     );
-    tokio::fs::remove_dir_all(root).await?;
-    Ok(())
+    tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
 #[tokio::test]
-async fn invalid_fallback_response_preserves_existing_context() -> Result<()> {
+async fn invalid_fallback_response_preserves_existing_context() {
     for events in [
         vec![],
         vec![ProviderStreamEvent::ScriptCall(ScriptCall {
@@ -563,26 +561,26 @@ async fn invalid_fallback_response_preserves_existing_context() -> Result<()> {
         })],
     ] {
         let (context, providers, _, root) = fixture(false, events, false);
-        ensure!(
+        assert!(
             context
                 .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
                 .await
                 .is_err()
         );
-        ensure!(
+        assert!(
             context
                 .store
                 .get(&MessageId::new("result"))
-                .await?
+                .await
+                .unwrap()
                 .is_none()
         );
-        tokio::fs::remove_dir_all(root).await?;
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn fallback_retries_without_the_tool_after_an_unexpected_tool_call() -> Result<()> {
+async fn fallback_retries_without_the_tool_after_an_unexpected_tool_call() {
     let (context, mut providers, requests, root) = fixture(false, vec![], false);
     providers.register_provider(
         ProviderId::new("test"),
@@ -602,12 +600,13 @@ async fn fallback_retries_without_the_tool_after_an_unexpected_tool_call() -> Re
     );
     let outcome = context
         .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
-        .await?;
+        .await
+        .unwrap();
     {
-        let requests = requests.lock().map_err(|e| eyre!("{e}"))?;
-        ensure!(requests.len() == 2);
-        ensure!(requests.first().is_some_and(|r| r.script_tool.is_some()));
-        ensure!(requests.last().is_some_and(|r| {
+        let requests = requests.lock().unwrap();
+        assert!(requests.len() == 2);
+        assert!(requests.first().is_some_and(|r| r.script_tool.is_some()));
+        assert!(requests.last().is_some_and(|r| {
             r.script_tool.is_none()
                 && requests
                     .first()
@@ -615,21 +614,19 @@ async fn fallback_retries_without_the_tool_after_an_unexpected_tool_call() -> Re
         }));
         drop(requests);
     }
-    ensure!(
+    assert!(
         outcome
             .request
             .messages
             .iter()
             .any(|item| item.display_text().contains("continue investigation"))
     );
-    ensure!(outcome.request.script_tool == context.original.script_tool);
-    tokio::fs::remove_dir_all(root).await?;
-    Ok(())
+    assert!(outcome.request.script_tool == context.original.script_tool);
+    tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn native_compaction_recovers_after_interruption_without_duplicate_checkpoint_items()
--> Result<()> {
+async fn native_compaction_recovers_after_interruption_without_duplicate_checkpoint_items() {
     let (context, mut providers, requests, root) = fixture(true, vec![], false);
     let payload = serde_json::json!({"type":"compaction","encrypted_content":"checkpoint"});
     providers.register_provider(
@@ -654,12 +651,13 @@ async fn native_compaction_recovers_after_interruption_without_duplicate_checkpo
     );
     let outcome = context
         .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
-        .await?;
-    ensure!(outcome.requests.len() == 2);
+        .await
+        .unwrap();
+    assert!(outcome.requests.len() == 2);
     {
-        let requests = requests.lock().map_err(|e| eyre!("{e}"))?.clone();
-        ensure!(requests.len() == 2);
-        ensure!(
+        let requests = requests.lock().unwrap().clone();
+        assert!(requests.len() == 2);
+        assert!(
             requests
                 .iter()
                 .all(|request| request.messages == context.original.messages)
@@ -668,27 +666,31 @@ async fn native_compaction_recovers_after_interruption_without_duplicate_checkpo
     let saved = context
         .store
         .get(&MessageId::new("result"))
-        .await?
-        .ok_or_else(|| eyre!("missing checkpoint"))?;
+        .await
+        .unwrap()
+        .expect("missing checkpoint");
     let checkpoints: Vec<_> = saved
         .replacement
         .iter()
-        .filter_map(|item| match item {
-            ConversationItem::Compaction { payload, .. } => Some(payload),
-            _ => None,
+        .filter_map(|item| {
+            if let ConversationItem::Compaction { payload, .. } = item {
+                Some(payload)
+            } else {
+                None
+            }
         })
         .collect();
-    ensure!(checkpoints == vec![&payload]);
-    ensure!(
+    assert!(checkpoints == vec![&payload]);
+    assert!(
         context
             .usage_store
             .load(&SessionId::new("session"))
-            .await?
+            .await
+            .unwrap()
             .len()
             == 2
     );
-    tokio::fs::remove_dir_all(root).await?;
-    Ok(())
+    tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
 #[test]
@@ -753,9 +755,12 @@ fn image_request_budget_keeps_recent_images_and_reopenable_references() {
     let count = request
         .messages
         .iter()
-        .filter_map(|message| match message {
-            ConversationItem::User { content } => Some(content.images().count()),
-            _ => None,
+        .filter_map(|message| {
+            if let ConversationItem::User { content } = message {
+                Some(content.images().count())
+            } else {
+                None
+            }
         })
         .sum::<usize>();
     assert_eq!(count, kraai_execution_types::image::MAX_REQUEST_IMAGES);
@@ -770,7 +775,7 @@ fn image_request_budget_keeps_recent_images_and_reopenable_references() {
 }
 
 #[tokio::test]
-async fn compaction_preserves_options_for_summary_and_following_generation() -> Result<()> {
+async fn compaction_preserves_options_for_summary_and_following_generation() {
     for native in [false, true] {
         let events = if native {
             vec![ProviderStreamEvent::Compaction {
@@ -797,15 +802,15 @@ async fn compaction_preserves_options_for_summary_and_following_generation() -> 
         context.original.options = options.clone();
         let outcome = context
             .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
-            .await?;
-        ensure!(outcome.request.options == options);
-        let requests = requests.lock().map_err(|error| eyre!("{error}"))?;
-        ensure!(!requests.is_empty());
-        ensure!(requests.iter().all(|request| request.options == options));
+            .await
+            .unwrap();
+        assert!(outcome.request.options == options);
+        let requests = requests.lock().unwrap();
+        assert!(!requests.is_empty());
+        assert!(requests.iter().all(|request| request.options == options));
         drop(requests);
-        std::fs::remove_dir_all(root)?;
+        std::fs::remove_dir_all(root).unwrap();
     }
-    Ok(())
 }
 
 struct TestImageResolver;
@@ -818,7 +823,7 @@ impl kraai_provider_core::ImageResolver for TestImageResolver {
 }
 
 #[tokio::test]
-async fn compaction_reads_images_but_retains_only_reopenable_references() -> Result<()> {
+async fn compaction_reads_images_but_retains_only_reopenable_references() {
     let image = kraai_execution_types::ImageAttachment {
         id: "a".repeat(64),
         mime_type: "image/png".into(),
@@ -853,10 +858,11 @@ async fn compaction_reads_images_but_retains_only_reopenable_references() -> Res
         let outcome = context
             .with_image_resolver(Arc::new(TestImageResolver))
             .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
-            .await?;
+            .await
+            .unwrap();
         {
-            let requests = requests.lock().map_err(|error| eyre!("{error}"))?.clone();
-            ensure!(
+            let requests = requests.lock().unwrap().clone();
+            assert!(
                 requests
                     .first()
                     .is_some_and(|request| request.messages.contains(&user))
@@ -864,29 +870,28 @@ async fn compaction_reads_images_but_retains_only_reopenable_references() -> Res
         }
         let saved = SqliteCompactionStore::new(&root)
             .get(&MessageId::new("result"))
-            .await?
-            .ok_or_else(|| eyre!("missing checkpoint"))?;
+            .await
+            .unwrap()
+            .expect("missing checkpoint");
         for messages in [&outcome.request.messages, &saved.replacement] {
-            ensure!(messages.iter().all(|message| !matches!(message, ConversationItem::User { content } if content.has_images())));
-            ensure!(
+            assert!(messages.iter().all(|message| !matches!(message, ConversationItem::User { content } if content.has_images())));
+            assert!(
                 messages
                     .iter()
                     .any(|message| message.display_text().contains(&image.id))
             );
-            ensure!(
+            assert!(
                 messages
                     .iter()
                     .any(|message| message.display_text().contains("Inspect the screenshot"))
             );
         }
-        tokio::fs::remove_dir_all(root).await?;
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn file_removal_notifications_survive_compaction_without_becoming_retained_users()
--> Result<()> {
+async fn file_removal_notifications_survive_compaction_without_becoming_retained_users() {
     let (mut context, providers, _, root) = fixture(
         true,
         vec![ProviderStreamEvent::Compaction {
@@ -902,8 +907,9 @@ async fn file_removal_notifications_survive_compaction_without_becoming_retained
     );
     let outcome = context
         .run(&providers, &ProviderId::new("test"), &ModelId::new("model"))
-        .await?;
-    ensure!(
+        .await
+        .unwrap();
+    assert!(
         outcome
             .request
             .messages
@@ -913,20 +919,18 @@ async fn file_removal_notifications_survive_compaction_without_becoming_retained
     let checkpoint = context
         .store
         .get(&MessageId::new("result"))
-        .await?
-        .ok_or_else(|| eyre!("missing checkpoint"))?;
-    ensure!(
+        .await
+        .unwrap()
+        .expect("missing checkpoint");
+    assert!(
         !checkpoint
             .replacement
             .iter()
             .any(|item| item.display_text().contains("removed.txt"))
     );
-    tokio::fs::remove_dir_all(root).await?;
-    Ok(())
+    tokio::fs::remove_dir_all(root).await.unwrap();
 }
 
-#[path = "chat_completions_tests.rs"]
 mod chat_completions;
 
-#[path = "assembly_tests.rs"]
 mod assembly;

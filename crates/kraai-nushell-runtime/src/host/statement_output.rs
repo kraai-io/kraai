@@ -37,6 +37,10 @@ pub(super) fn emit_drained_statements(
     emit_drains(ir, emit, &value_spans(working_set, statement));
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only assignments and subexpressions produce a value to drain"
+)]
 fn value_spans(working_set: &StateWorkingSet<'_>, block: &Block) -> Vec<Span> {
     let mut spans = Vec::new();
     block.flat_map(
@@ -83,14 +87,11 @@ pub(super) fn do_body(working_set: &StateWorkingSet<'_>, pipeline: &Pipeline) ->
     if working_set.get_decl(call.decl_id).name() != "do" {
         return None;
     }
-    match call.positional_iter().next()?.expr {
-        Expr::Closure(block_id) | Expr::Block(block_id)
-            if block_id.get() >= working_set.permanent().num_blocks() =>
-        {
-            Some(block_id)
-        }
-        _ => None,
-    }
+    let (Expr::Closure(block_id) | Expr::Block(block_id)) = call.positional_iter().next()?.expr
+    else {
+        return None;
+    };
+    (block_id.get() >= working_set.permanent().num_blocks()).then_some(block_id)
 }
 
 pub(super) fn emit_body_statements(
@@ -179,7 +180,7 @@ impl Command for Emit {
         &self,
         engine: &EngineState,
         stack: &mut Stack,
-        _call: &Call,
+        _call: &Call<'_>,
         input: PipelineData,
     ) -> Result<PipelineData, ShellError> {
         super::output::emit(&self.sink, engine, stack, input).map_err(|error| *error)?;

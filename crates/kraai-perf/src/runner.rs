@@ -76,6 +76,6 @@ fn sample(
         .wrap_err_with(|| format!("read sample for {name}"))
 }
 
-#[cfg(all(test, unix))]
-#[path = "runner_tests.rs"]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests;

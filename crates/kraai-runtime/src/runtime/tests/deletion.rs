@@ -15,9 +15,9 @@ use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_prof
 use crate::Event;
 
 #[tokio::test]
-async fn deletion_waits_for_turn_preparation() -> Result<()> {
+async fn deletion_waits_for_turn_preparation() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     super::harness::hold_preparation(&harness.runtime, &session_id).await;
     let deletion = {
         let handle = harness.handle.clone();
@@ -31,17 +31,17 @@ async fn deletion_waits_for_turn_preparation() -> Result<()> {
             .is_err()
     );
     super::harness::release_preparation(&harness.runtime, &session_id).await;
-    hang_guard(&mut deletion).await??;
+    hang_guard(&mut deletion).await.unwrap().unwrap();
     assert!(
         !harness
             .handle
             .list_sessions()
-            .await?
+            .await
+            .unwrap()
             .iter()
             .any(|session| session.id == session_id)
     );
     harness.shutdown().await;
-    Ok(())
 }
 
 struct BlockingPollProvider {
@@ -86,7 +86,7 @@ impl kraai_provider_core::Provider for BlockingPollProvider {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deletion_waits_for_a_blocked_stream_to_stop_polling() -> Result<()> {
+async fn deletion_waits_for_a_blocked_stream_to_stop_polling() {
     let entered = tokio_util::sync::CancellationToken::new();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let mut providers = kraai_provider_core::ProviderManager::new();
@@ -98,7 +98,7 @@ async fn deletion_waits_for_a_blocked_stream_to_stop_polling() -> Result<()> {
         }),
     );
     let harness = RuntimeTestHarness::new_with_parts(providers).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     harness
         .handle
         .send_message(
@@ -108,8 +108,9 @@ async fn deletion_waits_for_a_blocked_stream_to_stop_polling() -> Result<()> {
             "mock".into(),
             Default::default(),
         )
-        .await?;
-    hang_guard(entered.cancelled()).await?;
+        .await
+        .unwrap();
+    hang_guard(entered.cancelled()).await.unwrap();
     let deletion = {
         let handle = harness.handle.clone();
         let session_id = session_id.clone();
@@ -121,29 +122,29 @@ async fn deletion_waits_for_a_blocked_stream_to_stop_polling() -> Result<()> {
             .await
             .is_err()
     );
-    release_tx.send(())?;
-    hang_guard(&mut deletion).await??;
+    release_tx.send(()).unwrap();
+    hang_guard(&mut deletion).await.unwrap().unwrap();
     assert!(
         !harness
             .handle
             .list_sessions()
-            .await?
+            .await
+            .unwrap()
             .iter()
             .any(|session| session.id == session_id)
     );
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn deleting_during_script_preparation_cannot_leave_an_orphan_approval() -> Result<()> {
+async fn deleting_during_script_preparation_cannot_leave_an_orphan_approval() {
     let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::native_call(
         "call-1",
         "# timeout=30sec permissions=workspace-write\n'changed' | save result.txt",
     )]])
     .await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let idle_session = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
+    let idle_session = create_session_with_profile(&harness.handle, "test-profile").await;
     let store = Arc::new(PausedExecutionStore {
         inner: harness.runtime.execution_store.clone(),
         entered: Notify::new(),
@@ -160,9 +161,13 @@ async fn deleting_during_script_preparation_cannot_leave_an_orphan_approval() ->
         options: Default::default(),
         response,
     });
-    sent.await??;
-    hang_guard(store.entered.notified()).await?;
-    harness.handle.delete_session(idle_session.clone()).await?;
+    sent.await.unwrap().unwrap();
+    hang_guard(store.entered.notified()).await.unwrap();
+    harness
+        .handle
+        .delete_session(idle_session.clone())
+        .await
+        .unwrap();
     let deletion = {
         let handle = harness.handle.clone();
         let session_id = session_id.clone();
@@ -171,24 +176,24 @@ async fn deleting_during_script_preparation_cannot_leave_an_orphan_approval() ->
     tokio::pin!(deletion);
     assert!(futures::poll!(&mut deletion).is_pending());
     store.release.notify_one();
-    let outcome = hang_guard(&mut deletion).await?;
+    let outcome = hang_guard(&mut deletion).await.unwrap();
     harness.events.wait_for("script approval", |events| {
         events.iter().any(|event| {
             matches!(event, Event::ScriptApprovalRequested { session_id: id, .. } if id == &session_id)
         })
     }).await;
-    let sessions = harness.handle.list_sessions().await?;
+    let sessions = harness.handle.list_sessions().await.unwrap();
     let pending = harness
         .handle
         .get_pending_script(session_id.clone())
-        .await?;
+        .await
+        .unwrap();
     harness.shutdown().await;
     let error = outcome.expect_err("deletion succeeded during script preparation");
     assert_eq!(error.kind, crate::RuntimeErrorKind::Conflict);
     assert!(sessions.iter().any(|session| session.id == session_id));
     assert!(!sessions.iter().any(|session| session.id == idle_session));
     assert!(pending.is_some());
-    Ok(())
 }
 
 struct PausedExecutionStore {

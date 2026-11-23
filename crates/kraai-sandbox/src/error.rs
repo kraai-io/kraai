@@ -32,7 +32,7 @@ impl std::fmt::Display for SandboxError {
             Self::Spawn {
                 executable,
                 message,
-            } => write!(f, "unable to spawn '{}': {message}", executable),
+            } => write!(f, "unable to spawn '{executable}': {message}"),
             Self::Wait(message) => write!(f, "unable to wait for process: {message}"),
         }
     }
@@ -44,7 +44,14 @@ impl SandboxError {
     pub fn with_workspace_root(self, workspace: &std::path::Path) -> Self {
         let message = match self {
             Self::SandboxUnavailable(message) | Self::PrivateTemp(message) => message,
-            error => error.to_string(),
+            error @ (Self::ExecutableMustBeAbsolute
+            | Self::ExecutableNotVisible(_)
+            | Self::InvalidTimeout
+            | Self::WorkspaceReadRequired
+            | Self::MissingWorkspace(_)
+            | Self::InvalidRuntimeRoot(_)
+            | Self::Spawn { .. }
+            | Self::Wait(_)) => error.to_string(),
         };
         Self::SandboxUnavailable(format!(
             "{message}; configured session workspace root: '{}'",

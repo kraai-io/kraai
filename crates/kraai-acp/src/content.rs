@@ -32,11 +32,13 @@ pub(crate) async fn prompt(
                 }
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(image.data)
-                    .map_err(|error| crate::error::invalid(error.to_string()))?;
+                    .map_err(|error| error::invalid(error.to_string()))?;
                 let image = runtime.import_image(bytes).await.map_err(error::runtime)?;
                 parts.push(ContentPart::Image { image });
             }
-            _ => return Err(error::invalid("Unsupported prompt content type")),
+            acp::ContentBlock::Audio(_) | acp::ContentBlock::Resource(_) | _ => {
+                return Err(error::invalid("Unsupported prompt content type"));
+            }
         }
     }
     if parts.is_empty() {

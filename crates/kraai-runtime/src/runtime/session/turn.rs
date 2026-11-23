@@ -292,7 +292,11 @@ impl SessionActor {
             TurnState::Preparing(preparation) if preparation.generation == generation => {
                 preparation
             }
-            state => {
+            state @ (TurnState::Idle
+            | TurnState::Preparing(_)
+            | TurnState::Streaming(_)
+            | TurnState::AwaitingApproval(_)
+            | TurnState::RunningScript(_)) => {
                 self.state = state;
                 return;
             }

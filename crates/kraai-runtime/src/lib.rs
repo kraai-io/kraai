@@ -1,6 +1,3 @@
-#![forbid(unsafe_code)]
-#![deny(clippy::all)]
-
 mod api;
 mod handle;
 mod runtime;

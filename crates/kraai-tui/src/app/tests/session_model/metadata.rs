@@ -22,14 +22,14 @@ fn remaining_options() -> ModelOptionValues {
 }
 
 #[test]
-fn metadata_refresh_reconciles_deferred_saves_before_the_turn_finishes() -> color_eyre::Result<()> {
+fn metadata_refresh_reconciles_deferred_saves_before_the_turn_finishes() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
+    configure(&mut harness);
     let mut active = session_snapshot(None);
     active.session.is_running = true;
     active.activity = SessionActivity::Streaming;
     snapshot(&mut harness, &SessionId::new("session"), 0, active);
-    set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
+    set_option(&mut harness, "effort", "high").unwrap();
     assert!(saves(&harness).is_empty());
     remove_effort(&mut harness);
     assert!(harness.app.state.selected_model_options.is_empty());
@@ -42,26 +42,23 @@ fn metadata_refresh_reconciles_deferred_saves_before_the_turn_finishes() -> colo
     );
     assert!(matches!(saves(&harness).as_slice(), [(_, _, selection)]
         if selection.options.is_empty()));
-    Ok(())
 }
 
 #[test]
-fn unchanged_catalog_metadata_does_not_write_session_selection() -> color_eyre::Result<()> {
+fn unchanged_catalog_metadata_does_not_write_session_selection() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
+    configure(&mut harness);
     let models = harness.app.state.models_by_provider.clone();
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models)));
     assert!(saves(&harness).is_empty());
-    Ok(())
 }
 
 #[test]
-fn metadata_refresh_reconciles_background_saves_before_the_turn_finishes() -> color_eyre::Result<()>
-{
+fn metadata_refresh_reconciles_background_saves_before_the_turn_finishes() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
+    configure(&mut harness);
     let mut active = session_snapshot(None);
     active.session.is_running = true;
     active.activity = SessionActivity::Streaming;
@@ -86,11 +83,10 @@ fn metadata_refresh_reconciles_background_saves_before_the_turn_finishes() -> co
             && selection.options == remaining_options())
     );
     assert!(harness.app.state.selected_model_options.is_empty());
-    Ok(())
 }
 
 #[test]
-fn stale_background_save_results_preserve_reconciled_pending_options() -> color_eyre::Result<()> {
+fn stale_background_save_results_preserve_reconciled_pending_options() {
     for result in [
         Ok(()),
         Err(kraai_runtime::RuntimeError::invalid_argument(
@@ -98,13 +94,13 @@ fn stale_background_save_results_preserve_reconciled_pending_options() -> color_
         )),
     ] {
         let mut harness = test_harness();
-        configure(&mut harness)?;
+        configure(&mut harness);
         harness.app.state.selected_model_options = options("high", false, None);
         harness.app.save_model_selection();
         let (_, initial_id, initial) = saves(&harness)
             .into_iter()
             .next()
-            .ok_or_else(|| color_eyre::eyre::eyre!("missing initial save"))?;
+            .expect("missing initial save");
         switch_to_other_session(&mut harness);
         remove_effort(&mut harness);
         assert!(saves(&harness).is_empty());
@@ -118,7 +114,7 @@ fn stale_background_save_results_preserve_reconciled_pending_options() -> color_
         let (_, corrected_id, corrected) = saves(&harness)
             .into_iter()
             .next()
-            .ok_or_else(|| color_eyre::eyre::eyre!("missing corrected save"))?;
+            .expect("missing corrected save");
         assert!(corrected_id > initial_id);
         assert_eq!(corrected.options, remaining_options());
         assert_eq!(corrected.provider_id, initial.provider_id);
@@ -136,19 +132,18 @@ fn stale_background_save_results_preserve_reconciled_pending_options() -> color_
             Some(&SessionId::new("other"))
         );
     }
-    Ok(())
 }
 
 #[test]
-fn metadata_refresh_retries_background_saves_rejected_before_refresh() -> color_eyre::Result<()> {
+fn metadata_refresh_retries_background_saves_rejected_before_refresh() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
+    configure(&mut harness);
     harness.app.state.selected_model_options = options("high", false, None);
     harness.app.save_model_selection();
     let (_, save_id, _) = saves(&harness)
         .into_iter()
         .next()
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing initial save"))?;
+        .expect("missing initial save");
     switch_to_other_session(&mut harness);
     harness
         .app
@@ -173,5 +168,4 @@ fn metadata_refresh_retries_background_saves_rejected_before_refresh() -> color_
             && selection.options == remaining_options())
     );
     assert!(harness.app.state.selected_model_options.is_empty());
-    Ok(())
 }

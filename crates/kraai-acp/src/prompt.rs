@@ -89,9 +89,7 @@ async fn finish_prompt(
                 }
                 Err(broadcast::error::TryRecvError::Empty) => break,
                 Err(broadcast::error::TryRecvError::Closed) => {
-                    return Err(crate::error::internal(
-                        "Runtime event stream interrupted: closed",
-                    ));
+                    return Err(error::internal("Runtime event stream interrupted: closed"));
                 }
             }
         }
@@ -125,13 +123,11 @@ async fn drive(
                 continue;
             }
             Err(broadcast::error::RecvError::Closed) => {
-                return Err(crate::error::internal(
-                    "Runtime event stream interrupted: closed",
-                ));
+                return Err(error::internal("Runtime event stream interrupted: closed"));
             }
         };
         if let Event::ServiceError { error } = event.event {
-            return Err(crate::error::runtime(error));
+            return Err(error::runtime(error));
         }
         if !output.uncovered(&event) {
             continue;
@@ -139,9 +135,9 @@ async fn drive(
         match event.event {
             Event::TurnCompleted { .. } => return Ok(acp::StopReason::EndTurn),
             Event::StreamError { error, .. } | Event::ContinuationFailed { error, .. } => {
-                return Err(crate::error::internal(error));
+                return Err(error::internal(error));
             }
-            Event::SessionError { error, .. } => return Err(crate::error::runtime(error)),
+            Event::SessionError { error, .. } => return Err(error::runtime(error)),
             event @ Event::StreamCancelled { .. } => {
                 output.event(runtime, event).await?;
                 return Ok(acp::StopReason::Cancelled);
@@ -156,7 +152,28 @@ async fn drive(
                     return Ok(acp::StopReason::Cancelled);
                 }
             }
-            event => output.event(runtime, event).await?,
+            event @ (Event::ScriptPrepared { .. }
+            | Event::ScriptStarted { .. }
+            | Event::ScriptOutputTail { .. }
+            | Event::RequestUsageUpdated { .. }
+            | Event::TurnTimingChanged { .. }
+            | Event::ConfigLoaded
+            | Event::ModelsUpdated
+            | Event::ServiceError { .. }
+            | Event::StreamStart { .. }
+            | Event::ItemStarted { .. }
+            | Event::ItemDelta { .. }
+            | Event::ReasoningDelta { .. }
+            | Event::StreamComplete { .. }
+            | Event::ProviderRetryScheduled { .. }
+            | Event::StreamRestarted { .. }
+            | Event::ScriptResultReady { .. }
+            | Event::ContextStateChanged { .. }
+            | Event::SessionStateChanged { .. }
+            | Event::MessageUpserted { .. }
+            | Event::MessagesRemoved { .. }
+            | Event::ProviderAuthUpdated { .. }
+            | Event::McpAuthUpdated { .. }) => output.event(runtime, event).await?,
         }
     }
 }
@@ -375,7 +392,26 @@ impl Output {
                 self.executions.remove(&execution_id);
                 self.result(runtime, call_id, &output, outcome).await?;
             }
-            _ => {}
+            Event::TurnCompleted { .. }
+            | Event::ScriptOutputTail { .. }
+            | Event::RequestUsageUpdated { .. }
+            | Event::TurnTimingChanged { .. }
+            | Event::ConfigLoaded
+            | Event::ModelsUpdated
+            | Event::ServiceError { .. }
+            | Event::SessionError { .. }
+            | Event::StreamStart { .. }
+            | Event::StreamComplete { .. }
+            | Event::StreamError { .. }
+            | Event::StreamCancelled { .. }
+            | Event::ScriptApprovalRequested { .. }
+            | Event::ContinuationFailed { .. }
+            | Event::SessionStateChanged { .. }
+            | Event::MessageUpserted { .. }
+            | Event::MessagesRemoved { .. }
+            | Event::HistoryUpdated { .. }
+            | Event::ProviderAuthUpdated { .. }
+            | Event::McpAuthUpdated { .. } => {}
         }
         Ok(())
     }
@@ -414,7 +450,10 @@ impl Output {
                     self.result(runtime, call_id.to_string(), output, *outcome)
                         .await?;
                 }
-                _ => {}
+                ConversationItem::FileContext { .. }
+                | ConversationItem::Compaction { .. }
+                | ConversationItem::System { .. }
+                | ConversationItem::User { .. } => {}
             }
         }
         Ok(snapshot)
@@ -510,7 +549,9 @@ impl Output {
                     .map_err(error::runtime)?;
             }
             acp::RequestPermissionOutcome::Cancelled => return Ok(false),
-            _ => return Err(error::invalid("Unknown permission option")),
+            acp::RequestPermissionOutcome::Selected(_) | _ => {
+                return Err(error::invalid("Unknown permission option"));
+            }
         }
         Ok(true)
     }

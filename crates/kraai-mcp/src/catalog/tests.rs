@@ -1,9 +1,3 @@
-#![expect(
-    clippy::panic,
-    clippy::indexing_slicing,
-    reason = "catalog tests assert rendering and schema boundaries"
-)]
-
 use super::*;
 
 fn tool(server: &str, name: &str, description: &str) -> ToolDefinition {

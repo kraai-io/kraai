@@ -115,7 +115,7 @@ impl std::fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-pub type RuntimeResult<T> = std::result::Result<T, RuntimeError>;
+pub type RuntimeResult<T> = Result<T, RuntimeError>;
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export_to = "types.d.ts"))]

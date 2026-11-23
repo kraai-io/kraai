@@ -99,6 +99,10 @@ impl App {
             return false;
         };
         let written = self.state.input.strip_prefix('/') == Some(selected.name);
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only Tab, BackTab, Up and Down walk the command list"
+        )]
         let step = match key.code {
             KeyCode::Tab if !written => Some(index),
             KeyCode::Down | KeyCode::Tab => Some(next_wrapping(index, len)),
@@ -111,6 +115,10 @@ impl App {
             }
             return true;
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "every other key falls through to the composer"
+        )]
         match key.code {
             KeyCode::Enter if !key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.run_listed_command(selected.name)

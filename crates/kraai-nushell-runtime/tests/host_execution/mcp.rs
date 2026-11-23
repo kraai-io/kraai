@@ -29,7 +29,9 @@ impl kraai_mcp::McpHost for FixtureMcp {
                     json!({"tools": [{"server": "fixture", "name": "echo", "inputSchema": {"type": "object"}}]}),
                 )
             }
-            _ => Err(String::from("Unexpected fixture request")),
+            McpRequest::Servers | McpRequest::Tools { .. } | McpRequest::Describe { .. } => {
+                Err(String::from("Unexpected fixture request"))
+            }
         }
     }
 }
@@ -127,8 +129,7 @@ impl kraai_mcp::McpHost for StalledMcp {
 }
 
 #[tokio::test]
-async fn cancelling_execution_drops_the_mcp_request()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn cancelling_execution_drops_the_mcp_request() {
     let workspace = TestWorkspace::new();
     let entered = CancellationToken::new();
     let dropped = CancellationToken::new();
@@ -141,14 +142,13 @@ async fn cancelling_execution_drops_the_mcp_request()
     let cancellation = CancellationToken::new();
     let mut task = Box::pin(execute(plan, cancellation.clone()));
     tokio::select! {
-        result = &mut task => return Err(format!("MCP call exited early: {result:?}").into()),
-        result = hang_guard(entered.cancelled()) => result?,
+        result = &mut task => panic!("MCP call exited early: {result:?}"),
+        result = hang_guard(entered.cancelled()) => result.unwrap(),
     }
     cancellation.cancel();
-    let result = hang_guard(task).await??;
+    let result = hang_guard(task).await.unwrap().unwrap();
     if result.output.termination != Termination::Cancelled {
-        return Err("MCP script did not cancel".into());
+        panic!("MCP script did not cancel");
     }
-    hang_guard(dropped.cancelled()).await?;
-    Ok(())
+    hang_guard(dropped.cancelled()).await.unwrap();
 }

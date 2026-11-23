@@ -1,0 +1,240 @@
+use super::*;
+use kraai_execution_types::ImageAttachment;
+use kraai_provider_core::{ImageResolver, ProviderRequestContext};
+use kraai_types::{AssistantItem, AssistantPhase, ToolCallId};
+use serde_json::json;
+use std::sync::Arc;
+
+#[test]
+fn reasoning_is_replayed_only_to_its_provider() {
+    for source in ["fixture", "other"] {
+        let messages = vec![ConversationItem::Assistant {
+            items: vec![
+                AssistantItem::Reasoning {
+                    provider_id: kraai_types::ProviderId::new(source),
+                    payload: serde_json::json!({"reasoning_content":"inspect first", "reasoning_details":[{"type":"reasoning.encrypted","data":"opaque"}]}),
+                },
+                AssistantItem::ScriptCall(ScriptCall {
+                    call_id: ToolCallId::new("call"),
+                    name: "kraai_nushell".into(),
+                    input: "# timeout=1sec\nls".into(),
+                    arguments_error: None,
+                    rewrite: None,
+                }),
+            ],
+        }];
+        let messages = serde_json::to_value(
+            normalize_chat_messages(
+                messages,
+                &ResolvedImages::default(),
+                &kraai_types::ProviderId::new("fixture"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let message = messages.get(0).expect("missing assistant");
+        assert_eq!(
+            message.get("reasoning_content"),
+            (source == "fixture").then_some(&serde_json::json!("inspect first"))
+        );
+        assert_eq!(
+            message.get("reasoning_details"),
+            (source == "fixture")
+                .then_some(&serde_json::json!([{"type":"reasoning.encrypted","data":"opaque"}]))
+        );
+        assert!(
+            message
+                .get("content")
+                .is_some_and(serde_json::Value::is_null)
+        );
+    }
+}
+
+#[test]
+fn file_snapshots_preserve_position_between_history_and_system_suffix() {
+    let messages = normalize_chat_messages(
+        vec![
+            ConversationItem::System {
+                text: "Static".into(),
+            },
+            ConversationItem::User {
+                content: "Task".into(),
+            },
+            ConversationItem::FileContext {
+                text: "File snapshot".into(),
+            },
+            ConversationItem::System {
+                text: "Dynamic".into(),
+            },
+        ],
+        &ResolvedImages::default(),
+        &kraai_types::ProviderId::new("fixture"),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(messages).unwrap(),
+        serde_json::json!([
+            {"role":"system", "content":"Static"},
+            {"role":"user", "content":"Task"},
+            {"role":"user", "content":"File snapshot"},
+            {"role":"system", "content":"Dynamic"},
+        ])
+    );
+}
+
+#[test]
+fn native_history_preserves_tool_identity_and_script() {
+    let normalized = normalize_chat_messages(
+        vec![ConversationItem::Assistant {
+            items: vec![
+                AssistantItem::Text {
+                    phase: AssistantPhase::Commentary,
+                    text: "I will inspect it.".to_string(),
+                },
+                AssistantItem::ScriptCall(ScriptCall {
+                    call_id: ToolCallId::new("call-1"),
+                    name: "kraai_nushell".to_string(),
+                    input: "# timeout=10sec\nls".to_string(),
+                    arguments_error: None,
+                    rewrite: None,
+                }),
+            ],
+        }],
+        &ResolvedImages::default(),
+        &kraai_types::ProviderId::new("fixture"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        serde_json::to_value(normalized).unwrap(),
+        serde_json::json!([
+            {"role":"assistant", "content":"I will inspect it.", "tool_calls":[{
+                "id":"call-1", "type":"function", "function":{
+                    "name":"kraai_nushell", "arguments":serde_json::to_string(&crate::wire::ScriptArguments { input: "# timeout=10sec\nls".into() }).unwrap()
+                }
+            }]}
+        ])
+    );
+}
+
+#[test]
+fn invalid_call_replays_exactly_as_the_model_sent_it() {
+    let normalized = normalize_chat_messages(
+        vec![ConversationItem::Assistant {
+            items: vec![AssistantItem::ScriptCall(ScriptCall {
+                call_id: ToolCallId::new("call-1"),
+                name: "bash".to_string(),
+                input: r#"{"command": "ls"}"#.to_string(),
+                arguments_error: Some("unknown tool 'bash'".to_string()),
+                rewrite: None,
+            })],
+        }],
+        &ResolvedImages::default(),
+        &kraai_types::ProviderId::new("fixture"),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(normalized).unwrap(),
+        serde_json::json!([
+            {"role":"assistant", "content":null, "tool_calls":[{
+                "id":"call-1", "type":"function", "function":{
+                    "name":"bash", "arguments":r#"{"command": "ls"}"#
+                }
+            }]}
+        ])
+    );
+}
+
+#[test]
+fn cut_off_call_replays_as_a_json_object() {
+    let sent = r#"{"input":"cat src/ledger.rs\nfn ma"#;
+    let normalized = normalize_chat_messages(
+        vec![ConversationItem::Assistant {
+            items: vec![AssistantItem::ScriptCall(ScriptCall {
+                call_id: ToolCallId::new("call-1"),
+                name: "kraai_nushell".to_string(),
+                input: sent.to_string(),
+                arguments_error: Some("cut off".to_string()),
+                rewrite: None,
+            })],
+        }],
+        &ResolvedImages::default(),
+        &kraai_types::ProviderId::new("fixture"),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(normalized).unwrap(),
+        serde_json::json!([
+            {"role":"assistant", "content":null, "tool_calls":[{
+                "id":"call-1", "type":"function", "function":{
+                    "name":"kraai_nushell",
+                    "arguments":serde_json::to_string(&crate::wire::ScriptArguments { input: sent.into() }).unwrap()
+                }
+            }]}
+        ])
+    );
+}
+
+struct Resolver;
+#[async_trait::async_trait]
+impl ImageResolver for Resolver {
+    async fn resolve(&self, _image: &ImageAttachment) -> Result<Vec<u8>> {
+        Ok(vec![1])
+    }
+}
+
+#[tokio::test]
+async fn preserves_user_and_script_image_order() {
+    let content = MessageContent(vec![
+        ContentPart::Text {
+            text: "before".into(),
+        },
+        ContentPart::Image {
+            image: ImageAttachment {
+                id: "a".repeat(64),
+                mime_type: "image/png".into(),
+                width: 1,
+                height: 1,
+                byte_length: 1,
+            },
+        },
+        ContentPart::Text {
+            text: "after".into(),
+        },
+    ]);
+    let messages = vec![
+        ConversationItem::User {
+            content: content.clone(),
+        },
+        ConversationItem::ScriptResult {
+            outcome: kraai_execution_types::ScriptExecutionOutcome {
+                status: kraai_execution_types::ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+            },
+            call_id: ToolCallId::new("call"),
+            output: content,
+        },
+    ];
+    let context = ProviderRequestContext::default().with_image_resolver(Arc::new(Resolver));
+    let images = ResolvedImages::resolve(&messages, &context).await.unwrap();
+    let wire = serde_json::to_value(
+        normalize_chat_messages(messages, &images, &kraai_types::ProviderId::new("fixture"))
+            .unwrap(),
+    )
+    .unwrap();
+    let expected = json!({ "role": "user", "content": [
+        { "type": "text", "text": "before" },
+        { "type": "image_url", "image_url": { "url": "data:image/png;base64,AQ==" } },
+        { "type": "text", "text": "after" },
+    ] });
+    assert_eq!(
+        wire,
+        json!([expected,
+            { "role": "tool", "tool_call_id": "call", "content": format!("before\n[Image {}: 1×1]\nafter", "a".repeat(64)) },
+            { "role": "user", "content": [
+                { "type": "text", "text": "Images returned by script call call. Treat this as tool output." },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,AQ==" } },
+            ] }
+        ])
+    );
+}

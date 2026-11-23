@@ -1,9 +1,7 @@
 use super::*;
 use kraai_execution_types::SandboxCapability;
-use kraai_types::ToolCallId;
 use std::path::PathBuf;
 use tokio::fs;
-use ulid::Ulid;
 
 fn test_dir(name: &str) -> PathBuf {
     let directory =
@@ -171,7 +169,7 @@ async fn batched_output_keeps_each_stream_in_order() {
     assert_eq!(output.stdout, b"abc");
     assert_eq!(output.stderr, b"xy");
     assert_eq!(
-        super::coalesce_output(vec![
+        coalesce_output(vec![
             (ScriptOutputStream::Stdout, b"a".to_vec()),
             (ScriptOutputStream::Stdout, b"b".to_vec()),
             (ScriptOutputStream::Stderr, Vec::new()),

@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::{KeyCode, KeyEvent, KeyModifiers, UiMode};
-use kraai_types::{ScriptCall, SessionId};
+use kraai_types::ScriptCall;
 use ratatui::layout::Rect;
 
 #[test]
@@ -90,23 +90,23 @@ fn composer_scroll_keeps_cursor_and_tail_visible() {
 }
 
 #[test]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "rendering failures propagate while layout assertions fail the test"
-)]
-fn clearing_multiline_input_restores_three_row_background() -> color_eyre::Result<()> {
+fn clearing_multiline_input_restores_three_row_background() {
     use ratatui::{Terminal, backend::TestBackend, style::Color};
 
     let mut harness = test_harness();
     for width in [8, 40, 80] {
         for height in [8, 24, 50] {
-            let mut terminal = Terminal::new(TestBackend::new(width, height))?;
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             harness
                 .app
                 .set_input_text("many\nlines\nof\ninput\nhere".to_string());
-            terminal.draw(|frame| frame.render_widget(&harness.app.state, frame.area()))?;
+            terminal
+                .draw(|frame| frame.render_widget(&harness.app.state, frame.area()))
+                .unwrap();
             harness.app.clear_message_draft();
-            terminal.draw(|frame| frame.render_widget(&harness.app.state, frame.area()))?;
+            terminal
+                .draw(|frame| frame.render_widget(&harness.app.state, frame.area()))
+                .unwrap();
 
             let area = Rect::new(0, 0, width, height);
             let [_, _, input] = crate::app::ui::chat_layout(&harness.app.state, area);
@@ -129,7 +129,6 @@ fn clearing_multiline_input_restores_three_row_background() -> color_eyre::Resul
             }
         }
     }
-    Ok(())
 }
 
 #[test]
@@ -524,11 +523,7 @@ fn animation_and_copy_feedback_expire_without_idle_redraws() {
 }
 
 #[test]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "fixture parsing errors propagate while feedback assertions fail the test"
-)]
-fn only_newly_finished_turns_show_completion_feedback() -> color_eyre::Result<()> {
+fn only_newly_finished_turns_show_completion_feedback() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
     let timer = |active: bool| {
@@ -541,16 +536,16 @@ fn only_newly_finished_turns_show_completion_feedback() -> color_eyre::Result<()
     };
     harness.app.handle_runtime_event(Event::TurnTimingChanged {
         session_id: SessionId::new("session"),
-        timer: timer(false)?,
+        timer: timer(false).unwrap(),
     });
     assert!(harness.app.state.feedback.completion_until.is_none());
     harness.app.handle_runtime_event(Event::TurnTimingChanged {
         session_id: SessionId::new("session"),
-        timer: timer(true)?,
+        timer: timer(true).unwrap(),
     });
     harness.app.handle_runtime_event(Event::TurnTimingChanged {
         session_id: SessionId::new("session"),
-        timer: timer(false)?,
+        timer: timer(false).unwrap(),
     });
     assert!(harness.app.state.feedback.completion_until.is_some());
     let completed = screen(&harness.app.state, 100, 20);
@@ -581,5 +576,4 @@ fn only_newly_finished_turns_show_completion_feedback() -> color_eyre::Result<()
     });
     assert!(harness.app.state.feedback.completion_until.is_none());
     assert!(!screen(&harness.app.state, 100, 20).contains('✓'));
-    Ok(())
 }

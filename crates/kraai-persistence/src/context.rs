@@ -273,4 +273,4 @@ impl ContextStateStore for SqliteContextStateStore {
 }
 
 #[cfg(test)]
-mod snapshot_tests;
+mod tests;

@@ -12,7 +12,6 @@ pub fn measure_async<T: Send>(
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod supported {
-    use std::future::Future;
     use std::time::Instant;
 
     use color_eyre::eyre::{Result, WrapErr, eyre};
@@ -110,6 +109,6 @@ mod supported {
     }
 }
 
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-#[path = "measurement_tests.rs"]
+#[cfg(test)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod tests;

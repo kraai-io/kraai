@@ -42,49 +42,48 @@ fn prepare(manager: &ProviderManager, request: &ProviderRequest) -> Result<Optio
 }
 
 #[test]
-fn warming_is_opt_in_and_requires_a_large_prefix_with_a_suffix() -> Result<()> {
+fn warming_is_opt_in_and_requires_a_large_prefix_with_a_suffix() {
     let mut disabled = ProviderManager::new();
     disabled.register_provider(ProviderId::new("mock"), Box::new(MockProvider::new("mock")));
-    assert!(prepare(&disabled, &request())?.is_none());
+    assert!(prepare(&disabled, &request()).unwrap().is_none());
     let manager = manager();
     let mut request = request();
     request.cacheable_messages = None;
-    assert!(prepare(&manager, &request)?.is_none());
+    assert!(prepare(&manager, &request).unwrap().is_none());
     request.cacheable_messages = Some(request.messages.len());
     assert!(prepare(&manager, &request).is_err());
     request.cacheable_messages = Some(1);
-    assert!(prepare(&manager, &request)?.is_none());
-    Ok(())
+    assert!(prepare(&manager, &request).unwrap().is_none());
 }
 
 #[test]
-fn warming_preserves_tools_and_prefix_but_excludes_the_suffix() -> Result<()> {
+fn warming_preserves_tools_and_prefix_but_excludes_the_suffix() {
     let manager = manager();
     let mut request = request();
     request.options.insert(
         "reasoning_effort".into(),
         kraai_types::ModelOptionValue::Choice("selected-effort".into()),
     );
-    let warmup = prepare(&manager, &request)?.ok_or_else(|| eyre!("missing warmup"))?;
+    let warmup = prepare(&manager, &request)
+        .unwrap()
+        .expect("missing warmup");
     assert_eq!(warmup.request.script_tool, request.script_tool);
     assert_eq!(warmup.request.options, request.options);
     assert_eq!(
         warmup.request.messages,
-        request
-            .messages
-            .get(..2)
-            .ok_or_else(|| eyre!("missing prefix"))?
+        request.messages.get(..2).expect("missing prefix")
     );
     assert_eq!(warmup.request.cacheable_messages, None);
-    warmup.complete(&TokenUsage {
-        input_tokens: 3000,
-        ..Default::default()
-    })?;
-    Ok(())
+    warmup
+        .complete(&TokenUsage {
+            input_tokens: 3000,
+            ..Default::default()
+        })
+        .unwrap();
 }
 
 #[test]
-fn changing_selected_model_options_uses_separate_warming_state() -> Result<()> {
+fn changing_selected_model_options_uses_separate_warming_state() {
     let cache = CacheWarming::default();
     let provider = ProviderId::new("provider");
     let model = ModelId::new("model");
@@ -96,30 +95,31 @@ fn changing_selected_model_options_uses_separate_warming_state() -> Result<()> {
         "mode:fast".into(),
         kraai_types::ModelOptionValue::Boolean(true),
     )]);
-    let first_state = cache.state(&provider, &model, "session", &first)?;
-    let reused = cache.state(&provider, &model, "session", &first)?;
-    let second_state = cache.state(&provider, &model, "session", &second)?;
+    let first_state = cache.state(&provider, &model, "session", &first).unwrap();
+    let reused = cache.state(&provider, &model, "session", &first).unwrap();
+    let second_state = cache.state(&provider, &model, "session", &second).unwrap();
     assert!(Arc::ptr_eq(&first_state, &reused));
     assert!(!Arc::ptr_eq(&first_state, &second_state));
-    Ok(())
 }
 
 #[test]
-fn growth_requires_spacing_and_suffix_changes_do_not_rewarm() -> Result<()> {
+fn growth_requires_spacing_and_suffix_changes_do_not_rewarm() {
     let manager = manager();
     let mut request = request();
-    prepare(&manager, &request)?
-        .ok_or_else(|| eyre!("missing warmup"))?
+    prepare(&manager, &request)
+        .unwrap()
+        .expect("missing warmup")
         .complete(&TokenUsage {
             input_tokens: 3000,
             ..Default::default()
-        })?;
+        })
+        .unwrap();
     request.messages.pop();
     request.messages.push(ConversationItem::System {
         text: "changed pinned files".into(),
     });
     for _ in 0..8 {
-        assert!(prepare(&manager, &request)?.is_none());
+        assert!(prepare(&manager, &request).unwrap().is_none());
     }
     request.messages.insert(
         2,
@@ -128,12 +128,14 @@ fn growth_requires_spacing_and_suffix_changes_do_not_rewarm() -> Result<()> {
         },
     );
     request.cacheable_messages = Some(3);
-    prepare(&manager, &request)?
-        .ok_or_else(|| eyre!("growth should warm"))?
+    prepare(&manager, &request)
+        .unwrap()
+        .expect("growth should warm")
         .complete(&TokenUsage {
             input_tokens: 3000,
             ..Default::default()
-        })?;
+        })
+        .unwrap();
     request.messages.insert(
         3,
         ConversationItem::User {
@@ -142,37 +144,39 @@ fn growth_requires_spacing_and_suffix_changes_do_not_rewarm() -> Result<()> {
     );
     request.cacheable_messages = Some(4);
     for _ in 0..4 {
-        assert!(prepare(&manager, &request)?.is_none());
+        assert!(prepare(&manager, &request).unwrap().is_none());
     }
-    assert!(prepare(&manager, &request)?.is_some());
-    Ok(())
+    assert!(prepare(&manager, &request).unwrap().is_some());
 }
 
 #[test]
-fn cancelled_and_failed_warmups_release_the_slot_without_immediate_retry() -> Result<()> {
+fn cancelled_and_failed_warmups_release_the_slot_without_immediate_retry() {
     let manager = manager();
     let request = request();
-    let warmup = prepare(&manager, &request)?.ok_or_else(|| eyre!("missing warmup"))?;
-    assert!(prepare(&manager.clone(), &request)?.is_none());
+    let warmup = prepare(&manager, &request)
+        .unwrap()
+        .expect("missing warmup");
+    assert!(prepare(&manager, &request).unwrap().is_none());
     drop(warmup);
     for _ in 0..3 {
-        assert!(prepare(&manager, &request)?.is_none());
+        assert!(prepare(&manager, &request).unwrap().is_none());
     }
-    assert!(prepare(&manager, &request)?.is_some());
-    Ok(())
+    assert!(prepare(&manager, &request).unwrap().is_some());
 }
 
 #[test]
-fn changed_history_and_tools_invalidate_the_warmed_prefix() -> Result<()> {
+fn changed_history_and_tools_invalidate_the_warmed_prefix() {
     for change_tools in [false, true] {
         let manager = manager();
         let mut request = request();
-        prepare(&manager, &request)?
-            .ok_or_else(|| eyre!("missing warmup"))?
+        prepare(&manager, &request)
+            .unwrap()
+            .expect("missing warmup")
             .complete(&TokenUsage {
                 input_tokens: 3000,
                 ..Default::default()
-            })?;
+            })
+            .unwrap();
         if change_tools {
             request.script_tool = None;
         } else {
@@ -185,23 +189,24 @@ fn changed_history_and_tools_invalidate_the_warmed_prefix() -> Result<()> {
             );
         }
         for _ in 0..4 {
-            assert!(prepare(&manager, &request)?.is_none());
+            assert!(prepare(&manager, &request).unwrap().is_none());
         }
-        assert!(prepare(&manager, &request)?.is_some());
+        assert!(prepare(&manager, &request).unwrap().is_some());
     }
-    Ok(())
 }
 
 #[test]
-fn sessions_and_models_do_not_share_warming_state() -> Result<()> {
+fn sessions_and_models_do_not_share_warming_state() {
     let manager = manager();
     let request = request();
-    prepare(&manager, &request)?
-        .ok_or_else(|| eyre!("missing warmup"))?
+    prepare(&manager, &request)
+        .unwrap()
+        .expect("missing warmup")
         .complete(&TokenUsage {
             input_tokens: 3000,
             ..Default::default()
-        })?;
+        })
+        .unwrap();
     for (model, session) in [("other-model", "session"), ("model", "other-session")] {
         assert!(
             manager
@@ -210,15 +215,15 @@ fn sessions_and_models_do_not_share_warming_state() -> Result<()> {
                     &ModelId::new(model),
                     session,
                     &request
-                )?
+                )
+                .unwrap()
                 .is_some()
         );
     }
-    Ok(())
 }
 
 #[test]
-fn expired_prefix_is_refreshed_without_history_growth() -> Result<()> {
+fn expired_prefix_is_refreshed_without_history_growth() {
     let mut manager = manager();
     let mut provider = MockProvider::new("mock");
     provider.warming = Some(CacheWarmingPolicy {
@@ -226,14 +231,15 @@ fn expired_prefix_is_refreshed_without_history_growth() -> Result<()> {
         ..Default::default()
     });
     manager.register_provider(ProviderId::new("mock"), Box::new(provider));
-    prepare(&manager, &request())?
-        .ok_or_else(|| eyre!("missing warmup"))?
+    prepare(&manager, &request())
+        .unwrap()
+        .expect("missing warmup")
         .complete(&TokenUsage {
             input_tokens: 3000,
             ..Default::default()
-        })?;
-    assert!(prepare(&manager, &request())?.is_some());
-    Ok(())
+        })
+        .unwrap();
+    assert!(prepare(&manager, &request()).unwrap().is_some());
 }
 
 fn priced_usage(input: usize) -> TokenUsage {
@@ -259,30 +265,26 @@ fn priced_usage(input: usize) -> TokenUsage {
     }
 }
 
-fn observe(manager: &ProviderManager, request: &ProviderRequest, input: usize) -> Result<()> {
-    observe_usage(manager, request, &priced_usage(input))
+fn observe(manager: &ProviderManager, request: &ProviderRequest, input: usize) {
+    observe_usage(manager, request, &priced_usage(input));
 }
 
-fn observe_usage(
-    manager: &ProviderManager,
-    request: &ProviderRequest,
-    usage: &TokenUsage,
-) -> Result<()> {
+fn observe_usage(manager: &ProviderManager, request: &ProviderRequest, usage: &TokenUsage) {
     manager
         .cache_usage_observer(
             &ProviderId::new("mock"),
             &ModelId::new("model"),
             request,
             &crate::ProviderRequestContext::with_prompt_cache_key("session".into()),
-        )?
-        .ok_or_else(|| eyre!("missing observer"))?
+        )
+        .unwrap()
+        .expect("missing observer")
         .observe(usage)
+        .unwrap();
 }
 
-fn append(request: &mut ProviderRequest, text: String) -> Result<()> {
-    let boundary = request
-        .cacheable_messages
-        .ok_or_else(|| eyre!("missing boundary"))?;
+fn append(request: &mut ProviderRequest, text: String) {
+    let boundary = request.cacheable_messages.expect("missing boundary");
     request.messages.insert(
         boundary,
         ConversationItem::User {
@@ -290,50 +292,51 @@ fn append(request: &mut ProviderRequest, text: String) -> Result<()> {
         },
     );
     request.cacheable_messages = Some(boundary + 1);
-    Ok(())
 }
 
 #[test]
-fn scheduling_adapts_to_observed_tokens_even_when_serialized_growth_is_tiny() -> Result<()> {
+fn scheduling_adapts_to_observed_tokens_even_when_serialized_growth_is_tiny() {
     for (initial, interval) in [(8000, 2), (40000, 3), (90000, 5)] {
         let manager = manager();
         let mut request = request();
-        prepare(&manager, &request)?
-            .ok_or_else(|| eyre!("missing initial warmup"))?
-            .complete(&priced_usage(initial))?;
-        observe(&manager, &request, initial + 5436)?;
+        prepare(&manager, &request)
+            .unwrap()
+            .expect("missing initial warmup")
+            .complete(&priced_usage(initial))
+            .unwrap();
+        observe(&manager, &request, initial + 5436);
         for turn in 1..=interval {
-            append(&mut request, format!("turn {turn}"))?;
-            let warmup = prepare(&manager, &request)?;
+            append(&mut request, format!("turn {turn}"));
+            let warmup = prepare(&manager, &request).unwrap();
             assert_eq!(warmup.is_some(), turn == interval);
-            observe(&manager, &request, initial + turn * 900 + 5436)?;
+            observe(&manager, &request, initial + turn * 900 + 5436);
         }
     }
-    Ok(())
 }
 
 #[test]
-fn small_uncached_gap_prevents_warming_large_byte_changes() -> Result<()> {
+fn small_uncached_gap_prevents_warming_large_byte_changes() {
     let manager = manager();
     let mut request = request();
-    prepare(&manager, &request)?
-        .ok_or_else(|| eyre!("missing warmup"))?
-        .complete(&priced_usage(10000))?;
+    prepare(&manager, &request)
+        .unwrap()
+        .expect("missing warmup")
+        .complete(&priced_usage(10000))
+        .unwrap();
     let mut usage = priced_usage(15436);
     usage.input_tokens = 5452;
     usage.cache_read_tokens = 9984;
-    observe_usage(&manager, &request, &usage)?;
+    observe_usage(&manager, &request, &usage);
     for turn in 1..=10 {
-        append(&mut request, "large serialized growth ".repeat(1000))?;
-        assert!(prepare(&manager, &request)?.is_none());
+        append(&mut request, "large serialized growth ".repeat(1000));
+        assert!(prepare(&manager, &request).unwrap().is_none());
         usage.input_tokens = 5452 + turn * 10;
-        observe_usage(&manager, &request, &usage)?;
+        observe_usage(&manager, &request, &usage);
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn real_stream_usage_updates_warming_feedback() -> Result<()> {
+async fn real_stream_usage_updates_warming_feedback() {
     use futures::StreamExt;
     let mut manager = manager();
     let mut provider = MockProvider::new("mock");
@@ -351,27 +354,29 @@ async fn real_stream_usage_updates_warming_feedback() -> Result<()> {
             request(),
             crate::ProviderRequestContext::with_prompt_cache_key("session".into()),
         )
-        .await?;
+        .await
+        .unwrap();
     let mut reported = None;
     while let Some(event) = stream.next().await {
-        if let crate::ProviderStreamEvent::Usage(usage) = event? {
+        if let crate::ProviderStreamEvent::Usage(usage) = event.unwrap() {
             reported = Some(usage);
         }
     }
     assert_eq!(reported, Some(usage));
-    assert!(prepare(&manager, &request())?.is_none());
-    Ok(())
+    assert!(prepare(&manager, &request()).unwrap().is_none());
 }
 
 #[test]
-fn active_matching_prefix_does_not_expire_but_idle_prefix_does() -> Result<()> {
+fn active_matching_prefix_does_not_expire_but_idle_prefix_does() {
     let manager = manager();
-    prepare(&manager, &request())?
-        .ok_or_else(|| eyre!("missing warmup"))?
+    prepare(&manager, &request())
+        .unwrap()
+        .expect("missing warmup")
         .complete(&TokenUsage {
             input_tokens: 3000,
             ..Default::default()
-        })?;
+        })
+        .unwrap();
     let context = crate::ProviderRequestContext::with_prompt_cache_key("session".into());
     let observer = manager
         .cache_usage_observer(
@@ -379,83 +384,72 @@ fn active_matching_prefix_does_not_expire_but_idle_prefix_does() -> Result<()> {
             &ModelId::new("model"),
             &request(),
             &context,
-        )?
-        .ok_or_else(|| eyre!("missing observer"))?;
+        )
+        .unwrap()
+        .expect("missing observer");
+    observer.state.lock().expect("state lock").last_attempt =
+        Instant::now().checked_sub(Duration::from_secs(600));
     observer
-        .state
-        .lock()
-        .map_err(|error| eyre!("state lock: {error}"))?
-        .last_attempt = Instant::now().checked_sub(Duration::from_secs(600));
-    observer.observe(&TokenUsage {
-        cache_read_tokens: 3000,
-        input_tokens: 50,
-        ..Default::default()
-    })?;
-    assert!(prepare(&manager, &request())?.is_none());
-    observer
-        .state
-        .lock()
-        .map_err(|error| eyre!("state lock: {error}"))?
-        .last_prefix_use = Instant::now().checked_sub(Duration::from_secs(600));
-    assert!(prepare(&manager, &request())?.is_some());
-    Ok(())
+        .observe(&TokenUsage {
+            cache_read_tokens: 3000,
+            input_tokens: 50,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(prepare(&manager, &request()).unwrap().is_none());
+    observer.state.lock().expect("state lock").last_prefix_use =
+        Instant::now().checked_sub(Duration::from_secs(600));
+    assert!(prepare(&manager, &request()).unwrap().is_some());
 }
 
 #[test]
-fn session_lookup_only_cleans_expired_entries_periodically() -> Result<()> {
+fn session_lookup_only_cleans_expired_entries_periodically() {
     let cache = CacheWarming::default();
     let provider = ProviderId::new("mock");
     let model = ModelId::new("model");
-    let old = cache.state(&provider, &model, "old", &Default::default())?;
-    old.lock()
-        .map_err(|error| eyre!("state: {error}"))?
-        .last_used = Instant::now().checked_sub(Duration::from_secs(7200));
+    let old = cache
+        .state(&provider, &model, "old", &Default::default())
+        .unwrap();
+    old.lock().expect("state").last_used = Instant::now().checked_sub(Duration::from_secs(7200));
     drop(old);
-    let _current = cache.state(&provider, &model, "current", &Default::default())?;
+    let _current = cache
+        .state(&provider, &model, "current", &Default::default())
+        .unwrap();
     {
-        let mut sessions = cache
-            .sessions
-            .lock()
-            .map_err(|error| eyre!("sessions: {error}"))?;
+        let mut sessions = cache.sessions.lock().expect("sessions");
         assert_eq!(sessions.entries.len(), 2);
         sessions.next_cleanup = Some(Instant::now());
     }
-    let _next = cache.state(&provider, &model, "current", &Default::default())?;
-    assert_eq!(
-        cache
-            .sessions
-            .lock()
-            .map_err(|error| eyre!("sessions: {error}"))?
-            .entries
-            .len(),
-        1
-    );
-    Ok(())
+    let _next = cache
+        .state(&provider, &model, "current", &Default::default())
+        .unwrap();
+    assert_eq!(cache.sessions.lock().expect("sessions").entries.len(), 1);
 }
 
 #[test]
-fn cache_hits_can_defer_warming_and_cache_loss_can_trigger_it_without_growth() -> Result<()> {
+fn cache_hits_can_defer_warming_and_cache_loss_can_trigger_it_without_growth() {
     let manager = manager();
     let request = request();
-    prepare(&manager, &request)?
-        .ok_or_else(|| eyre!("missing warmup"))?
-        .complete(&priced_usage(40000))?;
+    prepare(&manager, &request)
+        .unwrap()
+        .expect("missing warmup")
+        .complete(&priced_usage(40000))
+        .unwrap();
     let mut usage = priced_usage(45436);
     usage.cache_read_tokens = 39936;
     usage.input_tokens = 5500;
-    observe_usage(&manager, &request, &usage)?;
+    observe_usage(&manager, &request, &usage);
     for _ in 0..10 {
-        assert!(prepare(&manager, &request)?.is_none());
+        assert!(prepare(&manager, &request).unwrap().is_none());
     }
     usage.cache_read_tokens = 0;
     usage.input_tokens = 45436;
-    observe_usage(&manager, &request, &usage)?;
-    assert!(prepare(&manager, &request)?.is_some());
-    Ok(())
+    observe_usage(&manager, &request, &usage);
+    assert!(prepare(&manager, &request).unwrap().is_some());
 }
 
 #[test]
-fn insufficient_payback_defers_even_an_expired_prefix() -> Result<()> {
+fn insufficient_payback_defers_even_an_expired_prefix() {
     let mut manager = manager();
     let mut provider = MockProvider::new("mock");
     provider.warming = Some(CacheWarmingPolicy {
@@ -466,34 +460,35 @@ fn insufficient_payback_defers_even_an_expired_prefix() -> Result<()> {
     let request = request();
     let mut warmup_usage = priced_usage(10000);
     warmup_usage.reasoning_tokens = 40000;
-    prepare(&manager, &request)?
-        .ok_or_else(|| eyre!("missing warmup"))?
-        .complete(&warmup_usage)?;
-    observe(&manager, &request, 15436)?;
+    prepare(&manager, &request)
+        .unwrap()
+        .expect("missing warmup")
+        .complete(&warmup_usage)
+        .unwrap();
+    observe(&manager, &request, 15436);
     for _ in 0..20 {
-        assert!(prepare(&manager, &request)?.is_none());
+        assert!(prepare(&manager, &request).unwrap().is_none());
     }
-    Ok(())
 }
 
 #[test]
-fn provider_reconfiguration_discards_feedback_and_leaves_existing_snapshots_isolated() -> Result<()>
-{
+fn provider_reconfiguration_discards_feedback_and_leaves_existing_snapshots_isolated() {
     let mut manager = manager();
     let request = request();
     let mut usage = priced_usage(40000);
     usage.reasoning_tokens = 100000;
-    prepare(&manager, &request)?
-        .ok_or_else(|| eyre!("missing warmup"))?
-        .complete(&usage)?;
-    observe(&manager, &request, 45436)?;
+    prepare(&manager, &request)
+        .unwrap()
+        .expect("missing warmup")
+        .complete(&usage)
+        .unwrap();
+    observe(&manager, &request, 45436);
     let previous = manager.clone();
     let mut provider = MockProvider::new("mock");
     provider.warming = Some(CacheWarmingPolicy::default());
     manager.register_provider(ProviderId::new("mock"), Box::new(provider));
-    assert!(prepare(&manager, &request)?.is_some());
+    assert!(prepare(&manager, &request).unwrap().is_some());
     for _ in 0..10 {
-        assert!(prepare(&previous, &request)?.is_none());
+        assert!(prepare(&previous, &request).unwrap().is_none());
     }
-    Ok(())
 }

@@ -2,7 +2,6 @@
 use std::process::Stdio;
 
 #[cfg(unix)]
-#[path = "process_group.rs"]
 mod process_group;
 use tokio::io::{AsyncRead, AsyncReadExt};
 #[cfg(not(windows))]

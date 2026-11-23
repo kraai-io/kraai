@@ -18,7 +18,10 @@ fn attachments(messages: &[ConversationItem]) -> impl Iterator<Item = &ImageAtta
         let parts = match message {
             ConversationItem::User { content } => content.parts(),
             ConversationItem::ScriptResult { output, .. } => output.parts(),
-            _ => &[],
+            ConversationItem::FileContext { .. }
+            | ConversationItem::Compaction { .. }
+            | ConversationItem::System { .. }
+            | ConversationItem::Assistant { .. } => &[],
         };
         parts.iter().filter_map(|part| match part {
             ContentPart::Image { image } => Some(image),
@@ -128,5 +131,4 @@ impl ResolvedImages {
 }
 
 #[cfg(test)]
-#[path = "images_tests.rs"]
 mod tests;

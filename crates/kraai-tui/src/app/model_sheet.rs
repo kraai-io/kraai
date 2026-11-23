@@ -73,6 +73,10 @@ impl App {
             .state
             .highlighted_model()
             .map(|(provider, model)| (provider.to_owned(), model.id.clone(), model.name.clone()));
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "every other key does nothing in the model sheet"
+        )]
         match key.code {
             KeyCode::Left | KeyCode::Right => {
                 if let Some((provider_id, model_id, _)) = selected {

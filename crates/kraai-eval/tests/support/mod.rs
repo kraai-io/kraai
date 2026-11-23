@@ -2,8 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use color_eyre::eyre::Result;
-
 pub fn find_program(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|path| {
         std::env::split_paths(&path)
@@ -43,8 +41,8 @@ impl Drop for TemporaryDirectory {
     }
 }
 
-pub fn temporary_directory(name: &str) -> Result<TemporaryDirectory> {
+pub fn temporary_directory(name: &str) -> TemporaryDirectory {
     let path = std::env::temp_dir().join(format!("kraai-eval-{name}-{}", ulid::Ulid::generate()));
-    fs::create_dir(&path)?;
-    Ok(TemporaryDirectory(path))
+    fs::create_dir(&path).unwrap();
+    TemporaryDirectory(path)
 }

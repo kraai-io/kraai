@@ -1,3 +1,5 @@
+// Clippy only applies its allow-*-in-tests settings to helpers under a `cfg(test)` ancestor.
+#![cfg(test)]
 #![cfg(target_os = "linux")]
 
 use std::fs;
@@ -5,7 +7,6 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::PathBuf;
 
-use color_eyre::eyre::{Result, ensure};
 use kraai_eval::{KraaiProviderConfigRequest, ModelProxyRequest, RunRequest, RunStatus};
 use support::{find_program, temporary_directory, user_scope_available};
 
@@ -37,35 +38,36 @@ fi
 "#;
 
 #[test]
-fn offline_runner_reaches_only_the_model_proxy() -> Result<()> {
-    run_with_network("disabled", "unreachable")
+fn offline_runner_reaches_only_the_model_proxy() {
+    run_with_network("disabled", "unreachable");
 }
 
 #[test]
-fn networked_runner_keeps_host_network_access() -> Result<()> {
-    run_with_network("enabled", "reachable")
+fn networked_runner_keeps_host_network_access() {
+    run_with_network("enabled", "reachable");
 }
 
-fn run_with_network(network: &str, host_loopback: &str) -> Result<()> {
+fn run_with_network(network: &str, host_loopback: &str) {
     let Some(bash) = find_program("bash") else {
-        return Ok(());
+        return;
     };
     if find_program("bwrap").is_none() || !user_scope_available() {
-        return Ok(());
+        return;
     }
-    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-    let upstream_port = upstream.local_addr()?.port();
+    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let upstream_port = upstream.local_addr().unwrap().port();
     std::thread::spawn(move || serve_upstream(&upstream));
 
-    let root = temporary_directory(&format!("proxy-network-{network}"))?;
+    let root = temporary_directory(&format!("proxy-network-{network}"));
     let task_dir = root.join("task");
-    fs::create_dir_all(task_dir.join("fixture"))?;
+    fs::create_dir_all(task_dir.join("fixture")).unwrap();
     fs::write(
         task_dir.join("fixture/probe.sh"),
         format!(
             "HOST_PORT={upstream_port}\nEXPECTED_HOST_LOOPBACK={host_loopback}\n{RUNNER_SCRIPT}"
         ),
-    )?;
+    )
+    .unwrap();
     fs::write(
         task_dir.join("task.toml"),
         format!(
@@ -87,20 +89,22 @@ timeout_seconds = {timeout}
             bash = bash.display(),
             timeout = kraai_test_support::HANG_TIMEOUT.as_secs(),
         ),
-    )?;
+    )
+    .unwrap();
     let providers = root.join("providers.toml");
     fs::write(
         &providers,
         format!(
             "[[provider]]\nid = 'local'\ntype = 'openai-chat-completions'\napi_key = 'upstream-secret'\nbase_url = 'http://127.0.0.1:{upstream_port}/v1'\n"
         ),
-    )?;
+    ).unwrap();
     let model_proxy = ModelProxyRequest::kraai_provider(
         KraaiProviderConfigRequest::new(providers, Some(String::from("local"))),
         4,
-    )?;
+    )
+    .unwrap();
     let eval = root.join("eval");
-    fs::create_dir_all(&eval)?;
+    fs::create_dir_all(&eval).unwrap();
     let result = kraai_eval::run(&RunRequest {
         task_path: task_dir.join("task.toml"),
         runner_program: bash,
@@ -116,16 +120,17 @@ timeout_seconds = {timeout}
         proxy_bridge: Some(PathBuf::from(env!("CARGO_BIN_EXE_kraai-eval"))),
         kraai_provider_config: None,
         progress: None,
-    })?;
+    })
+    .unwrap();
     let artifacts = eval.join(&result.artifact_path);
     let stderr = fs::read_to_string(artifacts.join("runner.stderr.log")).unwrap_or_default();
-    ensure!(
+    assert!(
         result.status == RunStatus::Passed,
         "status={:?}, runner={:?}, stderr={stderr}",
         result.status,
         result.runner
     );
-    ensure!(
+    assert!(
         result
             .metrics
             .proxy
@@ -134,7 +139,6 @@ timeout_seconds = {timeout}
             == Some(1),
         "the proxy did not record the runner request"
     );
-    Ok(())
 }
 
 fn serve_upstream(listener: &TcpListener) {

@@ -350,7 +350,7 @@ macro_rules! declare_kraai_command {
                 &self,
                 engine_state: &nu_protocol::engine::EngineState,
                 stack: &mut nu_protocol::engine::Stack,
-                call: &nu_protocol::engine::Call,
+                call: &nu_protocol::engine::Call<'_>,
                 input: nu_protocol::PipelineData,
             ) -> Result<nu_protocol::PipelineData, nu_protocol::ShellError> {
                 let $context = &self.context;
@@ -367,38 +367,4 @@ macro_rules! declare_kraai_command {
 pub(crate) use declare_kraai_command;
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-
-    use super::*;
-
-    #[test]
-    #[expect(
-        clippy::panic_in_result_fn,
-        reason = "catalog consistency test propagates setup errors and asserts the command contract"
-    )]
-    fn executable_commands_match_the_prompt_catalog() -> Result<(), Box<dyn std::error::Error>> {
-        let registry = command_registry(CommandContext::parse_only())?;
-        assert_eq!(
-            registry.command_ids().collect::<BTreeSet<_>>(),
-            crate::command_ids().collect::<BTreeSet<_>>()
-        );
-        for id in registry.command_ids() {
-            let metadata =
-                crate::command_metadata(id).ok_or("registered command is missing metadata")?;
-            for command in registry.select(&[String::from(id)])? {
-                assert_eq!(command.name(), metadata.name);
-                assert_eq!(command.signature().name, metadata.name);
-                assert_eq!(command.description(), metadata.description);
-                let examples = command.examples();
-                assert_eq!(examples.len(), metadata.examples.len());
-                for (example, metadata) in examples.iter().zip(metadata.examples) {
-                    assert_eq!(example.description, metadata.description);
-                    assert_eq!(example.example, metadata.script);
-                    assert!(metadata.script_input.ends_with(metadata.script));
-                }
-            }
-        }
-        Ok(())
-    }
-}
+mod tests;

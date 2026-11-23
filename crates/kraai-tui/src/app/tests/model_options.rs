@@ -1,8 +1,3 @@
-#![expect(
-    clippy::panic_in_result_fn,
-    reason = "model option tests assert after fallible fixture parsing"
-)]
-
 use super::*;
 use crate::app::model_options::active_options;
 use crate::app::{KeyCode, UiMode};
@@ -11,12 +6,12 @@ use kraai_types::{ModelOptionDefinition, ModelOptionKind, ModelOptionValue, Mode
 mod errors;
 mod refresh;
 
-pub(super) fn configure(harness: &mut TestHarness) -> color_eyre::Result<()> {
+pub(super) fn configure(harness: &mut TestHarness) {
     let options: Vec<ModelOptionDefinition> = serde_json::from_value(serde_json::json!([
         {"id":"effort","label":"Effort","type":"choice","required":true,"choices":[{"id":"low","label":"Low"},{"id":"high","label":"High"}]},
         {"id":"thinking","label":"Thinking","type":"boolean","required":true},
         {"id":"budget","label":"Budget","type":"integer","min":10,"max":100,"required":true,"binding":{"type":"body","path":"/budget"},"active_when":{"option":"thinking","value":true}}
-    ]))?;
+    ])).unwrap();
     harness.app.state.models_by_provider.insert(
         "provider".into(),
         vec![kraai_runtime::Model {
@@ -30,18 +25,17 @@ pub(super) fn configure(harness: &mut TestHarness) -> color_eyre::Result<()> {
     harness.app.state.selected_provider_id = Some("provider".into());
     harness.app.state.selected_model_id = Some("model".into());
     harness.app.state.selected_profile_id = Some("coding".into());
-    Ok(())
 }
 
-pub(super) fn configure_optional(harness: &mut TestHarness) -> color_eyre::Result<()> {
-    configure(harness)?;
+pub(super) fn configure_optional(harness: &mut TestHarness) {
+    configure(harness);
     let model = harness
         .app
         .state
         .models_by_provider
         .get_mut("provider")
         .and_then(|models| models.first_mut())
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing model"))?;
+        .expect("missing model");
     for option in &mut model.options {
         option.required = false;
     }
@@ -50,7 +44,6 @@ pub(super) fn configure_optional(harness: &mut TestHarness) -> color_eyre::Resul
         ("thinking".into(), ModelOptionValue::Boolean(true)),
         ("budget".into(), ModelOptionValue::Integer(50)),
     ]);
-    Ok(())
 }
 
 fn active_ids(harness: &TestHarness) -> Vec<String> {
@@ -64,25 +57,24 @@ fn active_ids(harness: &TestHarness) -> Vec<String> {
         .collect()
 }
 
-fn model_mut(harness: &mut TestHarness) -> color_eyre::Result<&mut kraai_runtime::Model> {
+fn model_mut(harness: &mut TestHarness) -> &mut kraai_runtime::Model {
     harness
         .app
         .state
         .models_by_provider
         .get_mut("provider")
         .and_then(|models| models.first_mut())
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing model"))
+        .expect("missing model")
 }
 
-fn open_settings(harness: &mut TestHarness, id: &str) -> color_eyre::Result<()> {
+fn open_settings(harness: &mut TestHarness, id: &str) {
     harness.app.handle_command("model");
     ctrl(harness, 's');
     assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
     harness.app.state.sheet_index = active_ids(harness)
         .iter()
         .position(|option| option == id)
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing active option {id}"))?;
-    Ok(())
+        .unwrap_or_else(|| panic!("missing active option {id}"));
 }
 
 pub(super) fn set(harness: &mut TestHarness, id: &str, input: &str) -> Result<(), String> {
@@ -101,10 +93,10 @@ fn value<'a>(harness: &'a TestHarness, id: &str) -> Option<&'a ModelOptionValue>
 }
 
 #[test]
-fn arrows_step_through_unset_and_every_choice_and_apply_at_once() -> color_eyre::Result<()> {
+fn arrows_step_through_unset_and_every_choice_and_apply_at_once() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    open_settings(&mut harness, "effort")?;
+    configure_optional(&mut harness);
+    open_settings(&mut harness, "effort");
     assert!(screen(&harness.app.state, 100, 30).contains("Effort    unset  Low  High"));
     key(&mut harness, KeyCode::Right);
     assert_eq!(value(&harness, "effort"), None);
@@ -132,32 +124,30 @@ fn arrows_step_through_unset_and_every_choice_and_apply_at_once() -> color_eyre:
     key(&mut harness, KeyCode::Left);
     assert_eq!(value(&harness, "thinking"), None);
     assert_eq!(harness.app.state.sheet_index, 1);
-    Ok(())
 }
 
 #[test]
-fn delete_unsets_the_highlighted_setting() -> color_eyre::Result<()> {
+fn delete_unsets_the_highlighted_setting() {
     for id in ["effort", "thinking", "budget"] {
         let mut harness = test_harness();
-        configure_optional(&mut harness)?;
-        open_settings(&mut harness, id)?;
+        configure_optional(&mut harness);
+        open_settings(&mut harness, id);
         key(&mut harness, KeyCode::Delete);
         assert_eq!(value(&harness, id), None);
         assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
     }
-    Ok(())
 }
 
 #[test]
-fn typed_text_sets_the_highlighted_setting() -> color_eyre::Result<()> {
+fn typed_text_sets_the_highlighted_setting() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
+    configure_optional(&mut harness);
     for (id, typed, expected) in [
         ("budget", "75", ModelOptionValue::Integer(75)),
         ("effort", "LOW", ModelOptionValue::Choice("low".into())),
         ("thinking", "off", ModelOptionValue::Boolean(false)),
     ] {
-        open_settings(&mut harness, id)?;
+        open_settings(&mut harness, id);
         type_text(&mut harness, typed);
         assert!(screen(&harness.app.state, 100, 30).contains(&format!("/model › Model › {typed}")));
         key(&mut harness, KeyCode::Enter);
@@ -167,19 +157,18 @@ fn typed_text_sets_the_highlighted_setting() -> color_eyre::Result<()> {
     }
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
-    Ok(())
 }
 
 #[test]
-fn required_settings_reject_unset_and_never_offer_it() -> color_eyre::Result<()> {
+fn required_settings_reject_unset_and_never_offer_it() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    for option in &mut model_mut(&mut harness)?.options {
+    configure_optional(&mut harness);
+    for option in &mut model_mut(&mut harness).options {
         option.required = true;
     }
     let values = harness.app.state.selected_model_options.clone();
     for id in ["effort", "thinking", "budget"] {
-        open_settings(&mut harness, id)?;
+        open_settings(&mut harness, id);
         key(&mut harness, KeyCode::Delete);
         assert!(
             harness
@@ -195,20 +184,19 @@ fn required_settings_reject_unset_and_never_offer_it() -> color_eyre::Result<()>
         assert_eq!(harness.app.state.selected_model_options, values);
     }
     for id in ["effort", "thinking"] {
-        open_settings(&mut harness, id)?;
+        open_settings(&mut harness, id);
         key(&mut harness, KeyCode::Right);
         assert!(value(&harness, id).is_some());
         key(&mut harness, KeyCode::Right);
         assert_eq!(value(&harness, id), values.get(id));
     }
-    Ok(())
 }
 
 #[test]
-fn off_and_zero_remain_distinct_from_unset() -> color_eyre::Result<()> {
+fn off_and_zero_remain_distinct_from_unset() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    if let Some(option) = model_mut(&mut harness)?
+    configure_optional(&mut harness);
+    if let Some(option) = model_mut(&mut harness)
         .options
         .iter_mut()
         .find(|option| option.id == "budget")
@@ -218,7 +206,7 @@ fn off_and_zero_remain_distinct_from_unset() -> color_eyre::Result<()> {
             max: Some(100),
         };
     }
-    open_settings(&mut harness, "budget")?;
+    open_settings(&mut harness, "budget");
     type_text(&mut harness, "0");
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
@@ -228,7 +216,7 @@ fn off_and_zero_remain_distinct_from_unset() -> color_eyre::Result<()> {
     key(&mut harness, KeyCode::Enter);
     assert!(screen(&harness.app.state, 100, 30).contains("Model  High, thinking, budget 0"));
 
-    open_settings(&mut harness, "thinking")?;
+    open_settings(&mut harness, "thinking");
     type_text(&mut harness, "off");
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
@@ -240,18 +228,17 @@ fn off_and_zero_remain_distinct_from_unset() -> color_eyre::Result<()> {
         value(&harness, "thinking"),
         Some(&ModelOptionValue::Boolean(true))
     );
-    Ok(())
 }
 
 #[test]
-fn a_choice_named_like_a_flag_or_with_spaces_can_be_selected() -> color_eyre::Result<()> {
+fn a_choice_named_like_a_flag_or_with_spaces_can_be_selected() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    let option = model_mut(&mut harness)?
+    configure_optional(&mut harness);
+    let option = model_mut(&mut harness)
         .options
         .iter_mut()
         .find(|option| option.id == "effort")
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing effort option"))?;
+        .expect("missing effort option");
     if let ModelOptionKind::Choice { choices } = &mut option.kind {
         choices.push(kraai_types::ModelOptionChoice {
             id: "--clear".into(),
@@ -259,7 +246,7 @@ fn a_choice_named_like_a_flag_or_with_spaces_can_be_selected() -> color_eyre::Re
             patch: kraai_types::ModelRequestPatch::default(),
         });
     }
-    open_settings(&mut harness, "effort")?;
+    open_settings(&mut harness, "effort");
     key(&mut harness, KeyCode::Right);
     assert_eq!(
         value(&harness, "effort"),
@@ -272,14 +259,13 @@ fn a_choice_named_like_a_flag_or_with_spaces_can_be_selected() -> color_eyre::Re
         value(&harness, "effort"),
         Some(&ModelOptionValue::Choice("--clear".into()))
     );
-    Ok(())
 }
 
 #[test]
-fn backspace_and_escape_step_back_through_the_model_list() -> color_eyre::Result<()> {
+fn backspace_and_escape_step_back_through_the_model_list() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    open_settings(&mut harness, "effort")?;
+    configure_optional(&mut harness);
+    open_settings(&mut harness, "effort");
     assert_eq!(composer(&harness), "/model › Model ›");
     key(&mut harness, KeyCode::Backspace);
     assert_eq!(harness.app.state.mode, UiMode::Model);
@@ -295,14 +281,13 @@ fn backspace_and_escape_step_back_through_the_model_list() -> color_eyre::Result
     key(&mut harness, KeyCode::Backspace);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert_eq!(harness.app.state.input, "/model");
-    Ok(())
 }
 
 #[test]
-fn enter_uses_the_model_and_ctrl_s_opens_its_settings() -> color_eyre::Result<()> {
+fn enter_uses_the_model_and_ctrl_s_opens_its_settings() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    let mut plain = model_mut(&mut harness)?.clone();
+    configure_optional(&mut harness);
+    let mut plain = model_mut(&mut harness).clone();
     plain.id = "plain".into();
     plain.name = "Plain".into();
     plain.options.clear();
@@ -344,14 +329,13 @@ fn enter_uses_the_model_and_ctrl_s_opens_its_settings() -> color_eyre::Result<()
         value(&harness, "effort"),
         Some(&ModelOptionValue::Choice("high".into()))
     );
-    Ok(())
 }
 
-fn add_effort_model(harness: &mut TestHarness, extra: bool) -> color_eyre::Result<()> {
+fn add_effort_model(harness: &mut TestHarness, extra: bool) {
     let mut options: Vec<ModelOptionDefinition> = serde_json::from_value(serde_json::json!([
         {"id":"reasoning_effort","label":"Reasoning effort","type":"choice","required":true,"binding":{"type":"body","path":"/effort"},"choices":[{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"}]},
         {"id":"thinking","label":"Thinking","type":"boolean","required":false}
-    ]))?;
+    ])).unwrap();
     if !extra {
         options.truncate(1);
     }
@@ -367,7 +351,6 @@ fn add_effort_model(harness: &mut TestHarness, extra: bool) -> color_eyre::Resul
             max_context: None,
             options,
         });
-    Ok(())
 }
 
 fn remembered<'a>(harness: &'a TestHarness, model: &str, id: &str) -> Option<&'a ModelOptionValue> {
@@ -381,10 +364,10 @@ fn remembered<'a>(harness: &'a TestHarness, model: &str, id: &str) -> Option<&'a
 }
 
 #[test]
-fn arrows_change_reasoning_effort_on_the_highlighted_model_only() -> color_eyre::Result<()> {
+fn arrows_change_reasoning_effort_on_the_highlighted_model_only() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    add_effort_model(&mut harness, false)?;
+    configure_optional(&mut harness);
+    add_effort_model(&mut harness, false);
     let before = harness.app.state.selected_model_options.clone();
 
     harness.app.handle_command("model");
@@ -453,15 +436,13 @@ fn arrows_change_reasoning_effort_on_the_highlighted_model_only() -> color_eyre:
         harness.app.state.sheet_notice.as_deref(),
         Some("Reasoner has no other settings")
     );
-    Ok(())
 }
 
 #[test]
-fn highlighted_model_keeps_its_other_settings_beside_the_effort_choices() -> color_eyre::Result<()>
-{
+fn highlighted_model_keeps_its_other_settings_beside_the_effort_choices() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    add_effort_model(&mut harness, true)?;
+    configure_optional(&mut harness);
+    add_effort_model(&mut harness, true);
     harness.app.handle_command("model");
     key(&mut harness, KeyCode::Down);
     assert!(
@@ -485,25 +466,20 @@ fn highlighted_model_keeps_its_other_settings_beside_the_effort_choices() -> col
     assert!(rendered.contains("Reasoner  low  medium  high  thinking"));
     key(&mut harness, KeyCode::Up);
     assert!(screen(&harness.app.state, 100, 30).contains("Reasoner  low, thinking"));
-    Ok(())
 }
 
 #[test]
-fn a_highlighted_model_starts_on_medium_and_models_never_highlighted_stay_unset()
--> color_eyre::Result<()> {
+fn a_highlighted_model_starts_on_medium_and_models_never_highlighted_stay_unset() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    add_effort_model(&mut harness, true)?;
+    configure_optional(&mut harness);
+    add_effort_model(&mut harness, true);
     let models = harness
         .app
         .state
         .models_by_provider
         .entry("provider".into())
         .or_default();
-    let mut fresh = models
-        .last()
-        .cloned()
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing model"))?;
+    let mut fresh = models.last().cloned().expect("missing model");
     fresh.id = "fresh".into();
     fresh.name = "Fresh".into();
     models.push(fresh);
@@ -570,14 +546,12 @@ fn a_highlighted_model_starts_on_medium_and_models_never_highlighted_stay_unset(
         remembered(&harness, "reasoner", "reasoning_effort"),
         Some(&ModelOptionValue::Choice("high".into()))
     );
-    Ok(())
 }
 
 #[test]
-fn an_effort_that_a_toggle_switches_on_starts_in_the_middle_of_its_list() -> color_eyre::Result<()>
-{
+fn an_effort_that_a_toggle_switches_on_starts_in_the_middle_of_its_list() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
+    configure_optional(&mut harness);
     harness
         .app
         .state
@@ -591,7 +565,7 @@ fn an_effort_that_a_toggle_switches_on_starts_in_the_middle_of_its_list() -> col
             options: serde_json::from_value(serde_json::json!([
                 {"id":"reasoning_enabled","label":"Thinking enabled","type":"boolean","required":true},
                 {"id":"reasoning_effort","label":"Reasoning effort","type":"choice","required":true,"active_when":{"option":"reasoning_enabled","value":true},"binding":{"type":"body","path":"/effort"},"choices":[{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}]}
-            ]))?,
+            ])).unwrap(),
         });
     harness.app.handle_command("model");
     key(&mut harness, KeyCode::Up);
@@ -614,14 +588,13 @@ fn an_effort_that_a_toggle_switches_on_starts_in_the_middle_of_its_list() -> col
         remembered(&harness, "gated", "reasoning_effort"),
         Some(&ModelOptionValue::Choice("low".into()))
     );
-    Ok(())
 }
 
 #[test]
-fn tab_and_shift_tab_walk_the_model_list_and_the_settings() -> color_eyre::Result<()> {
+fn tab_and_shift_tab_walk_the_model_list_and_the_settings() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    let mut second = model_mut(&mut harness)?.clone();
+    configure_optional(&mut harness);
+    let mut second = model_mut(&mut harness).clone();
     second.id = "second".into();
     harness
         .app
@@ -651,14 +624,13 @@ fn tab_and_shift_tab_walk_the_model_list_and_the_settings() -> color_eyre::Resul
         assert_eq!(harness.app.state.sheet_index, expected);
         assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
     }
-    Ok(())
 }
 
 #[test]
-fn each_model_remembers_its_own_settings() -> color_eyre::Result<()> {
+fn each_model_remembers_its_own_settings() {
     let mut harness = test_harness();
-    configure_optional(&mut harness)?;
-    let mut second = model_mut(&mut harness)?.clone();
+    configure_optional(&mut harness);
+    let mut second = model_mut(&mut harness).clone();
     second.id = "second".into();
     second.name = "Second".into();
     harness
@@ -705,26 +677,24 @@ fn each_model_remembers_its_own_settings() -> color_eyre::Result<()> {
         value(&harness, "effort"),
         Some(&ModelOptionValue::Choice("high".into()))
     );
-    Ok(())
 }
 
 #[test]
-fn missing_options_block_submission_without_selecting_defaults() -> color_eyre::Result<()> {
+fn missing_options_block_submission_without_selecting_defaults() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
+    configure(&mut harness);
     harness.app.submit_message("Hello".into());
     assert!(harness.drain_requests().is_empty());
     assert!(harness.app.state.selected_model_options.is_empty());
     let error = harness.app.state.last_error.clone().unwrap_or_default();
     assert!(error.contains("effort"));
     assert!(error.contains("thinking"));
-    Ok(())
 }
 
 #[test]
-fn typed_options_validate_and_hide_inactive_budget() -> color_eyre::Result<()> {
+fn typed_options_validate_and_hide_inactive_budget() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
+    configure(&mut harness);
     assert!(set(&mut harness, "effort", "high").is_ok());
     assert!(set(&mut harness, "thinking", "true").is_ok());
     assert!(set(&mut harness, "budget", "101").is_err());
@@ -743,5 +713,4 @@ fn typed_options_validate_and_hide_inactive_budget() -> color_eyre::Result<()> {
     );
     assert!(set(&mut harness, "budget", "50").is_err());
     assert_eq!(active_ids(&harness), ["effort", "thinking"]);
-    Ok(())
 }

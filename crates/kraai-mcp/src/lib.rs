@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 mod auth;
 mod cancellation;
 mod catalog;

@@ -133,7 +133,7 @@ impl RuntimeBuilder {
             use_current_executable_as_nushell_host: self.use_current_executable_as_nushell_host,
             initialize_tracing: true,
         };
-        let thread_startup_tx = startup_tx.clone();
+        let thread_startup_tx = startup_tx;
 
         let thread = std::thread::spawn(move || {
             let rt = match tokio::runtime::Runtime::new() {
@@ -188,7 +188,7 @@ impl RuntimeBuilder {
             use_current_executable_as_nushell_host: self.use_current_executable_as_nushell_host,
             initialize_tracing: false,
         };
-        let task_startup_tx = startup_tx.clone();
+        let task_startup_tx = startup_tx;
         let task = runtime.spawn(async move {
             Self::run_hosted(
                 event_tx,

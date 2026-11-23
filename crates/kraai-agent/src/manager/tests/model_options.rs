@@ -92,22 +92,26 @@ fn selection(options: ModelOptionValues) -> ModelSelection {
 }
 
 #[tokio::test]
-async fn message_append_failure_keeps_the_validated_selection() -> Result<()> {
+async fn message_append_failure_keeps_the_validated_selection() {
     for role in ["user", "assistant"] {
         let (manager, data_dir) = test_manager().await;
-        super::super::write(&manager.providers).register_provider(
+        write(&manager.providers).register_provider(
             ProviderId::new("configured"),
             Box::new(ConfigurableProvider),
         );
-        let session = manager.create_session().await?;
+        let session = manager.create_session().await.unwrap();
         manager
             .set_session_model(&session, selection(values("low")))
-            .await?;
-        rusqlite::Connection::open(data_dir.join("kraai.sqlite3"))?.execute_batch(&format!(
-            "CREATE TRIGGER fail_append BEFORE INSERT ON records
+            .await
+            .unwrap();
+        rusqlite::Connection::open(data_dir.join("kraai.sqlite3"))
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TRIGGER fail_append BEFORE INSERT ON records
              WHEN NEW.kind = 'message' AND json_extract(NEW.data, '$.content.type') = '{role}'
              BEGIN SELECT RAISE(FAIL, 'injected {role} append failure'); END;",
-        ))?;
+            ))
+            .unwrap();
         let error = manager
             .prepare_start_stream(
                 &session,
@@ -120,25 +124,31 @@ async fn message_append_failure_keeps_the_validated_selection() -> Result<()> {
             .expect_err("message append fails");
         assert!(format!("{error:?}").contains(&format!("injected {role} append failure")));
         assert_eq!(
-            manager.get_session_model(&session).await?,
+            manager.get_session_model(&session).await.unwrap(),
             Some(selection(values("high")))
         );
-        assert!(manager.get_chat_history(&session).await?.is_empty());
+        assert!(manager.get_chat_history(&session).await.unwrap().is_empty());
         assert!(!manager.is_turn_active(&session));
-        assert!(!manager.persistence.sessions().owns_turn(&session).await?);
+        assert!(
+            !manager
+                .persistence
+                .sessions()
+                .owns_turn(&session)
+                .await
+                .unwrap()
+        );
         cleanup_dir(data_dir).await;
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn interrupted_stream_recovery_keeps_the_persisted_options() -> Result<()> {
+async fn interrupted_stream_recovery_keeps_the_persisted_options() {
     let (manager, data_dir) = test_manager().await;
-    super::super::write(&manager.providers).register_provider(
+    write(&manager.providers).register_provider(
         ProviderId::new("configured"),
         Box::new(ConfigurableProvider),
     );
-    let session = manager.create_session().await?;
+    let session = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session,
@@ -147,32 +157,42 @@ async fn interrupted_stream_recovery_keeps_the_persisted_options() -> Result<()>
             ProviderId::new("configured"),
             values("high"),
         )
-        .await?;
+        .await
+        .unwrap();
     manager.streaming_messages.write().await.clear();
-    super::super::lock(&manager.session_states).remove(&session);
+    lock(&manager.session_states).remove(&session);
     manager
-        .recover_interrupted_stream(manager.require_session(&session).await?)
-        .await?;
-    assert!(manager.get_message(&request.message_id).await?.is_none());
+        .recover_interrupted_stream(manager.require_session(&session).await.unwrap())
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .get_message(&request.message_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
-        manager.get_session_model(&session).await?,
+        manager.get_session_model(&session).await.unwrap(),
         Some(selection(values("high")))
     );
-    assert_eq!(manager.get_chat_history(&session).await?.len(), 1);
+    assert_eq!(manager.get_chat_history(&session).await.unwrap().len(), 1);
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn partial_picker_selection_cannot_generate_or_mutate_history() -> Result<()> {
+async fn partial_picker_selection_cannot_generate_or_mutate_history() {
     let (manager, data_dir) = test_manager().await;
-    super::super::write(&manager.providers).register_provider(
+    write(&manager.providers).register_provider(
         ProviderId::new("configured"),
         Box::new(ConfigurableProvider),
     );
-    let session = manager.create_session().await?;
+    let session = manager.create_session().await.unwrap();
     let partial = selection(Default::default());
-    manager.set_session_model(&session, partial.clone()).await?;
+    manager
+        .set_session_model(&session, partial.clone())
+        .await
+        .unwrap();
     let mut conflicting = values("low");
     conflicting.insert("force_high".into(), ModelOptionValue::Boolean(true));
     for options in [Default::default(), values(""), conflicting.clone()] {
@@ -190,11 +210,18 @@ async fn partial_picker_selection_cannot_generate_or_mutate_history() -> Result<
             error.domain().map(kraai_execution_types::DomainError::kind),
             Some(kraai_execution_types::DomainErrorKind::InvalidArgument)
         );
-        assert!(manager.get_chat_history(&session).await?.is_empty());
+        assert!(manager.get_chat_history(&session).await.unwrap().is_empty());
         assert!(!manager.is_turn_active(&session));
-        assert!(!manager.persistence.sessions().owns_turn(&session).await?);
+        assert!(
+            !manager
+                .persistence
+                .sessions()
+                .owns_turn(&session)
+                .await
+                .unwrap()
+        );
         assert_eq!(
-            manager.get_session_model(&session).await?,
+            manager.get_session_model(&session).await.unwrap(),
             Some(partial.clone())
         );
     }
@@ -210,19 +237,21 @@ async fn partial_picker_selection_cannot_generate_or_mutate_history() -> Result<
             .await
             .is_err()
     );
-    assert_eq!(manager.get_session_model(&session).await?, Some(partial));
+    assert_eq!(
+        manager.get_session_model(&session).await.unwrap(),
+        Some(partial)
+    );
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn continuation_and_script_recovery_keep_the_original_options() -> Result<()> {
+async fn continuation_and_script_recovery_keep_the_original_options() {
     let (manager, data_dir) = test_manager().await;
-    super::super::write(&manager.providers).register_provider(
+    write(&manager.providers).register_provider(
         ProviderId::new("configured"),
         Box::new(ConfigurableProvider),
     );
-    let session = manager.create_session().await?;
+    let session = manager.create_session().await.unwrap();
     let original = values("low");
     let first = manager
         .prepare_start_stream(
@@ -232,40 +261,51 @@ async fn continuation_and_script_recovery_keep_the_original_options() -> Result<
             ProviderId::new("configured"),
             original.clone(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(first.provider_request.options, original);
-    manager.complete_message(&first.message_id).await?;
+    manager.complete_message(&first.message_id).await.unwrap();
     let continuation = manager
         .prepare_continuation_stream(&session)
-        .await?
+        .await
+        .unwrap()
         .expect("automatic continuation");
     assert_eq!(continuation.provider_request.options, original);
-    manager.complete_message(&continuation.message_id).await?;
+    manager
+        .complete_message(&continuation.message_id)
+        .await
+        .unwrap();
     manager.clear_active_turn(&session);
     manager
         .set_session_model(&session, selection(values("high")))
-        .await?;
-    super::super::lock(&manager.session_states).remove(&session);
+        .await
+        .unwrap();
+    lock(&manager.session_states).remove(&session);
     manager
         .prepare_script_recovery(&session, &first.message_id)
-        .await?;
+        .await
+        .unwrap();
     let recovered = manager
         .prepare_continuation_stream(&session)
-        .await?
+        .await
+        .unwrap()
         .expect("recovered continuation");
     assert_eq!(recovered.provider_request.options, original);
-    manager.complete_message(&recovered.message_id).await?;
+    manager
+        .complete_message(&recovered.message_id)
+        .await
+        .unwrap();
     let generation = manager
         .get_message(&recovered.message_id)
-        .await?
+        .await
+        .unwrap()
         .expect("persisted message")
         .generation
         .expect("generation metadata");
     assert_eq!(generation.options, original);
     assert_eq!(
-        manager.get_session_model(&session).await?,
+        manager.get_session_model(&session).await.unwrap(),
         Some(selection(original))
     );
     cleanup_dir(data_dir).await;
-    Ok(())
 }

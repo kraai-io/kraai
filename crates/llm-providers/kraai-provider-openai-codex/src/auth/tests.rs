@@ -5,11 +5,9 @@ use kraai_test_support::http;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-#[path = "state_tests.rs"]
-mod state_tests;
+mod state;
 
-#[path = "refresh_cancellation_tests.rs"]
-mod refresh_cancellation_tests;
+mod refresh_cancellation;
 
 #[test]
 fn request_auth_applies_subscription_headers_without_exposing_fields() {

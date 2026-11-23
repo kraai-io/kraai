@@ -201,8 +201,4 @@ fn push_sample<T>(samples: &mut VecDeque<T>, value: T) {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "fallible test fixtures use direct assertions"
-)]
 mod tests;

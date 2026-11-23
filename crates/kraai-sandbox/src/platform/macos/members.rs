@@ -106,6 +106,10 @@ enum ProcessState {
     Live(Option<(u64, u64)>),
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only ESRCH proves the process is gone"
+)]
 fn process_state(pid: libc::pid_t) -> ProcessState {
     // SAFETY: `proc_bsdinfo` contains only integers and byte arrays, so all-zero is valid.
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
@@ -133,7 +137,7 @@ fn all_pids() -> Result<Vec<libc::pid_t>, SandboxError> {
     let mut estimate = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     loop {
         let slots = usize::try_from(estimate).map_err(|_overflow| list_error())? + 256;
-        let mut pids = vec![0 as libc::pid_t; slots];
+        let mut pids = vec![0; slots];
         let bytes = c_int::try_from(slots * size_of::<libc::pid_t>())
             .map_err(|error| SandboxError::Wait(error.to_string()))?;
         // SAFETY: the buffer holds `bytes` bytes of writable PID slots.

@@ -1,10 +1,6 @@
-#[path = "process_attributes.rs"]
 mod attributes;
-#[path = "process_command.rs"]
 mod command_line;
-#[path = "process_io.rs"]
 mod pipes;
-#[path = "process_wait.rs"]
 mod process_wait;
 
 use std::io;

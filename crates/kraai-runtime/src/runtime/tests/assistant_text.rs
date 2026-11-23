@@ -1,13 +1,11 @@
-use color_eyre::eyre::Result;
-
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::Event;
 
 #[tokio::test]
-async fn native_assistant_text_preserves_literal_tool_envelopes() -> Result<()> {
+async fn native_assistant_text_preserves_literal_tool_envelopes() {
     let text = "Example:\n<tool_call>print 'example'</tool_call>\nThis is literal text.";
     let harness = RuntimeTestHarness::new_native(vec![vec![ScriptedChunk::plain(text)]]).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     harness
         .handle
         .send_message(
@@ -17,7 +15,8 @@ async fn native_assistant_text_preserves_literal_tool_envelopes() -> Result<()> 
             "mock-native".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let events = harness.events.wait_for("native text completion", |events| {
         events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id: id } if id == &session_id))
     }).await;
@@ -30,5 +29,4 @@ async fn native_assistant_text_preserves_literal_tool_envelopes() -> Result<()> 
         |event| matches!(event, Event::ScriptPrepared { session_id: id, .. } if id == &session_id)
     ));
     harness.shutdown().await;
-    Ok(())
 }

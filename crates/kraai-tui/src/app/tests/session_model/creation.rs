@@ -1,7 +1,7 @@
 use super::*;
 
-fn submit_first(harness: &mut TestHarness) -> color_eyre::Result<(u64, ModelSelection)> {
-    super::super::model_options::configure(harness)?;
+fn submit_first(harness: &mut TestHarness) -> (u64, ModelSelection) {
+    model_options::configure(harness);
     let submitted = ModelSelection {
         provider_id: kraai_types::ProviderId::new("provider"),
         model_id: kraai_types::ModelId::new("model"),
@@ -12,12 +12,15 @@ fn submit_first(harness: &mut TestHarness) -> color_eyre::Result<(u64, ModelSele
     let creation_id = harness
         .drain_requests()
         .into_iter()
-        .find_map(|request| match request {
-            RuntimeRequest::CreateSession { creation_id, .. } => Some(creation_id),
-            _ => None,
+        .find_map(|request| {
+            if let RuntimeRequest::CreateSession { creation_id, .. } = request {
+                Some(creation_id)
+            } else {
+                None
+            }
         })
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing session creation"))?;
-    Ok((creation_id, submitted))
+        .expect("missing session creation");
+    (creation_id, submitted)
 }
 
 fn created(harness: &mut TestHarness, creation_id: u64, submitted: &ModelSelection) {
@@ -50,18 +53,17 @@ fn created(harness: &mut TestHarness, creation_id: u64, submitted: &ModelSelecti
 }
 
 #[test]
-fn edits_during_creation_survive_initial_snapshots_and_save_after_the_turn()
--> color_eyre::Result<()> {
+fn edits_during_creation_survive_initial_snapshots_and_save_after_the_turn() {
     for change_model in [false, true] {
         let mut harness = test_harness();
-        let (creation_id, submitted) = submit_first(&mut harness)?;
+        let (creation_id, submitted) = submit_first(&mut harness);
         if change_model {
             let mut model = harness
                 .app
                 .state
                 .selected_model()
                 .cloned()
-                .ok_or_else(|| color_eyre::eyre::eyre!("missing model"))?;
+                .expect("missing model");
             model.id = "other-model".into();
             harness
                 .app
@@ -71,7 +73,7 @@ fn edits_during_creation_survive_initial_snapshots_and_save_after_the_turn()
             harness.app.state.selected_provider_id = Some("other-provider".into());
             harness.app.state.selected_model_id = Some("other-model".into());
         }
-        set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
+        set_option(&mut harness, "effort", "high").unwrap();
         let desired = ModelSelection {
             provider_id: kraai_types::ProviderId::new(if change_model {
                 "other-provider"
@@ -113,14 +115,13 @@ fn edits_during_creation_survive_initial_snapshots_and_save_after_the_turn()
             if session.as_str() == "created-session" && selection == &desired)
         );
     }
-    Ok(())
 }
 
 #[test]
-fn creation_edits_save_after_initial_admission_fails() -> color_eyre::Result<()> {
+fn creation_edits_save_after_initial_admission_fails() {
     let mut harness = test_harness();
-    let (creation_id, submitted) = submit_first(&mut harness)?;
-    set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
+    let (creation_id, submitted) = submit_first(&mut harness);
+    set_option(&mut harness, "effort", "high").unwrap();
     created(&mut harness, creation_id, &submitted);
     harness
         .app
@@ -139,13 +140,12 @@ fn creation_edits_save_after_initial_admission_fails() -> color_eyre::Result<()>
         if session.as_str() == "created-session" && selection.options == options("high", false, None))
     );
     assert_eq!(harness.app.state.input, "first message");
-    Ok(())
 }
 
 #[test]
-fn unchanged_creation_selection_does_not_schedule_an_extra_save() -> color_eyre::Result<()> {
+fn unchanged_creation_selection_does_not_schedule_an_extra_save() {
     let mut harness = test_harness();
-    let (creation_id, submitted) = submit_first(&mut harness)?;
+    let (creation_id, submitted) = submit_first(&mut harness);
     created(&mut harness, creation_id, &submitted);
     harness
         .app
@@ -159,5 +159,4 @@ fn unchanged_creation_selection_does_not_schedule_an_extra_save() -> color_eyre:
     idle.session.selected_model = Some(submitted);
     snapshot(&mut harness, &SessionId::new("created-session"), 0, idle);
     assert!(saves(&harness).is_empty());
-    Ok(())
 }

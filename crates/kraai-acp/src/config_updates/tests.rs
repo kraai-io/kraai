@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::task::{Context, Wake, Waker};
 

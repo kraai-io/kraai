@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 mod auth;
 pub use auth::{
     LoginMethod, PendingBrowserLogin, PendingDeviceCodeLogin, ProviderAuth, ProviderAuthStatus,
@@ -13,8 +11,6 @@ mod definition;
 mod error;
 mod history;
 mod http_body;
-#[cfg(test)]
-mod http_tests;
 pub use http_body::read_error_body;
 mod http_retry;
 pub use history::prepare_history;

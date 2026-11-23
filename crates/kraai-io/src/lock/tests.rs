@@ -1,8 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    reason = "Lock tests assert fixture operations directly"
-)]
-
 use super::*;
 
 #[test]

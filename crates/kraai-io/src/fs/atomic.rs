@@ -264,8 +264,4 @@ async fn run_anchored_write(
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "atomic write tests assert publication and durability outcomes"
-)]
 mod tests;

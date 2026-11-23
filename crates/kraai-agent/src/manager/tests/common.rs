@@ -1,16 +1,15 @@
 use super::super::*;
-use color_eyre::eyre::Result;
 use futures::stream::BoxStream;
-use kraai_provider_core::{Provider, ProviderRequest};
-use std::path::{Path, PathBuf};
+use kraai_provider_core::Provider;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(super) async fn open_persistence(data_dir: &Path) -> Result<kraai_persistence::Persistence> {
+pub(super) async fn open_persistence(data_dir: &Path) -> kraai_persistence::Persistence {
     kraai_persistence::Persistence::open_with_turn_lease(
         data_dir,
         kraai_test_support::OUTLIVES_ANY_TEST,
     )
     .await
+    .unwrap()
 }
 
 pub(super) struct MockProvider {
@@ -69,7 +68,7 @@ pub(super) async fn test_manager() -> (AgentManager, PathBuf) {
     let data_dir = test_dir("manager");
     tokio::fs::create_dir_all(&data_dir).await.unwrap();
 
-    let persistence = open_persistence(&data_dir).await.unwrap();
+    let persistence = open_persistence(&data_dir).await;
 
     let mut providers = ProviderManager::new();
     providers.register_provider(
@@ -98,12 +97,11 @@ pub(super) async fn cleanup_dir(data_dir: PathBuf) {
     let _ = tokio::fs::remove_dir_all(data_dir).await;
 }
 
-pub(super) fn corrupt_message(data_dir: &Path, id: &MessageId, data: &str) -> Result<()> {
-    rusqlite::Connection::open(data_dir.join("kraai.sqlite3"))?.execute(
+pub(super) fn corrupt_message(data_dir: &Path, id: &MessageId, data: &str) {
+    rusqlite::Connection::open(data_dir.join("kraai.sqlite3")).unwrap().execute(
         "INSERT INTO records(kind, id, data) VALUES ('message', ?1, ?2) ON CONFLICT(kind, id) DO UPDATE SET data = excluded.data",
         rusqlite::params![id.as_str(), data],
-    )?;
-    Ok(())
+    ).unwrap();
 }
 
 pub(super) fn streamed_text(streamed: Option<StreamedItem>) -> Option<String> {

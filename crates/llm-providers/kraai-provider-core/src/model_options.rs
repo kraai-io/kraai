@@ -198,7 +198,9 @@ fn set_body_value(body: &mut Value, path: &str, value: Value) -> Result<()> {
                     return Ok(());
                 }
             }
-            _ => return Err(eyre!("Body binding traverses a non-object value: {path}")),
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
+                return Err(eyre!("Body binding traverses a non-object value: {path}"));
+            }
         }
     }
     Err(eyre!("Invalid body binding '{path}'"))

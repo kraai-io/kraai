@@ -1,9 +1,5 @@
-#![expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    reason = "OAuth protocol fixtures assert requests and states"
-)]
+// Clippy only applies its allow-*-in-tests settings to helpers under a `cfg(test)` ancestor.
+#![cfg(test)]
 
 use std::sync::{
     Arc,
@@ -171,11 +167,14 @@ async fn pending(manager: &McpManager) -> url::Url {
     hang_guard(async {
         loop {
             let status = manager.auth_statuses().await.remove(0);
-            match status.state {
-                McpAuthState::Pending { auth_url } => return url::Url::parse(&auth_url).unwrap(),
-                McpAuthState::Starting => tokio::time::sleep(Duration::from_millis(10)).await,
-                _ => panic!("Unexpected login state: {status:?}"),
+            if let McpAuthState::Pending { auth_url } = &status.state {
+                return url::Url::parse(auth_url).unwrap();
             }
+            assert!(
+                matches!(status.state, McpAuthState::Starting),
+                "Unexpected login state: {status:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await

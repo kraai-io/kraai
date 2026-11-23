@@ -1,5 +1,3 @@
-use color_eyre::eyre::Result;
-
 use super::harness::FullHistory as _;
 use super::harness::{RuntimeTestHarness, create_session_with_profile};
 use crate::Event;
@@ -28,9 +26,9 @@ async fn wait_for_continuation_failure(
 }
 
 #[tokio::test]
-async fn failed_queue_preparation_keeps_the_batch_and_allows_later_retry() -> Result<()> {
+async fn failed_queue_preparation_keeps_the_batch_and_allows_later_retry() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let runtime = &harness.runtime;
     super::harness::enqueue(
         runtime,
@@ -62,7 +60,14 @@ async fn failed_queue_preparation_keeps_the_batch_and_allows_later_retry() -> Re
             .collect::<Vec<_>>(),
         vec!["one", "two"]
     );
-    assert!(runtime.agent_manager.get_tip(&session_id).await?.is_none());
+    assert!(
+        runtime
+            .agent_manager
+            .get_tip(&session_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     for message in &mut messages {
         message.selection.provider_id = kraai_types::ProviderId::new("mock");
     }
@@ -78,13 +83,12 @@ async fn failed_queue_preparation_keeps_the_batch_and_allows_later_retry() -> Re
         .await;
     assert!(super::harness::queue(runtime, &session_id).await.is_empty());
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn failed_continuation_preserves_queue_order_with_messages_queued_meanwhile() -> Result<()> {
+async fn failed_continuation_preserves_queue_order_with_messages_queued_meanwhile() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let message = |text: &str| {
         super::harness::queued(
             text.into(),
@@ -118,13 +122,12 @@ async fn failed_continuation_preserves_queue_order_with_messages_queued_meanwhil
         vec!["first", "second"]
     );
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
+async fn messages_arriving_during_preparation_stay_queued() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     super::harness::hold_preparation(&harness.runtime, &session_id).await;
     let outcome = harness
         .handle
@@ -135,7 +138,8 @@ async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert!(matches!(
         outcome,
         crate::SubmitMessageOutcome::Queued { position: 1 }
@@ -145,7 +149,8 @@ async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
             .runtime
             .agent_manager
             .get_tip(&session_id)
-            .await?
+            .await
+            .unwrap()
             .is_none()
     );
     let queued = super::harness::queue(&harness.runtime, &session_id).await;
@@ -155,13 +160,12 @@ async fn messages_arriving_during_preparation_stay_queued() -> Result<()> {
     );
     super::harness::release_preparation(&harness.runtime, &session_id).await;
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn queued_messages_survive_restart_and_drain_on_the_next_send() -> Result<()> {
+async fn queued_messages_survive_restart_and_drain_on_the_next_send() {
     let previous = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&previous.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&previous.handle, "test-profile").await;
     super::harness::enqueue(
         &previous.runtime,
         &session_id,
@@ -180,7 +184,8 @@ async fn queued_messages_survive_restart_and_drain_on_the_next_send() -> Result<
     let snapshot = restarted
         .handle
         .get_session_snapshot(session_id.clone())
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(snapshot.queued_messages, 1);
     assert!(!snapshot.session.is_running);
     assert!(snapshot.history.is_empty());
@@ -195,27 +200,29 @@ async fn queued_messages_survive_restart_and_drain_on_the_next_send() -> Result<
                 "mock".into(),
                 Default::default(),
             )
-            .await?,
+            .await
+            .unwrap(),
         crate::SubmitMessageOutcome::Queued { position: 2 }
     );
     restarted
         .events
         .wait_for("queued turn", |events| {
             events.iter().any(|event| {
-                matches!(event, crate::Event::TurnCompleted { session_id: id } if id == &session_id)
+                matches!(event, Event::TurnCompleted { session_id: id } if id == &session_id)
             })
         })
         .await;
     let users: Vec<_> = restarted
         .handle
         .get_chat_history(session_id.clone())
-        .await?
+        .await
         .into_values()
-        .filter_map(|message| match message.content {
-            kraai_types::ConversationItem::User { content } => {
+        .filter_map(|message| {
+            if let kraai_types::ConversationItem::User { content } = message.content {
                 content.as_text().map(str::to_string)
+            } else {
+                None
             }
-            _ => None,
         })
         .collect();
     assert_eq!(users.len(), 2);
@@ -228,5 +235,4 @@ async fn queued_messages_survive_restart_and_drain_on_the_next_send() -> Result<
     );
     restarted.shutdown().await;
     previous.shutdown().await;
-    Ok(())
 }

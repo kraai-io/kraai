@@ -2,7 +2,6 @@ mod login;
 mod storage;
 mod token;
 
-use std::future::Future;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -68,7 +67,7 @@ impl OpenAiCodexAuthControllerOptions {
 
 #[derive(Clone)]
 pub struct OpenAiCodexAuthController {
-    inner: std::sync::Arc<Inner>,
+    inner: Arc<Inner>,
 }
 
 #[derive(Clone)]
@@ -199,7 +198,7 @@ impl OpenAiCodexAuthController {
         };
 
         Ok(Self {
-            inner: std::sync::Arc::new(Inner {
+            inner: Arc::new(Inner {
                 client,
                 auth_directory: Arc::new(DirectoryBootstrap::new(
                     config.storage_root.clone(),
@@ -533,7 +532,7 @@ impl OpenAiCodexAuthController {
     {
         let id = generate_generation();
         let worker_id = id.clone();
-        let inner = std::sync::Arc::downgrade(&self.inner);
+        let inner = Arc::downgrade(&self.inner);
         let (start_tx, start_rx) = oneshot::channel();
         let task = AbortOnDropHandle::new(tokio::spawn(async move {
             if start_rx.await.is_err() {
@@ -729,9 +728,4 @@ fn unix_now() -> u64 {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::panic,
-    reason = "tests use direct assertions for auth fixture setup and inspection"
-)]
 mod tests;

@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -25,7 +24,7 @@ impl StateEffectHandler for DurableStateEffects {
     fn apply<'a>(
         &'a self,
         request: &'a StateEffectRequest,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), String>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
         Box::pin(async move {
             let mutations = authorize_context_mutations(
                 request,
@@ -67,7 +66,7 @@ fn authorize_context_mutations(
     request: &StateEffectRequest,
     workspace_root: &Path,
     effective_capabilities: &SandboxCapabilities,
-) -> std::result::Result<Vec<ContextStateMutation>, String> {
+) -> Result<Vec<ContextStateMutation>, String> {
     request
         .deltas
         .iter()
@@ -124,8 +123,4 @@ fn authorize_context_mutations(
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    reason = "context mutation authorization tests use direct fixture assertions"
-)]
 mod tests;

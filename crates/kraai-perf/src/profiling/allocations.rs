@@ -269,5 +269,4 @@ fn sanitize_frame(frame: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "allocations_tests.rs"]
 mod tests;

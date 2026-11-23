@@ -1,8 +1,3 @@
-#![expect(
-    clippy::expect_used,
-    reason = "test setup requires a session load request"
-)]
-
 use super::{RuntimeRequest, RuntimeResponse, TestHarness, session_snapshot, test_harness};
 use crate::app::{KeyCode, KeyEvent, KeyModifiers, UiMode};
 use crossbeam_channel::unbounded;
@@ -17,12 +12,16 @@ fn begin_load(harness: &mut TestHarness) -> (u64, kraai_types::SessionId) {
     harness
         .drain_requests()
         .into_iter()
-        .find_map(|request| match request {
-            RuntimeRequest::LoadSession {
+        .find_map(|request| {
+            if let RuntimeRequest::LoadSession {
                 load_id,
                 session_id,
-            } => Some((load_id, session_id)),
-            _ => None,
+            } = request
+            {
+                Some((load_id, session_id))
+            } else {
+                None
+            }
         })
         .expect("session selection must request a load")
 }

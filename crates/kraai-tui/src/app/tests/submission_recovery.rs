@@ -1,6 +1,6 @@
 use super::*;
 use kraai_execution_types::ImageAttachment;
-use kraai_types::{ContentPart, MessageContent, SessionId};
+use kraai_types::{ContentPart, MessageContent};
 
 fn send(harness: &mut TestHarness, text: &str) -> MessageContent {
     let message = MessageContent(vec![

@@ -1,8 +1,3 @@
-#![expect(
-    clippy::panic_in_result_fn,
-    reason = "session model tests assert after fallible fixture parsing"
-)]
-
 use kraai_types::{ModelOptionValue, ModelOptionValues, ModelSelection, SessionId};
 
 use super::model_options::set as set_option;
@@ -11,8 +6,8 @@ use super::*;
 mod creation;
 mod metadata;
 
-fn configure(harness: &mut TestHarness) -> color_eyre::Result<()> {
-    super::model_options::configure(harness)?;
+fn configure(harness: &mut TestHarness) {
+    model_options::configure(harness);
     harness
         .app
         .reset_chat_session(Some(SessionId::new("session")));
@@ -23,7 +18,6 @@ fn configure(harness: &mut TestHarness) -> color_eyre::Result<()> {
         session_snapshot(None),
     );
     harness.drain_requests();
-    Ok(())
 }
 
 fn snapshot(
@@ -46,13 +40,17 @@ fn saves(harness: &TestHarness) -> Vec<(SessionId, u64, ModelSelection)> {
     harness
         .drain_requests()
         .into_iter()
-        .filter_map(|request| match request {
-            RuntimeRequest::SetSessionModel {
+        .filter_map(|request| {
+            if let RuntimeRequest::SetSessionModel {
                 session_id,
                 save_id,
                 selection,
-            } => Some((session_id, save_id, selection)),
-            _ => None,
+            } = request
+            {
+                Some((session_id, save_id, selection))
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -79,9 +77,9 @@ fn options(effort: &str, thinking: bool, budget: Option<i64>) -> ModelOptionValu
 }
 
 #[test]
-fn option_picker_saves_partial_choices_before_any_message() -> color_eyre::Result<()> {
+fn option_picker_saves_partial_choices_before_any_message() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
+    configure(&mut harness);
     harness.app.handle_command("model");
     harness.app.handle_key_event(super::super::KeyEvent::new(
         super::super::KeyCode::Char('s'),
@@ -107,15 +105,14 @@ fn option_picker_saves_partial_choices_before_any_message() -> color_eyre::Resul
             && selection.options == ModelOptionValues::from([("effort".into(), ModelOptionValue::Choice("high".into()))]))
     );
     assert!(harness.app.state.pending_messages.is_empty());
-    Ok(())
 }
 
 #[test]
-fn clearing_an_optional_parent_saves_the_map_without_its_dependents() -> color_eyre::Result<()> {
+fn clearing_an_optional_parent_saves_the_map_without_its_dependents() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
-    super::model_options::configure_optional(&mut harness)?;
-    set_option(&mut harness, "thinking", "").map_err(color_eyre::eyre::Error::msg)?;
+    configure(&mut harness);
+    model_options::configure_optional(&mut harness);
+    set_option(&mut harness, "thinking", "").unwrap();
     let expected =
         ModelOptionValues::from([("effort".into(), ModelOptionValue::Choice("high".into()))]);
     assert_eq!(harness.app.state.selected_model_options, expected);
@@ -123,23 +120,19 @@ fn clearing_an_optional_parent_saves_the_map_without_its_dependents() -> color_e
         matches!(saves(&harness).as_slice(), [(session, _, selection)]
         if session.as_str() == "session" && selection.options == expected)
     );
-    Ok(())
 }
 
 #[test]
-fn model_picker_saves_the_complete_typed_selection() -> color_eyre::Result<()> {
+fn model_picker_saves_the_complete_typed_selection() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
+    configure(&mut harness);
     let models = harness
         .app
         .state
         .models_by_provider
         .get_mut("provider")
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing provider"))?;
-    let mut second = models
-        .first()
-        .cloned()
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing model"))?;
+        .expect("missing provider");
+    let mut second = models.first().cloned().expect("missing model");
     second.id = "second".into();
     models.push(second);
     let values = options("high", true, Some(50));
@@ -158,7 +151,7 @@ fn model_picker_saves_the_complete_typed_selection() -> color_eyre::Result<()> {
         .filtered_models()
         .iter()
         .position(|(_, model)| model.id == "second")
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing second model"))?;
+        .expect("missing second model");
     harness.app.handle_key_event(super::super::KeyEvent::new(
         super::super::KeyCode::Enter,
         super::super::KeyModifiers::NONE,
@@ -167,33 +160,31 @@ fn model_picker_saves_the_complete_typed_selection() -> color_eyre::Result<()> {
         matches!(saves(&harness).as_slice(), [(session, _, selection)]
         if session.as_str() == "session" && selection.model_id.as_str() == "second" && selection.options == values)
     );
-    Ok(())
 }
 
 #[test]
-fn rapid_edits_coalesce_and_stale_responses_preserve_the_latest_selection() -> color_eyre::Result<()>
-{
+fn rapid_edits_coalesce_and_stale_responses_preserve_the_latest_selection() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
-    set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
+    configure(&mut harness);
+    set_option(&mut harness, "effort", "high").unwrap();
     let (_, first_id, first) = saves(&harness)
         .into_iter()
         .next()
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing first save"))?;
+        .expect("missing first save");
     for (id, value) in [("effort", "low"), ("thinking", "true"), ("budget", "50")] {
-        set_option(&mut harness, id, value).map_err(color_eyre::eyre::Error::msg)?;
+        set_option(&mut harness, id, value).unwrap();
     }
     assert!(saves(&harness).is_empty());
     let desired = options("low", true, Some(50));
     let mut stale = session_snapshot(None);
-    stale.session.selected_model = Some(first.clone());
+    stale.session.selected_model = Some(first);
     snapshot(&mut harness, &SessionId::new("session"), 0, stale.clone());
     assert_eq!(harness.app.state.selected_model_options, desired);
     acknowledge(&mut harness, &SessionId::new("session"), first_id);
     let (_, second_id, second) = saves(&harness)
         .into_iter()
         .next()
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing coalesced save"))?;
+        .expect("missing coalesced save");
     assert!(second_id > first_id);
     assert_eq!(second.options, desired);
     acknowledge(&mut harness, &SessionId::new("session"), first_id);
@@ -216,13 +207,12 @@ fn rapid_edits_coalesce_and_stale_responses_preserve_the_latest_selection() -> c
         confirmed,
     );
     assert_eq!(harness.app.state.selected_model_options, desired);
-    Ok(())
 }
 
 #[test]
-fn active_and_queued_turns_defer_saves_and_retain_submitted_options() -> color_eyre::Result<()> {
+fn active_and_queued_turns_defer_saves_and_retain_submitted_options() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
+    configure(&mut harness);
     let submitted = options("high", false, None);
     harness.app.state.selected_model_options = submitted.clone();
     let mut active = session_snapshot(None);
@@ -231,7 +221,7 @@ fn active_and_queued_turns_defer_saves_and_retain_submitted_options() -> color_e
     active.session.profile_locked = true;
     snapshot(&mut harness, &SessionId::new("session"), 0, active);
     harness.app.submit_message("queued".into());
-    set_option(&mut harness, "effort", "low").map_err(color_eyre::eyre::Error::msg)?;
+    set_option(&mut harness, "effort", "low").unwrap();
     assert!(harness.drain_requests().iter().any(|request| matches!(request, RuntimeRequest::SendMessage { options, .. } if options == &submitted)));
     harness
         .app
@@ -252,19 +242,17 @@ fn active_and_queued_turns_defer_saves_and_retain_submitted_options() -> color_e
     assert!(
         matches!(saves(&harness).as_slice(), [(_, _, selection)] if selection.options == options("low", false, None))
     );
-    Ok(())
 }
 
 #[test]
-fn session_switches_keep_deferred_saves_and_ignore_background_acknowledgements()
--> color_eyre::Result<()> {
+fn session_switches_keep_deferred_saves_and_ignore_background_acknowledgements() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
+    configure(&mut harness);
     let mut active = session_snapshot(None);
     active.session.is_running = true;
     active.activity = SessionActivity::Streaming;
     snapshot(&mut harness, &SessionId::new("session"), 0, active);
-    set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
+    set_option(&mut harness, "effort", "high").unwrap();
     assert!(saves(&harness).is_empty());
     harness
         .app
@@ -280,7 +268,7 @@ fn session_switches_keep_deferred_saves_and_ignore_background_acknowledgements()
     let (_, save_id, selection) = saves(&harness)
         .into_iter()
         .next()
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing background save"))?;
+        .expect("missing background save");
     acknowledge(&mut harness, &SessionId::new("session"), save_id);
     assert_eq!(
         harness.app.state.selected_model_id.as_deref(),
@@ -297,16 +285,15 @@ fn session_switches_keep_deferred_saves_and_ignore_background_acknowledgements()
         harness.app.state.selected_model_options.get("effort"),
         Some(&ModelOptionValue::Choice("high".into()))
     );
-    Ok(())
 }
 
 #[test]
-fn admission_failure_refreshes_idle_state_and_flushes_deferred_edits() -> color_eyre::Result<()> {
+fn admission_failure_refreshes_idle_state_and_flushes_deferred_edits() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
+    configure(&mut harness);
     harness.app.state.selected_model_options = options("high", false, None);
     harness.app.submit_message("message".into());
-    set_option(&mut harness, "effort", "low").map_err(color_eyre::eyre::Error::msg)?;
+    set_option(&mut harness, "effort", "low").unwrap();
     assert!(saves(&harness).is_empty());
     harness
         .app
@@ -324,18 +311,17 @@ fn admission_failure_refreshes_idle_state_and_flushes_deferred_edits() -> color_
     assert!(
         matches!(saves(&harness).as_slice(), [(_, _, selection)] if selection.options == options("low", false, None))
     );
-    Ok(())
 }
 
 #[test]
-fn transient_save_errors_retry_during_session_reconciliation() -> color_eyre::Result<()> {
+fn transient_save_errors_retry_during_session_reconciliation() {
     let mut harness = test_harness();
-    configure(&mut harness)?;
-    set_option(&mut harness, "effort", "high").map_err(color_eyre::eyre::Error::msg)?;
+    configure(&mut harness);
+    set_option(&mut harness, "effort", "high").unwrap();
     let (_, first_id, desired) = saves(&harness)
         .into_iter()
         .next()
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing first save"))?;
+        .expect("missing first save");
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SetSessionModel {
@@ -355,5 +341,4 @@ fn transient_save_errors_retry_during_session_reconciliation() -> color_eyre::Re
     assert!(
         matches!(saves(&harness).as_slice(), [(_, id, selection)] if *id > first_id && selection == &desired)
     );
-    Ok(())
 }

@@ -1,5 +1,0 @@
-[advisories]
-ignore = [
-  "RUSTSEC-2026-0194", # quick-xml 0.39 via wayland-scanner, build-time parsing of bundled protocol XML only
-  "RUSTSEC-2026-0195", # quick-xml 0.39 via wayland-scanner, build-time parsing of bundled protocol XML only
-] # advisory IDs to ignore e.g. ["RUSTSEC-2019-0001", ...]

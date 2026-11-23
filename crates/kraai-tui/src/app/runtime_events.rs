@@ -191,7 +191,7 @@ impl App {
                 message_id,
             } => {
                 let message_id = MessageId::new(message_id);
-                self.mark_exit_usage_message_completed(message_id.clone());
+                self.mark_exit_usage_message_completed(message_id);
                 self.request(RuntimeRequest::ListUserInputHistory {
                     limit: INPUT_HISTORY_LIMIT,
                 });

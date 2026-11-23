@@ -1,5 +1,4 @@
 use kraai_execution_types::StateEffectRequest;
-use std::future::Future;
 use std::pin::Pin;
 
 pub trait StateEffectHandler: Send + Sync {

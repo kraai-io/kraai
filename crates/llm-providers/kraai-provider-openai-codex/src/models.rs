@@ -7,7 +7,6 @@ use kraai_types::{ModelId, ModelOptionChoice, ModelOptionDefinition, ModelReques
 use crate::wire::{ListModelEntry, ModelVisibility};
 
 #[cfg(test)]
-#[path = "models_tests.rs"]
 mod tests;
 
 #[derive(Default)]

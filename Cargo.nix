@@ -2613,9 +2613,9 @@ rec {
       };
       "chacha20" = rec {
         crateName = "chacha20";
-        version = "0.10.1";
+        version = "0.10.2";
         edition = "2024";
-        sha256 = "108aajbvs3rwl4d0pdvq3p8ydy4pwh0rxy2z265ynwkflrmla96m";
+        sha256 = "01hvvbgdmqkcgs2s4f12s9wa5h2gbq05rqvypv61azlwd55mxhv5";
         license = "MIT OR Apache-2.0";
         authors = [
           "RustCrypto Developers"
@@ -3068,9 +3068,9 @@ rec {
       };
       "clipboard-win" = rec {
         crateName = "clipboard-win";
-        version = "5.4.1";
+        version = "5.4.3";
         edition = "2018";
-        sha256 = "1m44gqy11rq1ww7jls86ppif98v6kv2wkwk8p17is86zsdq3gq5x";
+        sha256 = "16isdlcwrj0jgjs5k5c0jvr15mqrs1knlyms2bdcrzk6hj3zfah5";
         libName = "clipboard_win";
         license = "BSL-1.0";
         authors = [
@@ -12350,10 +12350,10 @@ rec {
       };
       "libz-sys" = rec {
         crateName = "libz-sys";
-        version = "1.1.31";
+        version = "1.1.33";
         edition = "2018";
         links = "z";
-        sha256 = "1cjw8nisxy5iv8yms7dsxwhclb26djl38n6xq4nmlqxxra73087z";
+        sha256 = "0ic0jc13vgz6fwcm12p7ss5bvl09mbkl52c2ip3v1ni18fgzbqzy";
         libName = "libz_sys";
         license = "MIT OR Apache-2.0";
         authors = [
@@ -23823,7 +23823,7 @@ rec {
           }
           {
             name = "getrandom";
-            packageId = "getrandom 0.4.3";
+            packageId = "getrandom 0.3.4";
             optional = true;
             usesDefaultFeatures = false;
             target = { target, features }: ((target."unix" or false) || (target."windows" or false) || ("wasi" == target."os" or null));

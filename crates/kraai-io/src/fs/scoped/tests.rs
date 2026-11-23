@@ -1,10 +1,4 @@
-#![expect(
-    clippy::unwrap_used,
-    reason = "scoped filesystem tests assert fixture operations"
-)]
-
 use std::fs;
-use std::io::Read;
 
 use super::*;
 

@@ -11,19 +11,18 @@ const REQUEST_BODY: &str = r#"{
 }"#;
 
 #[tokio::test]
-async fn routing_state_round_trips_without_credentials_and_counts_final_usage_once() -> Result<()> {
+async fn routing_state_round_trips_without_credentials_and_counts_final_usage_once() {
     let root = std::env::temp_dir().join(format!(
         "kraai-eval-proxy-routing-{}",
         ulid::Ulid::generate()
     ));
-    fs::create_dir(&root)?;
+    fs::create_dir(&root).unwrap();
     let result = kraai_test_support::hang_guard(exercise_routing_round_trip(
         root.join("proxy.events.jsonl"),
     ))
     .await;
-    fs::remove_dir_all(root)?;
-    result??;
-    Ok(())
+    fs::remove_dir_all(root).unwrap();
+    result.unwrap().unwrap();
 }
 
 async fn exercise_routing_round_trip(log_path: PathBuf) -> Result<()> {
@@ -153,15 +152,11 @@ async fn exercise_routing_round_trip(log_path: PathBuf) -> Result<()> {
         routing = response.headers().get("x-codex-routing-hint").cloned();
         turn_state = response.headers().get("x-codex-turn-state").cloned();
         ensure!(
-            routing.as_ref().map(reqwest::header::HeaderValue::as_bytes)
-                == Some(ROUTING_HINT.as_bytes()),
+            routing.as_ref().map(HeaderValue::as_bytes) == Some(ROUTING_HINT.as_bytes()),
             "upstream routing hint did not reach the client unchanged"
         );
         ensure!(
-            turn_state
-                .as_ref()
-                .map(reqwest::header::HeaderValue::as_bytes)
-                == Some(TURN_STATE),
+            turn_state.as_ref().map(HeaderValue::as_bytes) == Some(TURN_STATE),
             "upstream turn state did not reach the client unchanged"
         );
         for name in [

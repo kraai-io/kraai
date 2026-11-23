@@ -44,20 +44,6 @@ pub(super) fn publish(_staging: tempfile::TempDir, _output: &Path) -> Result<()>
     color_eyre::eyre::bail!("profiling requires Linux")
 }
 
-#[cfg(all(test, target_os = "linux"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn publishing_does_not_replace_an_existing_directory() -> Result<()> {
-        let parent = tempfile::tempdir()?;
-        let output = parent.path().join("profile");
-        fs::create_dir(&output)?;
-        let staging = tempfile::tempdir_in(parent.path())?;
-        fs::write(staging.path().join("profile.json"), b"new profile")?;
-        let result = publish(staging, &output);
-        ensure!(result.is_err());
-        ensure!(output.read_dir()?.next().is_none());
-        Ok(())
-    }
-}
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod tests;

@@ -1,9 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    clippy::panic,
-    reason = "tests directly inspect request channel coordination"
-)]
-
 use super::*;
 
 fn handle() -> (RuntimeHandle, mpsc::Receiver<Command>) {

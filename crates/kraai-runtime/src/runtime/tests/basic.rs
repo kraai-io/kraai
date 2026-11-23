@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use color_eyre::eyre::{Result, eyre};
 use kraai_provider_core::ProviderManager;
 use kraai_test_support::hang_guard;
 use kraai_types::{ChatRole, ProviderId, SessionId, TokenUsage};
@@ -13,22 +12,25 @@ use super::harness::{
 use crate::{Event, RuntimeErrorKind, RuntimeEvent};
 
 #[test]
-fn idle_config_watcher_does_not_block_single_thread_runtime() -> Result<()> {
+fn idle_config_watcher_does_not_block_single_thread_runtime() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()?;
+        .build()
+        .unwrap();
     runtime.block_on(async {
         let harness = RuntimeTestHarness::new(Vec::new()).await;
 
-        hang_guard(harness.handle.list_sessions()).await??;
+        hang_guard(harness.handle.list_sessions())
+            .await
+            .unwrap()
+            .unwrap();
 
         harness.shutdown().await;
-        Ok(())
     })
 }
 
 #[tokio::test]
-async fn profile_queries_share_reads_and_validate_workspace_before_locking() -> Result<()> {
+async fn profile_queries_share_reads_and_validate_workspace_before_locking() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
     let session_id = harness
         .handle
@@ -36,15 +38,20 @@ async fn profile_queries_share_reads_and_validate_workspace_before_locking() -> 
             workspace_dir: None,
             profile_id: Some(String::from("test-profile")),
         })
-        .await?;
+        .await
+        .unwrap();
     let profiles = hang_guard(harness.handle.list_agent_profiles(session_id)).await;
-    let profiles = profiles??;
+    let profiles = profiles.unwrap().unwrap();
     assert_eq!(
         profiles.selected_profile_id.as_deref(),
         Some("test-profile")
     );
 
-    let catalog = harness.handle.get_agent_profile_catalog(None).await?;
+    let catalog = harness
+        .handle
+        .get_agent_profile_catalog(None)
+        .await
+        .unwrap();
     assert_eq!(catalog.default_profile_id, "test-profile");
     assert_eq!(catalog.profiles, profiles.profiles);
     assert_eq!(catalog.warnings, profiles.warnings);
@@ -60,34 +67,32 @@ async fn profile_queries_share_reads_and_validate_workspace_before_locking() -> 
             .get_agent_profile_catalog(Some(missing.display().to_string())),
     )
     .await;
-    let error = invalid?
-        .err()
-        .ok_or_else(|| eyre!("missing workspace unexpectedly returned a profile catalog"))?;
+    let error = invalid
+        .unwrap()
+        .expect_err("missing workspace unexpectedly returned a profile catalog");
     assert_eq!(error.kind, RuntimeErrorKind::InvalidArgument);
     assert_eq!(
         error.message,
         format!("Workspace directory does not exist: {}", missing.display())
     );
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn runtime_shutdown_is_awaitable_and_rejects_new_commands() -> Result<()> {
+async fn runtime_shutdown_is_awaitable_and_rejects_new_commands() {
     for _ in 0..2 {
         let harness = RuntimeTestHarness::new(Vec::new()).await;
         let handle = harness.handle.clone();
 
-        hang_guard(handle.shutdown()).await??;
+        hang_guard(handle.shutdown()).await.unwrap().unwrap();
         assert!(handle.list_sessions().await.is_err());
 
-        hang_guard(harness.shutdown()).await?;
+        hang_guard(harness.shutdown()).await.unwrap();
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> {
+async fn provider_retry_observer_is_forwarded_to_runtime_events() {
     let mut providers = ProviderManager::new();
     providers.register_provider(
         ProviderId::new("retry-mock"),
@@ -97,7 +102,7 @@ async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> 
     );
 
     let harness = RuntimeTestHarness::new_with_parts(providers).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
 
     harness
         .handle
@@ -108,7 +113,8 @@ async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> 
             String::from("retry-mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
 
     let events = harness
         .events
@@ -119,8 +125,8 @@ async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> 
         })
         .await;
 
-    let retry_event = events.iter().find_map(|event| match event {
-        Event::ProviderRetryScheduled {
+    let retry_event = events.iter().find_map(|event| {
+        if let Event::ProviderRetryScheduled {
             session_id: event_session,
             provider_id,
             model_id,
@@ -128,15 +134,20 @@ async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> 
             retry_number,
             delay_seconds,
             reason,
-        } if event_session == &session_id => Some((
-            provider_id.clone(),
-            model_id.clone(),
-            operation.clone(),
-            *retry_number,
-            *delay_seconds,
-            reason.clone(),
-        )),
-        _ => None,
+        } = event
+            && event_session == &session_id
+        {
+            Some((
+                provider_id.clone(),
+                model_id.clone(),
+                operation.clone(),
+                *retry_number,
+                *delay_seconds,
+                reason.clone(),
+            ))
+        } else {
+            None
+        }
     });
 
     assert_eq!(
@@ -152,17 +163,16 @@ async fn provider_retry_observer_is_forwarded_to_runtime_events() -> Result<()> 
     );
 
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
+async fn runtime_broadcasts_events_to_multiple_subscribers() {
     let harness =
         RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("shared event stream")]]).await;
     let mut first = harness.handle.subscribe();
     let mut second = harness.handle.subscribe();
 
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     harness
         .handle
         .send_message(
@@ -172,12 +182,13 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
             String::from("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
 
     async fn collect_events(
         receiver: &mut broadcast::Receiver<RuntimeEvent>,
         session_id: &SessionId,
-    ) -> Result<Vec<RuntimeEvent>> {
+    ) -> Vec<RuntimeEvent> {
         let mut events = Vec::new();
         loop {
             match receiver.recv().await {
@@ -191,12 +202,12 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
                     );
                     events.push(event);
                     if is_complete {
-                        return Ok(events);
+                        return events;
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => {
-                    return Err(eyre!("event stream closed before completion"));
+                    panic!("event stream closed before completion");
                 }
             }
         }
@@ -204,10 +215,10 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
 
     let first_events = hang_guard(collect_events(&mut first, &session_id))
         .await
-        .map_err(|_| eyre!("timed out waiting for first subscriber events"))??;
+        .expect("timed out waiting for first subscriber events");
     let second_events = hang_guard(collect_events(&mut second, &session_id))
         .await
-        .map_err(|_| eyre!("timed out waiting for second subscriber events"))??;
+        .expect("timed out waiting for second subscriber events");
 
     for events in [&first_events, &second_events] {
         assert!(
@@ -238,7 +249,11 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
         }));
     }
 
-    let snapshot = harness.handle.get_session_snapshot(session_id).await?;
+    let snapshot = harness
+        .handle
+        .get_session_snapshot(session_id)
+        .await
+        .unwrap();
     assert!(snapshot.turn_timer.last_duration().is_some());
     assert!(
         snapshot
@@ -248,11 +263,10 @@ async fn runtime_broadcasts_events_to_multiple_subscribers() -> Result<()> {
     );
 
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> Result<()> {
+async fn completed_stream_persists_context_usage_for_latest_assistant_turn() {
     let harness = RuntimeTestHarness::new(vec![vec![
         ScriptedChunk::plain("usage-aware reply"),
         ScriptedChunk::usage(TokenUsage {
@@ -266,7 +280,7 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
     ]])
     .await;
 
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     harness
         .handle
         .send_message(
@@ -276,7 +290,8 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
             String::from("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
 
     harness
         .events
@@ -296,12 +311,17 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
     let events = harness.events.snapshot();
     let receipt_states = events
         .iter()
-        .filter_map(|event| match event {
-            Event::RequestUsageUpdated {
+        .filter_map(|event| {
+            if let Event::RequestUsageUpdated {
                 session_id: updated_session,
                 request,
-            } if updated_session == &session_id => Some(request.usage.is_some()),
-            _ => None,
+            } = event
+                && updated_session == &session_id
+            {
+                Some(request.usage.is_some())
+            } else {
+                None
+            }
         })
         .collect::<Vec<_>>();
     assert_eq!(receipt_states, vec![false, true]);
@@ -312,14 +332,15 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
     let usage = harness
         .handle
         .get_session_context_usage(session_id.clone())
-        .await?
+        .await
+        .unwrap()
         .expect("context usage should be available");
 
     assert_eq!(usage.provider_id, "mock");
     assert_eq!(usage.model_id, "mock-model");
     assert_eq!(usage.usage.used_context_tokens(), 40);
 
-    let history = harness.handle.get_chat_history(session_id).await?;
+    let history = harness.handle.get_chat_history(session_id).await;
     let assistant = history
         .values()
         .find(|message| message.role() == ChatRole::Assistant)
@@ -335,20 +356,20 @@ async fn completed_stream_persists_context_usage_for_latest_assistant_turn() -> 
     assert_eq!(usage.total_tokens, 42);
 
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn session_list_omits_sessions_without_messages() -> Result<()> {
+async fn session_list_omits_sessions_without_messages() {
     let harness = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("first reply")]]).await;
 
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    assert!(harness.handle.list_sessions().await?.is_empty());
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
+    assert!(harness.handle.list_sessions().await.unwrap().is_empty());
     assert!(
         harness
             .handle
             .get_workspace_state(session_id.clone())
-            .await?
+            .await
+            .unwrap()
             .is_some()
     );
 
@@ -361,7 +382,8 @@ async fn session_list_omits_sessions_without_messages() -> Result<()> {
             String::from("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     harness
         .events
         .wait_for("stream completion", |events| {
@@ -377,18 +399,17 @@ async fn session_list_omits_sessions_without_messages() -> Result<()> {
         })
         .await;
 
-    let listed = harness.handle.list_sessions().await?;
+    let listed = harness.handle.list_sessions().await.unwrap();
     assert_eq!(
         listed.iter().map(|session| &session.id).collect::<Vec<_>>(),
         vec![&session_id]
     );
 
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn domain_failures_preserve_their_public_error_kind() -> Result<()> {
+async fn domain_failures_preserve_their_public_error_kind() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
 
     let missing_session = harness
@@ -398,7 +419,7 @@ async fn domain_failures_preserve_their_public_error_kind() -> Result<()> {
         .unwrap_err();
     assert_eq!(missing_session.kind, RuntimeErrorKind::NotFound);
 
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let invalid_workspace = harness
         .handle
         .set_workspace_dir(
@@ -421,13 +442,12 @@ async fn domain_failures_preserve_their_public_error_kind() -> Result<()> {
     assert_eq!(missing_approval.kind, RuntimeErrorKind::NotFound);
 
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn session_snapshot_waits_for_state_event_boundary() -> Result<()> {
+async fn session_snapshot_waits_for_state_event_boundary() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let barrier = harness.runtime.sessions.barrier(&session_id);
     let mutation_guard = barrier.read().await;
     let mut snapshot_task = tokio::spawn({
@@ -448,22 +468,25 @@ async fn session_snapshot_waits_for_state_event_boundary() -> Result<()> {
     let mutation_sequence = harness.runtime.event_tx.latest_sequence();
     drop(mutation_guard);
 
-    let snapshot = snapshot_task.await??;
+    let snapshot = snapshot_task.await.unwrap().unwrap();
     assert!(snapshot.event_sequence >= mutation_sequence);
 
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn deleting_session_removes_only_its_timer() -> Result<()> {
+async fn deleting_session_removes_only_its_timer() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let deleted = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let retained = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let deleted = create_session_with_profile(&harness.handle, "test-profile").await;
+    let retained = create_session_with_profile(&harness.handle, "test-profile").await;
     harness.runtime.event_tx.resume_timer(&deleted);
     harness.runtime.event_tx.resume_timer(&retained);
     let retained_timer = harness.runtime.event_tx.turn_snapshot(&retained).timer;
-    harness.handle.delete_session(deleted.clone()).await?;
+    harness
+        .handle
+        .delete_session(deleted.clone())
+        .await
+        .unwrap();
     assert_eq!(
         harness.runtime.event_tx.turn_snapshot(&deleted).timer,
         crate::TurnTimer::default()
@@ -473,5 +496,4 @@ async fn deleting_session_removes_only_its_timer() -> Result<()> {
         retained_timer
     );
     harness.shutdown().await;
-    Ok(())
 }

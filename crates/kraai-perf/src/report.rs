@@ -245,5 +245,4 @@ fn median(sorted: &[f64]) -> Result<f64> {
 }
 
 #[cfg(test)]
-#[path = "report_tests.rs"]
 mod tests;

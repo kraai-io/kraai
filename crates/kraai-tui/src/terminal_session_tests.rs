@@ -3,13 +3,7 @@ use std::process::Command;
 use super::{TerminalSessionGuard, terminal_cursor::CursorStyle};
 
 #[test]
-#[expect(
-    clippy::panic,
-    clippy::panic_in_result_fn,
-    reason = "the child process exercises panic cleanup and the parent asserts captured output"
-)]
-fn restores_saved_cursor_on_normal_exit_error_and_panic() -> Result<(), Box<dyn std::error::Error>>
-{
+fn restores_saved_cursor_on_normal_exit_error_and_panic() {
     const MODE: &str = "KRAAI_CURSOR_CLEANUP_TEST";
     const STYLE: &str = "KRAAI_CURSOR_CLEANUP_STYLE";
     if let Ok(mode) = std::env::var(MODE) {
@@ -29,14 +23,14 @@ fn restores_saved_cursor_on_normal_exit_error_and_panic() -> Result<(), Box<dyn 
             guard.restore()
         })();
         assert_eq!(result.is_err(), mode == "error");
-        return Ok(());
+        return;
     }
 
     for (mode, code) in ["normal", "error", "panic"]
         .into_iter()
         .flat_map(|mode| [0, 5].map(|code| (mode, code)))
     {
-        let output = Command::new(std::env::current_exe()?)
+        let output = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "terminal_session_tests::restores_saved_cursor_on_normal_exit_error_and_panic",
@@ -44,11 +38,12 @@ fn restores_saved_cursor_on_normal_exit_error_and_panic() -> Result<(), Box<dyn 
             ])
             .env(MODE, mode)
             .env(STYLE, code.to_string())
-            .output()?;
+            .output()
+            .unwrap();
         assert_eq!(output.status.success(), mode != "panic");
         let stdout = String::from_utf8_lossy(&output.stdout);
         let Some((_, after_override)) = stdout.split_once("\x1b[6 q") else {
-            return Err(format!("{mode}: missing steady bar override: {stdout}").into());
+            panic!("{mode}: missing steady bar override: {stdout}");
         };
         assert!(
             after_override.contains(&format!("\x1b[{code} q")),
@@ -58,5 +53,4 @@ fn restores_saved_cursor_on_normal_exit_error_and_panic() -> Result<(), Box<dyn 
         assert!(!stdout.contains(&format!("\x1b[{other_code} q")));
         assert!(!stdout.contains("\x1b[2 q"));
     }
-    Ok(())
 }

@@ -1,8 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    reason = "OAuth storage fixtures assert credential isolation"
-)]
-
 use kraai_test_support::HANG_TIMEOUT;
 use rmcp::transport::auth::{CredentialStore, StoredCredentials};
 

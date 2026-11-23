@@ -11,7 +11,10 @@ impl SessionActor {
     pub(in crate::runtime) fn take_pending_approval(&mut self) -> Option<PendingScriptApproval> {
         match std::mem::replace(&mut self.state, TurnState::Idle) {
             TurnState::AwaitingApproval(pending) => Some(*pending),
-            state => {
+            state @ (TurnState::Idle
+            | TurnState::Preparing(_)
+            | TurnState::Streaming(_)
+            | TurnState::RunningScript(_)) => {
                 self.state = state;
                 None
             }
