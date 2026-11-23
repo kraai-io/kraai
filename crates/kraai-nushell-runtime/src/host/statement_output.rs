@@ -1,7 +1,9 @@
 use nu_engine::command_prelude::*;
-use nu_protocol::DeclId;
-use nu_protocol::ast::{Expr, Operator, Pipeline};
+use nu_protocol::ast::{
+    Block, Expr, Expression, Operator, Pipeline, PipelineRedirection, RedirectionSource, Traverse,
+};
 use nu_protocol::ir::{Instruction, IrBlock};
+use nu_protocol::{BlockId, DeclId};
 use std::sync::Arc;
 
 use super::HostError;
@@ -26,29 +28,94 @@ pub(super) fn emit_decl(working_set: &StateWorkingSet<'_>) -> Option<DeclId> {
     working_set.find_decl(EMIT_COMMAND.as_bytes())
 }
 
-pub(super) fn is_assignment(working_set: &StateWorkingSet<'_>, pipeline: &Pipeline) -> bool {
+pub(super) fn emit_drained_statements(
+    working_set: &StateWorkingSet<'_>,
+    statement: &Block,
+    ir: &mut IrBlock,
+    emit: DeclId,
+) {
+    emit_drains(ir, emit, &value_spans(working_set, statement));
+}
+
+fn value_spans(working_set: &StateWorkingSet<'_>, block: &Block) -> Vec<Span> {
+    let mut spans = Vec::new();
+    block.flat_map(
+        working_set,
+        &|expression: &Expression| match &expression.expr {
+            Expr::Call(call)
+                if matches!(
+                    working_set.get_decl(call.decl_id).name(),
+                    "let" | "mut" | "const"
+                ) =>
+            {
+                vec![expression.span]
+            }
+            Expr::BinaryOp(_, operator, _)
+                if matches!(operator.expr, Expr::Operator(Operator::Assignment(_))) =>
+            {
+                vec![expression.span]
+            }
+            Expr::Subexpression(_) => vec![expression.span],
+            _ => Vec::new(),
+        },
+        &mut spans,
+    );
+    spans
+}
+
+pub(super) fn do_body(working_set: &StateWorkingSet<'_>, pipeline: &Pipeline) -> Option<BlockId> {
     let [element] = pipeline.elements.as_slice() else {
-        return false;
+        return None;
     };
-    match &element.expr.expr {
-        Expr::Call(call) => matches!(
-            working_set.get_decl(call.decl_id).name(),
-            "let" | "mut" | "const"
-        ),
-        Expr::BinaryOp(_, operator, _) => {
-            matches!(operator.expr, Expr::Operator(Operator::Assignment(_)))
+    let stderr_only = matches!(
+        element.redirection,
+        Some(PipelineRedirection::Single {
+            source: RedirectionSource::Stderr,
+            ..
+        })
+    );
+    if element.redirection.is_some() && !stderr_only {
+        return None;
+    }
+    let Expr::Call(call) = &element.expr.expr else {
+        return None;
+    };
+    if working_set.get_decl(call.decl_id).name() != "do" {
+        return None;
+    }
+    match call.positional_iter().next()?.expr {
+        Expr::Closure(block_id) | Expr::Block(block_id)
+            if block_id.get() >= working_set.permanent().num_blocks() =>
+        {
+            Some(block_id)
         }
-        _ => false,
+        _ => None,
     }
 }
 
-pub(super) fn emit_drained_statements(ir: &mut IrBlock, emit: DeclId) {
+pub(super) fn emit_body_statements(
+    working_set: &mut StateWorkingSet<'_>,
+    body: BlockId,
+    emit: DeclId,
+) {
+    let assignments = value_spans(working_set, working_set.get_block(body));
+    if let Some(ir) = working_set.get_block_mut(body).ir_block.as_mut() {
+        emit_drains(ir, emit, &assignments);
+    }
+}
+
+fn emit_drains(ir: &mut IrBlock, emit: DeclId, assignments: &[Span]) {
     let drains: Vec<usize> = ir
         .instructions
         .iter()
+        .zip(&ir.spans)
         .enumerate()
-        .filter_map(|(index, instruction)| {
-            matches!(instruction, Instruction::Drain { .. }).then_some(index)
+        .filter_map(|(index, (instruction, span))| {
+            (matches!(instruction, Instruction::Drain { .. })
+                && !assignments
+                    .iter()
+                    .any(|assignment| assignment.contains_span(*span)))
+            .then_some(index)
         })
         .collect();
     let length = ir.instructions.len();
@@ -63,8 +130,10 @@ pub(super) fn emit_drained_statements(ir: &mut IrBlock, emit: DeclId) {
         .into_iter()
         .zip(std::mem::take(&mut ir.spans))
         .zip(std::mem::take(&mut ir.comments));
-    for ((mut instruction, span), comment) in old {
-        if let Instruction::Drain { src } = instruction {
+    for (index, ((mut instruction, span), comment)) in old.enumerate() {
+        if let Instruction::Drain { src } = instruction
+            && drains.binary_search(&index).is_ok()
+        {
             instructions.push(Instruction::Call {
                 decl_id: emit,
                 src_dst: src,

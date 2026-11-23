@@ -83,7 +83,7 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() -> Result<()> 
                 }
                 _ => {
                     manager
-                        .cancel_streaming_message(&request.message_id, "cancelled")
+                        .cancel_streaming_message(&request.message_id)
                         .await?;
                 }
             }

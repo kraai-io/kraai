@@ -1,6 +1,6 @@
 use nu_parser::{Token, TokenContents, lex};
 use nu_protocol::engine::StateWorkingSet;
-use nu_protocol::{ParseError, Span};
+use nu_protocol::{ParseError, Span, Type};
 
 /// A bash-style call to one of these built-ins fails to parse, so it runs the external program
 /// instead.
@@ -23,6 +23,8 @@ pub(super) fn edits(working_set: &StateWorkingSet, source: &str, offset: usize) 
         source: source.as_bytes(),
         edits: Vec::new(),
         commands: Vec::new(),
+        variables: Vec::new(),
+        scope_end: source.len(),
     };
     scan.block(0, source.len());
     for error in &working_set.parse_errors {
@@ -67,6 +69,13 @@ struct Scan<'a> {
     source: &'a [u8],
     edits: Vec<Edit>,
     commands: Vec<Command>,
+    variables: Vec<Variable>,
+    scope_end: usize,
+}
+
+struct Variable {
+    name: String,
+    visible: std::ops::Range<usize>,
 }
 
 struct Command {
@@ -99,6 +108,7 @@ impl Scan<'_> {
         let Some(input) = self.source.get(start..end) else {
             return;
         };
+        let outer_scope = std::mem::replace(&mut self.scope_end, end);
         let (tokens, _) = lex(input, start, &[], &[], false);
         let mut tokens = tokens
             .iter()
@@ -123,6 +133,13 @@ impl Scan<'_> {
                     );
                     command.clear();
                 }
+                TokenContents::Pipe if self.bytes(token.span) == b"&&" => {
+                    if self.runs_a_command(&command) {
+                        self.edit(token.span.start, token.span.end, ";", change("&&", ";"));
+                    }
+                    self.command(&command, None);
+                    command.clear();
+                }
                 TokenContents::Pipe
                 | TokenContents::PipePipe
                 | TokenContents::Semicolon
@@ -136,6 +153,36 @@ impl Scan<'_> {
             }
         }
         self.command(&command, None);
+        self.scope_end = outer_scope;
+    }
+
+    fn runs_a_command(&self, tokens: &[&Token]) -> bool {
+        tokens.first().is_some_and(|first| {
+            let bytes = self.bytes(first.span);
+            bytes.first().is_some_and(|byte| {
+                byte.is_ascii_alphabetic() || matches!(byte, b'^' | b'.' | b'/' | b'_' | b'~')
+            }) && bytes != b"false"
+        }) && !self.returns_a_bool(tokens)
+    }
+
+    fn returns_a_bool(&self, tokens: &[&Token]) -> bool {
+        let mut name = Vec::new();
+        let mut decl = None;
+        for token in tokens {
+            if !name.is_empty() {
+                name.push(b' ');
+            }
+            name.extend_from_slice(self.bytes(token.span));
+            decl = self.working_set.find_decl(&name).or(decl);
+        }
+        decl.is_some_and(|decl| {
+            self.working_set
+                .get_decl(decl)
+                .signature()
+                .input_output_types
+                .iter()
+                .any(|(_, output)| *output == Type::Bool)
+        })
     }
 
     fn nested(&mut self, span: Span) {
@@ -191,6 +238,16 @@ impl Scan<'_> {
             if token.contents == TokenContents::Item {
                 self.nested(token.span);
             }
+        }
+        if let [keyword, name, ..] = tokens
+            && matches!(self.bytes(keyword.span), b"let" | b"mut" | b"const")
+            && let Some(last) = tokens.last()
+        {
+            let name = String::from_utf8_lossy(self.bytes(name.span));
+            self.variables.push(Variable {
+                name: name.trim_end_matches(':').to_owned(),
+                visible: last.span.end..self.scope_end,
+            });
         }
         let Some(head_index) = self.head_index(tokens) else {
             return;
@@ -308,7 +365,17 @@ impl Scan<'_> {
         };
         if env_error {
             let end = self.word_end(end);
-            if let Some((replacement, label)) = self.source.get(start..end).and_then(env_variable) {
+            let declared: Vec<&str> = self
+                .variables
+                .iter()
+                .filter(|variable| variable.visible.contains(&start))
+                .map(|variable| variable.name.as_str())
+                .collect();
+            if let Some((replacement, label)) = self
+                .source
+                .get(start..end)
+                .and_then(|bytes| variable_path(bytes, &declared))
+            {
                 self.edit(start, end, replacement, label);
             }
             return;
@@ -390,9 +457,22 @@ fn redirect(operator: &str, target: &str, has_target: bool) -> Option<String> {
     Some(format!("{operator} {target}"))
 }
 
-fn env_variable(bytes: &[u8]) -> Option<(String, String)> {
+fn variable_path(bytes: &[u8], declared: &[&str]) -> Option<(String, String)> {
     let text = std::str::from_utf8(bytes).ok()?.strip_prefix('$')?;
     let (name, rest) = text.split_at(text.find('/').unwrap_or(text.len()));
+    let plain_path = rest
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'));
+    if declared.contains(&name) {
+        if rest.is_empty() || !plain_path {
+            return None;
+        }
+        let replacement = format!("$\"(${name}){rest}\"");
+        return Some((
+            replacement.clone(),
+            change(&format!("${name}{rest}"), &replacement),
+        ));
+    }
     let is_env_name = name.bytes().any(|byte| byte.is_ascii_uppercase())
         && name
             .bytes()
@@ -405,7 +485,5 @@ fn env_variable(bytes: &[u8]) -> Option<(String, String)> {
     if rest.is_empty() {
         return Some((format!("$env.{name}"), label));
     }
-    rest.bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))
-        .then(|| (format!("$\"($env.{name}){rest}\""), label))
+    plain_path.then(|| (format!("$\"($env.{name}){rest}\""), label))
 }

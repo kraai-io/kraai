@@ -8,7 +8,7 @@ mod result_reader;
 
 pub use error::ProtocolError;
 pub use payload::{
-    DEFAULT_SCRIPT_TIMEOUT, InvalidScriptBlock, ScriptBlock, parse_script_input,
+    DEFAULT_SCRIPT_TIMEOUT, InvalidScriptBlock, ScriptBlock, merge_scripts, parse_script_input,
     split_script_header,
 };
 pub use result::{

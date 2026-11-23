@@ -1,18 +1,16 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use kraai_agent::{ContextCompaction, PendingStreamRequest};
-use kraai_execution_types::SandboxCapabilities;
+use kraai_execution_types::{SandboxCapabilities, ScriptRewrites};
 use kraai_provider_core::{
     ProviderManager, ProviderRequest, ProviderRequestContext, ProviderStreamEvent,
     ScriptToolDefinition,
 };
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock, parse_script_input};
-use kraai_types::{
-    ConversationItem, MessageId, ModelId, ProviderId, ScriptCall, SessionId, ToolCallId,
-};
+use kraai_types::{ConversationItem, MessageId, ModelId, ProviderId, ScriptCall, SessionId};
 use tokio::sync::{RwLock, mpsc};
 
 use super::core::emit_event;
@@ -21,16 +19,15 @@ use super::session::{SessionMessage, StreamEvent};
 use crate::api::Event;
 use crate::handle::RuntimeEventSender;
 
-const POST_BOUNDARY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_STREAM_REISSUES: u32 = 2;
 pub(super) const POST_BOUNDARY_DRAIN_YIELD_INTERVAL: usize = 256;
 
 struct CompletedProtocolBoundary {
-    call_id: ToolCallId,
+    call: ScriptCall,
     script: Option<ScriptBlock>,
     invalid_script: Option<InvalidScriptBlock>,
     protocol_error: Option<ProtocolError>,
-    rewrites: Vec<String>,
+    rewrites: ScriptRewrites,
 }
 
 #[derive(Debug)]
@@ -43,11 +40,11 @@ pub(super) enum StreamDriveResult {
 
 #[derive(Debug)]
 pub(super) struct CompletedStreamOutput {
-    pub(super) call_id: Option<ToolCallId>,
+    pub(super) call: Option<ScriptCall>,
     pub(super) script: Option<ScriptBlock>,
     pub(super) invalid_script: Option<InvalidScriptBlock>,
     pub(super) protocol_error: Option<ProtocolError>,
-    pub(super) rewrites: Vec<String>,
+    pub(super) rewrites: ScriptRewrites,
     pub(super) reached_output_limit: bool,
 }
 
@@ -316,10 +313,13 @@ impl StreamReader {
                     return StreamDriveResult::FailedToStart { error };
                 }
             };
-            match self
+            let end = self
                 .read_response(stream, &provider_id, &mut response)
-                .await
-            {
+                .await;
+            if matches!(end, ResponseEnd::Finished | ResponseEnd::Interrupted { .. }) {
+                self.settle_calls(&mut response).await;
+            }
+            match end {
                 // A response cut off before it ran a script would leave the turn with nothing done.
                 // When the context left before compaction set the limit, compacting makes room for
                 // a retry. A response with neither a call nor text means the provider dropped the
@@ -431,6 +431,20 @@ impl StreamReader {
         }
     }
 
+    async fn settle_calls(&self, response: &mut ResponseState) {
+        let calls = std::mem::take(&mut response.calls);
+        let Some((call, rewrites)) = super::merged_calls::merge_response_calls(calls) else {
+            return;
+        };
+        let profile = self
+            .agent_manager
+            .script_turn_context(&self.session_id)
+            .ok()
+            .map(|turn| turn.profile);
+        let call = super::bash_habits::rewrite_script_call(call, profile).await;
+        response.boundary = Some(protocol_boundary(call, rewrites));
+    }
+
     /// A runtime that lost the session to another instance must not issue model requests for it.
     async fn ensure_turn_owned(&self) -> Result<(), String> {
         match self.session_store.owns_turn(&self.session_id).await {
@@ -452,26 +466,12 @@ impl StreamReader {
         provider_id: &ProviderId,
         response: &mut ResponseState,
     ) -> ResponseEnd {
-        let mut drain_deadline = None;
         let mut drained_events = 0_usize;
         loop {
-            let next = match drain_deadline {
-                Some(deadline) => match tokio::time::timeout_at(deadline, stream.next()).await {
-                    Ok(event) => event,
-                    Err(_) => {
-                        tracing::warn!(
-                            timeout_millis = POST_BOUNDARY_DRAIN_TIMEOUT.as_millis(),
-                            "Stopping provider stream drain after timeout"
-                        );
-                        return ResponseEnd::Finished;
-                    }
-                },
-                None => stream.next().await,
-            };
-            let Some(event) = next else {
+            let Some(event) = stream.next().await else {
                 return ResponseEnd::Finished;
             };
-            let draining = response.boundary.is_some();
+            let draining = !response.calls.is_empty();
             if draining {
                 drained_events = drained_events.saturating_add(1);
                 if drained_events.is_multiple_of(POST_BOUNDARY_DRAIN_YIELD_INTERVAL) {
@@ -523,31 +523,17 @@ impl StreamReader {
                     })
                 }
                 Ok(ProviderStreamEvent::ScriptCall(call)) => {
-                    if draining {
-                        // Only the first call runs; later ones stay in the response and get a
-                        // result saying they did not run.
-                        tracing::debug!(call_id = %call.call_id, "Keeping a script call after the first without running it");
-                        if !self.forward(StreamEvent::ScriptCall(call)) {
-                            return ResponseEnd::Stopped;
-                        }
-                        continue;
-                    }
-                    if call.arguments_error.is_none() && call.name != ScriptToolDefinition::NAME {
+                    if !draining
+                        && call.arguments_error.is_none()
+                        && call.name != ScriptToolDefinition::NAME
+                    {
                         return ResponseEnd::Failed(format!(
                             "provider called unexpected tool '{}'",
                             call.name
                         ));
                     }
-                    let profile = self
-                        .agent_manager
-                        .script_turn_context(&self.session_id)
-                        .ok()
-                        .map(|turn| turn.profile);
-                    let call = super::bash_habits::rewrite_script_call(call, profile).await;
-                    response.boundary = Some(protocol_boundary(&call));
-                    drain_deadline =
-                        Some(tokio::time::Instant::now() + POST_BOUNDARY_DRAIN_TIMEOUT);
-                    self.forward(StreamEvent::ScriptCall(call))
+                    response.calls.push(call);
+                    true
                 }
                 Ok(ProviderStreamEvent::Finished { stop_reason }) => {
                     response.reached_output_limit =
@@ -577,6 +563,7 @@ impl StreamReader {
 
 #[derive(Default)]
 struct ResponseState {
+    calls: Vec<ScriptCall>,
     boundary: Option<CompletedProtocolBoundary>,
     reached_output_limit: bool,
     answered: bool,
@@ -590,18 +577,18 @@ impl ResponseState {
     }
 
     fn finish(self) -> StreamDriveResult {
-        let (call_id, script, invalid_script, protocol_error, rewrites) = match self.boundary {
+        let (call, script, invalid_script, protocol_error, rewrites) = match self.boundary {
             Some(boundary) => (
-                Some(boundary.call_id),
+                Some(boundary.call),
                 boundary.script,
                 boundary.invalid_script,
                 boundary.protocol_error,
                 boundary.rewrites,
             ),
-            None => (None, None, None, None, Vec::new()),
+            None => (None, None, None, None, ScriptRewrites::default()),
         };
         StreamDriveResult::Completed(Box::new(CompletedStreamOutput {
-            call_id,
+            call,
             script,
             invalid_script,
             protocol_error,
@@ -634,37 +621,33 @@ fn output_limit_notice(limit: Option<usize>) -> String {
     )
 }
 
-fn protocol_boundary(call: &ScriptCall) -> CompletedProtocolBoundary {
-    let call_id = call.call_id.clone();
-    let input = call.input.as_str();
-    let rewrites = call
-        .rewrite
-        .as_ref()
-        .map(|rewrite| rewrite.changes.clone())
-        .unwrap_or_default();
+fn protocol_boundary(call: ScriptCall, mut rewrites: ScriptRewrites) -> CompletedProtocolBoundary {
+    if let Some(rewrite) = &call.rewrite {
+        rewrites.bash.clone_from(&rewrite.changes);
+    }
     let parsed = match &call.arguments_error {
         Some(error) => Err(ProtocolError::InvalidToolCall(error.clone())),
-        None => parse_script_input(input),
+        None => parse_script_input(&call.input),
     };
     match parsed {
         Ok(script) => CompletedProtocolBoundary {
-            call_id,
+            call,
             script: Some(script),
             invalid_script: None,
             protocol_error: None,
             rewrites,
         },
         Err(error) => CompletedProtocolBoundary {
-            call_id,
             script: None,
             invalid_script: Some(InvalidScriptBlock {
-                input: input.to_string(),
-                source: input.as_bytes().to_vec(),
+                input: call.input.clone(),
+                source: call.input.as_bytes().to_vec(),
                 timeout: None,
                 requested_capabilities: SandboxCapabilities::default(),
             }),
             protocol_error: Some(error),
             rewrites,
+            call,
         },
     }
 }

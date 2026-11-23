@@ -17,7 +17,7 @@ use crate::{Event, SessionActivity};
 struct HandoffProvider {
     requests: tokio::sync::mpsc::UnboundedSender<kraai_provider_core::ProviderRequest>,
     first_request: AtomicBool,
-    hold_after_call: bool,
+    hold_after_call: Option<Arc<tokio::sync::Notify>>,
     text_before_call: Option<&'static str>,
 }
 
@@ -64,10 +64,12 @@ impl kraai_provider_core::Provider for HandoffProvider {
                 },
             )));
             let events = futures::stream::iter(events);
-            if self.hold_after_call {
-                Ok(Box::pin(events.chain(futures::stream::pending())))
-            } else {
-                Ok(Box::pin(events))
+            match self.hold_after_call.clone() {
+                Some(call_taken) => Ok(Box::pin(events.chain(futures::stream::once(async move {
+                    call_taken.notify_one();
+                    futures::future::pending().await
+                })))),
+                None => Ok(Box::pin(events)),
             }
         } else {
             Ok(Box::pin(futures::stream::pending()))
@@ -76,45 +78,20 @@ impl kraai_provider_core::Provider for HandoffProvider {
 }
 
 #[tokio::test]
-async fn cancellation_after_script_boundary_keeps_the_next_provider_history_valid() -> Result<()> {
-    assert_cancellation_history(None).await
-}
-
-#[tokio::test]
-async fn cancelled_script_result_save_failure_can_be_retried() -> Result<()> {
-    assert_cancellation_history(Some(false)).await
-}
-
-#[tokio::test]
-async fn cancelled_script_result_retry_links_an_already_saved_result_once() -> Result<()> {
-    assert_cancellation_history(Some(true)).await
-}
-
-async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()> {
-    let data_dir =
-        std::env::temp_dir().join(format!("kraai-cancelled-script-{}", ulid::Ulid::generate()));
-    tokio::fs::create_dir_all(&data_dir).await?;
-    let store = Arc::new(PausedMessageStore {
-        inner: SqliteMessageStore::new(&data_dir),
-        pause: AtomicBool::new(false),
-        pause_completed_script: AtomicBool::new(false),
-        fail_script_result_save: AtomicBool::new(fail_after_save.is_some()),
-        persist_failed_script_result: fail_after_save.unwrap_or(false),
-        entered: tokio::sync::Notify::new(),
-        release: tokio::sync::Notify::new(),
-    });
+async fn cancelling_while_a_call_drains_keeps_the_text_and_drops_the_unrun_call() -> Result<()> {
     let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let call_taken = Arc::new(tokio::sync::Notify::new());
     let mut providers = kraai_provider_core::ProviderManager::new();
     providers.register_provider(
         kraai_types::ProviderId::new("mock"),
         Box::new(HandoffProvider {
             requests,
             first_request: AtomicBool::new(true),
-            hold_after_call: true,
+            hold_after_call: Some(call_taken.clone()),
             text_before_call: Some("I am partway through."),
         }),
     );
-    let harness = RuntimeTestHarness::new_with_message_store(providers, Some(store.clone())).await;
+    let harness = RuntimeTestHarness::new_with_message_store(providers, None).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
     harness
         .handle
@@ -131,30 +108,13 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         .expect("first provider request");
     harness
         .events
-        .wait_for("script call before usage drain completes", |events| {
+        .wait_for("text before the call", |events| {
             events.iter().any(|event| {
-                matches!(event, Event::ItemStarted { session_id: id, item: kraai_types::AssistantItem::ScriptCall(_), .. } if id == &session_id)
+                matches!(event, Event::ItemStarted { session_id: id, item: kraai_types::AssistantItem::Text { .. }, .. } if id == &session_id)
             })
         })
         .await;
-    if fail_after_save.is_some() {
-        let error = harness
-            .handle
-            .cancel_stream(session_id.clone())
-            .await
-            .expect_err("result persistence must fail once");
-        assert!(
-            error
-                .message
-                .contains("injected cancelled result save failure")
-        );
-        let snapshot = harness
-            .handle
-            .get_session_snapshot(session_id.clone())
-            .await?;
-        assert!(snapshot.session.is_running);
-        assert!(snapshot.session.is_streaming);
-    }
+    hang_guard(call_taken.notified()).await?;
     assert!(harness.handle.cancel_stream(session_id.clone()).await?);
     assert!(!harness.handle.cancel_stream(session_id.clone()).await?);
     assert!(harness.runtime.execution_store.list_all().await?.is_empty());
@@ -176,59 +136,16 @@ async fn assert_cancellation_history(fail_after_save: Option<bool>) -> Result<()
         .await?
         .expect("provider request after cancellation");
     harness.shutdown().await;
-    let has_call = request.messages.iter().any(|item| {
+    assert!(!request.messages.iter().any(|item| {
         matches!(item, kraai_types::ConversationItem::Assistant { items }
-            if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall(ScriptCall { call_id, .. })
-                if call_id.as_str() == "handoff-call")))
-    });
-    assert!(has_call, "cancellation discarded the script call");
-    let results = request
-        .messages
-        .iter()
-        .filter_map(|item| {
-            if let kraai_types::ConversationItem::ScriptResult {
-                call_id, output, ..
-            } = item
-                && call_id.as_str() == "handoff-call"
-            {
-                Some(output)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        results.len(),
-        1,
-        "cancelled script needs exactly one matching result"
-    );
-    assert!(
-        results
-            .first()
-            .expect("cancelled script result")
-            .display_text()
-            .contains("status=\"cancelled\"")
-    );
+            if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall(_))))
+            || matches!(item, kraai_types::ConversationItem::ScriptResult { .. })
+    }));
     assert!(request.messages.iter().any(|item| {
         matches!(item, kraai_types::ConversationItem::Assistant { items }
             if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::Text { phase, text }
                 if *phase == kraai_types::AssistantPhase::Commentary && text == "I am partway through.")))
     }));
-    let mut result_count = 0;
-    let mut on_disk: Vec<_> = store.list_ids().await?.into_iter().collect();
-    on_disk.sort();
-    for id in on_disk {
-        if let Some(message) = store.get(&id).await?
-            && matches!(
-                message.content,
-                kraai_types::ConversationItem::ScriptResult { .. }
-            )
-        {
-            result_count += 1;
-        }
-    }
-    assert_eq!(result_count, 1, "retry left duplicate durable results");
-    tokio::fs::remove_dir_all(data_dir).await?;
     Ok(())
 }
 
@@ -298,7 +215,7 @@ fn idle_provider() -> kraai_provider_core::ProviderManager {
         Box::new(HandoffProvider {
             requests,
             first_request: AtomicBool::new(false),
-            hold_after_call: false,
+            hold_after_call: None,
             text_before_call: None,
         }),
     );
@@ -580,9 +497,6 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
     let store = Arc::new(PausedMessageStore {
         inner: SqliteMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),
-        pause_completed_script: AtomicBool::new(false),
-        fail_script_result_save: AtomicBool::new(false),
-        persist_failed_script_result: false,
         entered: tokio::sync::Notify::new(),
         release: tokio::sync::Notify::new(),
     });
@@ -651,9 +565,6 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
 struct PausedMessageStore {
     inner: SqliteMessageStore,
     pause: AtomicBool,
-    pause_completed_script: AtomicBool,
-    fail_script_result_save: AtomicBool,
-    persist_failed_script_result: bool,
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
 }
@@ -671,26 +582,6 @@ impl MessageStore for PausedMessageStore {
         self.inner.get(id).await
     }
     async fn save(&self, message: &Message) -> Result<()> {
-        if matches!(
-            &message.content,
-            kraai_types::ConversationItem::ScriptResult { .. }
-        ) && self.fail_script_result_save.swap(false, Ordering::SeqCst)
-        {
-            if self.persist_failed_script_result {
-                self.inner.save(message).await?;
-            }
-            return Err(color_eyre::eyre::eyre!(
-                "injected cancelled result save failure"
-            ));
-        }
-        if message.status == kraai_types::MessageStatus::Complete
-            && matches!(&message.content, kraai_types::ConversationItem::Assistant { items }
-                if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::ScriptCall(_))))
-            && self.pause_completed_script.swap(false, Ordering::SeqCst)
-        {
-            self.entered.notify_one();
-            self.release.notified().await;
-        }
         self.inner.save(message).await
     }
     async fn delete(&self, id: &MessageId) -> Result<()> {

@@ -1,7 +1,7 @@
 use color_eyre::eyre::{Context, Result, eyre};
 use kraai_execution_types::{
     PermissionResolution, SandboxCapabilities, SandboxCapability, ScriptExecutionId,
-    ScriptExecutionStatus,
+    ScriptExecutionStatus, ScriptRewrites,
 };
 use kraai_persistence::{NewScriptExecution, ScriptExecutionCompletion};
 use kraai_script_protocol::{InvalidScriptBlock, ProtocolError, ScriptBlock};
@@ -43,7 +43,7 @@ impl SessionActor {
         script: Option<ScriptBlock>,
         invalid_script: Option<InvalidScriptBlock>,
         protocol_error: Option<ProtocolError>,
-        rewrites: Vec<String>,
+        rewrites: ScriptRewrites,
     ) {
         let call_id = match call_id {
             Some(call_id) => call_id,
@@ -71,7 +71,7 @@ impl SessionActor {
                     timeout: None,
                     requested_capabilities: SandboxCapabilities::default(),
                 });
-                self.finish_invalid_script(source_message_id, call_id, invalid, error)
+                self.finish_invalid_script(source_message_id, call_id, invalid, error, rewrites)
                     .await
             }
             (None, Some(script)) => {
@@ -90,7 +90,7 @@ impl SessionActor {
         source_message_id: MessageId,
         call_id: ToolCallId,
         script: ScriptBlock,
-        rewrites: Vec<String>,
+        rewrites: ScriptRewrites,
     ) -> Result<()> {
         let turn = self
             .runtime
@@ -194,6 +194,7 @@ impl SessionActor {
         call_id: ToolCallId,
         invalid: InvalidScriptBlock,
         error: ProtocolError,
+        rewrites: ScriptRewrites,
     ) -> Result<()> {
         let turn = self
             .runtime
@@ -210,7 +211,7 @@ impl SessionActor {
                 call_id: call_id.clone(),
                 profile: turn.profile,
                 source: invalid.source,
-                rewrites: Vec::new(),
+                rewrites,
                 requested_capabilities: invalid.requested_capabilities,
                 effective_capabilities,
                 timeout: invalid.timeout,

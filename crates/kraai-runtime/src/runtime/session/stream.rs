@@ -3,7 +3,7 @@ use std::panic::AssertUnwindSafe;
 use futures::FutureExt;
 use kraai_agent::PendingStreamRequest;
 use kraai_provider_core::ProviderManager;
-use kraai_types::{AssistantPhase, MessageId, ScriptCall, TokenUsage};
+use kraai_types::{AssistantPhase, MessageId, TokenUsage};
 use tokio_util::sync::CancellationToken;
 
 use super::super::core::RuntimeCore;
@@ -27,7 +27,6 @@ pub(crate) enum StreamEvent {
         item_id: String,
         delta: String,
     },
-    ScriptCall(ScriptCall),
     Usage(TokenUsage),
     Restart {
         reason: String,
@@ -155,13 +154,22 @@ impl SessionActor {
         completed: CompletedStreamOutput,
     ) {
         let CompletedStreamOutput {
-            call_id,
+            call,
             script,
             invalid_script,
             protocol_error,
             rewrites,
             reached_output_limit,
         } = completed;
+        let call_id = call.as_ref().map(|call| call.call_id.clone());
+        if let Some(call) = call {
+            let streamed = self
+                .runtime
+                .agent_manager
+                .append_script_call(&message_id, call)
+                .await;
+            send_streamed_item(&self.runtime, &self.session_id, &message_id, streamed);
+        }
         match self
             .runtime
             .agent_manager
@@ -389,11 +397,6 @@ pub(in crate::runtime) async fn apply_stream_event(
                 item_id,
                 delta,
             });
-            None
-        }
-        StreamEvent::ScriptCall(call) => {
-            let streamed = agent.append_script_call(message_id, call).await;
-            send_streamed_item(runtime, session_id, message_id, streamed);
             None
         }
         StreamEvent::Usage(usage) => {

@@ -951,7 +951,7 @@ async fn long_script_output_is_excerpted_and_saved_where_scripts_can_read_it() -
 }
 
 #[tokio::test]
-async fn only_the_first_script_call_of_a_response_runs_and_the_others_are_answered() -> Result<()> {
+async fn script_calls_in_one_response_merge_into_the_first_call() -> Result<()> {
     let harness = RuntimeTestHarness::new(vec![
         vec![
             ScriptedChunk::native_call(
@@ -960,7 +960,7 @@ async fn only_the_first_script_call_of_a_response_runs_and_the_others_are_answer
             ),
             ScriptedChunk::native_call("call-2", "# timeout=30sec\nls"),
         ],
-        vec![ScriptedChunk::plain("Both calls are answered.")],
+        vec![ScriptedChunk::plain("The merged call is answered.")],
     ])
     .await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
@@ -976,7 +976,7 @@ async fn only_the_first_script_call_of_a_response_runs_and_the_others_are_answer
         .await?;
     harness
         .events
-        .wait_for("approval of the first call", |events| {
+        .wait_for("approval of the merged call", |events| {
             events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id: id, .. } if id == &session_id))
         })
         .await;
@@ -1006,21 +1006,41 @@ async fn only_the_first_script_call_of_a_response_runs_and_the_others_are_answer
         .values()
         .filter_map(|message| match &message.content {
             kraai_types::ConversationItem::ScriptResult {
-                call_id, outcome, ..
-            } => Some((call_id.as_str().to_string(), outcome.status)),
+                call_id,
+                outcome,
+                output,
+            } => Some((
+                call_id.as_str().to_string(),
+                outcome.status,
+                output.text_only().into_owned(),
+            )),
             _ => None,
         })
         .collect();
-    assert_eq!(results.len(), 2, "{results:?}");
-    assert!(results.contains(&("call-1".into(), ScriptExecutionStatus::Denied)));
-    assert!(results.contains(&("call-2".into(), ScriptExecutionStatus::Cancelled)));
-    let calls = history
+    let [(call_id, status, output)] = results.as_slice() else {
+        panic!("expected one result: {results:?}");
+    };
+    assert_eq!(
+        (call_id.as_str(), *status),
+        ("call-1", ScriptExecutionStatus::Denied)
+    );
+    assert!(
+        output.contains("Kraai combined your 2 script calls into the call above."),
+        "{output}"
+    );
+    let calls: Vec<_> = history
         .values()
         .filter_map(|message| message.content.assistant_items())
         .flatten()
-        .filter(|item| matches!(item, AssistantItem::ScriptCall(_)))
-        .count();
-    assert_eq!(calls, 2);
+        .filter_map(|item| match item {
+            AssistantItem::ScriptCall(call) => Some(call.input.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        ["# timeout=1min permissions=workspace-write\ndo {\n^cargo test\n}\n\ndo {\nls\n}"]
+    );
     harness.shutdown().await;
     Ok(())
 }

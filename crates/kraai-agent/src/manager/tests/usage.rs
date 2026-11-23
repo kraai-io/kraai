@@ -157,7 +157,7 @@ async fn request_cost_survives_empty_response_cancellation_and_store_reload() ->
             .is_some()
     );
     manager
-        .cancel_streaming_message(&pending.message_id, "cancelled")
+        .cancel_streaming_message(&pending.message_id)
         .await?;
     assert!(
         !manager

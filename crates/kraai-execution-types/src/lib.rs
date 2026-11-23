@@ -26,5 +26,6 @@ pub use policy::{
 pub use profile::{EnvironmentPolicy, NushellStartup, PathPolicy, ScriptProfileSnapshot};
 pub use script::{
     ScriptExecutionOutcome, ScriptExecutionPhase, ScriptExecutionStatus, ScriptOutputStream,
+    ScriptRewrites,
 };
 pub use web::{WebSearchRequest, WebSearchResponse};

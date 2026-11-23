@@ -2,6 +2,25 @@ use std::time::Duration;
 
 use crate::ProtocolError;
 
+pub(crate) fn format_duration(duration: Duration) -> String {
+    const UNITS: [(&str, u128); 6] = [
+        ("day", 24 * 60 * 60 * 1_000_000_000),
+        ("hr", 60 * 60 * 1_000_000_000),
+        ("min", 60 * 1_000_000_000),
+        ("sec", 1_000_000_000),
+        ("ms", 1_000_000),
+        ("us", 1_000),
+    ];
+    let nanos = duration.as_nanos();
+    UNITS
+        .iter()
+        .find(|(_, size)| nanos.is_multiple_of(*size))
+        .map_or_else(
+            || format!("{nanos}ns"),
+            |(unit, size)| format!("{}{unit}", nanos / size),
+        )
+}
+
 pub(crate) fn parse_duration(input: &str) -> Result<Duration, ProtocolError> {
     let unit_start = input
         .bytes()

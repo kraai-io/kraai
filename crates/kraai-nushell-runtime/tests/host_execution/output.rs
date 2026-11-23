@@ -62,6 +62,36 @@ value
 }
 
 #[tokio::test]
+async fn top_level_do_blocks_emit_statements_and_keep_their_changes() {
+    assert_script(
+        r#"
+let root = $env.PWD
+do {
+cd ..
+"moved"
+$env.PWD == $root
+$env.MARK = "set"
+let quiet = if true { "hidden"; "kept" }
+$quiet
+if true { let nested = if true { "hidden"; "nested" }; $nested }
+}
+
+do {
+$env.PWD == $root
+"MARK" in $env
+}
+if true { let nested = if true { "hidden"; "top" }; $nested }
+do { "private"; "saved" } out> result.txt
+open --raw result.txt
+do { "first"; "last" } err> errors.txt
+do { echo ("hidden"; "argument") }
+"#,
+        "moved\nfalse\nkept\nnested\ntrue\nfalse\ntop\nsaved\nfirst\nlast\nargument\n",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn redirects_and_ignored_results_stay_silent() {
     assert_script(
         r#"
@@ -369,6 +399,41 @@ $env.STARTUP = "ready"
         "a[2]: 1,2\nb: 3\nready\n"
     );
     assert!(result.stderr.is_empty());
+}
+
+#[tokio::test]
+async fn aliased_do_blocks_run_once_per_use() {
+    let workspace = TestWorkspace::new();
+    let config_home = workspace.0.join("config");
+    let config_dir = config_home.join("nushell");
+    std::fs::create_dir_all(&config_dir).expect("create config directory");
+    std::fs::write(
+        config_dir.join("config.nu"),
+        "alias show = do { 'first'; 'last' }\n",
+    )
+    .expect("write config");
+    let mut execution = plan(
+        b"show\nalias twice = do { 'a'; 'b' }\ntwice\ntwice".to_vec(),
+        &workspace,
+    );
+    execution.nushell_startup = NushellStartup::Inherit;
+    execution
+        .environment
+        .insert("XDG_CONFIG_HOME".into(), config_home.display().to_string());
+    let result = execute(execution, CancellationToken::new())
+        .await
+        .expect("execute aliased do blocks")
+        .output;
+    assert_eq!(
+        result.termination,
+        Termination::Exited { code: Some(0) },
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&result.stdout),
+        "last\na\nb\na\nb\n"
+    );
 }
 
 #[cfg(unix)]

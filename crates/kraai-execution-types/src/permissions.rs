@@ -67,6 +67,13 @@ impl SandboxCapabilities {
     pub fn iter(&self) -> impl Iterator<Item = SandboxCapability> + '_ {
         self.0.iter().copied()
     }
+
+    pub fn without_implied(&self) -> impl Iterator<Item = SandboxCapability> + '_ {
+        self.iter().filter(|capability| {
+            let others = self.iter().filter(|other| other != capability);
+            !Self::new(others).0.contains(capability)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -86,6 +93,28 @@ mod tests {
             assert!(capabilities.contains(expected));
         }
         assert!(!capabilities.contains(SandboxCapability::Network));
+    }
+
+    #[test]
+    fn without_implied_keeps_capabilities_no_other_one_grants() {
+        let capabilities = SandboxCapabilities::new([
+            SandboxCapability::HostRead,
+            SandboxCapability::WorkspaceWrite,
+            SandboxCapability::Network,
+        ]);
+        assert_eq!(
+            capabilities.without_implied().collect::<Vec<_>>(),
+            [
+                SandboxCapability::HostRead,
+                SandboxCapability::WorkspaceWrite,
+                SandboxCapability::Network,
+            ]
+        );
+        let capabilities = SandboxCapabilities::new([SandboxCapability::HostWrite]);
+        assert_eq!(
+            capabilities.without_implied().collect::<Vec<_>>(),
+            [SandboxCapability::HostWrite]
+        );
     }
 
     #[test]

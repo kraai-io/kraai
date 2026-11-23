@@ -84,24 +84,10 @@ impl SessionActor {
 
     pub(super) async fn cancel_stream_job(&mut self, job: StreamJob, cancel: CancelRequest) {
         // The stream keeps running until the cancellation is durable, so a failed save can be retried.
-        let output = kraai_script_protocol::render_tool_call_result(
-            kraai_script_protocol::ToolCallResultView {
-                status: ScriptExecutionStatus::Cancelled,
-                exit_code: None,
-                elapsed_millis: None,
-                stdout: &[],
-                stderr: &[],
-                diagnostic: Some("Script was cancelled before execution"),
-                stdout_file: None,
-                stderr_file: None,
-                sandbox_blocked: None,
-                rewrites: &[],
-            },
-        );
         let cancelled = match self
             .runtime
             .agent_manager
-            .cancel_streaming_message(&job.message_id, &output)
+            .cancel_streaming_message(&job.message_id)
             .await
         {
             Ok(cancelled) => cancelled,

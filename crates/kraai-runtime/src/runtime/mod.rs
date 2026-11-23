@@ -5,6 +5,7 @@ mod client_view;
 mod config;
 mod core;
 mod dispatch;
+mod merged_calls;
 mod model_catalog;
 mod model_lists;
 mod nushell_host;

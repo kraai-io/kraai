@@ -10214,10 +10214,6 @@ rec {
             packageId = "kraai-provider-core";
           }
           {
-            name = "kraai-script-protocol";
-            packageId = "kraai-script-protocol";
-          }
-          {
             name = "kraai-types";
             packageId = "kraai-types";
           }
@@ -10264,6 +10260,10 @@ rec {
           {
             name = "kraai-provider-openai-chat-completions";
             packageId = "kraai-provider-openai-chat-completions";
+          }
+          {
+            name = "kraai-script-protocol";
+            packageId = "kraai-script-protocol";
           }
           {
             name = "kraai-test-support";

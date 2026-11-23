@@ -103,10 +103,16 @@ fn open_tag<'a>(text: &'a str, name: &str) -> Option<OpenTag<'a>> {
 mod tests {
     use std::path::Path;
 
-    use kraai_execution_types::{SandboxCapabilities, ScriptExecutionStatus};
+    use kraai_execution_types::{SandboxCapabilities, ScriptExecutionStatus, ScriptRewrites};
 
     use super::parse_tool_call_result;
     use crate::{CHANNEL_DISPLAY_LIMIT, ToolCallResultView, render_tool_call_result};
+
+    static NO_REWRITES: ScriptRewrites = ScriptRewrites {
+        bash: Vec::new(),
+        merged_calls: 0,
+        dropped_calls: 0,
+    };
 
     fn view<'a>(stdout: &'a [u8], stderr: &'a [u8]) -> ToolCallResultView<'a> {
         ToolCallResultView {
@@ -119,7 +125,7 @@ mod tests {
             stdout_file: None,
             stderr_file: None,
             sandbox_blocked: None,
-            rewrites: &[],
+            rewrites: &NO_REWRITES,
         }
     }
 
@@ -127,7 +133,10 @@ mod tests {
     #[expect(clippy::unwrap_used, reason = "rendered fixtures always parse")]
     fn every_rendered_part_reads_back_in_order() {
         let granted = SandboxCapabilities::default();
-        let rewrites = [String::from("`find` → `^find`")];
+        let rewrites = ScriptRewrites {
+            bash: vec![String::from("`find` → `^find`")],
+            ..ScriptRewrites::default()
+        };
         let rendered = render_tool_call_result(ToolCallResultView {
             diagnostic: Some("timed out"),
             sandbox_blocked: Some(&granted),

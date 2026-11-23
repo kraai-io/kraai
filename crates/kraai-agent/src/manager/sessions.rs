@@ -1,5 +1,4 @@
 use super::*;
-use kraai_types::ScriptCall;
 
 impl AgentManager {
     pub fn clear_active_turn(&self, session_id: &SessionId) {
@@ -215,17 +214,6 @@ impl AgentManager {
         let Some(tip) = self.message_store.get(&tip_id).await? else {
             return Ok(session);
         };
-        if tip.status == MessageStatus::Complete
-            && let Some((first_result, mut parent)) = self.answered_response(&tip).await?
-        {
-            if matches!(parent.status, MessageStatus::Streaming { .. }) {
-                parent.status = MessageStatus::Complete;
-                self.message_store.save(&parent).await?;
-                self.history_upserted(&session.id, &parent);
-            }
-            self.answer_skipped_calls(&session.id, &first_result)
-                .await?;
-        }
         if !matches!(tip.status, MessageStatus::Streaming { .. }) {
             return Ok(session);
         }
@@ -241,30 +229,6 @@ impl AgentManager {
         self.history_removed(&session.id, vec![tip_id]);
         session.tip_id = tip.parent_id.clone();
         Ok(session)
-    }
-
-    async fn answered_response(&self, tip: &Message) -> AgentResult<Option<(Message, Message)>> {
-        let mut result = tip.clone();
-        loop {
-            let ConversationItem::ScriptResult { call_id, .. } = &result.content else {
-                return Ok(None);
-            };
-            let Some(parent) = result.parent_id.as_ref() else {
-                return Ok(None);
-            };
-            let Some(parent) = self.message_store.get(parent).await? else {
-                return Ok(None);
-            };
-            match &parent.content {
-                ConversationItem::Assistant { items }
-                    if items.iter().any(|item| matches!(item, AssistantItem::ScriptCall(ScriptCall { call_id: called, .. }) if called == call_id)) =>
-                {
-                    return Ok(Some((result, parent)));
-                }
-                ConversationItem::ScriptResult { .. } => result = parent,
-                _ => return Ok(None),
-            }
-        }
     }
 
     pub(super) async fn validate_history_for_session(
