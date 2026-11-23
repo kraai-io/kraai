@@ -138,10 +138,7 @@ async fn drive(
                 return Err(error::internal(error));
             }
             Event::SessionError { error, .. } => return Err(error::runtime(error)),
-            event @ Event::StreamCancelled { .. } => {
-                output.event(runtime, event).await?;
-                return Ok(acp::StopReason::Cancelled);
-            }
+            Event::StreamCancelled { .. } => return Ok(acp::StopReason::Cancelled),
             Event::HistoryUpdated { .. } => {
                 if let Some(reason) = output.catch_up(runtime, cancelled).await? {
                     return Ok(reason);
@@ -392,8 +389,26 @@ impl Output {
                 self.executions.remove(&execution_id);
                 self.result(runtime, call_id, &output, outcome).await?;
             }
+            Event::ScriptOutputTail { call_id, lines, .. } => {
+                if self.open.contains(&call_id) {
+                    let text = lines
+                        .iter()
+                        .map(|line| line.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    self.update(acp::SessionUpdate::ToolCallUpdate(
+                        acp::ToolCallUpdate::new(
+                            call_id,
+                            acp::ToolCallUpdateFields::new().content(vec![
+                                acp::ToolCallContent::Content(acp::Content::new(content::text(
+                                    text,
+                                ))),
+                            ]),
+                        ),
+                    ))?;
+                }
+            }
             Event::TurnCompleted { .. }
-            | Event::ScriptOutputTail { .. }
             | Event::RequestUsageUpdated { .. }
             | Event::TurnTimingChanged { .. }
             | Event::ConfigLoaded

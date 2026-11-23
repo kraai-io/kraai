@@ -119,6 +119,18 @@ pub async fn run(
                     "\n\n[provider stream failed; retrying the response]\n\n"
                 )?;
             }
+            Event::ProviderRetryScheduled {
+                retry_number,
+                delay_seconds,
+                reason,
+                ..
+            } => {
+                write!(
+                    output,
+                    "\n\n[{reason}, retrying in {delay_seconds} s (retry {retry_number})]\n\n"
+                )?;
+                output.flush()?;
+            }
             Event::StreamComplete { message_id, .. } => {
                 transcript.completed.insert(MessageId::new(message_id));
             }
@@ -157,7 +169,6 @@ pub async fn run(
             | Event::StreamStart { .. }
             | Event::ReasoningDelta { .. }
             | Event::StreamCancelled { .. }
-            | Event::ProviderRetryScheduled { .. }
             | Event::ScriptResultReady { .. }
             | Event::ContextStateChanged { .. }
             | Event::SessionStateChanged {
