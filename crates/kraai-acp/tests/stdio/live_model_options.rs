@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
 
 use crate::support::{Harness, Reply, prompt};
@@ -62,25 +61,28 @@ path = "/custom/retained"
     )
 }
 
-async fn write_configuration(harness: &Harness, config: String) -> Result<()> {
+async fn write_configuration(harness: &Harness, config: String) {
     let temporary = harness.root.path().join("providers.toml.next");
-    tokio::fs::write(&temporary, config).await?;
-    tokio::fs::rename(temporary, harness.root.path().join("providers.toml")).await?;
-    Ok(())
+    tokio::fs::write(&temporary, config).await.unwrap();
+    tokio::fs::rename(temporary, harness.root.path().join("providers.toml"))
+        .await
+        .unwrap();
 }
 
-async fn configure(harness: &mut Harness) -> Result<String> {
-    harness.stop().await?;
-    let original = tokio::fs::read_to_string(harness.root.path().join("providers.toml")).await?;
+async fn configure(harness: &mut Harness) -> String {
+    harness.stop().await;
+    let original = tokio::fs::read_to_string(harness.root.path().join("providers.toml"))
+        .await
+        .unwrap();
     let (provider, _) = original
         .split_once("[[model]]")
-        .ok_or_else(|| eyre!("missing fixture models"))?;
-    write_configuration(harness, configuration(provider, false, true)).await?;
+        .expect("missing fixture models");
+    write_configuration(harness, configuration(provider, false, true)).await;
     harness
         .restart_with_selection(Some("mock"), Some("mock-alternate"))
-        .await?;
-    harness.initialize().await?;
-    Ok(provider.to_owned())
+        .await;
+    harness.initialize().await;
+    provider.to_owned()
 }
 
 fn option<'a>(message: &'a Value, id: &str) -> Option<&'a Value> {
@@ -92,7 +94,7 @@ fn option<'a>(message: &'a Value, id: &str) -> Option<&'a Value> {
         .find(|option| option.get("id").and_then(Value::as_str) == Some(id))
 }
 
-async fn select(harness: &mut Harness, session: &str, effort: &str) -> Result<()> {
+async fn select(harness: &mut Harness, session: &str, effort: &str) {
     for (request_id, (id, value)) in (10..).zip([
         ("effort", effort),
         ("retained", "keep"),
@@ -104,7 +106,7 @@ async fn select(harness: &mut Harness, session: &str, effort: &str) -> Result<()
                 "session/set_config_option",
                 json!({"sessionId":session,"configId":format!("option:{id}"),"value":value}),
             )
-            .await?;
+            .await;
         assert_eq!(
             responses
                 .last()
@@ -113,18 +115,17 @@ async fn select(harness: &mut Harness, session: &str, effort: &str) -> Result<()
             Some(&json!(value))
         );
     }
-    Ok(())
 }
 
 async fn updates(
     harness: &mut Harness,
     sessions: &[&str],
     matches: impl Fn(&Value) -> bool + Send + Sync,
-) -> Result<BTreeMap<String, Value>> {
+) -> BTreeMap<String, Value> {
     kraai_test_support::hang_guard(async {
         let mut updates = BTreeMap::new();
         while updates.len() < sessions.len() {
-            let message = harness.read().await?;
+            let message = harness.read().await;
             if message.pointer("/params/update/sessionUpdate")
                 != Some(&json!("config_option_update"))
                 || !matches(&message)
@@ -137,9 +138,10 @@ async fn updates(
                 updates.insert(session.to_owned(), message);
             }
         }
-        Ok(updates)
+        updates
     })
-    .await?
+    .await
+    .unwrap()
 }
 
 fn has_updated_choices(message: &Value) -> bool {
@@ -151,15 +153,14 @@ fn has_updated_choices(message: &Value) -> bool {
 }
 
 #[tokio::test]
-async fn idle_new_and_loaded_sessions_receive_model_options_without_a_client_request() -> Result<()>
-{
-    let mut harness = Harness::new(vec![]).await?;
-    let provider = configure(&mut harness).await?;
-    let loaded_session = harness.session().await?;
-    select(&mut harness, &loaded_session, "high").await?;
-    harness.restart_with_selection(None, None).await?;
-    harness.initialize().await?;
-    let loaded = harness.load_session(&loaded_session, 20).await?;
+async fn idle_new_and_loaded_sessions_receive_model_options_without_a_client_request() {
+    let mut harness = Harness::new(vec![]).await;
+    let provider = configure(&mut harness).await;
+    let loaded_session = harness.session().await;
+    select(&mut harness, &loaded_session, "high").await;
+    harness.restart_with_selection(None, None).await;
+    harness.initialize().await;
+    let loaded = harness.load_session(&loaded_session, 20).await;
     assert_eq!(
         loaded
             .last()
@@ -167,15 +168,15 @@ async fn idle_new_and_loaded_sessions_receive_model_options_without_a_client_req
             .and_then(|option| option.get("currentValue")),
         Some(&json!("high"))
     );
-    let new_session = harness.session().await?;
-    select(&mut harness, &new_session, "low").await?;
+    let new_session = harness.session().await;
+    select(&mut harness, &new_session, "low").await;
     let sessions = [loaded_session.as_str(), new_session.as_str()];
-    write_configuration(&harness, configuration(&provider, true, true)).await?;
-    let changed = updates(&mut harness, &sessions, has_updated_choices).await?;
+    write_configuration(&harness, configuration(&provider, true, true)).await;
+    let changed = updates(&mut harness, &sessions, has_updated_choices).await;
     for (session, expected) in [(loaded_session.as_str(), ""), (new_session.as_str(), "low")] {
         let message = changed
             .get(session)
-            .ok_or_else(|| eyre!("missing idle update for {session}"))?;
+            .unwrap_or_else(|| panic!("missing idle update for {session}"));
         assert_eq!(
             option(message, "option:effort").and_then(|option| option.get("currentValue")),
             Some(&json!(expected))
@@ -186,7 +187,7 @@ async fn idle_new_and_loaded_sessions_receive_model_options_without_a_client_req
         );
         assert!(option(message, "option:removed").is_none());
     }
-    write_configuration(&harness, configuration(&provider, true, false)).await?;
+    write_configuration(&harness, configuration(&provider, true, false)).await;
     let changed = updates(&mut harness, &sessions, |message| {
         option(message, "model")
             .and_then(|option| option.get("options"))
@@ -197,29 +198,29 @@ async fn idle_new_and_loaded_sessions_receive_model_options_without_a_client_req
                         == Some(&json!("4:mock:mock-alternate"))
             })
     })
-    .await?;
+    .await;
     assert_eq!(changed.len(), 2);
     assert!(harness.provider_payloads.lock().await.is_empty());
     harness.stop().await
 }
 
 #[tokio::test]
-async fn active_prompt_receives_model_options_before_its_completion() -> Result<()> {
-    let mut harness = Harness::new(vec![Reply::Streaming]).await?;
-    let provider = configure(&mut harness).await?;
-    let session = harness.session().await?;
-    select(&mut harness, &session, "high").await?;
+async fn active_prompt_receives_model_options_before_its_completion() {
+    let mut harness = Harness::new(vec![Reply::Streaming]).await;
+    let provider = configure(&mut harness).await;
+    let session = harness.session().await;
+    select(&mut harness, &session, "high").await;
     harness
         .send(json!({"jsonrpc":"2.0","id":20,"method":"session/prompt","params":prompt(&session)}))
-        .await?;
+        .await;
     harness
         .until(|message| message.pointer("/params/update/content/text") == Some(&json!("partial")))
-        .await?;
-    write_configuration(&harness, configuration(&provider, true, true)).await?;
-    let changed = updates(&mut harness, &[session.as_str()], has_updated_choices).await?;
+        .await;
+    write_configuration(&harness, configuration(&provider, true, true)).await;
+    let changed = updates(&mut harness, &[session.as_str()], has_updated_choices).await;
     let message = changed
         .get(&session)
-        .ok_or_else(|| eyre!("missing active session update"))?;
+        .expect("missing active session update");
     assert_eq!(
         option(message, "option:effort").and_then(|option| option.get("currentValue")),
         Some(&json!(""))
@@ -227,10 +228,10 @@ async fn active_prompt_receives_model_options_before_its_completion() -> Result<
     assert_eq!(harness.provider_payloads.lock().await.len(), 1);
     harness
         .send(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}}))
-        .await?;
+        .await;
     let completed = harness
         .until(|message| message.get("id") == Some(&json!(20)))
-        .await?;
+        .await;
     assert_eq!(
         completed
             .last()

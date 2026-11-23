@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 
-use color_eyre::eyre::Result;
 use kraai_provider_core::{ProviderManager, ProviderStreamEvent};
 use kraai_types::{AssistantPhase, ProviderId};
 use tokio::sync::{Mutex, mpsc};
@@ -10,7 +9,7 @@ use super::shared_sessions::ControlledProvider;
 use crate::{Event, SubmitMessageOutcome};
 
 #[tokio::test]
-async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease() -> Result<()> {
+async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease() {
     let (first_sender, first_receiver) = mpsc::unbounded_channel();
     let (next_sender, next_receiver) = mpsc::unbounded_channel();
     let mut providers = ProviderManager::new();
@@ -35,7 +34,7 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
     let new_owner =
         RuntimeTestHarness::new_in_directory(providers, None, Some(old_owner.data_dir.clone()))
             .await;
-    let session = create_session_with_profile(&old_owner.handle, "test-profile").await?;
+    let session = create_session_with_profile(&old_owner.handle, "test-profile").await;
     old_owner
         .handle
         .send_message(
@@ -45,12 +44,15 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
             "mock".into(),
             Default::default(),
         )
-        .await?;
-    first_sender.send(Ok(ProviderStreamEvent::TextDelta {
-        item_id: "old-text".into(),
-        phase: AssistantPhase::FinalAnswer,
-        delta: "first partial response".into(),
-    }))?;
+        .await
+        .unwrap();
+    first_sender
+        .send(Ok(ProviderStreamEvent::TextDelta {
+            item_id: "old-text".into(),
+            phase: AssistantPhase::FinalAnswer,
+            delta: "first partial response".into(),
+        }))
+        .unwrap();
     old_owner
         .events
         .wait_for("old stream started", |events| {
@@ -63,7 +65,8 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         .runtime
         .agent_manager
         .publish_streaming_snapshots()
-        .await?;
+        .await
+        .unwrap();
     let old_message = super::harness::started_stream(&old_owner.events.snapshot(), &session);
     let old_token = old_owner
         .runtime
@@ -73,12 +76,16 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         .find(|(id, _)| id == &session)
         .expect("old lease")
         .1;
-    let connection = rusqlite::Connection::open(old_owner.data_dir.join("kraai.sqlite3"))?;
-    connection.busy_timeout(kraai_test_support::HANG_TIMEOUT)?;
-    connection.execute(
-        "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
-        [session.as_str()],
-    )?;
+    let connection = rusqlite::Connection::open(old_owner.data_dir.join("kraai.sqlite3")).unwrap();
+    connection
+        .busy_timeout(kraai_test_support::HANG_TIMEOUT)
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
+            [session.as_str()],
+        )
+        .unwrap();
     new_owner
         .handle
         .send_message(
@@ -88,20 +95,24 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert!(
         new_owner
             .runtime
             .agent_manager
             .get_message(&old_message)
-            .await?
+            .await
+            .unwrap()
             .is_none()
     );
-    first_sender.send(Ok(ProviderStreamEvent::TextDelta {
-        item_id: "old-text".into(),
-        phase: AssistantPhase::FinalAnswer,
-        delta: "stale response".into(),
-    }))?;
+    first_sender
+        .send(Ok(ProviderStreamEvent::TextDelta {
+            item_id: "old-text".into(),
+            phase: AssistantPhase::FinalAnswer,
+            delta: "stale response".into(),
+        }))
+        .unwrap();
     drop(first_sender);
     old_owner
         .events
@@ -112,13 +123,22 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         })
         .await;
     old_owner.runtime.stream_tasks.wait_session(&session).await;
-    super::harness::cancel_if_lease_matches(&old_owner.runtime, &session, old_token).await?;
-    assert!(new_owner.runtime.session_store.owns_turn(&session).await?);
-    takeover_sender.send(Ok(ProviderStreamEvent::TextDelta {
-        item_id: "new-text".into(),
-        phase: AssistantPhase::FinalAnswer,
-        delta: "takeover response".into(),
-    }))?;
+    super::harness::cancel_if_lease_matches(&old_owner.runtime, &session, old_token).await;
+    assert!(
+        new_owner
+            .runtime
+            .session_store
+            .owns_turn(&session)
+            .await
+            .unwrap()
+    );
+    takeover_sender
+        .send(Ok(ProviderStreamEvent::TextDelta {
+            item_id: "new-text".into(),
+            phase: AssistantPhase::FinalAnswer,
+            delta: "takeover response".into(),
+        }))
+        .unwrap();
     drop(takeover_sender);
     new_owner
         .events
@@ -132,13 +152,15 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         .runtime
         .agent_manager
         .publish_streaming_snapshots()
-        .await?;
+        .await
+        .unwrap();
     assert!(
         new_owner
             .runtime
             .agent_manager
             .get_message(&old_message)
-            .await?
+            .await
+            .unwrap()
             .is_none(),
         "old client recreated its discarded streaming placeholder"
     );
@@ -152,14 +174,17 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
                 "mock".into(),
                 Default::default(),
             )
-            .await?,
+            .await
+            .unwrap(),
         SubmitMessageOutcome::Started { .. }
     ));
-    next_sender.send(Ok(ProviderStreamEvent::TextDelta {
-        item_id: "next-text".into(),
-        phase: AssistantPhase::FinalAnswer,
-        delta: "next response".into(),
-    }))?;
+    next_sender
+        .send(Ok(ProviderStreamEvent::TextDelta {
+            item_id: "next-text".into(),
+            phase: AssistantPhase::FinalAnswer,
+            delta: "next response".into(),
+        }))
+        .unwrap();
     drop(next_sender);
     old_owner
         .events
@@ -171,5 +196,4 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
         .await;
     new_owner.shutdown().await;
     old_owner.shutdown().await;
-    Ok(())
 }

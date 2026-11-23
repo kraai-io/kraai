@@ -46,46 +46,4 @@ pub(crate) fn detach_if_lost() -> bool {
 
 #[cfg(test)]
 #[cfg(unix)]
-mod tests {
-    use std::process::Command;
-
-    #[test]
-    #[expect(
-        clippy::panic_in_result_fn,
-        reason = "the child process asserts on its own hung-up terminal"
-    )]
-    fn hung_up_terminal_is_detached() -> Result<(), Box<dyn std::error::Error>> {
-        const CHILD_ENV: &str = "KRAAI_TERMINAL_LOSS_TEST";
-        if std::env::var_os(CHILD_ENV).is_some() {
-            use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
-
-            let controller = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
-            grantpt(&controller)?;
-            unlockpt(&controller)?;
-            let path = ptsname(&controller, Vec::new())?;
-            let user = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(path.to_str()?)?;
-            rustix::stdio::dup2_stdout(&user)?;
-            assert!(!super::detach_if_lost());
-            drop(controller);
-            assert!(super::detach_if_lost());
-            println!("written after hangup");
-            return Ok(());
-        }
-        let output = Command::new(std::env::current_exe()?)
-            .args([
-                "--exact",
-                "terminal_loss::tests::hung_up_terminal_is_detached",
-            ])
-            .env(CHILD_ENV, "1")
-            .output()?;
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        Ok(())
-    }
-}
+mod tests;

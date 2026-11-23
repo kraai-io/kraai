@@ -1,12 +1,10 @@
 use std::process::{Command, Stdio};
 
-use color_eyre::eyre::{Result, ensure, eyre};
-
-pub fn fixture_command(module: &str, name: &str) -> Result<Command> {
+pub fn fixture_command(module: &str, name: &str) -> Command {
     let (_, module) = module
         .split_once("::")
-        .ok_or_else(|| eyre!("test fixture has no module path"))?;
-    let mut command = Command::new(std::env::current_exe()?);
+        .expect("test fixture has no module path");
+    let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args([
             "--exact",
@@ -15,20 +13,19 @@ pub fn fixture_command(module: &str, name: &str) -> Result<Command> {
             "--test-threads=1",
         ])
         .stdin(Stdio::null());
-    Ok(command)
+    command
 }
 
-pub fn run_fixture(module: &str, name: &str) -> Result<()> {
-    let output = fixture_command(module, name)?.output()?;
-    ensure!(
+pub fn run_fixture(module: &str, name: &str) {
+    let output = fixture_command(module, name).output().unwrap();
+    assert!(
         output.status.success(),
         "test fixture {name} failed: {}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    ensure!(
+    assert!(
         String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed;"),
         "test fixture {name} did not execute exactly one test"
     );
-    Ok(())
 }

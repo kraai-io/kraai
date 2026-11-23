@@ -67,7 +67,7 @@ fn restrict(handled_access_fs: u64, scoped: u64) -> Result<(), SandboxError> {
         libc::syscall(
             libc::SYS_landlock_create_ruleset,
             &attr as *const RulesetAttr,
-            std::mem::size_of::<RulesetAttr>(),
+            size_of::<RulesetAttr>(),
             0_u32,
         )
     };

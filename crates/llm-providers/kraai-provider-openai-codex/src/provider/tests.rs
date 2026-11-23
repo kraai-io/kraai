@@ -1,0 +1,803 @@
+use super::*;
+use crate::auth::OpenAiCodexAuthControllerOptions;
+use color_eyre::eyre::ensure;
+use futures::TryStreamExt;
+use kraai_provider_core::ScriptToolDefinition;
+use kraai_test_support::http;
+use kraai_types::{AssistantPhase, ConversationItem, TokenUsage};
+use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::task::JoinHandle;
+
+async fn server(
+    responses: Vec<(&'static str, String)>,
+) -> (String, JoinHandle<Result<Vec<String>>>) {
+    let mut listener = http::Listener::bind("/backend-api").await.unwrap();
+    let base_url = listener.url().unwrap();
+    let task = tokio::spawn(async move {
+        kraai_test_support::hang_guard(async move {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().await?;
+                let mut bytes = Vec::new();
+                loop {
+                    let mut buffer = [0_u8; 4096];
+                    let read = stream.read(&mut buffer).await?;
+                    ensure!(read > 0, "request ended early");
+                    bytes.extend_from_slice(buffer.get(..read).ok_or_else(|| eyre!("invalid read length"))?);
+                    if let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(bytes.get(..header_end).ok_or_else(|| eyre!("missing headers"))?);
+                        let content_length = headers.lines().filter_map(|line| line.split_once(':'))
+                            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                            .map(|(_, value)| value.trim().parse::<usize>()).transpose()?.unwrap_or_default();
+                        if bytes.len() >= header_end + 4 + content_length { break; }
+                    }
+                }
+                requests.push(String::from_utf8(bytes)?);
+                let content_type = if body.starts_with("data:") { "text/event-stream" } else { "application/json" };
+                let response = format!("HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                stream.write_all(response.as_bytes()).await?;
+            }
+            Ok::<_, color_eyre::Report>(requests)
+        }).await?
+    });
+    (base_url, task)
+}
+
+fn provider(base_url: String) -> OpenAiCodexProvider {
+    OpenAiCodexProvider {
+        id: ProviderId::new("test-codex"),
+        auth: Arc::new(
+            OpenAiCodexAuthController::new_with_options(OpenAiCodexAuthControllerOptions::new(
+                std::env::temp_dir(),
+                std::env::temp_dir()
+                    .join(format!("codex-discovery-{}", ulid::Ulid::generate()))
+                    .join("auth.json"),
+            ))
+            .unwrap(),
+        ),
+        client: streaming_http_client_builder().build().unwrap(),
+        models: RwLock::new(DiscoveredModels::default()),
+        rejected_reasoning: RwLock::new(RejectedReasoning::default()),
+        model_configs: BTreeMap::new(),
+        base_url,
+        proxy_token: Some("test-token".into()),
+    }
+}
+
+#[test]
+fn provider_config_accepts_http_and_https_backends_on_any_host() {
+    for url in [
+        "https://chatgpt.com/backend-api",
+        "https://proxy.example.com/backend-api",
+        "http://127.0.0.1:1234/backend-api",
+        "http://[::1]/backend-api",
+        "http://localhost/backend-api",
+        "http://192.168.1.10/backend-api",
+        "http://example.com/backend-api",
+        "https://user:secret@example.com/backend-api",
+    ] {
+        for proxy_token in [false, true] {
+            let mut config =
+                DynamicConfig::from([("base_url".into(), DynamicValue::String(url.into()))]);
+            if proxy_token {
+                config.insert(
+                    "proxy_token_env".into(),
+                    DynamicValue::String("TEST_PROXY_TOKEN".into()),
+                );
+            }
+            assert!(
+                OpenAiCodexFactory::validate_provider_config(&config).is_empty(),
+                "{url}"
+            );
+        }
+    }
+}
+
+#[test]
+fn backends_that_cannot_take_an_endpoint_path_are_rejected_at_creation() {
+    let factory = OpenAiCodexFactory::new(provider(String::new()).auth);
+    for url in [
+        "file:///tmp/backend-api",
+        "https://example.com/backend-api?key=value",
+        "https://example.com/backend-api#fragment",
+    ] {
+        let config = DynamicConfig::from([("base_url".into(), DynamicValue::String(url.into()))]);
+        assert!(
+            factory
+                .create(ProviderId::new("malformed"), config)
+                .is_err_and(|error| error.to_string() == BACKEND_URL_ERROR),
+            "{url}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn tool_free_summaries_stream_text_and_usage_through_authenticated_requests() {
+    let models = json!({"models": [{
+        "slug": "summary-model",
+        "display_name": "Summary Model",
+        "visibility": "list",
+        "context_window": 10000,
+        "default_reasoning_level": "low",
+        "supported_reasoning_levels": [{"effort": "low", "description": "Fast"}]
+    }]})
+    .to_string();
+    let summary = "Routing fixed. Validate the remaining changes.";
+    let events = [
+        json!({"type": "response.output_text.delta", "item_id": "summary", "delta": summary}),
+        json!({"type": "response.completed", "response": {"usage": {
+            "input_tokens": 100, "output_tokens": 20,
+            "input_tokens_details": {"cached_tokens": 40},
+            "output_tokens_details": {"reasoning_tokens": 5}
+        }}}),
+    ]
+    .into_iter()
+    .map(|event| format!("data: {event}\n\n"))
+    .collect::<String>();
+    let (base_url, server) = server(vec![
+        ("200 OK", models),
+        ("200 OK", events.clone()),
+        ("200 OK", events),
+    ])
+    .await;
+    let provider = provider(base_url);
+    provider.refresh_model_list().await.unwrap();
+    for cache_key in [None, Some("summary-session")] {
+        let context = cache_key.map_or_else(ProviderRequestContext::default, |key| {
+            ProviderRequestContext::with_prompt_cache_key(key.into())
+        });
+        let events = provider
+            .generate_reply_stream(
+                &ModelId::new("summary-model"),
+                ProviderRequest {
+                    cacheable_messages: None,
+                    options: reasoning("low"),
+                    messages: vec![
+                        ConversationItem::System {
+                            text: "Summarize the conversation. Do not execute tools.".into(),
+                        },
+                        ConversationItem::User {
+                            content:
+                                "Previous summary:\n\nAdditional conversation data:\nRouting fixed."
+                                    .into(),
+                        },
+                    ],
+                    script_tool: None,
+                },
+                &context,
+            )
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![
+                ProviderStreamEvent::TextDelta {
+                    item_id: "summary".into(),
+                    phase: AssistantPhase::FinalAnswer,
+                    delta: summary.into(),
+                },
+                ProviderStreamEvent::Usage(TokenUsage {
+                    total_tokens: 120,
+                    input_tokens: 60,
+                    output_tokens: 15,
+                    reasoning_tokens: 5,
+                    cache_read_tokens: 40,
+                    ..TokenUsage::default()
+                }),
+                ProviderStreamEvent::Finished {
+                    stop_reason: kraai_provider_core::StopReason::EndTurn,
+                },
+            ]
+        );
+    }
+    let requests = server.await.unwrap().unwrap();
+    assert_eq!(requests.len(), 3);
+    for (request, cache_key) in requests.iter().skip(1).zip([None, Some("summary-session")]) {
+        assert!(request.starts_with("POST /backend-api/codex/responses HTTP/1.1\r\n"));
+        let (headers, body) = request
+            .split_once("\r\n\r\n")
+            .expect("missing request body");
+        let headers = headers.to_ascii_lowercase();
+        assert!(headers.contains("authorization: bearer test-token\r\n"));
+        assert!(headers.contains("accept: text/event-stream"));
+        assert!(!headers.contains("chatgpt-account-id"));
+        for name in ["session_id", "x-client-request-id"] {
+            assert_eq!(
+                headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix(&format!("{name}: "))),
+                cache_key,
+                "{name}"
+            );
+        }
+        let body: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(body.get("model"), Some(&json!("summary-model")));
+        assert_eq!(
+            body.get("instructions"),
+            Some(&json!("Summarize the conversation. Do not execute tools."))
+        );
+        assert_eq!(
+            body.get("input"),
+            Some(&json!([{
+                "type": "message", "role": "user", "content": [{
+                    "type": "input_text", "text": "Previous summary:\n\nAdditional conversation data:\nRouting fixed."
+                }]
+            }]))
+        );
+        assert_eq!(body.get("tools"), Some(&json!([])));
+        assert_eq!(body.get("tool_choice"), Some(&json!("none")));
+        assert!(body.get("parallel_tool_calls").is_none());
+        assert_eq!(body.get("max_output_tokens"), Some(&json!(7963)));
+        assert_eq!(body.get("stream"), Some(&json!(true)));
+        assert_eq!(body.get("store"), Some(&json!(false)));
+        assert_eq!(
+            body.get("prompt_cache_key").and_then(Value::as_str),
+            cache_key
+        );
+    }
+}
+
+#[tokio::test]
+async fn discovery_drives_requests_and_reports_refresh_failures() {
+    let body = json!({"models": [{
+        "slug": "brand-new-codex",
+        "display_name": "Brand New",
+        "visibility": "list",
+        "context_window": 234567,
+        "default_reasoning_level": "high",
+        "supported_reasoning_levels": [{"effort": "high", "description": "Thorough"}]
+    }]})
+    .to_string();
+    let (base_url, server) = server(vec![
+        ("200 OK", body),
+        ("200 OK", "{}".into()),
+        ("200 OK", r#"{"data":[]}"#.into()),
+        ("403 Forbidden", "denied".into()),
+        ("200 OK", r#"{"models":[]}"#.into()),
+    ])
+    .await;
+    let provider = provider(base_url);
+    provider.refresh_model_list().await.unwrap();
+    let models = provider.list_models().await;
+    assert_eq!(models.len(), 1);
+    let model = models.first().expect("no discovered model");
+    assert_eq!(model.id.as_str(), "brand-new-codex");
+    assert!(provider.cache_warming_policy(&model.id).is_some());
+    assert_eq!(model.name, "Brand New");
+    assert_eq!(model.max_context, Some(234567));
+    let request = ProviderRequest {
+        cacheable_messages: None,
+        options: reasoning("high"),
+        messages: vec![],
+        script_tool: Some(ScriptToolDefinition {
+            name: "kraai_nushell".into(),
+            description: "Run a script".into(),
+        }),
+    };
+    provider
+        .send_responses_request(
+            &model.id,
+            request,
+            &ProviderRequestContext::default(),
+            false,
+        )
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(provider.refresh_model_list().await.is_err());
+    assert!(
+        provider
+            .refresh_model_list()
+            .await
+            .is_err_and(|error| error.to_string().contains("403"))
+    );
+    provider.refresh_model_list().await.unwrap();
+    assert!(provider.list_models().await.is_empty());
+    assert!(
+        provider
+            .models
+            .read()
+            .await
+            .get(&model.id, &provider.model_configs)
+            .is_none()
+    );
+
+    let requests = server.await.unwrap().unwrap();
+    assert_eq!(requests.len(), 5);
+    for request in requests.iter().filter(|request| request.starts_with("GET")) {
+        assert!(
+            request
+                .starts_with("GET /backend-api/codex/models?client_version=0.159.2 HTTP/1.1\r\n")
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-token")
+        );
+    }
+    let request = requests
+        .iter()
+        .find(|request| request.starts_with("POST /backend-api/codex/responses "))
+        .expect("no responses request");
+    let (_, body) = request
+        .split_once("\r\n\r\n")
+        .expect("missing request body");
+    let body: Value = serde_json::from_str(body).unwrap();
+    assert_eq!(body.get("model"), Some(&json!("brand-new-codex")));
+    assert_eq!(
+        body.get("reasoning")
+            .and_then(|reasoning| reasoning.get("effort")),
+        Some(&json!("high"))
+    );
+    assert!(
+        body.get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| !tools.is_empty())
+    );
+    assert_eq!(body.get("tool_choice"), Some(&json!("auto")));
+    assert_eq!(body.get("parallel_tool_calls"), Some(&json!(false)));
+}
+
+#[tokio::test]
+async fn initial_discovery_failure_does_not_create_models() {
+    let (base_url, server) = server(vec![("403 Forbidden", "denied".into())]).await;
+    let provider = provider(base_url);
+    assert!(provider.refresh_model_list().await.is_err());
+    assert!(provider.list_models().await.is_empty());
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn rejected_reasoning_retries_once_without_losing_visible_history() {
+    for reject_again in [false, true] {
+        let rejection =
+            json!({"error":{"code":"invalid_encrypted_content","message":"The encrypted content for item rs-old could not be verified."}})
+                .to_string();
+        let (base_url, server) = server(vec![
+            ("200 OK", json!({"models":[{"slug":"plain","display_name":"Plain","visibility":"list","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low","description":"Low"}]},{"slug":"non-reasoning","display_name":"Plain","visibility":"list","supported_reasoning_levels":[]}]}).to_string()),
+            ("400 Bad Request", rejection.clone()),
+            (if reject_again { "400 Bad Request" } else { "200 OK" }, if reject_again { rejection } else { "data: [DONE]\n\n".into() }),
+            ("200 OK", "data: [DONE]\n\n".into()),
+            ("200 OK", "data: [DONE]\n\n".into()),
+        ]).await;
+        let provider = provider(base_url);
+        provider.refresh_model_list().await.unwrap();
+        let request = ProviderRequest {
+            cacheable_messages: None,
+            options: reasoning("low"),
+            script_tool: None,
+            messages: vec![
+                ConversationItem::Assistant {
+                    items: vec![
+                        kraai_types::AssistantItem::Reasoning {
+                            provider_id: ProviderId::new("test-codex"),
+                            payload: json!({"type":"reasoning","id":"rs-old","encrypted_content":"old-account","summary":[]}),
+                        },
+                        kraai_types::AssistantItem::Text {
+                            phase: AssistantPhase::FinalAnswer,
+                            text: "Keep this answer".into(),
+                        },
+                    ],
+                },
+                ConversationItem::User {
+                    content: "Continue".into(),
+                },
+            ],
+        };
+        let response = provider
+            .generate_reply_stream(
+                &ModelId::new("plain"),
+                request.clone(),
+                &ProviderRequestContext::default(),
+            )
+            .await;
+        assert_eq!(response.is_err(), reject_again);
+        for model in ["plain", "non-reasoning"] {
+            let mut next = request.clone();
+            if model == "non-reasoning" {
+                next.options.clear();
+                for message in &mut next.messages {
+                    if let ConversationItem::Assistant { items } = message {
+                        for item in items {
+                            if let kraai_types::AssistantItem::Reasoning { payload, .. } = item {
+                                *payload = json!({"type":"reasoning","id":"rs-new","encrypted_content":"fresh","summary":[]});
+                            }
+                        }
+                    }
+                }
+            }
+            let _stream = provider
+                .generate_reply_stream(
+                    &ModelId::new(model),
+                    next,
+                    &ProviderRequestContext::default(),
+                )
+                .await
+                .unwrap();
+        }
+        let requests = server.await.unwrap().unwrap();
+        let bodies = requests
+            .iter()
+            .skip(1)
+            .map(|request| {
+                let (_, body) = request
+                    .split_once("\r\n\r\n")
+                    .ok_or_else(|| eyre!("missing body"))?;
+                Ok(serde_json::from_str::<Value>(body)?)
+            })
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        let original = bodies.first().expect("missing original");
+        let retried = bodies.get(1).expect("missing retry");
+        assert!(original.get("include").is_some());
+        let original_input = original["input"].as_array().expect("missing input");
+        assert_eq!(
+            retried["input"],
+            json!(original_input.iter().skip(1).collect::<Vec<_>>())
+        );
+        assert_eq!(requests.len(), 5);
+        for later in bodies.iter().skip(2) {
+            assert_eq!(later["input"], retried["input"]);
+        }
+        assert!(
+            bodies
+                .last()
+                .expect("missing plain request")
+                .get("include")
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() {
+    let models = json!({"models": [{"slug":"astra", "display_name":"Astra", "visibility":"list", "context_window":272000, "default_reasoning_level":"low", "supported_reasoning_levels":[{"effort":"low"}]}]}).to_string();
+    let payload = json!({"type":"compaction","id":"cmp-1","encrypted_content":"opaque-state"});
+    let completed = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":200,\"output_tokens\":20}}}\n\n";
+    let body = format!(
+        "data: {}\n\n{completed}",
+        json!({"type":"response.output_item.done","item":payload})
+    );
+    let (base_url, server) = server(vec![
+        ("200 OK", models),
+        ("200 OK", body),
+        ("200 OK", completed.into()),
+    ])
+    .await;
+    let provider = provider(base_url);
+    provider.refresh_model_list().await.unwrap();
+    let reasoning_payload =
+        json!({"type":"reasoning","id":"rs-1","encrypted_content":"prior-reasoning","summary":[]});
+    let request = ProviderRequest {
+        messages: vec![
+            ConversationItem::System {
+                text: "system instructions".into(),
+            },
+            ConversationItem::User {
+                content: "task".into(),
+            },
+            ConversationItem::Assistant {
+                items: vec![kraai_types::AssistantItem::Reasoning {
+                    provider_id: provider.id.clone(),
+                    payload: reasoning_payload.clone(),
+                }],
+            },
+        ],
+        script_tool: Some(ScriptToolDefinition {
+            name: "kraai_nushell".into(),
+            description: "Run script".into(),
+        }),
+        cacheable_messages: None,
+        options: reasoning("low"),
+    };
+    let events = provider
+        .compact_stream(
+            &ModelId::new("astra"),
+            request.clone(),
+            &ProviderRequestContext::default(),
+        )
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    assert!(events.iter().any(|event| matches!(event, ProviderStreamEvent::Compaction { payload: value } if value == &payload)));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ProviderStreamEvent::Usage(_)))
+    );
+    let mut replay = request;
+    replay.messages.pop();
+    replay.messages.push(ConversationItem::Compaction {
+        provider_id: provider.id.clone(),
+        payload: payload.clone(),
+    });
+    provider
+        .generate_reply_stream(
+            &ModelId::new("astra"),
+            replay,
+            &ProviderRequestContext::default(),
+        )
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let requests = server.await.unwrap().unwrap();
+    let bodies = requests
+        .iter()
+        .skip(1)
+        .map(|r| {
+            serde_json::from_str::<Value>(
+                r.split_once("\r\n\r\n")
+                    .map(|(_, body)| body)
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+    let compact = bodies.first().expect("missing compact request");
+    assert_eq!(
+        compact["input"].as_array().and_then(|input| input.last()),
+        Some(&json!({"type":"compaction_trigger"}))
+    );
+    assert!(
+        compact["input"]
+            .as_array()
+            .is_some_and(|items| items.contains(&reasoning_payload))
+    );
+    assert_eq!(
+        compact.pointer("/tools/0/name").and_then(Value::as_str),
+        Some("kraai_nushell")
+    );
+    assert_eq!(compact["instructions"], "system instructions");
+    assert!(compact.get("max_output_tokens").is_none());
+    let replay = bodies.get(1).expect("missing replay");
+    assert_eq!(replay.get("max_output_tokens"), Some(&json!(217_564)));
+    assert!(
+        replay["input"]
+            .as_array()
+            .is_some_and(|items| items.contains(&payload))
+    );
+    assert!(!replay["input"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item["type"] == "compaction_trigger")
+    }));
+}
+
+#[tokio::test]
+async fn native_compaction_records_rejected_reasoning_without_retrying_the_failed_call() {
+    let models = json!({"models": [{"slug":"astra", "display_name":"Astra", "visibility":"list", "context_window":272000, "default_reasoning_level":"low", "supported_reasoning_levels":[{"effort":"low"}]}]}).to_string();
+    let (base_url, server) = server(vec![
+        ("200 OK", models),
+        (
+            "400 Bad Request",
+            json!({"error":{"code":"invalid_encrypted_content","message":"invalid reasoning","param":"input[0].encrypted_content"}})
+                .to_string(),
+        ),
+        ("200 OK", "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":20,\"output_tokens\":2}}}\n\n".into()),
+    ])
+    .await;
+    let provider = provider(base_url);
+    provider.refresh_model_list().await.unwrap();
+    let request = ProviderRequest {
+        messages: vec![ConversationItem::Assistant {
+            items: vec![kraai_types::AssistantItem::Reasoning {
+                provider_id: provider.id.clone(),
+                payload: json!({"type":"reasoning","id":"rs-1","encrypted_content":"opaque","summary":[]}),
+            }],
+        }],
+        script_tool: None,
+        cacheable_messages: None,
+        options: reasoning("low"),
+    };
+    assert!(
+        provider
+            .compact_stream(
+                &ModelId::new("astra"),
+                request.clone(),
+                &ProviderRequestContext::default()
+            )
+            .await
+            .is_err()
+    );
+    provider
+        .compact_stream(
+            &ModelId::new("astra"),
+            request,
+            &ProviderRequestContext::default(),
+        )
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let requests = server.await.unwrap().unwrap();
+    assert_eq!(requests.len(), 3);
+    let second = requests
+        .last()
+        .and_then(|request| request.split_once("\r\n\r\n"))
+        .expect("missing request body")
+        .1;
+    let body: Value = serde_json::from_str(second).unwrap();
+    assert!(
+        body.get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().all(|item| item["type"] != "reasoning"))
+    );
+    assert!(
+        body.get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item["type"] == "compaction_trigger")
+            })
+    );
+}
+
+#[tokio::test]
+async fn discovered_processing_tiers_preserve_model_and_reasoning_for_generation_and_compaction() {
+    let models = json!({"models": [{
+        "slug": "gpt-6-astra", "display_name": "Astra", "visibility": "list",
+        "supported_reasoning_levels": [{"effort": "low", "description": "Low"}],
+        "service_tiers": [{"id":"priority","name":"Fast"}],
+        "default_service_tier": "priority"
+    }]})
+    .to_string();
+    let mut responses = vec![("200 OK", models)];
+    responses.extend((0..4).map(|_| ("200 OK", "data: [DONE]\n\n".into())));
+    let (base_url, server) = server(responses).await;
+    let provider = provider(base_url);
+    provider.refresh_model_list().await.unwrap();
+    let model_id = ModelId::new("gpt-6-astra");
+    for options in [Default::default(), reasoning("low"), {
+        let mut options = reasoning("low");
+        options.insert(
+            "processing_mode_enabled".into(),
+            kraai_types::ModelOptionValue::Boolean(true),
+        );
+        options.insert(
+            "service_tier".into(),
+            kraai_types::ModelOptionValue::Choice(String::new()),
+        );
+        options
+    }] {
+        assert!(
+            provider
+                .send_responses_request(
+                    &model_id,
+                    ProviderRequest {
+                        messages: Vec::new(),
+                        script_tool: None,
+                        cacheable_messages: None,
+                        options,
+                    },
+                    &ProviderRequestContext::default(),
+                    false
+                )
+                .await
+                .is_err()
+        );
+    }
+    for tier in [None, Some("priority")] {
+        for compact in [false, true] {
+            let mut options = reasoning("low");
+            options.insert(
+                "processing_mode_enabled".into(),
+                kraai_types::ModelOptionValue::Boolean(tier.is_some()),
+            );
+            if let Some(tier) = tier {
+                options.insert(
+                    "service_tier".into(),
+                    kraai_types::ModelOptionValue::Choice(tier.into()),
+                );
+            }
+            provider
+                .send_responses_request(
+                    &model_id,
+                    ProviderRequest {
+                        messages: vec![ConversationItem::User {
+                            content: "Hello".into(),
+                        }],
+                        cacheable_messages: None,
+                        script_tool: None,
+                        options,
+                    },
+                    &ProviderRequestContext::default(),
+                    compact,
+                )
+                .await
+                .unwrap();
+        }
+    }
+    for (request, tier) in server.await.unwrap().unwrap().iter().skip(1).zip([
+        None,
+        None,
+        Some("priority"),
+        Some("priority"),
+    ]) {
+        let (_, body) = request.split_once("\r\n\r\n").expect("missing body");
+        let body: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(body.get("model"), Some(&json!("gpt-6-astra")));
+        assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("low")));
+        assert_eq!(
+            body.get("service_tier"),
+            tier.map(|tier| json!(tier)).as_ref()
+        );
+    }
+}
+
+fn reasoning(effort: &str) -> kraai_types::ModelOptionValues {
+    kraai_types::ModelOptionValues::from([(
+        "reasoning_effort".into(),
+        kraai_types::ModelOptionValue::Choice(effort.into()),
+    )])
+}
+
+#[tokio::test]
+async fn configured_custom_models_send_their_settings_without_native_discovery_entries() {
+    let (base_url, server) = server(vec![
+        ("200 OK", json!({"models":[]}).to_string()),
+        (
+            "200 OK",
+            format!(
+                "data: {}\n\n",
+                json!({"type":"response.completed", "response":{"usage":{"input_tokens":1,"output_tokens":1}}})
+            ),
+        ),
+    ])
+    .await;
+    let mut provider = provider(base_url);
+    let id = ModelId::new("custom-model");
+    provider.register_model(ModelConfig {
+        id: id.clone(), provider_id: provider.id.clone(), config: DynamicConfig::new(),
+        options: vec![serde_json::from_value(json!({
+            "id":"priority-processing","label":"Priority Processing","type":"boolean","required":true,
+            "enabled":{"body":{"priority_processing":true},"headers":{"x-processing":"priority"}},
+            "disabled":{"body":{"priority_processing":false}}
+        })).unwrap()], remove_options: Vec::new(),
+    }).await.unwrap();
+    provider.refresh_model_list().await.unwrap();
+    assert_eq!(provider.list_models().await.len(), 1);
+    provider
+        .generate_reply_stream(
+            &id,
+            ProviderRequest {
+                messages: Vec::new(),
+                script_tool: None,
+                cacheable_messages: None,
+                options: kraai_types::ModelOptionValues::from([(
+                    "priority-processing".into(),
+                    kraai_types::ModelOptionValue::Boolean(true),
+                )]),
+            },
+            &ProviderRequestContext::default(),
+        )
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let requests = server.await.unwrap().unwrap();
+    let (headers, body) = requests
+        .get(1)
+        .and_then(|request| request.split_once("\r\n\r\n"))
+        .expect("missing generation request");
+    assert!(
+        headers
+            .to_ascii_lowercase()
+            .contains("x-processing: priority")
+    );
+    let body: Value = serde_json::from_str(body).unwrap();
+    assert_eq!(body.get("model"), Some(&json!("custom-model")));
+    assert_eq!(body.get("priority_processing"), Some(&json!(true)));
+}

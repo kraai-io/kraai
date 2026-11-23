@@ -73,7 +73,7 @@ fn a_selected_model_never_moves_to_another_provider() {
 fn loading_models_never_saves_over_the_session_model() {
     for (selected, expected) in [(Some("added-later"), "added-later"), (None, "first")] {
         let mut harness = test_harness();
-        harness.app.state.current_session_id = Some(kraai_types::SessionId::new("session"));
+        harness.app.state.current_session_id = Some(SessionId::new("session"));
         harness.app.state.selected_provider_id = Some("provider".into());
         harness.app.state.selected_model_id = selected.map(String::from);
         harness.drain_requests();

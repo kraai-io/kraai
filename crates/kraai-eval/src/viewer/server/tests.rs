@@ -1,5 +1,4 @@
 use super::*;
-use color_eyre::eyre::{Result, ensure};
 
 struct Server {
     root: PathBuf,
@@ -8,25 +7,28 @@ struct Server {
 }
 
 impl Server {
-    async fn start() -> Result<Self> {
+    async fn start() -> Self {
         let root = std::env::temp_dir().join(format!("kraai-viewer-{}", ulid::Ulid::generate()));
         let assets = root.join("assets");
-        std::fs::create_dir_all(&assets)?;
+        std::fs::create_dir_all(&assets).unwrap();
         std::fs::write(
             assets.join("index.html"),
             "<title>Benchmark results</title>",
-        )?;
-        std::fs::write(assets.join("app.js"), "export {};")?;
-        std::fs::write(root.join("secret.html"), "private")?;
-        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
-        let address = listener.local_addr()?;
-        let router = router(root.join("cache"), assets.canonicalize()?);
+        )
+        .unwrap();
+        std::fs::write(assets.join("app.js"), "export {};").unwrap();
+        std::fs::write(root.join("secret.html"), "private").unwrap();
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = router(root.join("cache"), assets.canonicalize().unwrap());
         let task = tokio::spawn(async move { axum::serve(listener, router).await });
-        Ok(Self {
+        Self {
             root,
             url: format!("http://{address}"),
             task,
-        })
+        }
     }
 }
 
@@ -38,69 +40,79 @@ impl Drop for Server {
 }
 
 #[tokio::test]
-async fn serves_assets_and_an_empty_catalog_without_running_evaluations() -> Result<()> {
-    let server = Server::start().await?;
+async fn serves_assets_and_an_empty_catalog_without_running_evaluations() {
+    let server = Server::start().await;
     let client = reqwest::Client::new();
-    let response = client.get(&server.url).send().await?;
-    ensure!(response.status() == StatusCode::OK);
-    ensure!(
+    let response = client.get(&server.url).send().await.unwrap();
+    assert!(response.status() == StatusCode::OK);
+    assert!(
         response.headers().get(header::X_CONTENT_TYPE_OPTIONS)
             == Some(&HeaderValue::from_static("nosniff"))
     );
-    let body = response.text().await?;
-    ensure!(body.contains("Benchmark results"));
+    let body = response.text().await.unwrap();
+    assert!(body.contains("Benchmark results"));
     let response = client
         .get(format!("{}/api/catalog", server.url))
         .send()
-        .await?;
-    ensure!(response.status() == StatusCode::OK);
-    let body: serde_json::Value = response.json().await?;
-    ensure!(body.get("attempts") == Some(&serde_json::json!([])));
-    ensure!(!server.root.join("cache").exists());
-    let response = client.get(format!("{}/app.js", server.url)).send().await?;
-    ensure!(
+        .await
+        .unwrap();
+    assert!(response.status() == StatusCode::OK);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(body.get("attempts") == Some(&serde_json::json!([])));
+    assert!(!server.root.join("cache").exists());
+    let response = client
+        .get(format!("{}/app.js", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert!(
         response.headers().get(header::CONTENT_TYPE)
             == Some(&HeaderValue::from_static("text/javascript; charset=utf-8"))
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_external_hosts_origins_and_unregistered_artifacts() -> Result<()> {
-    let server = Server::start().await?;
+async fn rejects_external_hosts_origins_and_unregistered_artifacts() {
+    let server = Server::start().await;
     let client = reqwest::Client::new();
     for name in [header::HOST, header::ORIGIN] {
         let response = client
             .get(format!("{}/api/catalog", server.url))
             .header(name, "https://example.com")
             .send()
-            .await?;
-        ensure!(response.status() == StatusCode::FORBIDDEN);
+            .await
+            .unwrap();
+        assert!(response.status() == StatusCode::FORBIDDEN);
     }
     for path in [
         "/secret.html",
         "/%2e%2e/secret.html",
         "/api/attempts/unknown/logs/secret.html",
     ] {
-        let response = client.get(format!("{}{path}", server.url)).send().await?;
-        ensure!(response.status() == StatusCode::NOT_FOUND);
-        let body = response.text().await?;
-        ensure!(!body.contains("private"));
+        let response = client
+            .get(format!("{}{path}", server.url))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status() == StatusCode::NOT_FOUND);
+        let body = response.text().await.unwrap();
+        assert!(!body.contains("private"));
     }
-    Ok(())
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn rejects_asset_symlinks_outside_the_asset_directory() -> Result<()> {
-    let server = Server::start().await?;
+async fn rejects_asset_symlinks_outside_the_asset_directory() {
+    let server = Server::start().await;
     std::os::unix::fs::symlink(
         server.root.join("secret.html"),
         server.root.join("assets/escape.html"),
-    )?;
-    let response = reqwest::get(format!("{}/escape.html", server.url)).await?;
-    ensure!(response.status() == StatusCode::NOT_FOUND);
-    Ok(())
+    )
+    .unwrap();
+    let response = reqwest::get(format!("{}/escape.html", server.url))
+        .await
+        .unwrap();
+    assert!(response.status() == StatusCode::NOT_FOUND);
 }
 
 #[test]
@@ -147,9 +159,8 @@ fn normalizes_network_authorities_and_rejects_invalid_hosts() {
 }
 
 #[tokio::test]
-async fn accepts_network_hosts_and_forwarded_ports_but_rejects_cross_origin_requests() -> Result<()>
-{
-    let server = Server::start().await?;
+async fn accepts_network_hosts_and_forwarded_ports_but_rejects_cross_origin_requests() {
+    let server = Server::start().await;
     let client = reqwest::Client::new();
     for host in [
         "100.64.0.2:3928",
@@ -164,8 +175,9 @@ async fn accepts_network_hosts_and_forwarded_ports_but_rejects_cross_origin_requ
             .header(header::HOST, host)
             .header(header::ORIGIN, format!("http://{host}"))
             .send()
-            .await?;
-        ensure!(
+            .await
+            .unwrap();
+        assert!(
             response.status() == StatusCode::OK,
             "rejected authority {host}"
         );
@@ -182,18 +194,18 @@ async fn accepts_network_hosts_and_forwarded_ports_but_rejects_cross_origin_requ
             .header(header::HOST, "100.64.0.2:3928")
             .header(header::ORIGIN, origin)
             .send()
-            .await?;
-        ensure!(
+            .await
+            .unwrap();
+        assert!(
             response.status() == StatusCode::FORBIDDEN,
             "accepted origin {origin}"
         );
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn failed_refresh_keeps_previous_results_and_recovers_after_a_cooldown() -> Result<()> {
-    let server = Server::start().await?;
+async fn failed_refresh_keeps_previous_results_and_recovers_after_a_cooldown() {
+    let server = Server::start().await;
     let state = AppState {
         root: server.root.join("cache"),
         assets: server.root.join("assets"),
@@ -203,26 +215,29 @@ async fn failed_refresh_keeps_previous_results_and_recovers_after_a_cooldown() -
     let (original, _) = state
         .snapshot()
         .await
-        .map_err(|error| color_eyre::eyre::eyre!(error.1))?;
-    std::fs::write(&state.root, "not a directory")?;
+        .map_err(|error| color_eyre::eyre::eyre!(error.1))
+        .unwrap();
+    std::fs::write(&state.root, "not a directory").unwrap();
     expire(&state).await;
     let (stale, warning) = state
         .snapshot()
         .await
-        .map_err(|error| color_eyre::eyre::eyre!(error.1))?;
-    ensure!(Arc::ptr_eq(&original, &stale));
-    ensure!(
+        .map_err(|error| color_eyre::eyre::eyre!(error.1))
+        .unwrap();
+    assert!(Arc::ptr_eq(&original, &stale));
+    assert!(
         warning
             .as_ref()
             .is_some_and(|warning| warning.contains("refresh failed"))
     );
-    std::fs::remove_file(&state.root)?;
-    std::fs::create_dir(&state.root)?;
+    std::fs::remove_file(&state.root).unwrap();
+    std::fs::create_dir(&state.root).unwrap();
     let (_, warning) = state
         .snapshot()
         .await
-        .map_err(|error| color_eyre::eyre::eyre!(error.1))?;
-    ensure!(
+        .map_err(|error| color_eyre::eyre::eyre!(error.1))
+        .unwrap();
+    assert!(
         warning.is_some(),
         "refresh should respect its retry cooldown"
     );
@@ -230,10 +245,10 @@ async fn failed_refresh_keeps_previous_results_and_recovers_after_a_cooldown() -
     let (current, warning) = state
         .snapshot()
         .await
-        .map_err(|error| color_eyre::eyre::eyre!(error.1))?;
-    ensure!(warning.is_none());
-    ensure!(!Arc::ptr_eq(&original, &current));
-    Ok(())
+        .map_err(|error| color_eyre::eyre::eyre!(error.1))
+        .unwrap();
+    assert!(warning.is_none());
+    assert!(!Arc::ptr_eq(&original, &current));
 }
 
 async fn expire(state: &AppState) {

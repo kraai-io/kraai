@@ -1,4 +1,3 @@
-use color_eyre::eyre::Result;
 use kraai_execution_types::ScriptExecutionStatus;
 use kraai_persistence::ScriptExecutionCompletion;
 
@@ -7,7 +6,7 @@ use crate::Event;
 use crate::runtime::script_execution::CompletedScriptExecution;
 
 #[tokio::test]
-async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_sessions() -> Result<()> {
+async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_sessions() {
     let harness = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::native_call(
             "call-1",
@@ -16,7 +15,7 @@ async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_session
         vec![ScriptedChunk::plain("must not continue")],
     ])
     .await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     harness
         .handle
         .send_message(
@@ -26,7 +25,8 @@ async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_session
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     harness.events.wait_for("script approval", |events| {
         events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id: id, .. } if id == &session_id))
     }).await;
@@ -56,7 +56,8 @@ async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_session
                     .await
             })
         })
-        .await?;
+        .await
+        .unwrap();
 
     harness.events.wait_for("host error in UI", |events| {
         events.iter().any(|event| matches!(event, Event::ContinuationFailed { session_id: id, error } if id == &session_id && error == message))
@@ -65,15 +66,28 @@ async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_session
         .runtime
         .session_store
         .claim_turn(&session_id)
-        .await?;
+        .await
+        .unwrap();
     harness
         .runtime
         .recover_session_executions(&session_id)
-        .await?;
+        .await
+        .unwrap();
     assert!(!harness.runtime.agent_manager.is_turn_active(&session_id));
-    harness.handle.delete_session(session_id.clone()).await?;
-    assert!(harness.runtime.execution_store.list_all().await?.is_empty());
-    assert!(harness.handle.list_sessions().await?.is_empty());
+    harness
+        .handle
+        .delete_session(session_id.clone())
+        .await
+        .unwrap();
+    assert!(
+        harness
+            .runtime
+            .execution_store
+            .list_all()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(harness.handle.list_sessions().await.unwrap().is_empty());
     harness.shutdown().await;
-    Ok(())
 }

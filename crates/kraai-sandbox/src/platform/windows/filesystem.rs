@@ -165,6 +165,7 @@ fn query_error(path: &Path, api: &str, error: std::io::Error) -> SandboxError {
 #[path = "filesystem/tests.rs"]
 mod tests;
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
+#[cfg(windows)]
 #[path = "filesystem/integration_tests.rs"]
 mod integration_tests;

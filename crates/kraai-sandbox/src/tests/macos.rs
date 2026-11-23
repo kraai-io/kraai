@@ -1,6 +1,4 @@
-#[path = "macos/escape.rs"]
 mod escape;
-#[path = "macos/sysctl.rs"]
 mod sysctl;
 
 use std::ffi::OsString;

@@ -7,7 +7,7 @@ pub(crate) fn runtime(error: RuntimeError) -> Error {
         | RuntimeErrorKind::Validation
         | RuntimeErrorKind::NotFound
         | RuntimeErrorKind::Conflict => invalid(error.message),
-        _ => internal(error.message),
+        RuntimeErrorKind::Unavailable | RuntimeErrorKind::Internal => internal(error.message),
     }
 }
 

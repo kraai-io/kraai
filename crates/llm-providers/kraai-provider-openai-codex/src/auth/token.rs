@@ -69,7 +69,11 @@ pub(super) fn parse_id_token_claims(token: &str) -> io::Result<IdTokenClaims> {
             auth.chatgpt_plan_type
                 .map(|value| match value {
                     serde_json::Value::String(text) => text,
-                    other => other.to_string(),
+                    other @ (serde_json::Value::Null
+                    | serde_json::Value::Bool(_)
+                    | serde_json::Value::Number(_)
+                    | serde_json::Value::Array(_)
+                    | serde_json::Value::Object(_)) => other.to_string(),
                 })
                 .map(|text| normalize_plan_type(&text)),
             auth.chatgpt_account_id,

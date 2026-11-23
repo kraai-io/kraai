@@ -1,4 +1,3 @@
-use color_eyre::eyre::Result;
 use futures::poll;
 use kraai_persistence::{RequestUsageStore, SqliteRequestUsageStore};
 use kraai_test_support::hang_guard;
@@ -8,21 +7,20 @@ use std::sync::Arc;
 use super::harness::{RuntimeTestHarness, create_session_with_profile};
 
 #[tokio::test]
-async fn cancellation_waits_for_received_usage_to_be_persisted() -> Result<()> {
+async fn cancellation_waits_for_received_usage_to_be_persisted() {
     assert_usage_survives_abort(false).await
 }
 
 #[tokio::test]
-async fn shutdown_waits_for_received_usage_to_be_persisted() -> Result<()> {
+async fn shutdown_waits_for_received_usage_to_be_persisted() {
     assert_usage_survives_abort(true).await
 }
 
 #[tokio::test]
-async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_ownership() -> Result<()>
-{
+async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_ownership() {
     let directory =
         std::env::temp_dir().join(format!("kraai-auxiliary-usage-{}", ulid::Ulid::generate()));
-    tokio::fs::create_dir_all(&directory).await?;
+    tokio::fs::create_dir_all(&directory).await.unwrap();
     let tasks = super::super::stream_tasks::StreamTasks::default();
     let barrier = Arc::new(tokio::sync::RwLock::new(()));
     let event_tx = crate::handle::RuntimeEventSender::new(8);
@@ -58,31 +56,30 @@ async fn cancelled_unpolled_auxiliary_commit_retains_session_and_shutdown_owners
     hang_guard(async {
         tokio::join!(session, all);
     })
-    .await?;
+    .await
+    .unwrap();
     assert!(barrier.try_write().is_ok());
     let crate::api::Event::RequestUsageUpdated {
         session_id,
         request,
-    } = events.try_recv()?.event
+    } = events.try_recv().unwrap().event
     else {
-        return Err(color_eyre::eyre::eyre!(
-            "Expected persisted auxiliary usage notification"
-        ));
+        panic!("Expected persisted auxiliary usage notification");
     };
     assert_eq!(session_id, SessionId::new("session"));
     let reopened = SqliteRequestUsageStore::new(&directory);
     assert_eq!(
         reopened
             .load(&SessionId::new("session"))
-            .await?
+            .await
+            .unwrap()
             .get(&request.message_id),
         Some(request.as_ref())
     );
-    tokio::fs::remove_dir_all(directory).await?;
-    Ok(())
+    tokio::fs::remove_dir_all(directory).await.unwrap();
 }
 
-async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
+async fn assert_usage_survives_abort(shutdown: bool) {
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
     let mut providers = kraai_provider_core::ProviderManager::new();
     providers.register_provider(
@@ -92,7 +89,7 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
         }),
     );
     let harness = RuntimeTestHarness::new_with_parts(providers).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     harness
         .handle
         .send_message(
@@ -102,16 +99,19 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let message_id = super::harness::started_stream(&harness.events.snapshot(), &session_id);
-    sender.send(Ok(kraai_provider_core::ProviderStreamEvent::Usage(
-        TokenUsage {
-            total_tokens: 42,
-            input_tokens: 30,
-            output_tokens: 12,
-            ..Default::default()
-        },
-    )))?;
+    sender
+        .send(Ok(kraai_provider_core::ProviderStreamEvent::Usage(
+            TokenUsage {
+                total_tokens: 42,
+                input_tokens: 30,
+                output_tokens: 12,
+                ..Default::default()
+            },
+        )))
+        .unwrap();
     let events = harness
         .events
         .wait_for("received usage", |events| {
@@ -122,26 +122,34 @@ async fn assert_usage_survives_abort(shutdown: bool) -> Result<()> {
         .await;
     let saved = events
         .iter()
-        .find_map(|event| match event {
-            crate::Event::RequestUsageUpdated { request, .. } if request.usage.is_some() => {
+        .find_map(|event| {
+            if let crate::Event::RequestUsageUpdated { request, .. } = event
+                && request.usage.is_some()
+            {
                 Some(request.as_ref().clone())
+            } else {
+                None
             }
-            _ => None,
         })
         .expect("usage event");
     let cancelled = if shutdown {
-        hang_guard(harness.runtime.stop_active_work()).await?;
+        hang_guard(harness.runtime.stop_active_work())
+            .await
+            .unwrap();
         true
     } else {
-        hang_guard(harness.handle.cancel_stream(session_id.clone())).await??
+        hang_guard(harness.handle.cancel_stream(session_id.clone()))
+            .await
+            .unwrap()
+            .unwrap()
     };
     assert!(cancelled);
     let requests = SqliteRequestUsageStore::new(&harness.data_dir)
         .load(&session_id)
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests.get(&message_id), Some(&saved));
     drop(sender);
     harness.shutdown().await;
-    Ok(())
 }

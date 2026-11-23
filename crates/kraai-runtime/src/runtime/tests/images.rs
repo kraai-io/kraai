@@ -1,19 +1,19 @@
 use super::harness::FullHistory as _;
 use super::script_recovery::{completed_script_with_image, reopen_agent};
-use color_eyre::eyre::{Result, eyre};
+
 use kraai_execution_types::ScriptExecutionId;
 use kraai_nushell_runtime::ImageAttachmentHandler;
 use kraai_types::{ContentPart, ConversationItem, MessageContent};
 
 #[tokio::test]
-async fn failed_script_images_recover_and_reopen_without_source_or_pins() -> Result<()> {
-    let (mut harness, session_id, completed) = completed_script_with_image(true).await?;
+async fn failed_script_images_recover_and_reopen_without_source_or_pins() {
+    let (mut harness, session_id, completed) = completed_script_with_image(true).await;
     let image = completed
         .record
         .images
         .values()
         .next()
-        .ok_or_else(|| eyre!("missing image"))?
+        .expect("missing image")
         .clone();
     assert!(!harness.data_dir.join("workspace/screenshot.png").exists());
     assert!(
@@ -21,23 +21,33 @@ async fn failed_script_images_recover_and_reopen_without_source_or_pins() -> Res
             .runtime
             .context_state_store
             .list(&session_id)
-            .await?
+            .await
+            .unwrap()
             .is_empty()
     );
-    reopen_agent(&mut harness).await?;
+    reopen_agent(&mut harness).await;
     harness
         .runtime
         .recover_session_executions(&session_id)
-        .await?;
-    let history = harness.handle.get_chat_history(session_id.clone()).await?;
+        .await
+        .unwrap();
+    let history = harness.handle.get_chat_history(session_id.clone()).await;
     let restored = history
         .get(&completed.record.result_message_id)
-        .ok_or_else(|| eyre!("missing result"))?;
+        .expect("missing result");
     let ConversationItem::ScriptResult { output, .. } = &restored.content else {
-        return Err(eyre!("wrong result type"));
+        panic!("wrong result type");
     };
     assert_eq!(output.images().collect::<Vec<_>>(), vec![&image]);
-    assert!(!harness.runtime.image_store.read(&image).await?.is_empty());
+    assert!(
+        !harness
+            .runtime
+            .image_store
+            .read(&image)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let record = &completed.record;
     let id = ScriptExecutionId::new(ulid::Ulid::generate());
     harness
@@ -55,8 +65,14 @@ async fn failed_script_images_recover_and_reopen_without_source_or_pins() -> Res
             effective_capabilities: record.effective_capabilities.clone(),
             timeout: record.timeout,
         })
-        .await?;
-    harness.runtime.execution_store.mark_running(&id).await?;
+        .await
+        .unwrap();
+    harness
+        .runtime
+        .execution_store
+        .mark_running(&id)
+        .await
+        .unwrap();
     let mut handler = crate::runtime::images::DurableImageAttachments {
         execution_id: id,
         session_id: session_id.clone(),
@@ -65,34 +81,37 @@ async fn failed_script_images_recover_and_reopen_without_source_or_pins() -> Res
         executions: harness.runtime.execution_store.clone(),
     };
     assert_eq!(
-        handler
-            .attach_existing(1, image.id.clone())
-            .await
-            .map_err(|error| eyre!(error))?,
+        handler.attach_existing(1, image.id.clone()).await.unwrap(),
         image
     );
-    handler.session_id = harness.handle.create_session().await?;
+    handler.session_id = harness.handle.create_session().await.unwrap();
     assert!(handler.attach_existing(2, image.id.clone()).await.is_err());
     assert!(
         harness
             .runtime
             .context_state_store
             .list(&session_id)
-            .await?
+            .await
+            .unwrap()
             .is_empty()
     );
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn image_only_queued_input_keeps_references_and_undo_restores_them() -> Result<()> {
+async fn image_only_queued_input_keeps_references_and_undo_restores_them() {
     let harness = super::harness::RuntimeTestHarness::new(Vec::new()).await;
     let session_id =
-        super::harness::create_session_with_profile(&harness.handle, "test-profile").await?;
+        super::harness::create_session_with_profile(&harness.handle, "test-profile").await;
     let mut bytes = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::new_rgb8(2, 3).write_to(&mut bytes, image::ImageFormat::Png)?;
-    let image = harness.handle.import_image(bytes.into_inner()).await?;
+    image::DynamicImage::new_rgb8(2, 3)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    let image = harness
+        .handle
+        .import_image(bytes.into_inner())
+        .await
+        .unwrap();
     let content = MessageContent(vec![ContentPart::Image { image }]);
     super::harness::hold_preparation(&harness.runtime, &session_id).await;
     let result = harness
@@ -104,7 +123,8 @@ async fn image_only_queued_input_keeps_references_and_undo_restores_them() -> Re
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert!(matches!(
         result,
         crate::SubmitMessageOutcome::Queued { position: 1 }
@@ -125,16 +145,23 @@ async fn image_only_queued_input_keeps_references_and_undo_restores_them() -> Re
             kraai_types::ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     {
         let manager = &harness.runtime.agent_manager;
-        manager.abort_streaming_message(&pending.message_id).await?;
+        manager
+            .abort_streaming_message(&pending.message_id)
+            .await
+            .unwrap();
         manager.clear_active_turn(&session_id);
     }
     assert_eq!(
-        harness.handle.undo_last_user_message(session_id).await?,
+        harness
+            .handle
+            .undo_last_user_message(session_id)
+            .await
+            .unwrap(),
         Some(content)
     );
     harness.shutdown().await;
-    Ok(())
 }

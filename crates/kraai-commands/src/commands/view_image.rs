@@ -82,40 +82,5 @@ mod command {
     }
 
     #[cfg(test)]
-    #[expect(
-        clippy::panic_in_result_fn,
-        reason = "image read tests propagate fixture errors and assert bounds"
-    )]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn reads_binary_and_rejects_non_files_and_oversized_files() -> std::io::Result<()> {
-            let directory = tempfile::tempdir()?;
-            let path = directory.path().join("image.png");
-            let expected = [0, 255, 128, 13, 10];
-            std::fs::write(&path, expected)?;
-            assert_eq!(
-                read_image(directory.path(), Path::new("image.png"))?,
-                expected
-            );
-            assert!(read_image(directory.path(), directory.path()).is_err());
-            std::fs::File::create(&path)?.set_len(MAX_IMAGE_BYTES as u64 + 1)?;
-            assert!(read_image(directory.path(), &path).is_err());
-            Ok(())
-        }
-
-        #[cfg(unix)]
-        #[test]
-        fn rejects_fifo_without_waiting_for_a_writer() -> std::io::Result<()> {
-            let directory = tempfile::tempdir()?;
-            let path = directory.path().join("image.png");
-            nix::unistd::mkfifo(
-                &path,
-                nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
-            )?;
-            assert!(read_image(directory.path(), &path).is_err());
-            Ok(())
-        }
-    }
+    mod tests;
 }

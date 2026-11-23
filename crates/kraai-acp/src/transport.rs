@@ -246,8 +246,8 @@ impl<R: Role> ConnectTo<R> for Stdio {
         client: impl ConnectTo<R::Counterpart>,
     ) -> agent_client_protocol::Result<()> {
         let _closed = self.budget.failed.clone().drop_guard();
-        let stdin = blocking::Unblock::new(std::io::stdin());
-        let stdout = blocking::Unblock::with_capacity(64 * 1024, std::io::stdout());
+        let stdin = blocking::Unblock::new(io::stdin());
+        let stdout = blocking::Unblock::with_capacity(64 * 1024, io::stdout());
         let closed = CancellationToken::new();
         let sink = futures::sink::unfold(
             (stdout, self.budget.clone(), closed.clone()),

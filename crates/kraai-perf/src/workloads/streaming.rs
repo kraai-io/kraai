@@ -203,5 +203,4 @@ impl Benchmark for Case {
 }
 
 #[cfg(test)]
-#[path = "streaming_tests.rs"]
 mod tests;

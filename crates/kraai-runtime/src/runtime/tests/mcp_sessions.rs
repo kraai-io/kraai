@@ -1,4 +1,3 @@
-use color_eyre::eyre::Result;
 use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpConfig, McpHost, McpManager, ServerConfig, TransportConfig};
 use kraai_persistence::SessionStore;
@@ -44,17 +43,18 @@ async fn servers(harness: &RuntimeTestHarness, session: &SessionId) -> Vec<Value
 }
 
 #[tokio::test]
-async fn attachments_replace_atomically_and_never_enter_session_storage() -> Result<()> {
+async fn attachments_replace_atomically_and_never_enter_session_storage() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
     harness.runtime.agent_manager.set_mcp(std::sync::Arc::new(
         McpManager::new(config("configured")).unwrap(),
     ));
-    let first = harness.handle.create_session().await?;
-    let second = harness.handle.create_session().await?;
+    let first = harness.handle.create_session().await.unwrap();
+    let second = harness.handle.create_session().await.unwrap();
     harness
         .handle
         .set_session_mcp_servers(first.clone(), config("first"))
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
         servers(&harness, &first).await,
         vec![json!("configured"), json!("first")]
@@ -73,24 +73,28 @@ async fn attachments_replace_atomically_and_never_enter_session_storage() -> Res
     harness
         .handle
         .set_session_mcp_servers(first.clone(), config("replacement"))
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
         servers(&harness, &first).await,
         vec![json!("configured"), json!("replacement")]
     );
-    let persisted = serde_json::to_string(&harness.runtime.session_store.list().await?)?;
+    let persisted =
+        serde_json::to_string(&harness.runtime.session_store.list().await.unwrap()).unwrap();
     assert!(!persisted.contains("ephemeral-secret"));
     assert!(!persisted.contains("replacement"));
     harness
         .handle
         .set_session_mcp_servers(first.clone(), McpConfig::default())
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(servers(&harness, &first).await, vec![json!("configured")]);
     harness
         .handle
         .set_session_mcp_servers(first.clone(), config("deleted"))
-        .await?;
-    harness.handle.delete_session(first.clone()).await?;
+        .await
+        .unwrap();
+    harness.handle.delete_session(first.clone()).await.unwrap();
     assert_eq!(servers(&harness, &first).await, vec![json!("configured")]);
     let missing = harness
         .handle
@@ -99,20 +103,20 @@ async fn attachments_replace_atomically_and_never_enter_session_storage() -> Res
         .unwrap_err();
     assert_eq!(missing.kind, RuntimeErrorKind::NotFound);
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn attachments_reject_preparing_and_queued_sessions_without_waiting() -> Result<()> {
+async fn attachments_reject_preparing_and_queued_sessions_without_waiting() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session = harness.handle.create_session().await?;
+    let session = harness.handle.create_session().await.unwrap();
     super::harness::hold_preparation(&harness.runtime, &session).await;
     let busy = hang_guard(
         harness
             .handle
             .set_session_mcp_servers(session.clone(), config("attached")),
     )
-    .await?;
+    .await
+    .unwrap();
     assert_eq!(busy.unwrap_err().kind, RuntimeErrorKind::Conflict);
     super::harness::release_preparation(&harness.runtime, &session).await;
     super::harness::enqueue(
@@ -135,8 +139,8 @@ async fn attachments_reject_preparing_and_queued_sessions_without_waiting() -> R
     harness
         .handle
         .set_session_mcp_servers(session.clone(), config("attached"))
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(servers(&harness, &session).await, vec![json!("attached")]);
     harness.shutdown().await;
-    Ok(())
 }

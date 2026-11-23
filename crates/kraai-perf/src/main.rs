@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
@@ -18,7 +16,8 @@ mod process;
 mod profiling;
 mod report;
 mod runner;
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod test_support;
 mod workloads;
 

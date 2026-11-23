@@ -213,7 +213,10 @@ pub(crate) fn limit_request_images(request: &mut ProviderRequest) {
         let content = match message {
             ConversationItem::User { content } => content,
             ConversationItem::ScriptResult { output, .. } => output,
-            _ => continue,
+            ConversationItem::FileContext { .. }
+            | ConversationItem::Compaction { .. }
+            | ConversationItem::System { .. }
+            | ConversationItem::Assistant { .. } => continue,
         };
         for part in content.0.iter_mut().rev() {
             if let kraai_types::ContentPart::Image { image } = part {

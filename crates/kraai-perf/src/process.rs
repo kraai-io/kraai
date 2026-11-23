@@ -109,7 +109,13 @@ pub(crate) fn read_error(path: &Path) -> Result<String> {
 
 struct Worker {
     child: Child,
-    #[cfg_attr(not(unix), expect(dead_code))]
+    #[cfg_attr(
+        not(unix),
+        expect(
+            dead_code,
+            reason = "only unix workers get a grace period before SIGKILL"
+        )
+    )]
     termination_grace: Duration,
 }
 

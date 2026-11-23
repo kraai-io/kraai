@@ -91,8 +91,16 @@ impl AppState {
         match row {
             ConfigRow::ProviderType => ConfigKind::Type,
             ConfigRow::AddModel => ConfigKind::AddModel,
-            _ if self.config_field(row).is_some_and(is_boolean_field) => ConfigKind::Toggle,
-            _ => ConfigKind::Text,
+            ConfigRow::ProviderId
+            | ConfigRow::ProviderValue(_)
+            | ConfigRow::ModelId(_)
+            | ConfigRow::ModelValue(..) => {
+                if self.config_field(row).is_some_and(is_boolean_field) {
+                    ConfigKind::Toggle
+                } else {
+                    ConfigKind::Text
+                }
+            }
         }
     }
 
@@ -230,7 +238,12 @@ impl App {
                 kraai_runtime::FieldValueKind::Integer => {
                     format!("{} takes a whole number", field.label)
                 }
-                _ => format!("{} cannot be {text}", field.label),
+                kraai_runtime::FieldValueKind::String
+                | kraai_runtime::FieldValueKind::SecretString
+                | kraai_runtime::FieldValueKind::Boolean
+                | kraai_runtime::FieldValueKind::Url => {
+                    format!("{} cannot be {text}", field.label)
+                }
             })
     }
 
@@ -311,7 +324,10 @@ impl App {
             ConfigRow::ModelValue(model, _) => {
                 draft.models.get_mut(*model).map(|model| &mut model.values)
             }
-            _ => None,
+            ConfigRow::ProviderId
+            | ConfigRow::ProviderType
+            | ConfigRow::AddModel
+            | ConfigRow::ModelId(_) => None,
         };
         if let (Some(values), ConfigRow::ProviderValue(key) | ConfigRow::ModelValue(_, key)) =
             (values, row)

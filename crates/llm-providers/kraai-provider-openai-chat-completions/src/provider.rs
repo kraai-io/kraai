@@ -215,7 +215,7 @@ where
         let has_tool_history = messages.iter().any(|message| match message {
             RequestMessage::Assistant { tool_calls, .. } => !tool_calls.is_empty(),
             RequestMessage::Tool { .. } => true,
-            _ => false,
+            RequestMessage::System { .. } | RequestMessage::User { .. } => false,
         });
         let tools = provider_request
             .script_tool
@@ -406,5 +406,4 @@ impl ProviderFactory for OpenAiFactory {
 }
 
 #[cfg(test)]
-#[path = "provider_tests.rs"]
 mod tests;

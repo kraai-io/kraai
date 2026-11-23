@@ -146,7 +146,28 @@ pub async fn run(
             Event::SessionStateChanged {
                 is_running: false, ..
             } => break,
-            _ => {}
+            Event::TurnCompleted { .. }
+            | Event::ScriptPrepared { .. }
+            | Event::ScriptStarted { .. }
+            | Event::ScriptOutputTail { .. }
+            | Event::RequestUsageUpdated { .. }
+            | Event::TurnTimingChanged { .. }
+            | Event::ConfigLoaded
+            | Event::ModelsUpdated
+            | Event::StreamStart { .. }
+            | Event::ReasoningDelta { .. }
+            | Event::StreamCancelled { .. }
+            | Event::ProviderRetryScheduled { .. }
+            | Event::ScriptResultReady { .. }
+            | Event::ContextStateChanged { .. }
+            | Event::SessionStateChanged {
+                is_running: true, ..
+            }
+            | Event::MessageUpserted { .. }
+            | Event::MessagesRemoved { .. }
+            | Event::HistoryUpdated { .. }
+            | Event::ProviderAuthUpdated { .. }
+            | Event::McpAuthUpdated { .. } => {}
         }
     }
     output.flush()?;
@@ -269,40 +290,4 @@ fn count(value: usize) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[expect(
-        clippy::panic_in_result_fn,
-        reason = "assertions follow fallible writes to the transcript"
-    )]
-    fn transcript_separates_items_but_not_their_deltas() -> Result<()> {
-        let mut transcript = Transcript::default();
-        let mut output = Vec::new();
-        let text = |text: &str| AssistantItem::Text {
-            phase: kraai_types::AssistantPhase::FinalAnswer,
-            text: text.into(),
-        };
-        transcript.item(&mut output, "m", 0, &text("Looking"))?;
-        transcript.text(&mut output, "m", 0, " closer.")?;
-        transcript.item(
-            &mut output,
-            "m",
-            1,
-            &AssistantItem::ScriptCall(ScriptCall {
-                call_id: kraai_types::ToolCallId::new("call"),
-                name: "kraai_nushell".into(),
-                input: "ls".into(),
-                arguments_error: None,
-                rewrite: None,
-            }),
-        )?;
-        transcript.item(&mut output, "n", 0, &text("Done."))?;
-        assert_eq!(
-            String::from_utf8_lossy(&output),
-            "Looking closer.\n\n```nu\nls\n```\nDone."
-        );
-        Ok(())
-    }
-}
+mod tests;

@@ -23,6 +23,7 @@ Most of the repo was written by agents, so existing code is not proof of a delib
 - Break up god files. Shared logic goes in a shared module, not copied into each caller.
 - Fix warnings instead of silencing them.
 - Delete tests that don't test anything real.
+- Unit tests for `foo.rs` go in `foo/tests.rs`, declared as `#[cfg(test)] mod tests;`. Never inline a test module. Split large ones into `foo/tests/*.rs`.
 - Comments only for code so unusual that a reader can't infer why it must be written that way. Never comment to explain a change.
 - Rust dependencies go in `[workspace.dependencies]` with a full version triple.
 

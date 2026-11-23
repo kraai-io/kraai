@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::time::{Duration, Instant, SystemTime};
 
 use rand::RngExt;
@@ -269,9 +268,4 @@ fn is_retryable_error(error: &reqwest::Error) -> bool {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::panic,
-    clippy::panic_in_result_fn,
-    reason = "fallible network fixture setup is combined with direct assertions"
-)]
 mod tests;

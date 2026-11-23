@@ -160,7 +160,38 @@ impl RuntimeCore {
                 session_id,
                 response,
             } => (session_id, SessionMessage::Delete { response }),
-            command => {
+            command @ (Command::GetMcpAuthStatuses { .. }
+            | Command::StartMcpLogin { .. }
+            | Command::CancelMcpLogin { .. }
+            | Command::LogoutMcp { .. }
+            | Command::ListModels { .. }
+            | Command::RefreshModelLists { .. }
+            | Command::RefetchModelList { .. }
+            | Command::ListProviderDefinitions { .. }
+            | Command::GetSettings { .. }
+            | Command::ListAgentProfiles { .. }
+            | Command::GetAgentProfileCatalog { .. }
+            | Command::SetSessionProfile { .. }
+            | Command::SaveSettings { .. }
+            | Command::CreateSession { .. }
+            | Command::ImportImage { .. }
+            | Command::ReadImage { .. }
+            | Command::LoadConfig
+            | Command::LoadSession { .. }
+            | Command::ListSessions { .. }
+            | Command::ListUserInputHistory { .. }
+            | Command::GetWorkspaceState { .. }
+            | Command::SetWorkspaceDir { .. }
+            | Command::GetTip { .. }
+            | Command::GetHistoryPage { .. }
+            | Command::GetSessionContextUsage { .. }
+            | Command::GetSessionModel { .. }
+            | Command::SetSessionModel { .. }
+            | Command::GetProviderAuthStatuses { .. }
+            | Command::StartProviderLogin { .. }
+            | Command::CancelProviderLogin { .. }
+            | Command::LogoutProvider { .. }
+            | Command::Shutdown { .. }) => {
                 let runtime = self.clone();
                 tokio::spawn(async move {
                     if let Err(error) = runtime.handle_command(command).await {
@@ -313,7 +344,7 @@ impl RuntimeCore {
                     .image_store
                     .import(bytes)
                     .await
-                    .map_err(crate::RuntimeError::internal);
+                    .map_err(RuntimeError::internal);
                 let _ = response.send(result);
             }
             Command::ReadImage { image, response } => {

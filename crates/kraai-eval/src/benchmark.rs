@@ -169,18 +169,4 @@ pub fn runner_store_root(program: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn runner_roots_require_an_actual_store_location() -> Result<()> {
-        ensure!(runner_store_root(Path::new("/tmp/runner")).is_err());
-        ensure!(runner_store_root(Path::new("/nix/store")).is_err());
-        ensure!(runner_store_root(Path::new("/nix/store/../secret")).is_err());
-        ensure!(
-            runner_store_root(Path::new("/nix/store/abc-runner/bin/runner"))?
-                == Path::new("/nix/store/abc-runner")
-        );
-        Ok(())
-    }
-}
+mod tests;

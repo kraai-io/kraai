@@ -1,51 +1,51 @@
-#![expect(
-    clippy::panic_in_result_fn,
-    reason = "protocol integration tests assert after fallible I/O"
-)]
-
 use crate::support::{Harness, Reply};
 use base64::Engine;
-use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
 
 #[tokio::test]
-async fn prompt_and_tool_images_survive_reload_without_source_file() -> Result<()> {
+async fn prompt_and_tool_images_survive_reload_without_source_file() {
     let mut harness = Harness::new(vec![
         Reply::Script(String::from(
             "# timeout=10min permissions=no-sandbox\nkraai-view-image image.png",
         )),
         "Viewed image.".into(),
     ])
-    .await?;
+    .await;
     let mut bytes = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::new_rgb8(2, 3).write_to(&mut bytes, image::ImageFormat::Png)?;
+    image::DynamicImage::new_rgb8(2, 3)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes.get_ref());
-    tokio::fs::write(harness.root.path().join("image.png"), bytes.get_ref()).await?;
-    harness.initialize().await?;
-    let session = harness.session().await?;
+    tokio::fs::write(harness.root.path().join("image.png"), bytes.get_ref())
+        .await
+        .unwrap();
+    harness.initialize().await;
+    let session = harness.session().await;
     harness.send(json!({"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{
         "sessionId":session,
         "prompt":[{"type":"text","text":"View the image"},{"type":"image","data":encoded,"mimeType":"image/png"}]
-    }})).await?;
+    }})).await;
     let pending = harness
         .until(|value| value.get("method") == Some(&json!("session/request_permission")))
-        .await?;
-    let approval = pending.last().ok_or_else(|| eyre!("missing approval"))?;
-    harness.send(json!({"jsonrpc":"2.0","id":approval.get("id"),"result":{"outcome":{"outcome":"selected","optionId":"allow"}}})).await?;
+        .await;
+    let approval = pending.last().expect("missing approval");
+    harness.send(json!({"jsonrpc":"2.0","id":approval.get("id"),"result":{"outcome":{"outcome":"selected","optionId":"allow"}}})).await;
     let live = harness
         .until(|value| value.get("id") == Some(&json!(2)))
-        .await?;
+        .await;
     assert!(has_tool_image(&live, &encoded));
-    tokio::fs::remove_file(harness.root.path().join("image.png")).await?;
-    harness.restart().await?;
-    harness.initialize().await?;
+    tokio::fs::remove_file(harness.root.path().join("image.png"))
+        .await
+        .unwrap();
+    harness.restart().await;
+    harness.initialize().await;
     let replay = harness
         .request(
             3,
             "session/load",
             json!({"sessionId":session,"cwd":harness.root.path(),"mcpServers":[]}),
         )
-        .await?;
+        .await;
     assert!(
         replay
             .last()

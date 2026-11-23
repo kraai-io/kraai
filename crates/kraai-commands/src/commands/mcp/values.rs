@@ -26,7 +26,15 @@ pub(super) fn to_json(value: Value) -> Result<Json, Box<ShellError>> {
             .collect::<Result<_, _>>()
             .map(Json::Object),
         Value::Error { error, .. } => Err(error),
-        _ => Err(command_error(
+        Value::Glob { .. }
+        | Value::Filesize { .. }
+        | Value::Duration { .. }
+        | Value::Date { .. }
+        | Value::Range { .. }
+        | Value::Closure { .. }
+        | Value::Binary { .. }
+        | Value::CellPath { .. }
+        | Value::Custom { .. } => Err(command_error(
             "Invalid MCP arguments",
             "Use JSON-compatible records, lists, strings, numbers, booleans, or null",
             span,

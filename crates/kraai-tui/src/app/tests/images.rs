@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::{KeyCode, KeyEvent, KeyModifiers, is_known_slash_command};
 use kraai_execution_types::ImageAttachment;
-use kraai_types::{ContentPart, MessageContent, SessionId};
+use kraai_types::{ContentPart, MessageContent};
 
 fn image() -> ImageAttachment {
     ImageAttachment {

@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 mod metrics;
 #[cfg(feature = "runner")]
 mod runner;

@@ -1,6 +1,5 @@
 use kraai_types::{
-    ConversationItem, MessageGeneration, ModelId, ProviderId, ScriptCall, SessionId, StreamId,
-    TokenUsage,
+    ConversationItem, MessageGeneration, ModelId, ProviderId, ScriptCall, StreamId, TokenUsage,
 };
 
 use super::*;

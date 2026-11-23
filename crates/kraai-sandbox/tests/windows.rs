@@ -1,8 +1,7 @@
 #![cfg(windows)]
+// Clippy only applies its allow-*-in-tests settings to helpers under a `cfg(test)` ancestor.
+#![cfg(test)]
 #![expect(
-    clippy::expect_used,
-    clippy::panic,
-    clippy::print_stderr,
     clippy::zombie_processes,
     reason = "sandbox tests assert real Windows access decisions"
 )]

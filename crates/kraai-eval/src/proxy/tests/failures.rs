@@ -1,8 +1,8 @@
 use super::*;
 
-fn fixture() -> Result<(PathBuf, ProxyState, ParsedRequest)> {
+fn fixture() -> (PathBuf, ProxyState, ParsedRequest) {
     let root = std::env::temp_dir().join(format!("kraai-proxy-failure-{}", ulid::Ulid::generate()));
-    fs::create_dir(&root)?;
+    fs::create_dir(&root).unwrap();
     let state = ProxyState {
         upstream: String::from("http://upstream.invalid"),
         credentials: UpstreamCredentials::OpenAiApiKey {
@@ -11,8 +11,10 @@ fn fixture() -> Result<(PathBuf, ProxyState, ParsedRequest)> {
         },
         allowed_paths: BTreeSet::from([String::from("/v1/responses")]),
         token: String::from("client-token"),
-        client: Client::builder().redirect(Policy::none()).build()?,
-        log: Arc::new(Mutex::new(File::create(root.join("proxy.events.jsonl"))?)),
+        client: Client::builder().redirect(Policy::none()).build().unwrap(),
+        log: Arc::new(Mutex::new(
+            File::create(root.join("proxy.events.jsonl")).unwrap(),
+        )),
         max_requests: 1,
         limits: ConnectionLimits::default(),
         request_count: AtomicU64::new(0),
@@ -29,36 +31,36 @@ fn fixture() -> Result<(PathBuf, ProxyState, ParsedRequest)> {
         )],
         body: br#"{"model":"model","input":"private prompt"}"#.to_vec().into(),
     };
-    Ok((root, state, request))
+    (root, state, request)
 }
 
 fn field<'a>(event: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {
     event.pointer(path).unwrap_or(&serde_json::Value::Null)
 }
 
-fn read_event(root: &std::path::Path) -> Result<serde_json::Value> {
-    let log = fs::read_to_string(root.join("proxy.events.jsonl"))?;
-    ensure!(log.lines().count() == 1);
+fn read_event(root: &std::path::Path) -> serde_json::Value {
+    let log = fs::read_to_string(root.join("proxy.events.jsonl")).unwrap();
+    assert!(log.lines().count() == 1);
     for secret in ["upstream-secret", "client-token", "private prompt"] {
-        ensure!(!log.contains(secret));
+        assert!(!log.contains(secret));
     }
-    let event: serde_json::Value = serde_json::from_str(log.trim())?;
-    ensure!(
+    let event: serde_json::Value = serde_json::from_str(log.trim()).unwrap();
+    assert!(
         field(&event, "/request_id")
             .as_str()
             .is_some_and(|id| !id.is_empty())
     );
-    ensure!(field(&event, "/duration_ms").is_number());
-    Ok(event)
+    assert!(field(&event, "/duration_ms").is_number());
+    event
 }
 
 #[tokio::test]
-async fn truncated_http_response_records_original_status_and_error_chain() -> Result<()> {
-    let (root, mut state, _) = fixture()?;
-    let mut upstream = http::Listener::bind("/v1/").await?;
-    state.upstream = format!("http://{}", upstream.local_addr()?);
-    let mut listener = http::Listener::bind("/v1/").await?;
-    let address = listener.local_addr()?;
+async fn truncated_http_response_records_original_status_and_error_chain() {
+    let (root, mut state, _) = fixture();
+    let mut upstream = http::Listener::bind("/v1/").await.unwrap();
+    state.upstream = format!("http://{}", upstream.local_addr().unwrap());
+    let mut listener = http::Listener::bind("/v1/").await.unwrap();
+    let address = listener.local_addr().unwrap();
     let state = Arc::new(state);
     let serve = async {
         let (stream, _) = listener.accept().await?;
@@ -86,38 +88,39 @@ async fn truncated_http_response_records_original_status_and_error_chain() -> Re
     let (served, responded, received) = Box::pin(kraai_test_support::hang_guard(async {
         tokio::join!(serve, respond, receive)
     }))
-    .await?;
-    ensure!(served.is_err());
-    responded?;
-    received?;
-    let event = read_event(&root)?;
-    ensure!(
+    .await
+    .unwrap();
+    assert!(served.is_err());
+    responded.unwrap();
+    received.unwrap();
+    let event = read_event(&root);
+    assert!(
         field(&event, "/status") == 200
             && field(&event, "/upstream_request_id") == "upstream-request"
     );
-    ensure!(
+    assert!(
         field(&event, "/delivery") == "incomplete" && field(&event, "/stage") == "upstream_body"
     );
     let error = field(&event, "/error").as_str().unwrap_or_default();
-    ensure!(error.contains("reading upstream response body") && error.contains("unexpected EOF"));
+    assert!(error.contains("reading upstream response body") && error.contains("unexpected EOF"));
     let metrics = state
         .metrics
         .lock()
-        .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?
+        .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))
+        .unwrap()
         .clone();
-    ensure!(
+    assert!(
         metrics.requests == 1 && metrics.failed_requests == 1 && metrics.successful_requests == 0
     );
-    ensure!(metrics.unrecorded_requests == 0);
+    assert!(metrics.unrecorded_requests == 0);
     drop(state);
-    fs::remove_dir_all(root)?;
-    Ok(())
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
-async fn timeout_and_shutdown_preserve_partial_usage_without_counting_twice() -> Result<()> {
+async fn timeout_and_shutdown_preserve_partial_usage_without_counting_twice() {
     for cancelled in [false, true] {
-        let (root, state, request) = fixture()?;
+        let (root, state, request) = fixture();
         let mut record = RequestRecord::new(&state, &request, Instant::now());
         record.outcome.status = Some(200);
         record.outcome.delivery = DownstreamDelivery::Complete;
@@ -131,7 +134,7 @@ async fn timeout_and_shutdown_preserve_partial_usage_without_counting_twice() ->
                 relay_response(&mut downstream, &mut record.outcome, stalled),
             )
             .await;
-            ensure!(result.is_err());
+            assert!(result.is_err());
         } else {
             let failing = futures::StreamExt::chain(
                 body,
@@ -144,17 +147,17 @@ async fn timeout_and_shutdown_preserve_partial_usage_without_counting_twice() ->
             );
             let result = relay_response(&mut downstream, &mut record.outcome, failing).await;
             let recorded = record.finish(result);
-            ensure!(recorded.is_err());
+            assert!(recorded.is_err());
         }
         drop(record);
-        let event = read_event(&root)?;
-        ensure!(field(&event, "/status") == 200 && field(&event, "/delivery") == "incomplete");
-        ensure!(
+        let event = read_event(&root);
+        assert!(field(&event, "/status") == 200 && field(&event, "/delivery") == "incomplete");
+        assert!(
             field(&event, "/stage") == "upstream_body"
                 && field(&event, "/usage/total_tokens") == 30
         );
         let error = field(&event, "/error").as_str().unwrap_or_default();
-        ensure!(error.contains(if cancelled {
+        assert!(error.contains(if cancelled {
             "cancelled"
         } else {
             "injected read timeout"
@@ -162,15 +165,15 @@ async fn timeout_and_shutdown_preserve_partial_usage_without_counting_twice() ->
         let metrics = state
             .metrics
             .lock()
-            .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?
+            .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))
+            .unwrap()
             .clone();
-        ensure!(
+        assert!(
             metrics.requests == 1
                 && metrics.failed_requests == 1
                 && metrics.usage.total_tokens == 30
         );
         drop(state);
-        fs::remove_dir_all(root)?;
+        fs::remove_dir_all(root).unwrap();
     }
-    Ok(())
 }

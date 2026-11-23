@@ -171,41 +171,4 @@ async fn forward_auth_updates(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use color_eyre::eyre::ensure;
-    use kraai_provider_core::ProviderLoginState;
-    use kraai_test_support::hang_guard;
-
-    #[tokio::test]
-    async fn auth_forwarding_recovers_from_lag_and_drains_before_close() -> Result<()> {
-        let (updates, receiver) = broadcast::channel(2);
-        let events = RuntimeEventSender::new(4);
-        let mut received = events.subscribe();
-        let status = |sequence| ProviderAuthStatus {
-            provider_type: String::from("example"),
-            sequence,
-            state: ProviderLoginState::SignedOut,
-            account: None,
-            plan: None,
-            last_refresh_unix: Some(sequence),
-            error: None,
-        };
-        for sequence in 0..3 {
-            updates.send(status(sequence))?;
-        }
-        let forwarding = forward_auth_updates(receiver, events);
-        tokio::pin!(forwarding);
-        ensure!(futures::poll!(&mut forwarding).is_pending());
-        for sequence in 1..3 {
-            ensure!(matches!(received.try_recv()?.event,
-                Event::ProviderAuthUpdated { status: actual } if actual == status(sequence)));
-        }
-        updates.send(status(3))?;
-        drop(updates);
-        hang_guard(forwarding).await?;
-        ensure!(matches!(received.try_recv()?.event,
-            Event::ProviderAuthUpdated { status: actual } if actual == status(3)));
-        Ok(())
-    }
-}
+mod tests;

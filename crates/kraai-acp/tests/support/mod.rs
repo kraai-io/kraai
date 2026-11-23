@@ -11,7 +11,6 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use color_eyre::eyre::{Result, eyre};
 use futures::{StreamExt, stream};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -45,10 +44,10 @@ pub struct Harness {
 }
 
 impl Harness {
-    pub async fn new(replies: Vec<Reply>) -> Result<Self> {
-        let root = tempfile::tempdir()?;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
+    pub async fn new(replies: Vec<Reply>) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
         let replies = Arc::new(Mutex::new(VecDeque::from(replies)));
         let model_requests = Arc::new(AtomicUsize::new(0));
         let received_requests = model_requests.clone();
@@ -135,9 +134,10 @@ supports_images = true
 "#
             ),
         )
-        .await?;
-        let (child, input, output) = Self::spawn(root.path())?;
-        Ok(Self {
+        .await
+        .unwrap();
+        let (child, input, output) = Self::spawn(root.path());
+        Self {
             root,
             child,
             input: Some(input),
@@ -145,10 +145,10 @@ supports_images = true
             model_requests,
             provider_payloads,
             _server: server,
-        })
+        }
     }
 
-    fn spawn(root: &std::path::Path) -> Result<(Child, ChildStdin, BufReader<ChildStdout>)> {
+    fn spawn(root: &std::path::Path) -> (Child, ChildStdin, BufReader<ChildStdout>) {
         Self::spawn_with_selection(root, Some("mock"), Some("mock-model"))
     }
 
@@ -156,7 +156,7 @@ supports_images = true
         root: &std::path::Path,
         provider: Option<&str>,
         model: Option<&str>,
-    ) -> Result<(Child, ChildStdin, BufReader<ChildStdout>)> {
+    ) -> (Child, ChildStdin, BufReader<ChildStdout>) {
         Self::spawn_with_options(root, provider, model, &[])
     }
 
@@ -165,7 +165,7 @@ supports_images = true
         provider: Option<&str>,
         model: Option<&str>,
         options: &[&str],
-    ) -> Result<(Child, ChildStdin, BufReader<ChildStdout>)> {
+    ) -> (Child, ChildStdin, BufReader<ChildStdout>) {
         let mut command = Command::new(env!("CARGO_BIN_EXE_kraai-acp"));
         if let Some(provider) = provider {
             command.args(["--provider", provider]);
@@ -186,87 +186,85 @@ supports_images = true
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .kill_on_drop(true)
-            .spawn()?;
-        let input = child.stdin.take().ok_or_else(|| eyre!("missing stdin"))?;
-        let output = BufReader::new(child.stdout.take().ok_or_else(|| eyre!("missing stdout"))?);
-        Ok((child, input, output))
+            .spawn()
+            .unwrap();
+        let input = child.stdin.take().expect("missing stdin");
+        let output = BufReader::new(child.stdout.take().expect("missing stdout"));
+        (child, input, output)
     }
 
-    pub async fn send(&mut self, value: Value) -> Result<()> {
-        let input = self
-            .input
-            .as_mut()
-            .ok_or_else(|| eyre!("stdin is closed"))?;
-        input.write_all(format!("{value}\n").as_bytes()).await?;
-        input.flush().await?;
-        Ok(())
+    pub async fn send(&mut self, value: Value) {
+        let input = self.input.as_mut().expect("stdin is closed");
+        input
+            .write_all(format!("{value}\n").as_bytes())
+            .await
+            .unwrap();
+        input.flush().await.unwrap();
     }
 
-    pub async fn read(&mut self) -> Result<Value> {
+    pub async fn read(&mut self) -> Value {
         let mut line = String::new();
-        let bytes = kraai_test_support::hang_guard(self.output.read_line(&mut line)).await??;
+        let bytes = kraai_test_support::hang_guard(self.output.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
         if bytes == 0 {
-            return Err(eyre!("ACP subprocess closed stdout"));
+            panic!("ACP subprocess closed stdout");
         }
-        Ok(serde_json::from_str(&line)?)
+        serde_json::from_str(&line).unwrap()
     }
 
-    pub async fn until(
-        &mut self,
-        predicate: impl Fn(&Value) -> bool + Send + Sync,
-    ) -> Result<Vec<Value>> {
+    pub async fn until(&mut self, predicate: impl Fn(&Value) -> bool + Send + Sync) -> Vec<Value> {
         kraai_test_support::hang_guard(async {
             let mut messages = Vec::new();
             loop {
-                let value = self.read().await?;
+                let value = self.read().await;
                 let done = predicate(&value);
                 messages.push(value);
                 if done {
-                    return Ok(messages);
+                    return messages;
                 }
             }
         })
-        .await?
+        .await
+        .unwrap()
     }
 
-    pub async fn request(&mut self, id: u64, method: &str, params: Value) -> Result<Vec<Value>> {
+    pub async fn request(&mut self, id: u64, method: &str, params: Value) -> Vec<Value> {
         self.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
-            .await?;
+            .await;
         self.until(|value| value.get("id") == Some(&json!(id)))
             .await
     }
 
-    pub async fn initialize(&mut self) -> Result<Value> {
+    pub async fn initialize(&mut self) -> Value {
         let values = self
             .request(
                 0,
                 "initialize",
                 json!({"protocolVersion":2,"info":{"name":"kraai-acp-tests","version":"0.0.0"},"capabilities":{}}),
             )
-            .await?;
-        values
-            .last()
-            .cloned()
-            .ok_or_else(|| eyre!("missing initialize response"))
+            .await;
+        values.last().cloned().expect("missing initialize response")
     }
 
-    pub async fn session(&mut self) -> Result<String> {
+    pub async fn session(&mut self) -> String {
         let values = self
             .request(
                 1,
                 "session/new",
                 json!({"cwd":self.root.path(),"mcpServers":[]}),
             )
-            .await?;
+            .await;
         values
             .last()
             .and_then(|value| value.pointer("/result/sessionId"))
             .and_then(Value::as_str)
             .map(String::from)
-            .ok_or_else(|| eyre!("missing session ID: {values:?}"))
+            .unwrap_or_else(|| panic!("missing session ID: {values:?}"))
     }
 
-    pub async fn load_session(&mut self, session: &str, id: u64) -> Result<Vec<Value>> {
+    pub async fn load_session(&mut self, session: &str, id: u64) -> Vec<Value> {
         self.request(
             id,
             "session/load",
@@ -275,25 +273,23 @@ supports_images = true
         .await
     }
 
-    pub async fn stop(&mut self) -> Result<()> {
+    pub async fn stop(&mut self) {
         drop(self.input.take());
-        let status = kraai_test_support::hang_guard(self.child.wait()).await??;
+        let status = kraai_test_support::hang_guard(self.child.wait())
+            .await
+            .unwrap()
+            .unwrap();
         if !status.success() {
-            return Err(eyre!("ACP subprocess failed: {status}"));
+            panic!("ACP subprocess failed: {status}");
         }
-        Ok(())
     }
 
-    pub async fn restart(&mut self) -> Result<()> {
+    pub async fn restart(&mut self) {
         self.restart_with_selection(Some("mock"), Some("mock-model"))
             .await
     }
 
-    pub async fn restart_with_selection(
-        &mut self,
-        provider: Option<&str>,
-        model: Option<&str>,
-    ) -> Result<()> {
+    pub async fn restart_with_selection(&mut self, provider: Option<&str>, model: Option<&str>) {
         self.restart_with_options(provider, model, &[]).await
     }
 
@@ -302,19 +298,18 @@ supports_images = true
         provider: Option<&str>,
         model: Option<&str>,
         options: &[&str],
-    ) -> Result<()> {
-        self.stop().await?;
+    ) {
+        self.stop().await;
         let (child, input, output) =
-            Self::spawn_with_options(self.root.path(), provider, model, options)?;
+            Self::spawn_with_options(self.root.path(), provider, model, options);
         self.child = child;
         self.input = Some(input);
         self.output = output;
-        Ok(())
     }
 
-    pub async fn install_profile(&self) -> Result<()> {
+    pub async fn install_profile(&self) {
         let directory = self.root.path().join(".kraai");
-        tokio::fs::create_dir_all(&directory).await?;
+        tokio::fs::create_dir_all(&directory).await.unwrap();
         tokio::fs::write(
             directory.join("agents.toml"),
             format!(
@@ -332,8 +327,8 @@ path = "inherit"
 "#
             ),
         )
-        .await?;
-        Ok(())
+        .await
+        .unwrap();
     }
 }
 

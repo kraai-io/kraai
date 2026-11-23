@@ -1,7 +1,3 @@
-#![expect(
-    clippy::panic_in_result_fn,
-    reason = "integration tests assert after fallible host execution"
-)]
 use super::*;
 use kraai_execution_types::ImageAttachment;
 use kraai_nushell_runtime::ImageAttachmentHandler;
@@ -25,8 +21,7 @@ impl kraai_mcp::McpHost for McpImages {
 }
 
 #[tokio::test]
-async fn mcp_images_attach_without_enabling_view_image()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn mcp_images_attach_without_enabling_view_image() {
     let workspace = TestWorkspace::new();
     let images = Arc::new(RecordingImages::default());
     let mut plan = plan(
@@ -36,19 +31,18 @@ async fn mcp_images_attach_without_enabling_view_image()
     plan.active_commands = vec![String::from("kraai-mcp")];
     plan.mcp = Arc::new(McpImages);
     plan.image_attachment_handler = images.clone();
-    let result = execute(plan, CancellationToken::new()).await?;
+    let result = execute(plan, CancellationToken::new()).await.unwrap();
     assert_eq!(
         result.output.termination,
         Termination::Exited { code: Some(0) }
     );
     assert_eq!(
-        *images.0.lock().map_err(|error| error.to_string())?,
+        *images.0.lock().unwrap(),
         vec![b"hello".to_vec(), b"world".to_vec()]
     );
-    let output = String::from_utf8(result.output.stdout)?;
+    let output = String::from_utf8(result.output.stdout).unwrap();
     assert!(output.contains("attachment"));
     assert!(!output.contains("aGVsbG8="));
-    Ok(())
 }
 
 impl ImageAttachmentHandler for RecordingImages {
@@ -91,11 +85,10 @@ impl ImageAttachmentHandler for RecordingImages {
 }
 
 #[tokio::test]
-async fn view_image_attaches_bytes_without_state_effects_or_binary_stdout()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn view_image_attaches_bytes_without_state_effects_or_binary_stdout() {
     let workspace = TestWorkspace::new();
     let bytes = [0, 255, 128, 10, 13];
-    std::fs::write(workspace.0.join("image.png"), bytes)?;
+    std::fs::write(workspace.0.join("image.png"), bytes).unwrap();
     let images = Arc::new(RecordingImages::default());
     let effects = Arc::new(RecordingEffects::default());
     let mut plan = plan(
@@ -105,12 +98,12 @@ async fn view_image_attaches_bytes_without_state_effects_or_binary_stdout()
     plan.active_commands.push(String::from("kraai-view-image"));
     plan.image_attachment_handler = images.clone();
     plan.state_effect_handler = effects.clone();
-    let result = execute(plan, CancellationToken::new()).await?;
+    let result = execute(plan, CancellationToken::new()).await.unwrap();
     assert_eq!(
         result.output.termination,
         Termination::Exited { code: Some(0) }
     );
-    let output: serde_json::Value = serde_json::from_slice(&result.output.stdout)?;
+    let output: serde_json::Value = serde_json::from_slice(&result.output.stdout).unwrap();
     assert_eq!(
         output.get("id").and_then(serde_json::Value::as_str),
         Some("a".repeat(64).as_str())
@@ -120,23 +113,12 @@ async fn view_image_attaches_bytes_without_state_effects_or_binary_stdout()
         Some(1)
     );
     assert_eq!(output.as_object().map(|value| value.len()), Some(4));
-    assert_eq!(
-        *images.0.lock().map_err(|error| error.to_string())?,
-        vec![bytes.to_vec()]
-    );
-    assert!(
-        effects
-            .requests
-            .lock()
-            .map_err(|error| error.to_string())?
-            .is_empty()
-    );
-    Ok(())
+    assert_eq!(*images.0.lock().unwrap(), vec![bytes.to_vec()]);
+    assert!(effects.requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn view_image_reopens_by_attachment_without_a_filesystem_path()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn view_image_reopens_by_attachment_without_a_filesystem_path() {
     let workspace = TestWorkspace::new();
     let images = Arc::new(RecordingImages::default());
     let id = "a".repeat(64);
@@ -146,22 +128,15 @@ async fn view_image_reopens_by_attachment_without_a_filesystem_path()
     );
     plan.active_commands.push(String::from("kraai-view-image"));
     plan.image_attachment_handler = images.clone();
-    let result = execute(plan, CancellationToken::new()).await?;
+    let result = execute(plan, CancellationToken::new()).await.unwrap();
     assert_eq!(
         result.output.termination,
         Termination::Exited { code: Some(0) }
     );
-    let output: serde_json::Value = serde_json::from_slice(&result.output.stdout)?;
+    let output: serde_json::Value = serde_json::from_slice(&result.output.stdout).unwrap();
     assert_eq!(
         output.get("id").and_then(serde_json::Value::as_str),
         Some(id.as_str())
     );
-    assert!(
-        images
-            .0
-            .lock()
-            .map_err(|error| error.to_string())?
-            .is_empty()
-    );
-    Ok(())
+    assert!(images.0.lock().unwrap().is_empty());
 }

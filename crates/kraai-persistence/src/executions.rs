@@ -455,8 +455,4 @@ fn now_millis() -> u64 {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    reason = "execution persistence tests use direct fixture assertions"
-)]
 mod tests;

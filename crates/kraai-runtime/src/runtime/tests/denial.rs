@@ -1,20 +1,19 @@
-use color_eyre::eyre::Result;
 use kraai_execution_types::ScriptExecutionId;
 
 use super::harness::{RuntimeTestHarness, ScriptedChunk, create_session_with_profile};
 use crate::{Event, SubmitMessageOutcome};
 
 #[tokio::test]
-async fn denial_execution_failure_cleans_up_turn_and_drains_queue() -> Result<()> {
+async fn denial_execution_failure_cleans_up_turn_and_drains_queue() {
     denial_failure_cleans_up(false).await
 }
 
 #[tokio::test]
-async fn denial_history_failure_cleans_up_turn_and_drains_queue() -> Result<()> {
+async fn denial_history_failure_cleans_up_turn_and_drains_queue() {
     denial_failure_cleans_up(true).await
 }
 
-async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
+async fn denial_failure_cleans_up(fail_history: bool) {
     let harness = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::native_call(
             "call-1",
@@ -23,7 +22,7 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
         vec![ScriptedChunk::plain("Queued message handled")],
     ])
     .await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     harness
         .handle
         .send_message(
@@ -33,7 +32,8 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     harness
         .events
         .wait_for("approval", |events| {
@@ -47,16 +47,18 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
     let pending = harness
         .handle
         .get_pending_script(session_id.clone())
-        .await?
+        .await
+        .unwrap()
         .expect("pending approval");
     let execution_id = ScriptExecutionId::new(pending.execution_id);
     let record = harness
         .runtime
         .execution_store
         .get(&execution_id)
-        .await?
+        .await
+        .unwrap()
         .expect("execution record");
-    let connection = rusqlite::Connection::open(harness.data_dir.join("kraai.sqlite3"))?;
+    let connection = rusqlite::Connection::open(harness.data_dir.join("kraai.sqlite3")).unwrap();
     let (kind, id) = if fail_history {
         ("message", record.result_message_id.as_str())
     } else {
@@ -64,7 +66,7 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
     };
     connection.execute_batch(&format!(
         "CREATE TRIGGER fail_denial BEFORE INSERT ON records WHEN NEW.kind = '{kind}' AND NEW.id = '{id}' BEGIN SELECT RAISE(FAIL, 'injected persistence failure'); END;"
-    ))?;
+    )).unwrap();
     assert!(matches!(
         harness
             .handle
@@ -75,7 +77,8 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
                 "mock".into(),
                 Default::default(),
             )
-            .await?,
+            .await
+            .unwrap(),
         SubmitMessageOutcome::Queued { .. }
     ));
 
@@ -88,7 +91,9 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
         format!("{error:?}").contains("injected persistence failure"),
         "{error:?}"
     );
-    connection.execute_batch("DROP TRIGGER fail_denial")?;
+    connection
+        .execute_batch("DROP TRIGGER fail_denial")
+        .unwrap();
     harness
         .events
         .wait_for("denial failure", |events| {
@@ -108,5 +113,4 @@ async fn denial_failure_cleans_up(fail_history: bool) -> Result<()> {
         })
         .await;
     harness.shutdown().await;
-    Ok(())
 }

@@ -101,7 +101,7 @@ pub(super) fn run(
     let result = kraai_eval::run_suite(&SuiteRequest {
         runs,
         eval_root: root.path().to_path_buf(),
-        harness_dir: directory.relative.clone(),
+        harness_dir: directory.relative,
     });
     display.finish();
     let outcome = result?;

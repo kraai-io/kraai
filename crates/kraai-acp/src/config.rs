@@ -11,7 +11,7 @@ use model_options::model_option;
 pub(crate) use model_options::set_model_option;
 
 #[cfg(test)]
-mod refresh_tests;
+mod tests;
 
 pub(crate) async fn options(
     runtime: &RuntimeHandle,

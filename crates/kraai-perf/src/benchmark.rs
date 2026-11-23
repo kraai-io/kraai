@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::path::PathBuf;
 
 use color_eyre::eyre::{Result, ensure};
@@ -133,6 +132,6 @@ pub(crate) fn validate_catalog(workloads: Vec<Workload>) -> Result<Vec<Workload>
     Ok(workloads)
 }
 
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-#[path = "benchmark_tests.rs"]
+#[cfg(test)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod tests;

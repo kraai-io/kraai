@@ -3,7 +3,6 @@ use kraai_execution_types::{
     SandboxCapability,
 };
 use kraai_runtime::{AgentProfileSource, AgentProfileSummary};
-use kraai_types::SessionId;
 
 use super::*;
 use crate::app::{KeyCode, UiMode};

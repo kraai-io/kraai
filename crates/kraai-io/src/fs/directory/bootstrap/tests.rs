@@ -1,16 +1,10 @@
-#![expect(
-    clippy::panic_in_result_fn,
-    reason = "bootstrap tests assert filesystem and durability outcomes"
-)]
-
 use std::fs;
 
 use super::*;
 
 #[test]
-fn independent_initializers_sync_existing_and_overlapping_directories_to_the_anchor()
--> io::Result<()> {
-    let root = tempfile::tempdir()?;
+fn independent_initializers_sync_existing_and_overlapping_directories_to_the_anchor() {
+    let root = tempfile::tempdir().unwrap();
     let first_path = root.path().join("shared/first");
     let first = DirectoryBootstrap::new(root.path().to_path_buf(), first_path.clone());
     assert!(
@@ -28,25 +22,26 @@ fn independent_initializers_sync_existing_and_overlapping_directories_to_the_anc
     for path in [first_path, root.path().join("shared/second")] {
         let bootstrap = DirectoryBootstrap::new(root.path().to_path_buf(), path.clone());
         let mut synced = Vec::new();
-        bootstrap.create_private_with_sync(|directory| {
-            synced.push(directory.to_path_buf());
-            sync_directory(directory)
-        })?;
+        bootstrap
+            .create_private_with_sync(|directory| {
+                synced.push(directory.to_path_buf());
+                sync_directory(directory)
+            })
+            .unwrap();
         assert_eq!(
             synced,
             vec![path, root.path().join("shared"), root.path().to_path_buf()]
         );
     }
-    Ok(())
 }
 
 #[test]
-fn recreated_directory_sync_failure_revokes_prior_ready_state() -> io::Result<()> {
-    let root = tempfile::tempdir()?;
+fn recreated_directory_sync_failure_revokes_prior_ready_state() {
+    let root = tempfile::tempdir().unwrap();
     let path = root.path().join("credentials");
     let bootstrap = DirectoryBootstrap::new(root.path().to_path_buf(), path.clone());
-    bootstrap.create_private()?;
-    fs::remove_dir(&path)?;
+    bootstrap.create_private().unwrap();
+    fs::remove_dir(&path).unwrap();
     for _ in 0..2 {
         assert!(
             bootstrap
@@ -61,13 +56,12 @@ fn recreated_directory_sync_failure_revokes_prior_ready_state() -> io::Result<()
         );
         assert!(path.is_dir());
     }
-    bootstrap.create_private()?;
-    Ok(())
+    bootstrap.create_private().unwrap();
 }
 
 #[test]
-fn failed_sync_retains_original_anchor_until_every_directory_is_durable() -> io::Result<()> {
-    let root = tempfile::tempdir()?;
+fn failed_sync_retains_original_anchor_until_every_directory_is_durable() {
+    let root = tempfile::tempdir().unwrap();
     let path = root.path().join("parent/credentials");
     let bootstrap = DirectoryBootstrap::new(root.path().to_path_buf(), path.clone());
     for _ in 0..2 {
@@ -92,10 +86,12 @@ fn failed_sync_retains_original_anchor_until_every_directory_is_durable() -> io:
         );
     }
     let mut synced = Vec::new();
-    bootstrap.create_private_with_sync(|directory| {
-        synced.push(directory.to_path_buf());
-        sync_directory(directory)
-    })?;
+    bootstrap
+        .create_private_with_sync(|directory| {
+            synced.push(directory.to_path_buf());
+            sync_directory(directory)
+        })
+        .unwrap();
     assert_eq!(
         synced,
         vec![
@@ -104,19 +100,20 @@ fn failed_sync_retains_original_anchor_until_every_directory_is_durable() -> io:
             root.path().to_path_buf()
         ]
     );
-    bootstrap.create_private_with_sync(|_directory| Err(io::Error::other("already durable")))?;
-    fs::remove_dir_all(root.path().join("parent"))?;
-    bootstrap.create_private()?;
+    bootstrap
+        .create_private_with_sync(|_directory| Err(io::Error::other("already durable")))
+        .unwrap();
+    fs::remove_dir_all(root.path().join("parent")).unwrap();
+    bootstrap.create_private().unwrap();
     assert!(path.is_dir());
-    Ok(())
 }
 
 #[cfg(feature = "async")]
 #[tokio::test]
-async fn cancelled_waiter_does_not_discard_failed_bootstrap_anchor() -> io::Result<()> {
+async fn cancelled_waiter_does_not_discard_failed_bootstrap_anchor() {
     use std::sync::Arc;
 
-    let root = tempfile::tempdir()?;
+    let root = tempfile::tempdir().unwrap();
     let path = root.path().join("parent/credentials");
     let bootstrap = Arc::new(DirectoryBootstrap::new(
         root.path().to_path_buf(),
@@ -148,21 +145,20 @@ async fn cancelled_waiter_does_not_discard_failed_bootstrap_anchor() -> io::Resu
         })
         .await
     });
-    entered_rx.await.map_err(io::Error::other)?;
+    entered_rx.await.unwrap();
     waiter.abort();
     assert!(waiter.await.is_err_and(|error| error.is_cancelled()));
-    release_tx
-        .send(())
-        .map_err(|()| io::Error::other("worker stopped"))?;
-    assert!(finished_rx.await.map_err(io::Error::other)?.is_err());
+    release_tx.send(()).expect("worker stopped");
+    assert!(finished_rx.await.unwrap().is_err());
     let mut synced = Vec::new();
-    bootstrap.create_private_with_sync(|directory| {
-        synced.push(directory.to_path_buf());
-        sync_directory(directory)
-    })?;
+    bootstrap
+        .create_private_with_sync(|directory| {
+            synced.push(directory.to_path_buf());
+            sync_directory(directory)
+        })
+        .unwrap();
     assert_eq!(
         synced,
         vec![path, root.path().join("parent"), root.path().to_path_buf()]
     );
-    Ok(())
 }

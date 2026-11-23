@@ -1,12 +1,8 @@
 use super::*;
 
 #[test]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "regression test asserts cleanup state"
-)]
-fn failed_cleanup_preserves_profile_for_retry() -> Result<(), SandboxError> {
-    let mut identity = Identity::create()?;
+fn failed_cleanup_preserves_profile_for_retry() {
+    let mut identity = Identity::create().unwrap();
     let name = identity.name.clone();
     let result = identity.cleanup_with(|_| {
         Err(SandboxError::SandboxUnavailable(
@@ -18,28 +14,24 @@ fn failed_cleanup_preserves_profile_for_retry() -> Result<(), SandboxError> {
     );
     assert_eq!(identity.name, name);
     assert!(identity.alive.is_some());
-    identity.cleanup()?;
+    identity.cleanup().unwrap();
     assert!(identity.name.is_empty());
     assert!(identity.alive.is_none());
-    identity.cleanup_with(|_| {
-        Err(SandboxError::SandboxUnavailable(
-            "profile deleted twice".into(),
-        ))
-    })?;
-    Ok(())
+    identity
+        .cleanup_with(|_| {
+            Err(SandboxError::SandboxUnavailable(
+                "profile deleted twice".into(),
+            ))
+        })
+        .unwrap();
 }
 
 #[test]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "regression test asserts profile lifetimes"
-)]
-fn launches_get_distinct_identities() -> Result<(), SandboxError> {
-    let first = Identity::create()?;
-    let second = Identity::create()?;
+fn launches_get_distinct_identities() {
+    let first = Identity::create().unwrap();
+    let second = Identity::create().unwrap();
     assert_ne!(first.name, second.name);
     assert_ne!(first.sid.0, second.sid.0);
-    Ok(())
 }
 
 fn moniker(identity: &Identity) -> String {
@@ -47,44 +39,35 @@ fn moniker(identity: &Identity) -> String {
 }
 
 #[test]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "regression test asserts profile lifetimes"
-)]
-fn sweep_deletes_only_profiles_without_a_live_launch() -> Result<(), SandboxError> {
-    let mut stale = Identity::create()?;
-    let live = Identity::create()?;
+fn sweep_deletes_only_profiles_without_a_live_launch() {
+    let mut stale = Identity::create().unwrap();
+    let live = Identity::create().unwrap();
     let stale_moniker = moniker(&stale);
     let live_moniker = moniker(&live);
-    let listed = monikers()?;
+    let listed = monikers().unwrap();
     assert!(listed.contains(&stale_moniker));
     assert!(listed.contains(&live_moniker));
     stale.alive = None;
     let stale_name = std::mem::take(&mut stale.name);
     let swept = sweep_stale_profiles();
-    let listed = monikers()?;
+    let listed = monikers().unwrap();
     if listed.contains(&stale_moniker) {
-        delete_profile(&stale_name)?;
+        delete_profile(&stale_name).unwrap();
     }
-    swept?;
+    swept.unwrap();
     assert!(!listed.contains(&stale_moniker));
     assert!(listed.contains(&live_moniker));
-    Ok(())
 }
 
 #[test]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "regression test asserts capability isolation"
-)]
-fn path_capabilities_differ_by_path_kind_and_access() -> Result<(), SandboxError> {
+fn path_capabilities_differ_by_path_kind_and_access() {
     let first = Path::new(r"C:\kraai\first");
     let second = Path::new(r"C:\kraai\second");
     let derived = [
-        path_capability("root", first, Access::Read)?,
-        path_capability("root", second, Access::Read)?,
-        path_capability("ws", first, Access::Read)?,
-        path_capability("ws", first, Access::Write)?,
+        path_capability("root", first, Access::Read).unwrap(),
+        path_capability("root", second, Access::Read).unwrap(),
+        path_capability("ws", first, Access::Read).unwrap(),
+        path_capability("ws", first, Access::Write).unwrap(),
     ]
     .into_iter()
     .flatten()
@@ -93,10 +76,10 @@ fn path_capabilities_differ_by_path_kind_and_access() -> Result<(), SandboxError
     assert_eq!(derived.len(), 4);
     let distinct = derived.iter().collect::<std::collections::HashSet<_>>();
     assert_eq!(distinct.len(), derived.len());
-    let again = path_capability("root", first, Access::Read)?
+    let again = path_capability("root", first, Access::Read)
+        .unwrap()
         .into_iter()
         .map(|sid| sid.0)
         .collect::<Vec<_>>();
     assert_eq!(derived.first(), again.first());
-    Ok(())
 }

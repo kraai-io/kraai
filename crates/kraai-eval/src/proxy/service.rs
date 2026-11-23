@@ -120,26 +120,4 @@ fn advertised_host(host: &str) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn advertised_hosts_support_ipv6_and_reject_ports() -> Result<()> {
-        ensure!(advertised_host("::1")? == "[::1]");
-        ensure!(advertised_host("[::1]")? == "[::1]");
-        ensure!(advertised_host("127.0.0.1")? == "127.0.0.1");
-        ensure!(advertised_host("controller.test")? == "controller.test");
-        for host in [
-            "localhost:1000",
-            "127.0.0.1:1000",
-            "[::1]:1000",
-            "",
-            "host/path",
-            "user@host",
-            "[[::1]]",
-        ] {
-            ensure!(advertised_host(host).is_err());
-        }
-        Ok(())
-    }
-}
+mod tests;

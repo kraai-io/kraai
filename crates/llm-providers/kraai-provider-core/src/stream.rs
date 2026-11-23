@@ -84,5 +84,4 @@ pub enum StopReason {
 }
 
 #[cfg(test)]
-#[path = "stream_tests.rs"]
 mod tests;

@@ -78,7 +78,7 @@ fn restricted_network_child() {
                 bytes.len(),
                 0,
                 (&address as *const libc::sockaddr_un).cast(),
-                std::mem::size_of_val(&address) as libc::socklen_t,
+                size_of_val(&address) as libc::socklen_t,
             )
         },
         -1

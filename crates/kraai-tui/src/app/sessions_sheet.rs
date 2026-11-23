@@ -1,5 +1,4 @@
 use kraai_runtime::Session;
-use kraai_types::SessionId;
 
 use super::*;
 

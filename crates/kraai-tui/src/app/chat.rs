@@ -1,5 +1,4 @@
 use super::*;
-use kraai_types::SessionId;
 
 impl App {
     pub(super) fn set_error(&mut self, error: String) {
@@ -19,7 +18,7 @@ impl App {
     pub(super) fn copy_text_to_clipboard(
         &mut self,
         text: &str,
-        target: super::feedback::CopyTarget,
+        target: feedback::CopyTarget,
     ) -> Result<(), String> {
         self.state.feedback.clear_copy();
         let mut errors = Vec::new();
@@ -335,7 +334,7 @@ impl App {
         self.state.retry_waiting = false;
         self.state.profile_lock_stale_after_terminal_event = false;
         self.state.turn_timer = kraai_runtime::TurnTimer::default();
-        self.state.feedback = super::feedback::VisualFeedback::default();
+        self.state.feedback = feedback::VisualFeedback::default();
         self.last_statusline_animation_tick = None;
         self.state.auto_scroll = true;
         self.state.scroll = 0;
@@ -379,8 +378,8 @@ impl App {
         if self.request(RuntimeRequest::SendMessage {
             session_id: session_id.clone(),
             message: message.clone(),
-            model_id: model_id.clone(),
-            provider_id: provider_id.clone(),
+            model_id,
+            provider_id,
             options,
         }) == RuntimeRequestDelivery::Disconnected
         {
@@ -459,7 +458,7 @@ impl App {
         let message = String::from("Runtime bridge disconnected");
         self.runtime_bridge_connected = false;
         self.state.submitted_script_decisions.clear();
-        self.runtime_bridge_error.get_or_insert(message.clone());
+        self.runtime_bridge_error.get_or_insert(message);
         let mut messages: std::collections::BTreeMap<Option<SessionId>, Vec<MessageContent>> =
             std::collections::BTreeMap::new();
         while let Some(pending) = self.state.pending_messages.pop_front() {
@@ -490,7 +489,7 @@ impl App {
         self.event_lag_script_resync_pending = false;
         self.state.profile_lock_stale_after_terminal_event = false;
         self.state.turn_timer = kraai_runtime::TurnTimer::default();
-        self.state.feedback = super::feedback::VisualFeedback::default();
+        self.state.feedback = feedback::VisualFeedback::default();
         self.invalidate_chat_cache();
         self.state.exit = true;
     }

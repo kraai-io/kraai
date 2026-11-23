@@ -239,7 +239,7 @@ pub(crate) async fn create(
     }
     let cwd = tokio::fs::canonicalize(request.cwd)
         .await
-        .map_err(|error| crate::error::invalid(error.to_string()))?;
+        .map_err(|error| error::invalid(error.to_string()))?;
     let mcp = crate::mcp::config(request.mcp_servers, &cwd)?;
     let model = select_model(runtime, options, None).await?;
     let id = runtime
@@ -264,7 +264,7 @@ pub(crate) async fn create(
         runtime
             .delete_session(id.clone())
             .await
-            .map_err(crate::error::runtime)?;
+            .map_err(error::runtime)?;
         return Err(error);
     }
     Ok((id, Arc::new(Session::new(config_updated))))

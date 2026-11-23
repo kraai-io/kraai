@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 use clap::Parser;
 use color_eyre::eyre::Result;
 use kraai_runtime::RuntimeBuilder;
@@ -8,14 +6,14 @@ use std::path::PathBuf;
 use crate::app::{App, StartupOptions};
 
 mod app;
-#[path = "app/clipboard_image.rs"]
 mod clipboard_image;
 mod components;
 mod duration;
 mod terminal_cursor;
 mod terminal_features;
 mod terminal_loss;
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod terminal_session_tests;
 mod theme;
 
@@ -101,7 +99,7 @@ fn main() -> Result<()> {
     let mut app = App::new(runtime, startup_options);
     app.set_sandbox_check(kraai_sandbox::availability_warning);
 
-    ratatui::crossterm::terminal::enable_raw_mode()?;
+    crossterm::terminal::enable_raw_mode()?;
     app.request_cursor_preferences();
     let mut terminal = ratatui::init();
     let mut terminal_guard = TerminalSessionGuard::new();
@@ -127,30 +125,4 @@ fn main() -> Result<()> {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "CLI tests use direct assertions for parsing outcomes"
-)]
-mod tests {
-    use clap::Parser;
-
-    use super::Cli;
-
-    #[test]
-    fn interactive_mode_keeps_message_profile_and_provider_config_flags() {
-        for args in [
-            vec!["kraai"],
-            vec![
-                "kraai",
-                "--message",
-                "hello world",
-                "--agent-profile",
-                "coding",
-                "--provider-config",
-                "/tmp/providers.toml",
-            ],
-        ] {
-            Cli::try_parse_from(args).expect("interactive arguments should parse");
-        }
-    }
-}
+mod tests;

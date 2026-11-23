@@ -116,9 +116,12 @@ impl AppState {
         let rendered_messages = self.rendered_messages();
         let completed: HashSet<&str> = rendered_messages
             .iter()
-            .filter_map(|message| match &message.content {
-                ConversationItem::ScriptResult { call_id, .. } => Some(call_id.as_str()),
-                _ => None,
+            .filter_map(|message| {
+                if let ConversationItem::ScriptResult { call_id, .. } = &message.content {
+                    Some(call_id.as_str())
+                } else {
+                    None
+                }
             })
             .collect();
         let mut sources = HashMap::new();
@@ -176,11 +179,13 @@ impl AppState {
                     Some(entry) if entry.fingerprint == fingerprint => entry.lines,
                     _ => Arc::new(ChatHistory::build_script_group_lines(
                         &super::executions::group_summary(group.iter().filter_map(|message| {
-                            match &message.content {
-                                ConversationItem::ScriptResult {
-                                    outcome, output, ..
-                                } => Some((*outcome, output.text_only())),
-                                _ => None,
+                            if let ConversationItem::ScriptResult {
+                                outcome, output, ..
+                            } = &message.content
+                            {
+                                Some((*outcome, output.text_only()))
+                            } else {
+                                None
                             }
                         })),
                         width,
@@ -390,5 +395,4 @@ fn message_fingerprint(msg: &Message) -> u64 {
 }
 
 #[cfg(test)]
-#[path = "chat_render_tests.rs"]
 mod tests;

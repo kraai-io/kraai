@@ -95,28 +95,4 @@ fn load(path: &Path) -> Result<Task> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use color_eyre::eyre::ensure;
-
-    #[test]
-    fn selection_rejects_duplicate_task_ids_and_accepts_paths_without_a_catalog() -> Result<()> {
-        let root =
-            std::env::temp_dir().join(format!("kraai-eval-catalog-{}", ulid::Ulid::generate()));
-        fs::create_dir_all(root.join("fixture"))?;
-        fs::write(root.join("fixture/input"), "input")?;
-        let path = root.join("task.toml");
-        fs::write(
-            &path,
-            "schema_version = 1\nid = 'example'\nprompt = 'Repair the input.'\n[source]\ndirectory = 'fixture'\n[[grader.commands]]\ncommand = ['true']\n",
-        )?;
-        let selector = path.to_string_lossy().into_owned();
-        let tasks = select(&root.join("missing"), std::slice::from_ref(&selector))?;
-        ensure!(tasks.len() == 1);
-        ensure!(select(&root, &[selector.clone(), selector.clone()]).is_err());
-        fs::copy(&path, root.join("duplicate.toml"))?;
-        ensure!(discover(&root).is_err());
-        fs::remove_dir_all(root)?;
-        Ok(())
-    }
-}
+mod tests;

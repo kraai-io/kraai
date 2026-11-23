@@ -127,8 +127,4 @@ fn open_file_walk(root: &File, relative: &Path, path: &Path) -> Result<File, Sco
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    reason = "scoped walk tests assert fixture operations"
-)]
 mod tests;

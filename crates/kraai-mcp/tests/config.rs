@@ -1,10 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    clippy::panic,
-    clippy::indexing_slicing,
-    reason = "configuration fixtures assert parsing and availability"
-)]
-
 use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpConfig, McpHost, McpManager, TransportConfig};
 

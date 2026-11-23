@@ -5,6 +5,10 @@ impl App {
     pub(super) fn handle_composer_shortcut(&mut self, key: KeyEvent) -> bool {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only the listed keys are composer shortcuts"
+        )]
         match key.code {
             KeyCode::Char('v') if key.modifiers == KeyModifiers::CONTROL => self.paste_image(),
             KeyCode::Left if control => {

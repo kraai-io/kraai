@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 use color_eyre::eyre::{ContextCompat, Result};
 use directories::BaseDirs;
 use std::path::PathBuf;

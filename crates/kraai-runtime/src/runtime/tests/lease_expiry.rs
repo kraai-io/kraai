@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use color_eyre::eyre::Result;
 use kraai_test_support::hang_guard;
 
 use super::harness::FullHistory as _;
@@ -9,30 +8,38 @@ use crate::Event;
 use kraai_persistence::SessionStore;
 
 #[tokio::test]
-async fn observers_refresh_on_expiry_without_a_revision_change_and_can_submit() -> Result<()> {
+async fn observers_refresh_on_expiry_without_a_revision_change_and_can_submit() {
     let observer = RuntimeTestHarness::new(vec![vec![ScriptedChunk::plain("reply")]]).await;
-    let session = create_session_with_profile(&observer.handle, "test-profile").await?;
-    let owner = kraai_persistence::Persistence::open(&observer.data_dir).await?;
-    owner.sessions().claim_turn(&session).await?;
-    assert!(observer.handle.load_session(session.clone()).await?);
+    let session = create_session_with_profile(&observer.handle, "test-profile").await;
+    let owner = kraai_persistence::Persistence::open(&observer.data_dir)
+        .await
+        .unwrap();
+    owner.sessions().claim_turn(&session).await.unwrap();
+    assert!(observer.handle.load_session(session.clone()).await.unwrap());
     let before = observer
         .handle
         .get_session_snapshot(session.clone())
-        .await?;
+        .await
+        .unwrap();
     assert!(before.session.is_running);
     assert!(before.profiles.profile_locked);
     let revision = owner
         .sessions()
         .observe(&session)
-        .await?
+        .await
+        .unwrap()
         .expect("lease")
         .revision;
-    let connection = rusqlite::Connection::open(observer.data_dir.join("kraai.sqlite3"))?;
-    connection.busy_timeout(kraai_test_support::HANG_TIMEOUT)?;
-    connection.execute(
-        "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
-        [session.as_str()],
-    )?;
+    let connection = rusqlite::Connection::open(observer.data_dir.join("kraai.sqlite3")).unwrap();
+    connection
+        .busy_timeout(kraai_test_support::HANG_TIMEOUT)
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
+            [session.as_str()],
+        )
+        .unwrap();
     let after = hang_guard(async {
         loop {
             let snapshot = observer
@@ -45,14 +52,17 @@ async fn observers_refresh_on_expiry_without_a_revision_change_and_can_submit() 
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
-    .await??;
+    .await
+    .unwrap()
+    .unwrap();
     assert!(!after.session.is_running);
     assert!(!after.profiles.profile_locked);
     assert_eq!(
         owner
             .sessions()
             .observe(&session)
-            .await?
+            .await
+            .unwrap()
             .expect("lease")
             .revision,
         revision
@@ -66,14 +76,14 @@ async fn observers_refresh_on_expiry_without_a_revision_change_and_can_submit() 
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     observer.events.wait_for("turn completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id } if session_id == &session))).await;
     observer.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn startup_recovers_sessions_whose_owner_stopped_mid_stream() -> Result<()> {
+async fn startup_recovers_sessions_whose_owner_stopped_mid_stream() {
     let directory = std::env::temp_dir().join(format!(
         "kraai-startup-sweep-{}-{}",
         std::process::id(),
@@ -81,7 +91,9 @@ async fn startup_recovers_sessions_whose_owner_stopped_mid_stream() -> Result<()
     ));
     let session = kraai_types::SessionId::new("crashed");
     {
-        let crashed = kraai_persistence::Persistence::open(&directory).await?;
+        let crashed = kraai_persistence::Persistence::open(&directory)
+            .await
+            .unwrap();
         crashed
             .sessions()
             .save(&kraai_persistence::SessionMeta {
@@ -95,8 +107,9 @@ async fn startup_recovers_sessions_whose_owner_stopped_mid_stream() -> Result<()
                 selected_profile_id: Some("test-profile".into()),
                 selected_model: None,
             })
-            .await?;
-        crashed.sessions().claim_turn(&session).await?;
+            .await
+            .unwrap();
+        crashed.sessions().claim_turn(&session).await.unwrap();
         crashed
             .conversations()
             .append_messages(
@@ -114,51 +127,59 @@ async fn startup_recovers_sessions_whose_owner_stopped_mid_stream() -> Result<()
                 None,
                 None,
             )
-            .await?;
+            .await
+            .unwrap();
     }
-    let connection = rusqlite::Connection::open(directory.join("kraai.sqlite3"))?;
-    connection.execute(
-        "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
-        [session.as_str()],
-    )?;
+    let connection = rusqlite::Connection::open(directory.join("kraai.sqlite3")).unwrap();
+    connection
+        .execute(
+            "UPDATE sessions SET lease_expires_at = 0 WHERE id = ?1",
+            [session.as_str()],
+        )
+        .unwrap();
 
     let restarted = RuntimeTestHarness::new_shared(Vec::new(), directory.clone()).await;
     assert!(
         restarted
             .handle
             .get_chat_history(session.clone())
-            .await?
+            .await
             .is_empty()
     );
-    let lease_active: bool = connection.query_row(
-        "SELECT lease_active FROM sessions WHERE id = ?1",
-        [session.as_str()],
-        |row| row.get(0),
-    )?;
+    let lease_active: bool = connection
+        .query_row(
+            "SELECT lease_active FROM sessions WHERE id = ?1",
+            [session.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
     assert!(!lease_active);
     restarted.shutdown().await;
-    tokio::fs::remove_dir_all(directory).await?;
-    Ok(())
+    tokio::fs::remove_dir_all(directory).await.unwrap();
 }
 
 #[test]
-fn a_timer_left_running_by_an_expired_lease_stops_at_the_expiry() -> Result<()> {
+fn a_timer_left_running_by_an_expired_lease_stops_at_the_expiry() {
     let now = std::time::Instant::now();
     let mut running = crate::TurnTimer::default();
     running.start(
         now.checked_sub(Duration::from_secs(60))
-            .ok_or_else(|| color_eyre::eyre::eyre!("clock too early"))?,
+            .expect("clock too early"),
     );
     let expired_at = std::time::SystemTime::now()
         .checked_sub(Duration::from_secs(30))
-        .ok_or_else(|| color_eyre::eyre::eyre!("clock too early"))?;
+        .expect("clock too early");
     let mut observation = kraai_persistence::SessionObservation {
         revision: 0,
         lease_active: true,
         lease_expires_at: i64::try_from(
-            expired_at.duration_since(std::time::UNIX_EPOCH)?.as_nanos(),
-        )?,
-        turn_timer: Some(serde_json::to_string(&running)?),
+            expired_at
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        )
+        .unwrap(),
+        turn_timer: Some(serde_json::to_string(&running).unwrap()),
     };
     let session = kraai_types::SessionId::new("session");
     let stored = crate::runtime::session_maintenance::stored_turn_timer(&session, &observation);
@@ -166,10 +187,9 @@ fn a_timer_left_running_by_an_expired_lease_stops_at_the_expiry() -> Result<()> 
 
     observation.lease_active = false;
     let stopped = crate::runtime::session_maintenance::stored_turn_timer(&session, &observation)
-        .ok_or_else(|| color_eyre::eyre::eyre!("missing timer"))?;
+        .expect("missing timer");
     assert_eq!(stopped.elapsed(std::time::Instant::now()), None);
     assert!(stopped.last_duration().is_some_and(|duration| {
         duration >= Duration::from_secs(29) && duration <= Duration::from_secs(31)
     }));
-    Ok(())
 }

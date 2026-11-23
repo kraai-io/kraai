@@ -335,7 +335,11 @@ impl SessionActor {
     ) {
         let job = match std::mem::replace(&mut self.state, TurnState::Idle) {
             TurnState::RunningScript(job) if job.generation == generation => job,
-            state => {
+            state @ (TurnState::Idle
+            | TurnState::Preparing(_)
+            | TurnState::Streaming(_)
+            | TurnState::AwaitingApproval(_)
+            | TurnState::RunningScript(_)) => {
                 self.state = state;
                 return;
             }
@@ -358,7 +362,10 @@ impl SessionActor {
     ) -> Result<PendingScriptApproval> {
         let pending_id = match &self.state {
             TurnState::AwaitingApproval(pending) => pending.request.id.clone(),
-            _ => {
+            TurnState::Idle
+            | TurnState::Preparing(_)
+            | TurnState::Streaming(_)
+            | TurnState::RunningScript(_) => {
                 return Err(eyre!(kraai_execution_types::DomainError::not_found(
                     format!("Session {} has no pending script approval", self.session_id)
                 )));
@@ -374,7 +381,10 @@ impl SessionActor {
         }
         match std::mem::replace(&mut self.state, TurnState::Idle) {
             TurnState::AwaitingApproval(pending) => Ok(*pending),
-            state => {
+            state @ (TurnState::Idle
+            | TurnState::Preparing(_)
+            | TurnState::Streaming(_)
+            | TurnState::RunningScript(_)) => {
                 self.state = state;
                 Err(eyre!("Pending script approval disappeared"))
             }
@@ -420,7 +430,10 @@ impl SessionActor {
     pub(super) fn pending_script_info(&self) -> Option<PendingScriptInfo> {
         match &self.state {
             TurnState::AwaitingApproval(pending) => Some(pending_script_info(pending)),
-            _ => None,
+            TurnState::Idle
+            | TurnState::Preparing(_)
+            | TurnState::Streaming(_)
+            | TurnState::RunningScript(_) => None,
         }
     }
 

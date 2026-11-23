@@ -1,29 +1,26 @@
 use std::sync::atomic::Ordering;
 
-use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
 
 use crate::support::{Harness, PROFILE_ID, PROFILE_PROMPT, prompt};
 
 #[tokio::test]
-async fn workspace_profile_configuration_persists_and_controls_the_model_prompt() -> Result<()> {
-    let mut harness = Harness::new(vec!["Profile applied".into()]).await?;
-    harness.install_profile().await?;
-    harness.initialize().await?;
+async fn workspace_profile_configuration_persists_and_controls_the_model_prompt() {
+    let mut harness = Harness::new(vec!["Profile applied".into()]).await;
+    harness.install_profile().await;
+    harness.initialize().await;
     let created = harness
         .request(
             1,
             "session/new",
             json!({"cwd":harness.root.path(),"mcpServers":[]}),
         )
-        .await?;
-    let response = created
-        .last()
-        .ok_or_else(|| eyre!("missing session response"))?;
+        .await;
+    let response = created.last().expect("missing session response");
     let session = response
         .pointer("/result/sessionId")
         .and_then(Value::as_str)
-        .ok_or_else(|| eyre!("missing session ID"))?
+        .expect("missing session ID")
         .to_owned();
     assert_profile_options(response);
     assert_commands(&created);
@@ -34,7 +31,7 @@ async fn workspace_profile_configuration_persists_and_controls_the_model_prompt(
             "session/set_config_option",
             json!({"sessionId":session,"configId":"profile","value":"missing-profile"}),
         )
-        .await?;
+        .await;
     assert!(
         invalid
             .last()
@@ -46,7 +43,7 @@ async fn workspace_profile_configuration_persists_and_controls_the_model_prompt(
             "session/set_config_option",
             json!({"sessionId":session,"configId":"profile","value":PROFILE_ID}),
         )
-        .await?;
+        .await;
     assert_eq!(
         selected
             .last()
@@ -59,18 +56,16 @@ async fn workspace_profile_configuration_persists_and_controls_the_model_prompt(
                 == Some(&json!(PROFILE_ID))
     }));
 
-    harness.restart().await?;
-    harness.initialize().await?;
+    harness.restart().await;
+    harness.initialize().await;
     let loaded = harness
         .request(
             4,
             "session/load",
             json!({"sessionId":session,"cwd":harness.root.path(),"mcpServers":[]}),
         )
-        .await?;
-    let response = loaded
-        .last()
-        .ok_or_else(|| eyre!("missing load response"))?;
+        .await;
+    let response = loaded.last().expect("missing load response");
     assert_profile_options(response);
     assert_eq!(
         response.pointer("/result/configOptions/1/currentValue"),
@@ -79,9 +74,7 @@ async fn workspace_profile_configuration_persists_and_controls_the_model_prompt(
     assert_commands(&loaded);
     assert_eq!(harness.model_requests.load(Ordering::SeqCst), 0);
 
-    let generated = harness
-        .request(5, "session/prompt", prompt(&session))
-        .await?;
+    let generated = harness.request(5, "session/prompt", prompt(&session)).await;
     assert_eq!(
         generated
             .last()

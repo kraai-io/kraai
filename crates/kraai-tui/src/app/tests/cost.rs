@@ -1,5 +1,4 @@
 use super::*;
-use kraai_types::SessionId;
 
 fn pending_request(id: &str) -> kraai_types::RequestUsage {
     kraai_types::RequestUsage {

@@ -50,7 +50,7 @@ pub(crate) struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    pub(crate) fn script_output_dir(&self, session_id: &kraai_types::SessionId) -> PathBuf {
+    pub(crate) fn script_output_dir(&self, session_id: &SessionId) -> PathBuf {
         self.script_output_root.join(session_id.as_str())
     }
 }

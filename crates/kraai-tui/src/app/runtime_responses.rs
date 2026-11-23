@@ -171,7 +171,7 @@ impl App {
                 }
                 self.reset_session_state(Some(session_id.clone()));
                 self.state.pending_submit = pending_submit;
-                self.state.selected_profile_id = draft_profile_id.clone();
+                self.state.selected_profile_id = draft_profile_id;
                 self.request_sync_for_session(&session_id);
 
                 if let Some(pending_submit) = self.state.pending_submit.take() {
@@ -210,7 +210,7 @@ impl App {
                 let is_foreground = self.state.current_session_id.as_ref() == Some(&session_id);
                 self.request(RuntimeRequest::ListSessions);
                 if is_foreground {
-                    self.state.selected_profile_id = Some(profile_id.clone());
+                    self.state.selected_profile_id = Some(profile_id);
                     self.save_workspace_preferences();
                     self.request(RuntimeRequest::GetSessionSnapshot {
                         session_id: session_id.clone(),

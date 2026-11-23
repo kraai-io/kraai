@@ -56,7 +56,11 @@ impl RuntimeCore {
                     kraai_types::ConversationItem::ScriptResult {
                         output, outcome, ..
                     } => Some((output, outcome)),
-                    _ => None,
+                    kraai_types::ConversationItem::FileContext { .. }
+                    | kraai_types::ConversationItem::Compaction { .. }
+                    | kraai_types::ConversationItem::System { .. }
+                    | kraai_types::ConversationItem::User { .. }
+                    | kraai_types::ConversationItem::Assistant { .. } => None,
                 });
             if let Some((output, outcome)) = stored {
                 let recorded = record.outcome().ok();
@@ -81,8 +85,7 @@ impl RuntimeCore {
                     .await?;
                 continue;
             }
-            let completed = if record.phase == kraai_execution_types::ScriptExecutionPhase::Finished
-            {
+            let completed = if record.phase == ScriptExecutionPhase::Finished {
                 CompletedScriptExecution {
                     output: self.execution_store.read_output(&record.id).await?,
                     record,

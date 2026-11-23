@@ -65,7 +65,13 @@ impl OutputValue {
                 Ok(value) => Self::nested(value, engine),
                 Err(error) => Self::Text(error.to_string()),
             },
-            value => Self::Literal(value.to_expanded_string(", ", engine.get_config())),
+            value @ (Value::Filesize { .. }
+            | Value::Duration { .. }
+            | Value::Range { .. }
+            | Value::Closure { .. }
+            | Value::CellPath { .. }) => {
+                Self::Literal(value.to_expanded_string(", ", engine.get_config()))
+            }
         }
     }
 }

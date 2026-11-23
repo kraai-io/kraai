@@ -203,16 +203,16 @@ pub fn run(request: &RunRequest) -> Result<RunResult> {
             )?;
             RunResult {
                 schema_version: 6,
-                experiment_id: experiment_id.clone(),
+                experiment_id,
                 artifact_path: store.relative_dir().to_path_buf(),
                 task_id: task.id.clone(),
-                harness_name: harness_name.clone(),
-                model_label: model_label.clone(),
+                harness_name,
+                model_label,
                 attempt: request.attempt,
                 runner_version: request.runner_version.clone(),
-                runner_artifact_sha256: runner_artifact_sha256.clone(),
-                task_sha256: task_sha256.clone(),
-                grader_sha256: grader_sha256.clone(),
+                runner_artifact_sha256,
+                task_sha256,
+                grader_sha256,
                 sandbox: SandboxRecord {
                     backend: String::from("bubblewrap+systemd-cgroup-v2"),
                     network: task.runner.network.clone(),
@@ -233,9 +233,9 @@ pub fn run(request: &RunRequest) -> Result<RunResult> {
                 controller_failure: Some(ControllerFailure {
                     phase,
                     error,
-                    retained_work_path: run_root.clone(),
+                    retained_work_path: run_root,
                 }),
-                provider_config_sha256: provider_config_sha256.clone(),
+                provider_config_sha256,
                 rust_environment_programs,
             }
         }
@@ -404,20 +404,4 @@ fn identity_json(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::expand_argument;
-
-    #[test]
-    fn runner_templates_preserve_placeholder_text_inside_prompts() {
-        assert_eq!(
-            expand_argument(
-                "prefix {prompt} {provider_id} {unknown}",
-                &[
-                    ("{prompt}", "Keep {provider_id} literal, including 🦀."),
-                    ("{provider_id}", "selected")
-                ],
-            ),
-            "prefix Keep {provider_id} literal, including 🦀. selected {unknown}"
-        );
-    }
-}
+mod tests;

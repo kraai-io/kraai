@@ -3,7 +3,8 @@ target
 *.profraw
 crate-sources*
 .codex
-result
+/result
+/result-*
 .venv/
 __pycache__/
 node_modules/

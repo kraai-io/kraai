@@ -38,9 +38,9 @@ impl App {
 
     pub(super) fn handle_terminal_event(&mut self, event: CrosstermEvent) -> bool {
         match self.state.cursor_preferences.filter(event) {
-            super::terminal_reply::FilteredEvent::Pass(event) => self.handle_palette_event(event),
-            super::terminal_reply::FilteredEvent::Consumed => false,
-            super::terminal_reply::FilteredEvent::Replay(events) => {
+            terminal_reply::FilteredEvent::Pass(event) => self.handle_palette_event(event),
+            terminal_reply::FilteredEvent::Consumed => false,
+            terminal_reply::FilteredEvent::Replay(events) => {
                 let mut changed = false;
                 for event in events {
                     changed |= self.handle_palette_event(event);
@@ -52,9 +52,9 @@ impl App {
 
     fn handle_palette_event(&mut self, event: CrosstermEvent) -> bool {
         match self.state.palette.filter(event) {
-            super::palette::PaletteEvent::Pass(event) => self.handle_input_event(event),
-            super::palette::PaletteEvent::Consumed => false,
-            super::palette::PaletteEvent::Replay(events) => {
+            palette::PaletteEvent::Pass(event) => self.handle_input_event(event),
+            palette::PaletteEvent::Consumed => false,
+            palette::PaletteEvent::Replay(events) => {
                 let mut changed = false;
                 for event in events {
                     changed |= self.handle_input_event(event);
@@ -82,7 +82,9 @@ impl App {
                 true
             }
             CrosstermEvent::Resize(_, _) => true,
-            _ => false,
+            CrosstermEvent::FocusGained | CrosstermEvent::FocusLost | CrosstermEvent::Key(_) => {
+                false
+            }
         }
     }
 
@@ -92,7 +94,12 @@ impl App {
             match mouse_event.kind {
                 MouseEventKind::ScrollUp => self.state.error_scroll.set(offset.saturating_sub(3)),
                 MouseEventKind::ScrollDown => self.state.error_scroll.set(offset.saturating_add(3)),
-                _ => {}
+                MouseEventKind::Down(_)
+                | MouseEventKind::Up(_)
+                | MouseEventKind::Drag(_)
+                | MouseEventKind::Moved
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight => {}
             }
             return;
         }
@@ -110,7 +117,12 @@ impl App {
                     .state
                     .approval_scroll
                     .set(self.state.approval_scroll.get().saturating_add(3)),
-                _ => {}
+                MouseEventKind::Down(_)
+                | MouseEventKind::Up(_)
+                | MouseEventKind::Drag(_)
+                | MouseEventKind::Moved
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight => {}
             }
             return;
         }
@@ -121,7 +133,12 @@ impl App {
             MouseEventKind::ScrollDown => {
                 self.scroll_chat_by(WHEEL_SCROLL_LINES);
             }
-            _ => {}
+            MouseEventKind::Down(_)
+            | MouseEventKind::Up(_)
+            | MouseEventKind::Drag(_)
+            | MouseEventKind::Moved
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => {}
         }
     }
 
@@ -157,10 +174,11 @@ impl App {
             }
             match self.state.mode {
                 UiMode::Providers => self.close_providers_level(),
-                UiMode::Model => self.close_sheet(),
                 UiMode::ModelSettings => self.close_model_settings(),
                 UiMode::Mcp => self.close_mcp_level(),
-                _ => self.close_sheet(),
+                UiMode::Model | UiMode::Chat | UiMode::Agent | UiMode::Sessions => {
+                    self.close_sheet()
+                }
             }
             return;
         }
@@ -195,6 +213,10 @@ impl App {
             return;
         }
 
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "every other key does nothing in the composer"
+        )]
         match key_event.code {
             KeyCode::Enter => {
                 self.reset_command_selection();
@@ -302,6 +324,10 @@ impl App {
     }
 
     pub(super) fn handle_script_approval_key_event(&mut self, key_event: KeyEvent) {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "every other key does nothing while a script approval is open"
+        )]
         match key_event.code {
             KeyCode::Left | KeyCode::BackTab => self.select_previous_script_action(),
             KeyCode::Right | KeyCode::Tab => self.select_next_script_action(),

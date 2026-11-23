@@ -215,10 +215,6 @@ impl ProviderManager {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "fallible test fixtures use direct assertions"
-)]
 mod tests;
 
 impl CacheWarming {

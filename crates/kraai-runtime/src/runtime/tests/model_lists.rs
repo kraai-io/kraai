@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use color_eyre::eyre::{Result, bail, eyre};
+use color_eyre::eyre::{Result, bail};
 use futures::stream::BoxStream;
 use kraai_provider_core::{
     Model, ModelConfig, Provider, ProviderManager, ProviderRequest, ProviderRequestContext,
@@ -24,9 +24,9 @@ struct Unlisted {
 }
 
 impl Unlisted {
-    async fn start(respond: bool) -> Result<Self> {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
+    async fn start(respond: bool) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
         let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let mut held = Vec::new();
@@ -49,7 +49,7 @@ impl Unlisted {
             std::process::id(),
             unix_millis()
         ));
-        tokio::fs::create_dir_all(&root).await?;
+        tokio::fs::create_dir_all(&root).await.unwrap();
         let config = root.join("providers.toml");
         tokio::fs::write(
             &config,
@@ -57,52 +57,51 @@ impl Unlisted {
                 "[[provider]]\nid = \"unlisted\"\ntype = \"openai-chat-completions\"\nbase_url = \"http://{address}\"\napi_key = \"test\"\n\n[[model]]\nid = \"configured\"\nprovider_id = \"unlisted\"\n"
             ),
         )
-        .await?;
+        .await
+        .unwrap();
         let runtime = crate::RuntimeBuilder::new(kraai_providers::DefaultProviders)
             .storage_root(root.join("state"))
             .provider_config_path(config)
             .mcp_config_path(root.join("mcp.toml"))
             .build_on(&tokio::runtime::Handle::current());
-        Ok(Self {
+        Self {
             runtime,
             root,
             _server: server,
-        })
+        }
     }
 
-    async fn configured_models(&self) -> Result<Vec<String>> {
-        Ok(self
-            .runtime
+    async fn configured_models(&self) -> Vec<String> {
+        self.runtime
             .list_models()
-            .await?
+            .await
+            .unwrap()
             .remove("unlisted")
-            .ok_or_else(|| eyre!("unlisted provider is missing"))?
+            .expect("unlisted provider is missing")
             .into_iter()
-            .map(|model| model.id.to_string())
-            .collect())
+            .map(|model| model.id)
+            .collect()
     }
 
-    async fn shutdown(self) -> Result<()> {
-        self.runtime.shutdown().await?;
+    async fn shutdown(self) {
+        self.runtime.shutdown().await.unwrap();
         let _ = tokio::fs::remove_dir_all(&self.root).await;
-        Ok(())
     }
 }
 
 #[tokio::test]
-async fn startup_succeeds_when_a_provider_cannot_list_its_models() -> Result<()> {
-    let unlisted = Unlisted::start(true).await?;
+async fn startup_succeeds_when_a_provider_cannot_list_its_models() {
+    let unlisted = Unlisted::start(true).await;
     let mut events = unlisted.runtime.subscribe();
 
     assert_eq!(
-        unlisted.runtime.wait_for_startup().await?,
+        unlisted.runtime.wait_for_startup().await.unwrap(),
         crate::RuntimeStartupState::ready()
     );
-    assert_eq!(unlisted.configured_models().await?, ["configured"]);
+    assert_eq!(unlisted.configured_models().await, ["configured"]);
     let reported = loop {
-        match events.recv().await?.event {
-            Event::ServiceError { error } => break error.to_string(),
-            _ => continue,
+        if let Event::ServiceError { error } = events.recv().await.unwrap().event {
+            break error.to_string();
         }
     };
     assert!(reported.contains("unlisted"), "{reported}");
@@ -110,15 +109,17 @@ async fn startup_succeeds_when_a_provider_cannot_list_its_models() -> Result<()>
 }
 
 #[tokio::test]
-async fn startup_does_not_wait_for_a_provider_that_never_answers() -> Result<()> {
-    let unlisted = Unlisted::start(false).await?;
+async fn startup_does_not_wait_for_a_provider_that_never_answers() {
+    let unlisted = Unlisted::start(false).await;
     let startup = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         unlisted.runtime.wait_for_startup(),
     )
-    .await??;
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(startup, crate::RuntimeStartupState::ready());
-    assert_eq!(unlisted.configured_models().await?, ["configured"]);
+    assert_eq!(unlisted.configured_models().await, ["configured"]);
     unlisted.shutdown().await
 }
 
@@ -219,17 +220,17 @@ impl Process {
         self.attempts.load(Ordering::SeqCst)
     }
 
-    async fn listed(&self) -> Result<Vec<String>> {
-        Ok(self
-            .harness
+    async fn listed(&self) -> Vec<String> {
+        self.harness
             .handle
             .list_models()
-            .await?
+            .await
+            .unwrap()
             .remove("listed")
-            .ok_or_else(|| eyre!("listed provider is missing"))?
+            .expect("listed provider is missing")
             .into_iter()
-            .map(|model| model.id.to_string())
-            .collect())
+            .map(|model| model.id)
+            .collect()
     }
 
     fn models_updates(&self) -> usize {
@@ -256,7 +257,7 @@ impl Process {
 }
 
 #[tokio::test]
-async fn a_second_process_installs_the_stored_list_without_fetching() -> Result<()> {
+async fn a_second_process_installs_the_stored_list_without_fetching() {
     let upstream = Upstream::default();
     let first = Process::start(&upstream, None).await;
     first
@@ -265,7 +266,7 @@ async fn a_second_process_installs_the_stored_list_without_fetching() -> Result<
         .poll_model_lists(unix_millis(), SyncRequest::POLL)
         .await;
     assert_eq!(first.attempts(), 1);
-    assert_eq!(first.listed().await?, ["model-1"]);
+    assert_eq!(first.listed().await, ["model-1"]);
     first.wait_for_models_updates(1).await;
 
     let second = Process::start(&upstream, Some(first.harness.data_dir.clone())).await;
@@ -275,7 +276,7 @@ async fn a_second_process_installs_the_stored_list_without_fetching() -> Result<
         .poll_model_lists(unix_millis(), SyncRequest::POLL)
         .await;
     assert_eq!(second.attempts(), 0);
-    assert_eq!(second.listed().await?, ["model-1"]);
+    assert_eq!(second.listed().await, ["model-1"]);
     second.wait_for_models_updates(1).await;
 
     second
@@ -292,11 +293,10 @@ async fn a_second_process_installs_the_stored_list_without_fetching() -> Result<
     assert_eq!(second.models_updates(), 1);
     second.harness.shutdown().await;
     first.harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_stale_list_is_refetched_by_one_process_and_picked_up_by_the_other() -> Result<()> {
+async fn a_stale_list_is_refetched_by_one_process_and_picked_up_by_the_other() {
     let upstream = Upstream::default();
     let first = Process::start(&upstream, None).await;
     let second = Process::start(&upstream, Some(first.harness.data_dir.clone())).await;
@@ -310,7 +310,7 @@ async fn a_stale_list_is_refetched_by_one_process_and_picked_up_by_the_other() -
         .runtime
         .poll_model_lists(unix_millis(), SyncRequest::POLL)
         .await;
-    assert_eq!(second.listed().await?, ["model-1"]);
+    assert_eq!(second.listed().await, ["model-1"]);
 
     let later = unix_millis() + STALE;
     tokio::join!(
@@ -335,47 +335,48 @@ async fn a_stale_list_is_refetched_by_one_process_and_picked_up_by_the_other() -
         .poll_model_lists(later, SyncRequest::POLL)
         .await;
     assert_eq!(first.attempts() + second.attempts(), 2);
-    assert_eq!(first.listed().await?, ["model-2"]);
-    assert_eq!(second.listed().await?, ["model-2"]);
+    assert_eq!(first.listed().await, ["model-2"]);
+    assert_eq!(second.listed().await, ["model-2"]);
     first.wait_for_models_updates(2).await;
     second.wait_for_models_updates(2).await;
     second.harness.shutdown().await;
     first.harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_stored_list_older_than_the_installed_one_is_ignored() -> Result<()> {
+async fn a_stored_list_older_than_the_installed_one_is_ignored() {
     let upstream = Upstream::default();
     let process = Process::start(&upstream, None).await;
     let runtime = &process.harness.runtime;
     runtime
         .sync_model_lists(unix_millis(), Refetch::OlderThan(MAX_AGE))
-        .await?;
-    rusqlite::Connection::open(process.harness.data_dir.join("kraai.sqlite3"))?.execute(
+        .await
+        .unwrap();
+    rusqlite::Connection::open(process.harness.data_dir.join("kraai.sqlite3")).unwrap().execute(
         "UPDATE model_lists SET fetched_at = fetched_at - 60 * 1000, data = '{\"models\":[\"older\"]}'",
         [],
-    )?;
+    ).unwrap();
 
     let outcome = runtime
         .sync_model_lists(unix_millis(), Refetch::OlderThan(MAX_AGE))
-        .await?;
+        .await
+        .unwrap();
     assert!(!outcome.changed && outcome.failures.is_empty());
     assert_eq!(process.attempts(), 1);
-    assert_eq!(process.listed().await?, ["model-1"]);
+    assert_eq!(process.listed().await, ["model-1"]);
     process.harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_failed_refresh_keeps_the_installed_list_and_backs_off_until_reload() -> Result<()> {
+async fn a_failed_refresh_keeps_the_installed_list_and_backs_off_until_reload() {
     let upstream = Upstream::default();
     let process = Process::start(&upstream, None).await;
     let runtime = &process.harness.runtime;
     assert!(
         runtime
             .sync_model_lists(unix_millis(), Refetch::OlderThan(MAX_AGE))
-            .await?
+            .await
+            .unwrap()
             .failures
             .is_empty()
     );
@@ -384,14 +385,16 @@ async fn a_failed_refresh_keeps_the_installed_list_and_backs_off_until_reload() 
 
     let failed = runtime
         .sync_model_lists(later, Refetch::OlderThan(MAX_AGE))
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(failed.failures.len(), 1);
     assert_eq!(process.attempts(), 2);
-    assert_eq!(process.listed().await?, ["model-1"]);
+    assert_eq!(process.listed().await, ["model-1"]);
     assert!(
         runtime
             .sync_model_lists(later, Refetch::OlderThan(MAX_AGE))
-            .await?
+            .await
+            .unwrap()
             .failures
             .is_empty()
     );
@@ -401,23 +404,23 @@ async fn a_failed_refresh_keeps_the_installed_list_and_backs_off_until_reload() 
     runtime.model_lists.reset();
     let recovered = runtime
         .sync_model_lists(later, Refetch::OlderThan(MAX_AGE))
-        .await?;
+        .await
+        .unwrap();
     assert!(recovered.changed && recovered.failures.is_empty());
     assert_eq!(process.attempts(), 3);
-    assert_eq!(process.listed().await?, ["model-2"]);
+    assert_eq!(process.listed().await, ["model-2"]);
     process.harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_manual_refresh_refetches_only_lists_older_than_a_minute() -> Result<()> {
+async fn a_manual_refresh_refetches_only_lists_older_than_a_minute() {
     let upstream = Upstream::default();
     let process = Process::start(&upstream, None).await;
     let runtime = &process.harness.runtime;
     let start = unix_millis();
     runtime.poll_model_lists(start, SyncRequest::POLL).await;
     assert_eq!(process.attempts(), 1);
-    let manual = i64::try_from(MANUAL_MAX_AGE.as_millis())?;
+    let manual = i64::try_from(MANUAL_MAX_AGE.as_millis()).unwrap();
 
     runtime
         .poll_model_lists(start + manual - 1000, SyncRequest::REFRESH)
@@ -427,38 +430,39 @@ async fn a_manual_refresh_refetches_only_lists_older_than_a_minute() -> Result<(
     let later = start + manual + 1000;
     runtime.poll_model_lists(later, SyncRequest::REFRESH).await;
     assert_eq!(process.attempts(), 2);
-    assert_eq!(process.listed().await?, ["model-2"]);
+    assert_eq!(process.listed().await, ["model-2"]);
     runtime
         .poll_model_lists(later + 1000, SyncRequest::REFRESH)
         .await;
     assert_eq!(process.attempts(), 2);
     process.harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn requesting_a_refresh_wakes_the_sync_loop_with_the_manual_max_age() -> Result<()> {
+async fn requesting_a_refresh_wakes_the_sync_loop_with_the_manual_max_age() {
     let upstream = Upstream::default();
     let process = Process::start(&upstream, None).await;
-    rusqlite::Connection::open(process.harness.data_dir.join("kraai.sqlite3"))?.execute(
-        "INSERT INTO model_lists (provider_id, source, fetched_at, data, claimed_until)
+    rusqlite::Connection::open(process.harness.data_dir.join("kraai.sqlite3"))
+        .unwrap()
+        .execute(
+            "INSERT INTO model_lists (provider_id, source, fetched_at, data, claimed_until)
          VALUES ('listed', 'https://models.test', ?1, '{\"models\":[\"stored\"]}', 0)",
-        [unix_millis() - 2 * i64::try_from(MANUAL_MAX_AGE.as_millis())?],
-    )?;
+            [unix_millis() - 2 * i64::try_from(MANUAL_MAX_AGE.as_millis()).unwrap()],
+        )
+        .unwrap();
     let sync =
         tokio_util::task::AbortOnDropHandle::new(process.harness.runtime.spawn_model_list_sync());
 
-    process.harness.handle.refresh_model_lists().await?;
+    process.harness.handle.refresh_model_lists().await.unwrap();
     process.wait_for_models_updates(1).await;
     assert_eq!(process.attempts(), 1);
-    assert_eq!(process.listed().await?, ["model-1"]);
+    assert_eq!(process.listed().await, ["model-1"]);
     drop(sync);
     process.harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_refetch_ignores_the_max_age_and_the_failure_backoff() -> Result<()> {
+async fn a_refetch_ignores_the_max_age_and_the_failure_backoff() {
     let upstream = Upstream::default();
     let process = Process::start(&upstream, None).await;
     let runtime = &process.harness.runtime;
@@ -468,7 +472,7 @@ async fn a_refetch_ignores_the_max_age_and_the_failure_backoff() -> Result<()> {
         .await;
     runtime.refetch_model_list(&listed).await;
     assert_eq!(process.attempts(), 2);
-    assert_eq!(process.listed().await?, ["model-2"]);
+    assert_eq!(process.listed().await, ["model-2"]);
 
     upstream.failing.store(true, Ordering::SeqCst);
     runtime.refetch_model_list(&listed).await;
@@ -491,10 +495,11 @@ async fn a_refetch_ignores_the_max_age_and_the_failure_backoff() -> Result<()> {
         .harness
         .handle
         .refetch_model_list("listed".into())
-        .await?;
+        .await
+        .unwrap();
     process.wait_for_models_updates(3).await;
     assert_eq!(process.attempts(), 5);
-    assert_eq!(process.listed().await?, ["model-3"]);
+    assert_eq!(process.listed().await, ["model-3"]);
     assert!(
         process
             .harness
@@ -504,11 +509,10 @@ async fn a_refetch_ignores_the_max_age_and_the_failure_backoff() -> Result<()> {
             .is_err()
     );
     process.harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_list_being_fetched_by_any_process_is_not_fetched_again() -> Result<()> {
+async fn a_list_being_fetched_by_any_process_is_not_fetched_again() {
     let upstream = Upstream::default();
     let first = Process::start(&upstream, None).await;
     let second = Process::start(&upstream, Some(first.harness.data_dir.clone())).await;
@@ -524,7 +528,8 @@ async fn a_list_being_fetched_by_any_process_is_not_fetched_again() -> Result<()
             tokio::task::yield_now().await;
         }
     })
-    .await?;
+    .await
+    .unwrap();
 
     kraai_test_support::hang_guard(async {
         first.harness.runtime.refetch_model_list(&listed).await;
@@ -540,25 +545,25 @@ async fn a_list_being_fetched_by_any_process_is_not_fetched_again() -> Result<()
             .poll_model_lists(unix_millis(), SyncRequest::POLL)
             .await;
     })
-    .await?;
+    .await
+    .unwrap();
     assert_eq!((first.attempts(), second.attempts()), (1, 0));
     drop(gate);
-    fetching.await?;
+    fetching.await.unwrap();
     second
         .harness
         .runtime
         .poll_model_lists(unix_millis(), SyncRequest::POLL)
         .await;
-    assert_eq!(second.listed().await?, ["model-1"]);
+    assert_eq!(second.listed().await, ["model-1"]);
     second.harness.runtime.refetch_model_list(&listed).await;
     assert_eq!((first.attempts(), second.attempts()), (1, 1));
     second.harness.shutdown().await;
     first.harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_fetch_releases_its_claim_even_when_a_newer_list_is_already_stored() -> Result<()> {
+async fn a_fetch_releases_its_claim_even_when_a_newer_list_is_already_stored() {
     let upstream = Upstream::default();
     let process = Process::start(&upstream, None).await;
     let runtime = &process.harness.runtime;
@@ -570,11 +575,10 @@ async fn a_fetch_releases_its_claim_even_when_a_newer_list_is_already_stored() -
     runtime.refetch_model_list(&listed).await;
     assert_eq!(process.attempts(), 3);
     process.harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_fetch_renews_its_claim_and_stops_once_another_fetch_takes_it() -> Result<()> {
+async fn a_fetch_renews_its_claim_and_stops_once_another_fetch_takes_it() {
     let upstream = Upstream::default();
     let process = Process::start(&upstream, None).await;
     let gate = upstream.gate.clone().lock_owned().await;
@@ -589,8 +593,10 @@ async fn a_fetch_renews_its_claim_and_stops_once_another_fetch_takes_it() -> Res
             tokio::task::yield_now().await;
         }
     })
-    .await?;
-    let database = rusqlite::Connection::open(process.harness.data_dir.join("kraai.sqlite3"))?;
+    .await
+    .unwrap();
+    let database =
+        rusqlite::Connection::open(process.harness.data_dir.join("kraai.sqlite3")).unwrap();
     let claimed_until = || {
         database.query_row(
             "SELECT claimed_until FROM model_lists WHERE provider_id = 'listed'",
@@ -598,23 +604,29 @@ async fn a_fetch_renews_its_claim_and_stops_once_another_fetch_takes_it() -> Res
             |row| row.get::<_, i64>(0),
         )
     };
-    let claimed = claimed_until()?;
+    let claimed = claimed_until().unwrap();
     kraai_test_support::hang_guard(async {
-        while claimed_until()? == claimed {
+        while claimed_until().unwrap() == claimed {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         Ok::<_, rusqlite::Error>(())
     })
-    .await??;
+    .await
+    .unwrap()
+    .unwrap();
 
-    database.execute(
-        "UPDATE model_lists SET claimed_until = claimed_until + 1 WHERE provider_id = 'listed'",
-        [],
-    )?;
-    kraai_test_support::hang_guard(fetching).await??;
+    database
+        .execute(
+            "UPDATE model_lists SET claimed_until = claimed_until + 1 WHERE provider_id = 'listed'",
+            [],
+        )
+        .unwrap();
+    kraai_test_support::hang_guard(fetching)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(process.attempts(), 1);
-    assert!(process.listed().await?.is_empty());
+    assert!(process.listed().await.is_empty());
     drop(gate);
     process.harness.shutdown().await;
-    Ok(())
 }

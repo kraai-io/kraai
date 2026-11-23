@@ -1,22 +1,23 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_dir, test_manager};
-use color_eyre::eyre::Result;
 use kraai_execution_types::{CommandInvocationId, ScriptExecutionId};
 use kraai_types::{ContextStateMutation, PinnedFileScope};
-use ulid::Ulid;
 
 #[tokio::test]
-async fn discovery_warnings_are_reported_once_until_they_change() -> Result<()> {
+async fn discovery_warnings_are_reported_once_until_they_change() {
     let (manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("discovery-warnings");
     let skill_path = workspace_dir.join(".agents/skills/broken/SKILL.md");
-    tokio::fs::create_dir_all(skill_path.parent().expect("skill directory")).await?;
+    tokio::fs::create_dir_all(skill_path.parent().expect("skill directory"))
+        .await
+        .unwrap();
     let invalid = "---\nname: broken\ndescription: \"\"\n---\n";
-    tokio::fs::write(&skill_path, invalid).await?;
-    let session_id = manager.create_session().await?;
+    tokio::fs::write(&skill_path, invalid).await.unwrap();
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_workspace_dir(&session_id, workspace_dir.clone())
-        .await?;
+        .await
+        .unwrap();
     let skipped = |request: &PendingStreamRequest| {
         request
             .context_notifications
@@ -35,35 +36,43 @@ async fn discovery_warnings_are_reported_once_until_they_change() -> Result<()> 
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(skipped(&first), 1);
-    manager.complete_message(&first.message_id).await?;
+    manager.complete_message(&first.message_id).await.unwrap();
 
     let repeated = manager
         .prepare_continuation_stream(&session_id)
-        .await?
+        .await
+        .unwrap()
         .expect("continuation");
     assert_eq!(skipped(&repeated), 0);
-    manager.complete_message(&repeated.message_id).await?;
+    manager
+        .complete_message(&repeated.message_id)
+        .await
+        .unwrap();
 
-    tokio::fs::write(&skill_path, "---\nname: broken\ndescription: Fixed.\n---\n").await?;
+    tokio::fs::write(&skill_path, "---\nname: broken\ndescription: Fixed.\n---\n")
+        .await
+        .unwrap();
     let fixed = manager
         .prepare_continuation_stream(&session_id)
-        .await?
+        .await
+        .unwrap()
         .expect("continuation");
     assert_eq!(skipped(&fixed), 0);
-    manager.complete_message(&fixed.message_id).await?;
+    manager.complete_message(&fixed.message_id).await.unwrap();
 
-    tokio::fs::write(&skill_path, invalid).await?;
+    tokio::fs::write(&skill_path, invalid).await.unwrap();
     let broken_again = manager
         .prepare_continuation_stream(&session_id)
-        .await?
+        .await
+        .unwrap()
         .expect("continuation");
     assert_eq!(skipped(&broken_again), 1);
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 fn request_prefix(request: &PendingStreamRequest) -> &str {
@@ -71,9 +80,12 @@ fn request_prefix(request: &PendingStreamRequest) -> &str {
         .provider_request
         .messages
         .first()
-        .and_then(|message| match message {
-            ConversationItem::System { text } => Some(text.as_str()),
-            _ => None,
+        .and_then(|message| {
+            if let ConversationItem::System { text } = message {
+                Some(text.as_str())
+            } else {
+                None
+            }
         })
         .expect("request should start with its instruction prefix")
 }
@@ -91,30 +103,37 @@ fn request_file_context(request: &PendingStreamRequest) -> String {
         .provider_request
         .messages
         .iter()
-        .filter_map(|item| match item {
-            ConversationItem::FileContext { text } => Some(text.as_str()),
-            _ => None,
+        .filter_map(|item| {
+            if let ConversationItem::FileContext { text } = item {
+                Some(text.as_str())
+            } else {
+                None
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
 #[tokio::test]
-async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidation() -> Result<()>
-{
+async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidation() {
     let (manager, data_dir) = test_manager().await;
     let workspace = data_dir.join("profile-workspace");
-    tokio::fs::create_dir_all(workspace.join(".kraai")).await?;
+    tokio::fs::create_dir_all(workspace.join(".kraai"))
+        .await
+        .unwrap();
     let profile_path = workspace.join(".kraai/agents.toml");
     let profile = |prompt: &str| {
         format!(
             "[[profiles]]\nid = \"turn-snapshot\"\nextends = \"coding\"\nsystem_prompt = \"{prompt}\"\n"
         )
     };
-    tokio::fs::write(&profile_path, profile("ORIGINAL TURN PROMPT")).await?;
+    tokio::fs::write(&profile_path, profile("ORIGINAL TURN PROMPT"))
+        .await
+        .unwrap();
     let session = manager
         .create_session_with(Some(workspace), Some(String::from("turn-snapshot")))
-        .await?;
+        .await
+        .unwrap();
     let first = manager
         .prepare_start_stream(
             &session,
@@ -123,16 +142,19 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert!(request_prefix(&first).contains("ORIGINAL TURN PROMPT"));
-    manager.complete_message(&first.message_id).await?;
-    let original = manager.script_turn_context(&session)?;
-    let mut detached = manager.script_turn_context(&session)?;
+    manager.complete_message(&first.message_id).await.unwrap();
+    let original = manager.script_turn_context(&session).unwrap();
+    let mut detached = manager.script_turn_context(&session).unwrap();
     detached.profile.id.clear();
     detached.profile.commands.clear();
-    assert_eq!(manager.script_turn_context(&session)?, original);
+    assert_eq!(manager.script_turn_context(&session).unwrap(), original);
 
-    tokio::fs::write(&profile_path, profile("REFRESHED TURN PROMPT")).await?;
+    tokio::fs::write(&profile_path, profile("REFRESHED TURN PROMPT"))
+        .await
+        .unwrap();
     assert!(
         manager
             .prepare_messages_stream(
@@ -145,17 +167,24 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
             .await
             .is_err()
     );
-    assert_eq!(manager.get_tip(&session).await?, Some(first.message_id));
-    assert_eq!(manager.script_turn_context(&session)?, original);
+    assert_eq!(
+        manager.get_tip(&session).await.unwrap(),
+        Some(first.message_id)
+    );
+    assert_eq!(manager.script_turn_context(&session).unwrap(), original);
     let continuation = manager
         .prepare_continuation_stream(&session)
-        .await?
+        .await
+        .unwrap()
         .expect("continuation after rollback");
     assert!(request_prefix(&continuation).contains("ORIGINAL TURN PROMPT"));
     assert!(!request_prefix(&continuation).contains("REFRESHED TURN PROMPT"));
-    manager.complete_message(&continuation.message_id).await?;
+    manager
+        .complete_message(&continuation.message_id)
+        .await
+        .unwrap();
 
-    tokio::fs::write(&profile_path, "").await?;
+    tokio::fs::write(&profile_path, "").await.unwrap();
     let error = manager
         .prepare_continuation_stream(&session)
         .await
@@ -164,9 +193,11 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
         error.to_string(),
         "Selected profile is unavailable: turn-snapshot"
     );
-    assert_eq!(manager.script_turn_context(&session)?, original);
+    assert_eq!(manager.script_turn_context(&session).unwrap(), original);
 
-    tokio::fs::write(&profile_path, profile("REFRESHED TURN PROMPT")).await?;
+    tokio::fs::write(&profile_path, profile("REFRESHED TURN PROMPT"))
+        .await
+        .unwrap();
     manager.clear_active_turn(&session);
     let next = manager
         .prepare_start_stream(
@@ -176,19 +207,15 @@ async fn active_profile_survives_refresh_and_rollback_without_skipping_revalidat
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert!(request_prefix(&next).contains("REFRESHED TURN PROMPT"));
     assert!(!request_prefix(&next).contains("ORIGINAL TURN PROMPT"));
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
-async fn persist_open_effect(
-    manager: &mut AgentManager,
-    session_id: &SessionId,
-    path: &Path,
-) -> Result<()> {
-    let session = manager.require_session(session_id).await?;
+async fn persist_open_effect(manager: &mut AgentManager, session_id: &SessionId, path: &Path) {
+    let session = manager.require_session(session_id).await.unwrap();
     let id = ScriptExecutionId::new(Ulid::generate());
     manager
         .context_state_store
@@ -205,28 +232,34 @@ async fn persist_open_effect(
                 },
             }],
         )
-        .await?;
-    Ok(())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
-async fn prepare_start_stream_injects_latest_pinned_file() -> Result<()> {
+async fn prepare_start_stream_injects_latest_pinned_file() {
     let (mut manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("open-file-start");
-    tokio::fs::create_dir_all(&workspace_dir).await?;
+    tokio::fs::create_dir_all(&workspace_dir).await.unwrap();
     let file_path = workspace_dir.join("notes.txt");
     let file_path_str = file_path.display().to_string();
-    tokio::fs::write(&file_path, "old contents\n").await?;
+    tokio::fs::write(&file_path, "old contents\n")
+        .await
+        .unwrap();
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_workspace_dir(&session_id, workspace_dir.clone())
-        .await?;
+        .await
+        .unwrap();
     manager
         .set_session_profile(&session_id, String::from("coding"))
-        .await?;
-    persist_open_effect(&mut manager, &session_id, &file_path).await?;
-    tokio::fs::write(&file_path, "new contents\nsecond line\n").await?;
+        .await
+        .unwrap();
+    persist_open_effect(&mut manager, &session_id, &file_path).await;
+    tokio::fs::write(&file_path, "new contents\nsecond line\n")
+        .await
+        .unwrap();
 
     let request = manager
         .prepare_start_stream(
@@ -236,7 +269,8 @@ async fn prepare_start_stream_injects_latest_pinned_file() -> Result<()> {
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
 
     let system_prompt = request_file_context(&request);
     assert!(system_prompt.contains("Opened file:"));
@@ -249,26 +283,27 @@ async fn prepare_start_stream_injects_latest_pinned_file() -> Result<()> {
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<()> {
+async fn missing_pinned_file_is_durably_unpinned_and_reported_once() {
     let (mut manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("missing-pinned-file");
-    tokio::fs::create_dir_all(&workspace_dir).await?;
+    tokio::fs::create_dir_all(&workspace_dir).await.unwrap();
     let file_path = workspace_dir.join("removed.txt");
-    tokio::fs::write(&file_path, "temporary\n").await?;
+    tokio::fs::write(&file_path, "temporary\n").await.unwrap();
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_workspace_dir(&session_id, workspace_dir.clone())
-        .await?;
+        .await
+        .unwrap();
     manager
         .set_session_profile(&session_id, String::from("coding"))
-        .await?;
-    persist_open_effect(&mut manager, &session_id, &file_path).await?;
-    tokio::fs::remove_file(&file_path).await?;
+        .await
+        .unwrap();
+    persist_open_effect(&mut manager, &session_id, &file_path).await;
+    tokio::fs::remove_file(&file_path).await.unwrap();
 
     let request = manager
         .prepare_start_stream(
@@ -278,7 +313,8 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
         request
             .context_notifications
@@ -303,7 +339,8 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
         None,
         Vec::new(),
     )
-    .await?;
+    .await
+    .unwrap();
     assert!(
         !next_refresh
             .notifications
@@ -314,22 +351,23 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() -> Result<(
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -> Result<()> {
+async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() {
     let (manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("agents-missing");
-    tokio::fs::create_dir_all(&workspace_dir).await?;
+    tokio::fs::create_dir_all(&workspace_dir).await.unwrap();
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_workspace_dir(&session_id, workspace_dir.clone())
-        .await?;
+        .await
+        .unwrap();
     manager
         .set_session_profile(&session_id, String::from("coding"))
-        .await?;
+        .await
+        .unwrap();
 
     let request = manager
         .prepare_start_stream(
@@ -339,14 +377,15 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
 
     let system_prompt = request_prefix(&request);
     assert!(!system_prompt.contains("Workspace Instructions"));
     assert!(!request_file_context(&request).contains(AGENTS_MD_FILE_NAME));
     let Some(ConversationItem::System { text: prefix }) = request.provider_request.messages.first()
     else {
-        return Err(eyre!("missing static prefix"));
+        panic!("missing static prefix");
     };
     assert!(prefix.contains("# Script Execution"));
     assert!(prefix.contains("# Kraai Commands"));
@@ -364,37 +403,35 @@ async fn prepare_start_stream_omits_agents_md_when_workspace_file_is_missing() -
     assert!(!prefix.contains("</tool_call>"));
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn script_examples_use_the_shared_tool_prompt() -> Result<()> {
+async fn script_examples_use_the_shared_tool_prompt() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
-    let session = manager.require_session(&session_id).await?;
-    let profile = manager.resolve_selected_profile(&session)?;
+    let session_id = manager.create_session().await.unwrap();
+    let session = manager.require_session(&session_id).await.unwrap();
+    let profile = manager.resolve_selected_profile(&session).unwrap();
     let prompt = manager
         .build_turn_system_prompt(&session_id, &profile, &session.workspace_dir)
-        .await?;
+        .await
+        .unwrap();
     assert!(prompt.prefix.contains("kraai_nushell"));
     for block in prompt.prefix.split("```nu\n").skip(1) {
-        let (script, _) = block
-            .split_once("\n```")
-            .ok_or_else(|| eyre!("unclosed Nushell example"))?;
-        kraai_script_protocol::parse_script_input(script)?;
+        let (script, _) = block.split_once("\n```").expect("unclosed Nushell example");
+        kraai_script_protocol::parse_script_input(script).unwrap();
     }
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt() -> Result<()> {
+async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_session_profile(&session_id, String::from("coding"))
-        .await?;
+        .await
+        .unwrap();
 
     let request = manager
         .prepare_start_stream(
@@ -404,14 +441,16 @@ async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt()
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
 
     let system_prompt = request_prefix(&request);
 
-    let session = manager.require_session(&session_id).await?;
+    let session = manager.require_session(&session_id).await.unwrap();
     assert!(
         manager
-            .resolve_selected_profile(&session)?
+            .resolve_selected_profile(&session)
+            .unwrap()
             .system_prompt
             .is_empty()
     );
@@ -426,15 +465,14 @@ async fn coding_prefix_includes_edit_command_guidance_without_a_profile_prompt()
     }
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn execution_context_reports_selected_profile_grants_and_policy() -> Result<()> {
+async fn execution_context_reports_selected_profile_grants_and_policy() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
-    let session = manager.require_session(&session_id).await?;
-    let mut profile = manager.resolve_selected_profile(&session)?;
+    let session_id = manager.create_session().await.unwrap();
+    let session = manager.require_session(&session_id).await.unwrap();
+    let mut profile = manager.resolve_selected_profile(&session).unwrap();
     profile.permissions = kraai_execution_types::SandboxPermissionSet::new([
         kraai_execution_types::SandboxCapability::WorkspaceRead,
     ]);
@@ -451,13 +489,14 @@ async fn execution_context_reports_selected_profile_grants_and_policy() -> Resul
         }
         let prompt = manager
             .build_turn_system_prompt(&session_id, &profile, &session.workspace_dir)
-            .await?;
+            .await
+            .unwrap();
         let context = prompt
             .prefix
             .split_once("# Execution Context\n")
             .and_then(|(_, tail)| tail.lines().next())
-            .ok_or_else(|| eyre!("missing execution context"))?;
-        let context: serde_json::Value = serde_json::from_str(context)?;
+            .expect("missing execution context");
+        let context: serde_json::Value = serde_json::from_str(context).unwrap();
         assert_eq!(
             context.get("workspace"),
             Some(&serde_json::json!(session.workspace_dir))
@@ -484,22 +523,23 @@ async fn execution_context_reports_selected_profile_grants_and_policy() -> Resul
         );
     }
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Result<()> {
+async fn prepare_streams_re_read_workspace_agents_md_between_requests() {
     let (manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("agents-dynamic");
-    tokio::fs::create_dir_all(&workspace_dir).await?;
+    tokio::fs::create_dir_all(&workspace_dir).await.unwrap();
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_workspace_dir(&session_id, workspace_dir.clone())
-        .await?;
+        .await
+        .unwrap();
     manager
         .set_session_profile(&session_id, String::from("coding"))
-        .await?;
+        .await
+        .unwrap();
 
     let first_request = manager
         .prepare_start_stream(
@@ -509,34 +549,45 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let first_system_prompt = request_instructions(&first_request);
     assert!(!first_system_prompt.contains("First instructions"));
-    manager.complete_message(&first_request.message_id).await?;
+    manager
+        .complete_message(&first_request.message_id)
+        .await
+        .unwrap();
 
     tokio::fs::write(
         workspace_dir.join(AGENTS_MD_FILE_NAME),
         "First instructions\n",
     )
-    .await?;
+    .await
+    .unwrap();
 
     let second_request = manager
         .prepare_continuation_stream(&session_id)
-        .await?
+        .await
+        .unwrap()
         .expect("continuation request should exist");
     let second_system_prompt = request_instructions(&second_request);
     assert!(second_system_prompt.contains("First instructions"));
-    manager.complete_message(&second_request.message_id).await?;
+    manager
+        .complete_message(&second_request.message_id)
+        .await
+        .unwrap();
 
     tokio::fs::write(
         workspace_dir.join(AGENTS_MD_FILE_NAME),
         "Updated instructions\n",
     )
-    .await?;
+    .await
+    .unwrap();
 
     let third_request = manager
         .prepare_continuation_stream(&session_id)
-        .await?
+        .await
+        .unwrap()
         .expect("continuation request should exist");
     let third_system_prompt = request_instructions(&third_request);
     assert!(third_system_prompt.contains("Updated instructions"));
@@ -544,27 +595,31 @@ async fn prepare_streams_re_read_workspace_agents_md_between_requests() -> Resul
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_pending()
--> Result<()> {
+async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_pending() {
     let (manager, data_dir) = test_manager().await;
     let workspace_a = test_dir("agents-active-workspace-a");
     let workspace_b = test_dir("agents-active-workspace-b");
-    tokio::fs::create_dir_all(&workspace_a).await?;
-    tokio::fs::create_dir_all(&workspace_b).await?;
-    tokio::fs::write(workspace_a.join(AGENTS_MD_FILE_NAME), "Workspace A\n").await?;
-    tokio::fs::write(workspace_b.join(AGENTS_MD_FILE_NAME), "Workspace B\n").await?;
+    tokio::fs::create_dir_all(&workspace_a).await.unwrap();
+    tokio::fs::create_dir_all(&workspace_b).await.unwrap();
+    tokio::fs::write(workspace_a.join(AGENTS_MD_FILE_NAME), "Workspace A\n")
+        .await
+        .unwrap();
+    tokio::fs::write(workspace_b.join(AGENTS_MD_FILE_NAME), "Workspace B\n")
+        .await
+        .unwrap();
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_workspace_dir(&session_id, workspace_a.clone())
-        .await?;
+        .await
+        .unwrap();
     manager
         .set_session_profile(&session_id, String::from("coding"))
-        .await?;
+        .await
+        .unwrap();
 
     let first_request = manager
         .prepare_start_stream(
@@ -574,46 +629,57 @@ async fn continuation_uses_active_workspace_agents_md_when_workspace_change_is_p
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
-    manager.complete_message(&first_request.message_id).await?;
+        .await
+        .unwrap();
+    manager
+        .complete_message(&first_request.message_id)
+        .await
+        .unwrap();
 
     manager
         .set_workspace_dir(&session_id, workspace_b.clone())
-        .await?;
+        .await
+        .unwrap();
 
     let continuation = manager
         .prepare_continuation_stream(&session_id)
-        .await?
+        .await
+        .unwrap()
         .expect("continuation request should exist");
     let system_prompt = request_instructions(&continuation);
     assert!(system_prompt.contains("Workspace A"));
     assert!(!system_prompt.contains("Workspace B"));
 
-    let workspace_state = manager.get_workspace_dir_state(&session_id).await?.unwrap();
+    let workspace_state = manager
+        .get_workspace_dir_state(&session_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(workspace_state.0, workspace_b);
     assert!(workspace_state.1);
 
     let _ = tokio::fs::remove_dir_all(&workspace_a).await;
     let _ = tokio::fs::remove_dir_all(&workspace_b).await;
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn prepare_continuation_injects_pinned_file() -> Result<()> {
+async fn prepare_continuation_injects_pinned_file() {
     let (mut manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("open-file-continuation");
-    tokio::fs::create_dir_all(&workspace_dir).await?;
+    tokio::fs::create_dir_all(&workspace_dir).await.unwrap();
     let file_path = workspace_dir.join("notes.txt");
-    tokio::fs::write(&file_path, "current\n").await?;
+    tokio::fs::write(&file_path, "current\n").await.unwrap();
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_workspace_dir(&session_id, workspace_dir.clone())
-        .await?;
+        .await
+        .unwrap();
     manager
         .set_session_profile(&session_id, String::from("coding"))
-        .await?;
+        .await
+        .unwrap();
     manager
         .add_message(
             &session_id,
@@ -621,11 +687,12 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
             String::from("prior").into(),
             None,
         )
-        .await?;
-    persist_open_effect(&mut manager, &session_id, &file_path).await?;
+        .await
+        .unwrap();
+    persist_open_effect(&mut manager, &session_id, &file_path).await;
 
-    let session = manager.require_session(&session_id).await?;
-    let profile = manager.resolve_selected_profile(&session)?;
+    let session = manager.require_session(&session_id).await.unwrap();
+    let profile = manager.resolve_selected_profile(&session).unwrap();
     manager.with_runtime_state(&session_id, &session.workspace_dir, |state| {
         state.last_model = Some(ModelId::new("mock-model"));
         state.last_provider = Some(ProviderId::new("mock"));
@@ -634,7 +701,8 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
 
     let request = manager
         .prepare_continuation_stream(&session_id)
-        .await?
+        .await
+        .unwrap()
         .expect("continuation request should exist");
 
     let system_prompt = request_file_context(&request);
@@ -647,24 +715,25 @@ async fn prepare_continuation_injects_pinned_file() -> Result<()> {
 
     let _ = tokio::fs::remove_dir_all(&workspace_dir).await;
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn skills_are_advertised_without_pinning_or_injecting_instructions() -> Result<()> {
+async fn skills_are_advertised_without_pinning_or_injecting_instructions() {
     let (manager, data_dir) = test_manager().await;
     let workspace_dir = test_dir("skills-catalog");
     let skill_dir = workspace_dir.join(".agents/skills/review");
-    tokio::fs::create_dir_all(&skill_dir).await?;
+    tokio::fs::create_dir_all(&skill_dir).await.unwrap();
     tokio::fs::write(
         skill_dir.join("SKILL.md"),
         "---\nname: review\ndescription: Review changes\n---\nUNLOADED SKILL BODY",
     )
-    .await?;
-    let session_id = manager.create_session().await?;
+    .await
+    .unwrap();
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_workspace_dir(&session_id, workspace_dir.clone())
-        .await?;
+        .await
+        .unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -673,7 +742,8 @@ async fn skills_are_advertised_without_pinning_or_injecting_instructions() -> Re
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let prompt = request_instructions(&request);
     assert!(prompt.contains("workspace:review"));
     assert!(prompt.contains("Review changes"));
@@ -682,34 +752,41 @@ async fn skills_are_advertised_without_pinning_or_injecting_instructions() -> Re
         manager
             .context_state_store
             .list(&session_id)
-            .await?
+            .await
+            .unwrap()
             .is_empty()
     );
-    manager.complete_message(&request.message_id).await?;
-    let continuation = manager.prepare_continuation_stream(&session_id).await?;
-    let continuation = continuation.ok_or_else(|| eyre!("missing continuation"))?;
+    manager.complete_message(&request.message_id).await.unwrap();
+    let continuation = manager
+        .prepare_continuation_stream(&session_id)
+        .await
+        .unwrap();
+    let continuation = continuation.expect("missing continuation");
     assert!(request_instructions(&continuation).contains("workspace:review"));
     assert!(!request_instructions(&continuation).contains("UNLOADED SKILL BODY"));
-    tokio::fs::remove_dir_all(workspace_dir).await?;
+    tokio::fs::remove_dir_all(workspace_dir).await.unwrap();
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()> {
+async fn user_agents_md_is_layered_and_refreshed_on_continuation() {
     let (manager, data_dir) = test_manager().await;
     let workspace_dir = data_dir.join("workspace");
-    tokio::fs::create_dir_all(&workspace_dir).await?;
+    tokio::fs::create_dir_all(&workspace_dir).await.unwrap();
     let user_path = data_dir.join(AGENTS_MD_FILE_NAME);
-    tokio::fs::write(&user_path, "Global working agreements").await?;
+    tokio::fs::write(&user_path, "Global working agreements")
+        .await
+        .unwrap();
     tokio::fs::write(
         workspace_dir.join(AGENTS_MD_FILE_NAME),
         "Project agreements",
     )
-    .await?;
+    .await
+    .unwrap();
     let session_id = manager
         .create_session_with(Some(workspace_dir), None)
-        .await?;
+        .await
+        .unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -718,7 +795,8 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let prompt = request_instructions(&request);
     assert!(prompt.contains(user_path.to_string_lossy().as_ref()));
     assert!(prompt.contains("Workspace Instructions"));
@@ -728,17 +806,18 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
     );
     assert!(prompt.contains("workspace AGENTS.md overrides global AGENTS.md"));
     assert!(prompt.contains("Explicit user requests override AGENTS.md"));
-    manager.complete_message(&request.message_id).await?;
+    manager.complete_message(&request.message_id).await.unwrap();
 
     for contents in [
         "Updated global agreements",
         " \n\t",
         "Restored global agreements",
     ] {
-        tokio::fs::write(&user_path, contents).await?;
+        tokio::fs::write(&user_path, contents).await.unwrap();
         let request = manager
             .prepare_continuation_stream(&session_id)
-            .await?
+            .await
+            .unwrap()
             .unwrap();
         let prompt = request_instructions(&request);
         assert!(!prompt.contains("Global working agreements"));
@@ -750,30 +829,32 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() -> Result<()>
         if !contents.trim().is_empty() {
             assert!(prompt.contains(contents));
         }
-        manager.complete_message(&request.message_id).await?;
+        manager.complete_message(&request.message_id).await.unwrap();
     }
-    tokio::fs::remove_file(&user_path).await?;
+    tokio::fs::remove_file(&user_path).await.unwrap();
     let request = manager
         .prepare_continuation_stream(&session_id)
-        .await?
+        .await
+        .unwrap()
         .unwrap();
     assert!(!request_instructions(&request).contains("User Instructions"));
     assert!(!request_instructions(&request).contains("Restored global agreements"));
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn user_agents_md_loads_without_workspace_instructions_and_reports_read_errors() -> Result<()>
-{
+async fn user_agents_md_loads_without_workspace_instructions_and_reports_read_errors() {
     let (manager, data_dir) = test_manager().await;
     let workspace_dir = data_dir.join("workspace");
-    tokio::fs::create_dir_all(&workspace_dir).await?;
+    tokio::fs::create_dir_all(&workspace_dir).await.unwrap();
     let user_path = data_dir.join(AGENTS_MD_FILE_NAME);
-    tokio::fs::write(&user_path, "Global instructions only").await?;
+    tokio::fs::write(&user_path, "Global instructions only")
+        .await
+        .unwrap();
     let session_id = manager
         .create_session_with(Some(workspace_dir), None)
-        .await?;
+        .await
+        .unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -782,11 +863,12 @@ async fn user_agents_md_loads_without_workspace_instructions_and_reports_read_er
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert!(request_instructions(&request).contains("Global instructions only"));
     assert!(!request_instructions(&request).contains("Workspace Instructions"));
-    manager.complete_message(&request.message_id).await?;
-    tokio::fs::write(&user_path, [0xff]).await?;
+    manager.complete_message(&request.message_id).await.unwrap();
+    tokio::fs::write(&user_path, [0xff]).await.unwrap();
     let error = manager
         .prepare_continuation_stream(&session_id)
         .await
@@ -797,5 +879,4 @@ async fn user_agents_md_loads_without_workspace_instructions_and_reports_read_er
             .contains(user_path.to_string_lossy().as_ref())
     );
     cleanup_dir(data_dir).await;
-    Ok(())
 }

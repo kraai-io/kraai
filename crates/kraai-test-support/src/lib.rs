@@ -1,7 +1,6 @@
 //! Test machines vary disk and CPU latency by orders of magnitude, so a wall-clock bound only
 //! detects a hang and sits far above any latency a working run can see.
 
-use std::future::IntoFuture;
 use std::time::Duration;
 
 pub mod http;

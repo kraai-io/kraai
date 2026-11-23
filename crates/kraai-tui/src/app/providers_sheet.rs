@@ -332,7 +332,7 @@ impl App {
     pub(super) fn provider_feedback(&mut self, text: impl Into<String>) {
         let text = text.into();
         if self.state.mode == UiMode::Providers {
-            self.state.sheet_feedback = Some(text.clone());
+            self.state.sheet_feedback = Some(text);
         }
     }
 
@@ -462,7 +462,7 @@ impl App {
             self.state.sheet_notice = Some(String::from("No sign-in is waiting"));
             return;
         };
-        match self.copy_text_to_clipboard(&value, super::feedback::CopyTarget::Auth) {
+        match self.copy_text_to_clipboard(&value, feedback::CopyTarget::Auth) {
             Ok(()) => self.provider_feedback("Copied"),
             Err(error) => self.state.sheet_notice = Some(format!("Copy failed: {error}")),
         }

@@ -655,7 +655,7 @@ fn protocol_boundary(call: ScriptCall, mut rewrites: ScriptRewrites) -> Complete
 #[cfg(debug_assertions)]
 fn log_file_contexts(session_id: &SessionId, message_id: &MessageId, request: &ProviderRequest) {
     for (position, item) in request.messages.iter().enumerate() {
-        if let kraai_types::ConversationItem::FileContext { text } = item {
+        if let ConversationItem::FileContext { text } = item {
             tracing::info!(
                 session_id = %session_id,
                 request_id = %message_id,

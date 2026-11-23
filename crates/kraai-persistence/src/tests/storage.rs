@@ -1,176 +1,209 @@
 use super::*;
-use color_eyre::eyre::OptionExt;
 
 #[tokio::test]
-async fn message_ids_do_not_load_message_payloads() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let persistence = open_persistence(directory.path()).await?;
-    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
+async fn message_ids_do_not_load_message_payloads() {
+    let directory = tempfile::tempdir().unwrap();
+    let persistence = open_persistence(directory.path()).await.unwrap();
+    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3")).unwrap();
     connection.execute(
         "INSERT INTO records(kind, id, data) VALUES ('message', 'message', 'invalid JSON'), ('usage', 'usage', 'invalid JSON')",
         [],
-    )?;
-    ensure!(
-        persistence.messages().list_ids().await?
+    ).unwrap();
+    assert!(
+        persistence.messages().list_ids().await.unwrap()
             == std::collections::HashSet::from([MessageId::new("message")])
     );
-    ensure!(
+    assert!(
         persistence
             .messages()
             .get(&MessageId::new("message"))
             .await
             .is_err()
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn database_creation_records_the_schema_version() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let persistence = open_persistence(directory.path()).await?;
-    persistence.sessions().save(&session("session")).await?;
-    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
-    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    ensure!(version == crate::database::SCHEMA_VERSION);
-    let reopened = open_persistence(directory.path()).await?;
-    ensure!(
+async fn database_creation_records_the_schema_version() {
+    let directory = tempfile::tempdir().unwrap();
+    let persistence = open_persistence(directory.path()).await.unwrap();
+    persistence
+        .sessions()
+        .save(&session("session"))
+        .await
+        .unwrap();
+    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3")).unwrap();
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert!(version == database::SCHEMA_VERSION);
+    let reopened = open_persistence(directory.path()).await.unwrap();
+    assert!(
         reopened
             .sessions()
             .get(&SessionId::new("session"))
-            .await?
+            .await
+            .unwrap()
             .is_some()
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn other_schema_versions_are_rejected_without_changing_the_database() -> Result<()> {
-    let current = crate::database::SCHEMA_VERSION;
+async fn other_schema_versions_are_rejected_without_changing_the_database() {
+    let current = database::SCHEMA_VERSION;
     for other in [current - 1, current + 1] {
-        let directory = tempfile::tempdir()?;
-        let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
-        connection.pragma_update(None, "user_version", other)?;
-        ensure!(open_persistence(directory.path()).await.is_err());
-        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        ensure!(version == other);
-        let tables: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table'",
-            [],
-            |row| row.get(0),
-        )?;
-        ensure!(tables == 0);
+        let directory = tempfile::tempdir().unwrap();
+        let connection =
+            rusqlite::Connection::open(directory.path().join("kraai.sqlite3")).unwrap();
+        connection
+            .pragma_update(None, "user_version", other)
+            .unwrap();
+        assert!(open_persistence(directory.path()).await.is_err());
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert!(version == other);
+        let tables: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(tables == 0);
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn deletion_preserves_branched_history_and_removes_unlinked_messages() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let persistence = open_persistence(directory.path()).await?;
-    persistence.sessions().save(&session("original")).await?;
+async fn deletion_preserves_branched_history_and_removes_unlinked_messages() {
+    let directory = tempfile::tempdir().unwrap();
+    let persistence = open_persistence(directory.path()).await.unwrap();
+    persistence
+        .sessions()
+        .save(&session("original"))
+        .await
+        .unwrap();
     let mut original_ids = Vec::new();
     for _ in 0..16 {
         let appended = persistence
             .conversations()
             .append_message(request("original", "shared"))
-            .await?;
+            .await
+            .unwrap();
         original_ids.push(appended.message.id);
     }
     let mut fork = session("fork");
     fork.tip_id = original_ids.last().cloned();
-    persistence.sessions().save(&fork).await?;
+    persistence.sessions().save(&fork).await.unwrap();
     let mut other_fork = session("other-fork");
     other_fork.tip_id = original_ids.first().cloned();
-    persistence.sessions().save(&other_fork).await?;
+    persistence.sessions().save(&other_fork).await.unwrap();
     for _ in 0..16 {
         persistence
             .conversations()
             .append_message(request("original", "exclusive"))
-            .await?;
+            .await
+            .unwrap();
     }
     let mut unlinked = persistence
         .conversations()
         .append_message(request("fork", "fork message"))
-        .await?
+        .await
+        .unwrap()
         .message;
     let fork_message_id = unlinked.id.clone();
     unlinked.id = MessageId::new("unlinked-original-message");
     unlinked.parent_id = original_ids.last().cloned();
-    persistence.messages().save(&unlinked).await?;
+    persistence.messages().save(&unlinked).await.unwrap();
     persistence
         .sessions()
         .delete(&SessionId::new("original"))
-        .await?;
-    let retained = persistence.messages().list_ids().await?;
-    ensure!(retained.len() == original_ids.len() + 1);
-    ensure!(retained.contains(&fork_message_id));
+        .await
+        .unwrap();
+    let retained = persistence.messages().list_ids().await.unwrap();
+    assert!(retained.len() == original_ids.len() + 1);
+    assert!(retained.contains(&fork_message_id));
     for id in &original_ids {
-        ensure!(retained.contains(id));
+        assert!(retained.contains(id));
     }
-    ensure!(!retained.contains(&unlinked.id));
+    assert!(!retained.contains(&unlinked.id));
     persistence
         .sessions()
         .delete(&SessionId::new("fork"))
-        .await?;
-    ensure!(
-        persistence.messages().list_ids().await?
+        .await
+        .unwrap();
+    assert!(
+        persistence.messages().list_ids().await.unwrap()
             == original_ids.first().cloned().into_iter().collect()
     );
     persistence
         .sessions()
         .delete(&SessionId::new("other-fork"))
-        .await?;
-    ensure!(persistence.messages().list_ids().await?.is_empty());
-    Ok(())
+        .await
+        .unwrap();
+    assert!(persistence.messages().list_ids().await.unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn deletion_cannot_remove_another_clients_owned_unlinked_message() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let owner = open_persistence(directory.path()).await?;
-    owner.sessions().save(&session("owner")).await?;
+async fn deletion_cannot_remove_another_clients_owned_unlinked_message() {
+    let directory = tempfile::tempdir().unwrap();
+    let owner = open_persistence(directory.path()).await.unwrap();
+    owner.sessions().save(&session("owner")).await.unwrap();
     let root = owner
         .conversations()
         .append_message(request("owner", "root"))
-        .await?;
+        .await
+        .unwrap();
     let mut fork = session("fork");
     fork.tip_id = Some(root.message.id.clone());
-    owner.sessions().save(&fork).await?;
+    owner.sessions().save(&fork).await.unwrap();
     let mut metadata = owner
         .sessions()
         .get(&SessionId::new("owner"))
-        .await?
-        .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
+        .await
+        .unwrap()
+        .expect("Missing session");
     metadata.tip_id = None;
-    owner.sessions().save(&metadata).await?;
+    owner.sessions().save(&metadata).await.unwrap();
     owner
         .sessions()
         .claim_turn(&SessionId::new("owner"))
-        .await?;
-    let observer = open_persistence(directory.path()).await?;
-    ensure!(
+        .await
+        .unwrap();
+    let observer = open_persistence(directory.path()).await.unwrap();
+    assert!(
         observer
             .sessions()
             .delete(&SessionId::new("fork"))
             .await
             .is_err()
     );
-    ensure!(
+    assert!(
         observer
             .sessions()
             .get(&SessionId::new("fork"))
-            .await?
+            .await
+            .unwrap()
             .is_some()
     );
-    ensure!(observer.messages().get(&root.message.id).await?.is_some());
-    Ok(())
+    assert!(
+        observer
+            .messages()
+            .get(&root.message.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]
-async fn last_used_model_survives_reopening_and_messages_without_generation() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let persistence = open_persistence(directory.path()).await?;
-    persistence.sessions().save(&session("session")).await?;
+async fn last_used_model_survives_reopening_and_messages_without_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let persistence = open_persistence(directory.path()).await.unwrap();
+    persistence
+        .sessions()
+        .save(&session("session"))
+        .await
+        .unwrap();
     for (model, effort) in [("first", "light"), ("last", "deep")] {
         let mut request = request("session", "answer");
         request.content = ConversationItem::Assistant { items: Vec::new() };
@@ -184,19 +217,25 @@ async fn last_used_model_survives_reopening_and_messages_without_generation() ->
             max_context: None,
             usage: None,
         });
-        persistence.conversations().append_message(request).await?;
+        persistence
+            .conversations()
+            .append_message(request)
+            .await
+            .unwrap();
     }
     persistence
         .conversations()
         .append_message(request("session", "next question"))
-        .await?;
-    let reopened = open_persistence(directory.path()).await?;
+        .await
+        .unwrap();
+    let reopened = open_persistence(directory.path()).await.unwrap();
     let saved = reopened
         .sessions()
         .get(&SessionId::new("session"))
-        .await?
-        .ok_or_else(|| color_eyre::eyre::eyre!("Missing session"))?;
-    ensure!(
+        .await
+        .unwrap()
+        .expect("Missing session");
+    assert!(
         saved.selected_model
             == Some(kraai_types::ModelSelection {
                 provider_id: kraai_types::ProviderId::new("provider"),
@@ -207,14 +246,13 @@ async fn last_used_model_survives_reopening_and_messages_without_generation() ->
                 )]),
             })
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn repeated_message_reads_observe_changes_from_another_connection() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let reader = open_persistence(directory.path()).await?;
-    let writer = open_persistence(directory.path()).await?;
+async fn repeated_message_reads_observe_changes_from_another_connection() {
+    let directory = tempfile::tempdir().unwrap();
+    let reader = open_persistence(directory.path()).await.unwrap();
+    let writer = open_persistence(directory.path()).await.unwrap();
     let mut message = kraai_types::Message {
         id: MessageId::new("message"),
         parent_id: None,
@@ -225,47 +263,50 @@ async fn repeated_message_reads_observe_changes_from_another_connection() -> Res
         agent_profile_id: None,
         generation: None,
     };
-    writer.messages().save(&message).await?;
+    writer.messages().save(&message).await.unwrap();
     let original = reader
         .messages()
         .get(&message.id)
-        .await?
-        .ok_or_eyre("Missing original message")?;
-    ensure!(
+        .await
+        .unwrap()
+        .expect("Missing original message");
+    assert!(
         reader
             .messages()
             .get(&MessageId::new("missing"))
-            .await?
+            .await
+            .unwrap()
             .is_none()
     );
     message.content = ConversationItem::User {
         content: "updated\n\"hello\" 🦀".into(),
     };
-    writer.messages().save(&message).await?;
+    writer.messages().save(&message).await.unwrap();
     let updated = reader
         .messages()
         .get(&message.id)
-        .await?
-        .ok_or_eyre("Missing updated message")?;
-    ensure!(updated.content == message.content);
-    ensure!(original.content.text() == Some("original"));
-    writer.messages().delete(&message.id).await?;
-    ensure!(reader.messages().get(&message.id).await?.is_none());
-    writer.messages().save(&message).await?;
-    ensure!(
+        .await
+        .unwrap()
+        .expect("Missing updated message");
+    assert!(updated.content == message.content);
+    assert!(original.content.text() == Some("original"));
+    writer.messages().delete(&message.id).await.unwrap();
+    assert!(reader.messages().get(&message.id).await.unwrap().is_none());
+    writer.messages().save(&message).await.unwrap();
+    assert!(
         reader
             .messages()
             .get(&message.id)
-            .await?
+            .await
+            .unwrap()
             .is_some_and(|stored| stored.content == message.content)
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn message_read_errors_preserve_types_and_allow_recovery() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let persistence = open_persistence(directory.path()).await?;
+async fn message_read_errors_preserve_types_and_allow_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let persistence = open_persistence(directory.path()).await.unwrap();
     let message = kraai_types::Message {
         id: MessageId::new("message"),
         parent_id: None,
@@ -276,22 +317,23 @@ async fn message_read_errors_preserve_types_and_allow_recovery() -> Result<()> {
         agent_profile_id: None,
         generation: None,
     };
-    persistence.messages().save(&message).await?;
-    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
-    let valid = serde_json::to_string(&message)?;
+    persistence.messages().save(&message).await.unwrap();
+    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3")).unwrap();
+    let valid = serde_json::to_string(&message).unwrap();
     for corrupt in ["'invalid JSON'", "'{}'", "X'00'", "CAST(X'FF' AS TEXT)"] {
-        connection.execute(
-            &format!(
-                "UPDATE records SET data = {corrupt} WHERE kind = 'message' AND id = 'message'"
-            ),
-            [],
-        )?;
+        connection
+            .execute(
+                &format!(
+                    "UPDATE records SET data = {corrupt} WHERE kind = 'message' AND id = 'message'"
+                ),
+                [],
+            )
+            .unwrap();
         let actual = persistence
             .messages()
             .get(&message.id)
             .await
-            .err()
-            .ok_or_eyre("Corrupt message was accepted")?;
+            .expect_err("Corrupt message was accepted");
         match connection.query_row(
             "SELECT data FROM records WHERE kind = 'message' AND id = 'message'",
             [],
@@ -299,49 +341,56 @@ async fn message_read_errors_preserve_types_and_allow_recovery() -> Result<()> {
         ) {
             Ok(json) => {
                 let expected = serde_json::from_str::<kraai_types::Message>(&json)
-                    .err()
-                    .ok_or_eyre("Expected invalid message JSON")?;
-                ensure!(
+                    .expect_err("Expected invalid message JSON");
+                assert!(
                     actual
                         .downcast_ref::<serde_json::Error>()
                         .is_some_and(|actual| actual.to_string() == expected.to_string())
                 );
             }
             Err(expected) => {
-                ensure!(actual.downcast_ref::<rusqlite::Error>() == Some(&expected));
+                assert!(actual.downcast_ref::<rusqlite::Error>() == Some(&expected));
             }
         }
-        connection.execute(
-            "UPDATE records SET data = ?1 WHERE kind = 'message' AND id = 'message'",
-            [&valid],
-        )?;
-        ensure!(
+        connection
+            .execute(
+                "UPDATE records SET data = ?1 WHERE kind = 'message' AND id = 'message'",
+                [&valid],
+            )
+            .unwrap();
+        assert!(
             persistence
                 .messages()
                 .get(&message.id)
-                .await?
+                .await
+                .unwrap()
                 .is_some_and(|stored| stored.content == message.content)
         );
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn history_cursor_pages_double_and_detect_cycles_across_pages() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let persistence = open_persistence(directory.path()).await?;
-    persistence.sessions().save(&session("session")).await?;
+async fn history_cursor_pages_double_and_detect_cycles_across_pages() {
+    let directory = tempfile::tempdir().unwrap();
+    let persistence = open_persistence(directory.path()).await.unwrap();
+    persistence
+        .sessions()
+        .save(&session("session"))
+        .await
+        .unwrap();
     persistence
         .sessions()
         .claim_turn(&SessionId::new("session"))
-        .await?;
+        .await
+        .unwrap();
     let conversation = persistence.conversations();
     let mut ids = Vec::new();
     for index in 0..7 {
         ids.push(
             conversation
                 .append_message(request("session", &format!("message {index}")))
-                .await?
+                .await
+                .unwrap()
                 .message
                 .id,
         );
@@ -350,46 +399,51 @@ async fn history_cursor_pages_double_and_detect_cycles_across_pages() -> Result<
     let tip = ids.first().cloned();
     let mut cursor = HistoryCursor::new(persistence.messages().as_ref(), tip.clone());
     let mut pages = Vec::new();
-    while let Some(page) = cursor.next_page().await? {
+    while let Some(page) = cursor.next_page().await.unwrap() {
         pages.push(
             page.into_iter()
                 .map(|message| message.id)
                 .collect::<Vec<_>>(),
         );
     }
-    ensure!(pages.iter().map(Vec::len).collect::<Vec<_>>() == [1, 2, 4]);
-    ensure!(pages.concat() == ids);
+    assert!(pages.iter().map(Vec::len).collect::<Vec<_>>() == [1, 2, 4]);
+    assert!(pages.concat() == ids);
 
-    let root = ids.last().ok_or_eyre("missing root")?;
+    let root = ids.last().expect("missing root");
     let mut message = persistence
         .messages()
         .get(root)
-        .await?
-        .ok_or_eyre("missing root message")?;
+        .await
+        .unwrap()
+        .expect("missing root message");
     message.parent_id.clone_from(&tip);
-    persistence.messages().save(&message).await?;
+    persistence.messages().save(&message).await.unwrap();
     let mut cursor = HistoryCursor::new(persistence.messages().as_ref(), tip);
     let error = loop {
         match cursor.next_page().await {
             Ok(Some(_)) => {}
-            Ok(None) => color_eyre::eyre::bail!("cycle was not detected"),
+            Ok(None) => panic!("cycle was not detected"),
             Err(error) => break error,
         }
     };
-    ensure!(error.to_string().contains("cycle repeats message"));
-    Ok(())
+    assert!(error.to_string().contains("cycle repeats message"));
 }
 
 #[tokio::test]
-async fn stream_deltas_replay_idempotently_until_a_full_save() -> Result<()> {
+async fn stream_deltas_replay_idempotently_until_a_full_save() {
     use kraai_types::{AssistantItem, AssistantPhase, StreamId};
-    let directory = tempfile::tempdir()?;
-    let persistence = open_persistence(directory.path()).await?;
-    persistence.sessions().save(&session("session")).await?;
+    let directory = tempfile::tempdir().unwrap();
+    let persistence = open_persistence(directory.path()).await.unwrap();
+    persistence
+        .sessions()
+        .save(&session("session"))
+        .await
+        .unwrap();
     persistence
         .sessions()
         .claim_turn(&SessionId::new("session"))
-        .await?;
+        .await
+        .unwrap();
     let mut streaming = request("session", "unused");
     streaming.content = ConversationItem::Assistant { items: Vec::new() };
     streaming.status = MessageStatus::Streaming {
@@ -398,7 +452,8 @@ async fn stream_deltas_replay_idempotently_until_a_full_save() -> Result<()> {
     let mut message = persistence
         .conversations()
         .append_message(streaming)
-        .await?
+        .await
+        .unwrap()
         .message;
     let deltas = [
         StreamDelta::Text {
@@ -413,18 +468,25 @@ async fn stream_deltas_replay_idempotently_until_a_full_save() -> Result<()> {
         },
     ];
     for delta in &deltas {
-        delta.apply(&mut message)?;
+        delta.apply(&mut message).unwrap();
     }
     let messages = persistence.messages();
-    messages.append_stream_deltas(&message, 0, &deltas).await?;
-    messages.append_stream_deltas(&message, 0, &deltas).await?;
-    let reopened = open_persistence(directory.path()).await?;
+    messages
+        .append_stream_deltas(&message, 0, &deltas)
+        .await
+        .unwrap();
+    messages
+        .append_stream_deltas(&message, 0, &deltas)
+        .await
+        .unwrap();
+    let reopened = open_persistence(directory.path()).await.unwrap();
     let replayed = reopened
         .messages()
         .get(&message.id)
-        .await?
-        .ok_or_eyre("missing streamed message")?;
-    ensure!(replayed.content == message.content && replayed.status == message.status);
+        .await
+        .unwrap()
+        .expect("missing streamed message");
+    assert!(replayed.content == message.content && replayed.status == message.status);
 
     message.content = ConversationItem::Assistant {
         items: vec![AssistantItem::Text {
@@ -433,15 +495,16 @@ async fn stream_deltas_replay_idempotently_until_a_full_save() -> Result<()> {
         }],
     };
     message.status = MessageStatus::Complete;
-    messages.save(&message).await?;
+    messages.save(&message).await.unwrap();
     let saved = messages
         .get(&message.id)
-        .await?
-        .ok_or_eyre("missing saved message")?;
-    ensure!(saved.content == message.content && saved.status == message.status);
-    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3"))?;
-    let remaining: i64 =
-        connection.query_row("SELECT COUNT(*) FROM stream_deltas", [], |row| row.get(0))?;
-    ensure!(remaining == 0);
-    Ok(())
+        .await
+        .unwrap()
+        .expect("missing saved message");
+    assert!(saved.content == message.content && saved.status == message.status);
+    let connection = rusqlite::Connection::open(directory.path().join("kraai.sqlite3")).unwrap();
+    let remaining: i64 = connection
+        .query_row("SELECT COUNT(*) FROM stream_deltas", [], |row| row.get(0))
+        .unwrap();
+    assert!(remaining == 0);
 }

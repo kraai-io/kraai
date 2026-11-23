@@ -78,7 +78,7 @@ impl kraai_provider_core::Provider for HandoffProvider {
 }
 
 #[tokio::test]
-async fn cancelling_while_a_call_drains_keeps_the_text_and_drops_the_unrun_call() -> Result<()> {
+async fn cancelling_while_a_call_drains_keeps_the_text_and_drops_the_unrun_call() {
     let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
     let call_taken = Arc::new(tokio::sync::Notify::new());
     let mut providers = kraai_provider_core::ProviderManager::new();
@@ -92,7 +92,7 @@ async fn cancelling_while_a_call_drains_keeps_the_text_and_drops_the_unrun_call(
         }),
     );
     let harness = RuntimeTestHarness::new_with_message_store(providers, None).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     harness
         .handle
         .send_message(
@@ -102,9 +102,11 @@ async fn cancelling_while_a_call_drains_keeps_the_text_and_drops_the_unrun_call(
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     hang_guard(received.recv())
-        .await?
+        .await
+        .unwrap()
         .expect("first provider request");
     harness
         .events
@@ -114,10 +116,30 @@ async fn cancelling_while_a_call_drains_keeps_the_text_and_drops_the_unrun_call(
             })
         })
         .await;
-    hang_guard(call_taken.notified()).await?;
-    assert!(harness.handle.cancel_stream(session_id.clone()).await?);
-    assert!(!harness.handle.cancel_stream(session_id.clone()).await?);
-    assert!(harness.runtime.execution_store.list_all().await?.is_empty());
+    hang_guard(call_taken.notified()).await.unwrap();
+    assert!(
+        harness
+            .handle
+            .cancel_stream(session_id.clone())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !harness
+            .handle
+            .cancel_stream(session_id.clone())
+            .await
+            .unwrap()
+    );
+    assert!(
+        harness
+            .runtime
+            .execution_store
+            .list_all()
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert!(
         received.try_recv().is_err(),
         "cancellation started an automatic continuation"
@@ -131,9 +153,11 @@ async fn cancelling_while_a_call_drains_keeps_the_text_and_drops_the_unrun_call(
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let request = hang_guard(received.recv())
-        .await?
+        .await
+        .unwrap()
         .expect("provider request after cancellation");
     harness.shutdown().await;
     assert!(!request.messages.iter().any(|item| {
@@ -146,18 +170,17 @@ async fn cancelling_while_a_call_drains_keeps_the_text_and_drops_the_unrun_call(
             if items.iter().any(|item| matches!(item, kraai_types::AssistantItem::Text { phase, text }
                 if *phase == kraai_types::AssistantPhase::Commentary && text == "I am partway through.")))
     }));
-    Ok(())
 }
 
 #[tokio::test]
-async fn held_preparation_queues_without_blocking_another_session() -> Result<()> {
+async fn held_preparation_queues_without_blocking_another_session() {
     let harness = RuntimeTestHarness::new(vec![
         vec![ScriptedChunk::plain("other session complete")],
         vec![ScriptedChunk::plain("queued message complete")],
     ])
     .await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let other_session = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
+    let other_session = create_session_with_profile(&harness.handle, "test-profile").await;
     super::harness::hold_preparation(&harness.runtime, &session_id).await;
     assert!(matches!(
         harness
@@ -169,7 +192,8 @@ async fn held_preparation_queues_without_blocking_another_session() -> Result<()
                 "mock".into(),
                 Default::default(),
             )
-            .await?,
+            .await
+            .unwrap(),
         crate::SubmitMessageOutcome::Queued { position: 1 }
     ));
     assert!(matches!(
@@ -180,7 +204,9 @@ async fn held_preparation_queues_without_blocking_another_session() -> Result<()
             "mock".into(),
             Default::default(),
         ),)
-        .await??,
+        .await
+        .unwrap()
+        .unwrap(),
         crate::SubmitMessageOutcome::Started { .. }
     ));
     super::harness::release_preparation(&harness.runtime, &session_id).await;
@@ -204,7 +230,6 @@ async fn held_preparation_queues_without_blocking_another_session() -> Result<()
             .is_empty()
     );
     harness.shutdown().await;
-    Ok(())
 }
 
 fn idle_provider() -> kraai_provider_core::ProviderManager {
@@ -223,10 +248,10 @@ fn idle_provider() -> kraai_provider_core::ProviderManager {
 }
 
 #[tokio::test]
-async fn session_stays_running_between_streams_until_turn_finishes() -> Result<()> {
+async fn session_stays_running_between_streams_until_turn_finishes() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let idle_session = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
+    let idle_session = create_session_with_profile(&harness.handle, "test-profile").await;
     let request = harness
         .runtime
         .agent_manager
@@ -237,10 +262,11 @@ async fn session_stays_running_between_streams_until_turn_finishes() -> Result<(
             kraai_types::ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
 
     for is_streaming in [true, false] {
-        let sessions = harness.handle.list_sessions().await?;
+        let sessions = harness.handle.list_sessions().await.unwrap();
         let session = sessions
             .iter()
             .find(|session| session.id == session_id)
@@ -251,7 +277,8 @@ async fn session_stays_running_between_streams_until_turn_finishes() -> Result<(
         let snapshot = harness
             .handle
             .get_session_snapshot(session_id.clone())
-            .await?;
+            .await
+            .unwrap();
         assert!(snapshot.session.is_running);
         assert_eq!(snapshot.session.is_streaming, is_streaming);
         if is_streaming {
@@ -259,27 +286,27 @@ async fn session_stays_running_between_streams_until_turn_finishes() -> Result<(
                 .runtime
                 .agent_manager
                 .complete_message(&request.message_id)
-                .await?;
+                .await
+                .unwrap();
         }
     }
 
     harness.runtime.agent_manager.clear_active_turn(&session_id);
-    let sessions = harness.handle.list_sessions().await?;
+    let sessions = harness.handle.list_sessions().await.unwrap();
     assert!(sessions.iter().all(|session| !session.is_running));
     let snapshot = harness
         .handle
         .get_session_snapshot(session_id.clone())
-        .await?;
+        .await
+        .unwrap();
     assert!(!snapshot.session.is_running);
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn stream_start_events_precede_a_snapshot_taken_right_after_the_stream_starts() -> Result<()>
-{
+async fn stream_start_events_precede_a_snapshot_taken_right_after_the_stream_starts() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let mut request = harness
         .runtime
         .agent_manager
@@ -290,7 +317,8 @@ async fn stream_start_events_precede_a_snapshot_taken_right_after_the_stream_sta
             kraai_types::ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     request.context_notifications = vec!["missing file automatically unpinned".into()];
     let message_id = request.message_id.to_string();
     let mut events = harness.runtime.event_tx.subscribe();
@@ -304,31 +332,30 @@ async fn stream_start_events_precede_a_snapshot_taken_right_after_the_stream_sta
         })
         .await;
 
-    let timing = events.try_recv()?;
+    let timing = events.try_recv().unwrap();
     let Event::TurnTimingChanged { timer, .. } = timing.event else {
         panic!("expected runtime turn timing");
     };
-    let start = events.try_recv()?;
+    let start = events.try_recv().unwrap();
     assert!(
         matches!(start.event, Event::StreamStart { message_id: actual, .. } if actual == message_id)
     );
-    let context = events.try_recv()?;
+    let context = events.try_recv().unwrap();
     assert!(
         matches!(context.event, Event::ContextStateChanged { notifications, .. } if notifications.len() == 1)
     );
-    let snapshot = hang_guard(snapshot).await???;
+    let snapshot = hang_guard(snapshot).await.unwrap().unwrap().unwrap();
     assert!(snapshot.event_sequence >= start.sequence);
     assert_eq!(snapshot.activity, SessionActivity::Streaming);
     assert_eq!(snapshot.turn_timer, timer);
     assert!(timer.elapsed(std::time::Instant::now()).is_some());
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn cancellation_finishes_after_a_snapshot_and_stays_active_until_finalized() -> Result<()> {
+async fn cancellation_finishes_after_a_snapshot_and_stays_active_until_finalized() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let runtime = harness.runtime.clone();
     let (generation, cancellation) = runtime
         .with_session_actor(&session_id, |actor| {
@@ -339,11 +366,12 @@ async fn cancellation_finishes_after_a_snapshot_and_stays_active_until_finalized
     let handle = harness.handle.clone();
     let cancel_session = session_id.clone();
     let cancel = tokio::spawn(async move { handle.cancel_stream(cancel_session).await });
-    hang_guard(cancellation.cancelled()).await?;
+    hang_guard(cancellation.cancelled()).await.unwrap();
     let snapshot = harness
         .handle
         .get_session_snapshot(session_id.clone())
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(snapshot.activity, SessionActivity::ExecutingScript);
     assert!(!cancel.is_finished());
 
@@ -355,20 +383,20 @@ async fn cancellation_finishes_after_a_snapshot_and_stays_active_until_finalized
             result: Err(color_eyre::eyre::eyre!("script cancelled")),
         },
     );
-    assert!(hang_guard(cancel).await???);
+    assert!(hang_guard(cancel).await.unwrap().unwrap().unwrap());
     let snapshot = harness
         .handle
         .get_session_snapshot(session_id.clone())
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(snapshot.activity, SessionActivity::Idle);
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shutdown_waits_for_synchronous_stream_poll_to_return() -> Result<()> {
+async fn shutdown_waits_for_synchronous_stream_poll_to_return() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let entered = CancellationToken::new();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let task_entered = entered.clone();
@@ -383,9 +411,9 @@ async fn shutdown_waits_for_synchronous_stream_poll_to_return() -> Result<()> {
             });
             std::task::Poll::Ready(Some(()))
         });
-        let _ = futures::StreamExt::next(&mut stream).await;
+        let _ = StreamExt::next(&mut stream).await;
     });
-    hang_guard(entered.cancelled()).await?;
+    hang_guard(entered.cancelled()).await.unwrap();
     let runtime = harness.runtime.clone();
     let shutdown = runtime.stop_active_work();
     tokio::pin!(shutdown);
@@ -394,20 +422,19 @@ async fn shutdown_waits_for_synchronous_stream_poll_to_return() -> Result<()> {
 
     release_tx.send(()).expect("stream poll is blocked");
     if shutdown_pending {
-        hang_guard(shutdown).await?;
+        hang_guard(shutdown).await.unwrap();
     }
-    let _task_result = hang_guard(task).await?;
+    let _task_result = hang_guard(task).await.unwrap();
     assert!(shutdown_pending);
     assert!(!stream_finished_early);
     assert!(harness.runtime.stream_tasks.is_empty());
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn shutdown_cancels_a_running_script_and_waits_for_its_finalization() -> Result<()> {
+async fn shutdown_cancels_a_running_script_and_waits_for_its_finalization() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let runtime = harness.runtime.clone();
     let (generation, cancellation, mailbox) = runtime
         .with_session_actor(&session_id, |actor| {
@@ -421,14 +448,14 @@ async fn shutdown_cancels_a_running_script_and_waits_for_its_finalization() -> R
     let shutdown = runtime.stop_active_work();
     tokio::pin!(shutdown);
     assert!(poll!(&mut shutdown).is_pending());
-    hang_guard(cancellation.cancelled()).await?;
+    hang_guard(cancellation.cancelled()).await.unwrap();
     assert!(poll!(&mut shutdown).is_pending());
 
     let _ = mailbox.send(crate::runtime::session::SessionMessage::ScriptEnded {
         generation,
         result: Err(color_eyre::eyre::eyre!("script cancelled")),
     });
-    hang_guard(shutdown).await?;
+    hang_guard(shutdown).await.unwrap();
     assert!(
         std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
             event.event,
@@ -436,13 +463,12 @@ async fn shutdown_cancels_a_running_script_and_waits_for_its_finalization() -> R
         ))
     );
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn session_commands_after_shutdown_cannot_start_a_new_stream() -> Result<()> {
+async fn session_commands_after_shutdown_cannot_start_a_new_stream() {
     let harness = RuntimeTestHarness::new(Vec::new()).await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let agent = &harness.runtime.agent_manager;
     let request = agent
         .prepare_start_stream(
@@ -452,8 +478,9 @@ async fn session_commands_after_shutdown_cannot_start_a_new_stream() -> Result<(
             kraai_types::ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
-    agent.complete_message(&request.message_id).await?;
+        .await
+        .unwrap();
+    agent.complete_message(&request.message_id).await.unwrap();
     harness.runtime.stop_active_work().await;
     let event_sequence = harness.runtime.event_tx.latest_sequence();
     assert!(
@@ -483,17 +510,16 @@ async fn session_commands_after_shutdown_cannot_start_a_new_stream() -> Result<(
             response,
         },
     );
-    assert!(outcome.await?.is_err());
+    assert!(outcome.await.unwrap().is_err());
     assert_eq!(harness.runtime.event_tx.latest_sequence(), event_sequence);
     harness.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Result<()> {
+async fn slow_snapshot_history_does_not_block_commands_or_state_events() {
     let data_dir =
         std::env::temp_dir().join(format!("kraai-slow-history-{}", ulid::Ulid::generate()));
-    tokio::fs::create_dir_all(&data_dir).await?;
+    tokio::fs::create_dir_all(&data_dir).await.unwrap();
     let store = Arc::new(PausedMessageStore {
         inner: SqliteMessageStore::new(&data_dir),
         pause: AtomicBool::new(false),
@@ -505,7 +531,7 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
         Some(store.clone()),
     )
     .await;
-    let session_id = create_session_with_profile(&harness.handle, "test-profile").await?;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
     let message_id = MessageId::new(ulid::Ulid::generate());
     harness
         .runtime
@@ -521,18 +547,22 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
                 exit_code: Some(0),
             },
         )
-        .await?;
+        .await
+        .unwrap();
     store.pause.store(true, Ordering::SeqCst);
     let snapshot_task = tokio::spawn({
         let handle = harness.handle.clone();
         let session_id = session_id.clone();
         async move { handle.get_session_snapshot(session_id).await }
     });
-    hang_guard(store.entered.notified()).await?;
-    hang_guard(harness.handle.list_provider_definitions()).await??;
+    hang_guard(store.entered.notified()).await.unwrap();
+    hang_guard(harness.handle.list_provider_definitions())
+        .await
+        .unwrap()
+        .unwrap();
     let guard = {
         let barrier = harness.runtime.sessions.barrier(&session_id);
-        hang_guard(barrier.read_owned()).await?
+        hang_guard(barrier.read_owned()).await.unwrap()
     };
     harness
         .runtime
@@ -540,7 +570,7 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
     let later_sequence = harness.runtime.event_tx.latest_sequence();
     drop(guard);
     store.release.notify_one();
-    let snapshot = hang_guard(snapshot_task).await???;
+    let snapshot = hang_guard(snapshot_task).await.unwrap().unwrap().unwrap();
     assert!(snapshot.event_sequence < later_sequence);
     assert_eq!(
         snapshot
@@ -558,8 +588,7 @@ async fn slow_snapshot_history_does_not_block_commands_or_state_events() -> Resu
         }
     );
     harness.shutdown().await;
-    tokio::fs::remove_dir_all(data_dir).await?;
-    Ok(())
+    tokio::fs::remove_dir_all(data_dir).await.unwrap();
 }
 
 struct PausedMessageStore {

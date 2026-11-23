@@ -1,8 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    reason = "usage commit tests assert cancellation and barrier ownership"
-)]
-
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 

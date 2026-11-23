@@ -1,5 +1,3 @@
-#![deny(unsafe_code)]
-
 mod config;
 mod config_guard;
 mod error;
@@ -30,11 +28,6 @@ use platform::linux::{
 #[cfg(all(test, unix))]
 use process::is_likely_sandbox_denied;
 
-#[cfg(all(test, unix))]
-#[expect(
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    reason = "sandbox tests assert argv construction and process behavior directly"
-)]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests;

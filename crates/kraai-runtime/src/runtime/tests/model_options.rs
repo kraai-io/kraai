@@ -116,7 +116,7 @@ fn values(effort: &str) -> ModelOptionValues {
 }
 
 #[tokio::test]
-async fn full_and_partial_model_options_survive_restarting_each_session() -> Result<()> {
+async fn full_and_partial_model_options_survive_restarting_each_session() {
     let data_dir = std::env::temp_dir().join(format!(
         "kraai-runtime-model-options-{}",
         ulid::Ulid::generate()
@@ -155,33 +155,41 @@ async fn full_and_partial_model_options_survive_restarting_each_session() -> Res
             RuntimeTestHarness::new_in_directory(providers, None, Some(data_dir.clone())).await;
         if !restart {
             for selection in &selections {
-                let session = create_session_with_profile(&harness.handle, "test-profile").await?;
+                let session = create_session_with_profile(&harness.handle, "test-profile").await;
                 harness
                     .handle
                     .set_session_model(session.clone(), selection.clone())
-                    .await?;
+                    .await
+                    .unwrap();
                 sessions.push(session);
             }
         }
         for (session, selection) in sessions.iter().zip(&selections) {
-            assert!(harness.handle.load_session(session.clone()).await?);
+            assert!(harness.handle.load_session(session.clone()).await.unwrap());
             assert_eq!(
-                harness.handle.get_session_model(session.clone()).await?,
+                harness
+                    .handle
+                    .get_session_model(session.clone())
+                    .await
+                    .unwrap(),
                 Some(selection.clone())
             );
-            let snapshot = harness.handle.get_session_snapshot(session.clone()).await?;
+            let snapshot = harness
+                .handle
+                .get_session_snapshot(session.clone())
+                .await
+                .unwrap();
             assert_eq!(snapshot.session.selected_model.as_ref(), Some(selection));
             assert!(snapshot.history.is_empty());
             assert!(!snapshot.session.is_running);
         }
         harness.shutdown().await;
     }
-    tokio::fs::remove_dir_all(data_dir).await?;
-    Ok(())
+    tokio::fs::remove_dir_all(data_dir).await.unwrap();
 }
 
 #[tokio::test]
-async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
+async fn queue_and_generation_use_validated_submission_options() {
     let (requests, mut received) = mpsc::unbounded_channel();
     let (first_output, first_receiver) = mpsc::unbounded_channel();
     let (_second_output, second_receiver) = mpsc::unbounded_channel();
@@ -194,8 +202,8 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
         }),
     );
     let harness = RuntimeTestHarness::new_with_parts(providers).await;
-    let session = create_session_with_profile(&harness.handle, "test-profile").await?;
-    let models = harness.handle.list_models().await?;
+    let session = create_session_with_profile(&harness.handle, "test-profile").await;
+    let models = harness.handle.list_models().await.unwrap();
     let model = models
         .get("configured")
         .and_then(|models| models.first())
@@ -218,10 +226,17 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
         harness
             .handle
             .get_chat_history(session.clone())
-            .await?
+            .await
             .is_empty()
     );
-    assert!(!harness.runtime.session_store.owns_turn(&session).await?);
+    assert!(
+        !harness
+            .runtime
+            .session_store
+            .owns_turn(&session)
+            .await
+            .unwrap()
+    );
     harness
         .handle
         .send_message(
@@ -231,10 +246,14 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
             "configured".into(),
             values("low"),
         )
-        .await?;
-    let first = hang_guard(received.recv()).await?.expect("first request");
+        .await
+        .unwrap();
+    let first = hang_guard(received.recv())
+        .await
+        .unwrap()
+        .expect("first request");
     assert_eq!(first.options, values("low"));
-    let before = harness.handle.get_chat_history(session.clone()).await?;
+    let before = harness.handle.get_chat_history(session.clone()).await;
     let error = harness
         .handle
         .send_message(
@@ -253,8 +272,8 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
             .is_empty()
     );
     assert_eq!(
-        serde_json::to_value(before)?,
-        serde_json::to_value(harness.handle.get_chat_history(session.clone()).await?)?
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(harness.handle.get_chat_history(session.clone()).await).unwrap()
     );
     let mut queued = values("high");
     queued.insert("cache".into(), ModelOptionValue::Boolean(false));
@@ -269,7 +288,8 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
                 "configured".into(),
                 queued.clone(),
             )
-            .await?,
+            .await
+            .unwrap(),
         SubmitMessageOutcome::Queued { position: 1 }
     );
     assert_eq!(
@@ -281,15 +301,24 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
             .options,
         queued
     );
-    first_output.send(Ok(ProviderStreamEvent::TextDelta {
-        item_id: "answer".into(),
-        phase: AssistantPhase::FinalAnswer,
-        delta: "first answer".into(),
-    }))?;
+    first_output
+        .send(Ok(ProviderStreamEvent::TextDelta {
+            item_id: "answer".into(),
+            phase: AssistantPhase::FinalAnswer,
+            delta: "first answer".into(),
+        }))
+        .unwrap();
     drop(first_output);
-    let second = hang_guard(received.recv()).await?.expect("queued request");
+    let second = hang_guard(received.recv())
+        .await
+        .unwrap()
+        .expect("queued request");
     assert_eq!(second.options, queued);
-    let snapshot = harness.handle.get_session_snapshot(session.clone()).await?;
+    let snapshot = harness
+        .handle
+        .get_session_snapshot(session.clone())
+        .await
+        .unwrap();
     assert_eq!(
         snapshot
             .session
@@ -306,5 +335,4 @@ async fn queue_and_generation_use_validated_submission_options() -> Result<()> {
             .is_some_and(|generation| generation.options == queued)
     }));
     harness.shutdown().await;
-    Ok(())
 }

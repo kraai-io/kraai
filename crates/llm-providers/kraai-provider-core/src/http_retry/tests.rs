@@ -29,7 +29,7 @@ impl ProviderRetryObserver for RetryCollector {
     fn before_attempt(
         &self,
         unpriced_prior_attempts: u32,
-    ) -> Pin<Box<dyn Future<Output = color_eyre::Result<()>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             self.attempts
                 .lock()
@@ -60,9 +60,9 @@ enum ScriptedResponse {
     },
 }
 
-async fn spawn_server(script: Vec<ScriptedResponse>) -> Result<String> {
-    let mut listener = http::Listener::bind(http::PATH).await?;
-    let url = listener.url()?;
+async fn spawn_server(script: Vec<ScriptedResponse>) -> String {
+    let mut listener = http::Listener::bind(http::PATH).await.unwrap();
+    let url = listener.url().unwrap();
     let script = Arc::new(tokio::sync::Mutex::new(VecDeque::from(script)));
 
     tokio::spawn(async move {
@@ -104,7 +104,7 @@ async fn spawn_server(script: Vec<ScriptedResponse>) -> Result<String> {
         }
     });
 
-    Ok(url)
+    url
 }
 
 async fn write_response(
@@ -140,22 +140,22 @@ fn test_policy() -> HttpRetryPolicy {
     }
 }
 
-fn closed_port_url() -> std::io::Result<String> {
-    let listener = StdTcpListener::bind("127.0.0.1:0")?;
-    let address = listener.local_addr()?;
+fn closed_port_url() -> String {
+    let listener = StdTcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
     drop(listener);
-    Ok(format!("http://{address}/"))
+    format!("http://{address}/")
 }
 
 #[tokio::test]
-async fn failed_attempt_record_prevents_retry_send() -> Result<()> {
+async fn failed_attempt_record_prevents_retry_send() {
     struct RejectRetry;
     impl ProviderRetryObserver for RejectRetry {
         fn on_retry_scheduled(&self, _event: &ProviderRetryEvent) {}
         fn before_attempt(
             &self,
             unpriced_prior_attempts: u32,
-        ) -> Pin<Box<dyn Future<Output = color_eyre::Result<()>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
             Box::pin(async move {
                 if unpriced_prior_attempts > 0 {
                     return Err(eyre!("receipt unavailable"));
@@ -169,8 +169,8 @@ async fn failed_attempt_record_prevents_retry_send() -> Result<()> {
         headers: Vec::new(),
         body: "try again",
     }])
-    .await?;
-    let client = reqwest::Client::builder().build()?;
+    .await;
+    let client = reqwest::Client::builder().build().unwrap();
     let context = ProviderRequestContext::with_retry_observer(Arc::new(RejectRetry));
     let mut sends = 0;
     let result = send_with_retry("test", &test_policy(), &context, || {
@@ -180,11 +180,10 @@ async fn failed_attempt_record_prevents_retry_send() -> Result<()> {
     .await;
     assert_eq!(sends, 1);
     assert!(result.is_err_and(|error| error.to_string() == "receipt unavailable"));
-    Ok(())
 }
 
 #[tokio::test]
-async fn retries_500_then_succeeds() -> Result<()> {
+async fn retries_500_then_succeeds() {
     let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "500 Internal Server Error",
@@ -197,13 +196,14 @@ async fn retries_500_then_succeeds() -> Result<()> {
             body: "ok",
         },
     ])
-    .await?;
-    let client = reqwest::Client::builder().build()?;
+    .await;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let observer = Arc::new(RetryCollector::default());
     let context = ProviderRequestContext::with_retry_observer(observer.clone());
-    let response =
-        send_with_retry("test", &test_policy(), &context, || client.get(&url).send()).await?;
+    let response = send_with_retry("test", &test_policy(), &context, || client.get(&url).send())
+        .await
+        .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -213,11 +213,10 @@ async fn retries_500_then_succeeds() -> Result<()> {
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
         [0, 1]
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn retries_429_then_succeeds() -> Result<()> {
+async fn retries_429_then_succeeds() {
     let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "429 Too Many Requests",
@@ -230,13 +229,14 @@ async fn retries_429_then_succeeds() -> Result<()> {
             body: "ok",
         },
     ])
-    .await?;
-    let client = reqwest::Client::builder().build()?;
+    .await;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let observer = Arc::new(RetryCollector::default());
     let context = ProviderRequestContext::with_retry_observer(observer.clone());
-    let response =
-        send_with_retry("test", &test_policy(), &context, || client.get(&url).send()).await?;
+    let response = send_with_retry("test", &test_policy(), &context, || client.get(&url).send())
+        .await
+        .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -246,11 +246,10 @@ async fn retries_429_then_succeeds() -> Result<()> {
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
         [0, 0]
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn retries_408_then_succeeds() -> Result<()> {
+async fn retries_408_then_succeeds() {
     let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "408 Request Timeout",
@@ -263,13 +262,14 @@ async fn retries_408_then_succeeds() -> Result<()> {
             body: "ok",
         },
     ])
-    .await?;
-    let client = reqwest::Client::builder().build()?;
+    .await;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let observer = Arc::new(RetryCollector::default());
     let context = ProviderRequestContext::with_retry_observer(observer.clone());
-    let response =
-        send_with_retry("test", &test_policy(), &context, || client.get(&url).send()).await?;
+    let response = send_with_retry("test", &test_policy(), &context, || client.get(&url).send())
+        .await
+        .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -279,11 +279,10 @@ async fn retries_408_then_succeeds() -> Result<()> {
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
         [0, 1]
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn retries_409_then_succeeds() -> Result<()> {
+async fn retries_409_then_succeeds() {
     let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "409 Conflict",
@@ -296,8 +295,8 @@ async fn retries_409_then_succeeds() -> Result<()> {
             body: "ok",
         },
     ])
-    .await?;
-    let client = reqwest::Client::builder().build()?;
+    .await;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let response = send_with_retry(
         "test",
@@ -305,15 +304,15 @@ async fn retries_409_then_succeeds() -> Result<()> {
         &ProviderRequestContext::default(),
         || client.get(&url).send(),
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    Ok(())
 }
 
 #[tokio::test]
-async fn does_not_retry_client_errors() -> Result<()> {
-    let client = reqwest::Client::builder().build()?;
+async fn does_not_retry_client_errors() {
+    let client = reqwest::Client::builder().build().unwrap();
     for (status_line, status) in [
         ("400 Bad Request", StatusCode::BAD_REQUEST),
         ("401 Unauthorized", StatusCode::UNAUTHORIZED),
@@ -323,7 +322,7 @@ async fn does_not_retry_client_errors() -> Result<()> {
             headers: Vec::new(),
             body: "rejected",
         }])
-        .await?;
+        .await;
         let collector = Arc::new(RetryCollector::default());
 
         let response = send_with_retry(
@@ -332,24 +331,24 @@ async fn does_not_retry_client_errors() -> Result<()> {
             &ProviderRequestContext::with_retry_observer(collector.clone()),
             || client.get(&url).send(),
         )
-        .await?;
+        .await
+        .unwrap();
 
         assert_eq!(response.status(), status);
         assert!(collector.snapshot().is_empty());
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn retries_transport_connect_failure() -> Result<()> {
+async fn retries_transport_connect_failure() {
     let ok_url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "200 OK",
         headers: Vec::new(),
         body: "ok",
     }])
-    .await?;
-    let closed_url = closed_port_url()?;
-    let client = reqwest::Client::builder().build()?;
+    .await;
+    let closed_url = closed_port_url();
+    let client = reqwest::Client::builder().build().unwrap();
     let attempt = Arc::new(Mutex::new(0usize));
 
     let response = send_with_retry(
@@ -374,28 +373,28 @@ async fn retries_transport_connect_failure() -> Result<()> {
             client.get(url).send()
         },
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    Ok(())
 }
 
 #[tokio::test]
-async fn retries_transport_timeout() -> Result<()> {
+async fn retries_transport_timeout() {
     let slow_url = spawn_server(vec![ScriptedResponse::DelayedStatus {
         delay: kraai_test_support::HANG_TIMEOUT,
         status_line: "200 OK",
         headers: Vec::new(),
         body: "slow",
     }])
-    .await?;
+    .await;
     let ok_url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "200 OK",
         headers: Vec::new(),
         body: "ok",
     }])
-    .await?;
-    let client = reqwest::Client::builder().build()?;
+    .await;
+    let client = reqwest::Client::builder().build().unwrap();
     let attempt = Arc::new(Mutex::new(0usize));
 
     let response = send_with_retry(
@@ -420,14 +419,14 @@ async fn retries_transport_timeout() -> Result<()> {
             }
         },
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    Ok(())
 }
 
 #[tokio::test]
-async fn stops_after_max_attempts() -> Result<()> {
+async fn stops_after_max_attempts() {
     let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "500 Internal Server Error",
@@ -445,7 +444,7 @@ async fn stops_after_max_attempts() -> Result<()> {
             body: "3",
         },
     ])
-    .await?;
+    .await;
     let policy = HttpRetryPolicy {
         max_attempts: 3,
         initial_backoff: Duration::from_millis(1),
@@ -454,7 +453,7 @@ async fn stops_after_max_attempts() -> Result<()> {
         max_rate_limit_wait: kraai_test_support::HANG_TIMEOUT,
     };
     let collector = Arc::new(RetryCollector::default());
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let response = send_with_retry(
         "test",
@@ -462,15 +461,15 @@ async fn stops_after_max_attempts() -> Result<()> {
         &ProviderRequestContext::with_retry_observer(collector.clone()),
         || client.get(&url).send(),
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(collector.snapshot().len(), 2);
-    Ok(())
 }
 
 #[tokio::test]
-async fn rate_limits_retry_past_the_attempt_and_elapsed_limits() -> Result<()> {
+async fn rate_limits_retry_past_the_attempt_and_elapsed_limits() {
     let rate_limited = || ScriptedResponse::Status {
         status_line: "429 Too Many Requests",
         headers: Vec::new(),
@@ -486,7 +485,7 @@ async fn rate_limits_retry_past_the_attempt_and_elapsed_limits() -> Result<()> {
             body: "ok",
         },
     ])
-    .await?;
+    .await;
     let policy = HttpRetryPolicy {
         max_attempts: 1,
         initial_backoff: Duration::from_millis(1),
@@ -495,7 +494,7 @@ async fn rate_limits_retry_past_the_attempt_and_elapsed_limits() -> Result<()> {
         max_rate_limit_wait: kraai_test_support::HANG_TIMEOUT,
     };
     let collector = Arc::new(RetryCollector::default());
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let response = send_with_retry(
         "test",
@@ -503,15 +502,15 @@ async fn rate_limits_retry_past_the_attempt_and_elapsed_limits() -> Result<()> {
         &ProviderRequestContext::with_retry_observer(collector.clone()),
         || client.get(&url).send(),
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(collector.snapshot().len(), 3);
-    Ok(())
 }
 
 #[tokio::test]
-async fn returns_rate_limit_once_waits_exceed_the_rate_limit_budget() -> Result<()> {
+async fn returns_rate_limit_once_waits_exceed_the_rate_limit_budget() {
     let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "429 Too Many Requests",
@@ -524,13 +523,13 @@ async fn returns_rate_limit_once_waits_exceed_the_rate_limit_budget() -> Result<
             body: "second",
         },
     ])
-    .await?;
+    .await;
     let policy = HttpRetryPolicy {
         max_rate_limit_wait: Duration::from_millis(1_500),
         ..test_policy()
     };
     let collector = Arc::new(RetryCollector::default());
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let response = send_with_retry(
         "test",
@@ -538,22 +537,22 @@ async fn returns_rate_limit_once_waits_exceed_the_rate_limit_budget() -> Result<
         &ProviderRequestContext::with_retry_observer(collector.clone()),
         || client.get(&url).send(),
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(response.text().await?, "second");
+    assert_eq!(response.text().await.unwrap(), "second");
     assert_eq!(collector.snapshot().len(), 1);
-    Ok(())
 }
 
 #[tokio::test]
-async fn zero_delay_rate_limits_stop_at_the_rate_limit_budget() -> Result<()> {
+async fn zero_delay_rate_limits_stop_at_the_rate_limit_budget() {
     let url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "429 Too Many Requests",
         headers: Vec::new(),
         body: "slow down",
     }])
-    .await?;
+    .await;
     let policy = HttpRetryPolicy {
         max_attempts: 20,
         initial_backoff: Duration::ZERO,
@@ -562,7 +561,7 @@ async fn zero_delay_rate_limits_stop_at_the_rate_limit_budget() -> Result<()> {
         max_rate_limit_wait: Duration::ZERO,
     };
     let collector = Arc::new(RetryCollector::default());
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let response = send_with_retry(
         "test",
@@ -570,15 +569,15 @@ async fn zero_delay_rate_limits_stop_at_the_rate_limit_budget() -> Result<()> {
         &ProviderRequestContext::with_retry_observer(collector.clone()),
         || client.get(&url).send(),
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert!(collector.snapshot().is_empty());
-    Ok(())
 }
 
 #[tokio::test]
-async fn slow_rate_limited_responses_leave_the_error_budget_alone() -> Result<()> {
+async fn slow_rate_limited_responses_leave_the_error_budget_alone() {
     let url = spawn_server(vec![
         ScriptedResponse::DelayedStatus {
             delay: Duration::from_millis(400),
@@ -597,24 +596,24 @@ async fn slow_rate_limited_responses_leave_the_error_budget_alone() -> Result<()
             body: "ok",
         },
     ])
-    .await?;
+    .await;
     let policy = HttpRetryPolicy {
         max_elapsed: Duration::from_millis(300),
         ..test_policy()
     };
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let response = send_with_retry("test", &policy, &ProviderRequestContext::default(), || {
         client.get(&url).send()
     })
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    Ok(())
 }
 
 #[tokio::test]
-async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
+async fn emits_retry_events_with_exact_number_and_delay() {
     let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "500 Internal Server Error",
@@ -632,7 +631,7 @@ async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
             body: "ok",
         },
     ])
-    .await?;
+    .await;
     let policy = HttpRetryPolicy {
         max_attempts: 3,
         initial_backoff: Duration::from_millis(7),
@@ -641,7 +640,7 @@ async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
         max_rate_limit_wait: kraai_test_support::HANG_TIMEOUT,
     };
     let collector = Arc::new(RetryCollector::default());
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let response = send_with_retry(
         "responses",
@@ -649,14 +648,15 @@ async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
         &ProviderRequestContext::with_retry_observer(collector.clone()),
         || client.get(&url).send(),
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
 
     let events = collector.snapshot();
     assert_eq!(events.len(), 2);
     let [first, second] = events.as_slice() else {
-        return Err(eyre!("expected two retry events"));
+        panic!("expected two retry events");
     };
     assert_eq!(first.operation, "responses");
     assert_eq!(first.retry_number, 1);
@@ -665,11 +665,10 @@ async fn emits_retry_events_with_exact_number_and_delay() -> Result<()> {
     assert_eq!(second.retry_number, 2);
     assert!(second.delay >= Duration::from_micros(11_200));
     assert!(second.delay <= Duration::from_micros(16_800));
-    Ok(())
 }
 
 #[tokio::test]
-async fn a_shorter_retry_after_still_waits_the_backoff() -> Result<()> {
+async fn a_shorter_retry_after_still_waits_the_backoff() {
     let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "429 Too Many Requests",
@@ -682,9 +681,9 @@ async fn a_shorter_retry_after_still_waits_the_backoff() -> Result<()> {
             body: "ok",
         },
     ])
-    .await?;
+    .await;
     let collector = Arc::new(RetryCollector::default());
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let response = send_with_retry(
         "responses",
@@ -692,20 +691,20 @@ async fn a_shorter_retry_after_still_waits_the_backoff() -> Result<()> {
         &ProviderRequestContext::with_retry_observer(collector.clone()),
         || client.get(&url).send(),
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     let events = collector.snapshot();
     let [event] = events.as_slice() else {
-        return Err(eyre!("expected one retry event"));
+        panic!("expected one retry event");
     };
     assert!(event.delay >= Duration::from_millis(4));
     assert!(event.delay <= Duration::from_millis(6));
-    Ok(())
 }
 
 #[tokio::test]
-async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
+async fn falls_back_when_retry_after_is_invalid() {
     let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "503 Service Unavailable",
@@ -718,7 +717,7 @@ async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
             body: "ok",
         },
     ])
-    .await?;
+    .await;
     let collector = Arc::new(RetryCollector::default());
     let policy = HttpRetryPolicy {
         max_attempts: 2,
@@ -727,7 +726,7 @@ async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
         max_elapsed: kraai_test_support::HANG_TIMEOUT,
         max_rate_limit_wait: kraai_test_support::HANG_TIMEOUT,
     };
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let response = send_with_retry(
         "responses",
@@ -735,16 +734,16 @@ async fn falls_back_when_retry_after_is_invalid() -> Result<()> {
         &ProviderRequestContext::with_retry_observer(collector.clone()),
         || client.get(&url).send(),
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     let events = collector.snapshot();
     let [event] = events.as_slice() else {
-        return Err(eyre!("expected one retry event"));
+        panic!("expected one retry event");
     };
     assert!(event.delay >= Duration::from_micros(8_800));
     assert!(event.delay <= Duration::from_micros(13_200));
-    Ok(())
 }
 
 #[test]
@@ -764,15 +763,15 @@ fn jitter_and_backoff_stay_within_limits() {
 }
 
 #[tokio::test]
-async fn returns_rate_limit_when_retry_after_exceeds_the_budget() -> Result<()> {
+async fn returns_rate_limit_when_retry_after_exceeds_the_budget() {
     let url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "429 Too Many Requests",
         headers: vec![("Retry-After", String::from("999999"))],
         body: "wait",
     }])
-    .await?;
+    .await;
     let collector = Arc::new(RetryCollector::default());
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let response = send_with_retry(
         "responses",
@@ -780,15 +779,15 @@ async fn returns_rate_limit_when_retry_after_exceeds_the_budget() -> Result<()> 
         &ProviderRequestContext::with_retry_observer(collector.clone()),
         || client.get(&url).send(),
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert!(collector.snapshot().is_empty());
-    Ok(())
 }
 
 #[tokio::test]
-async fn honors_retry_after_longer_than_max_delay_within_the_budget() -> Result<()> {
+async fn honors_retry_after_longer_than_max_delay_within_the_budget() {
     let url = spawn_server(vec![
         ScriptedResponse::Status {
             status_line: "429 Too Many Requests",
@@ -801,9 +800,9 @@ async fn honors_retry_after_longer_than_max_delay_within_the_budget() -> Result<
             body: "ok",
         },
     ])
-    .await?;
+    .await;
     let collector = Arc::new(RetryCollector::default());
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().build().unwrap();
 
     let response = send_with_retry(
         "responses",
@@ -811,25 +810,25 @@ async fn honors_retry_after_longer_than_max_delay_within_the_budget() -> Result<
         &ProviderRequestContext::with_retry_observer(collector.clone()),
         || client.get(&url).send(),
     )
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         collector.snapshot().first().map(|event| event.delay),
         Some(Duration::from_secs(1))
     );
-    Ok(())
 }
 
 #[tokio::test]
-async fn zero_attempt_policy_is_normalized_to_one_attempt() -> Result<()> {
+async fn zero_attempt_policy_is_normalized_to_one_attempt() {
     let url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "200 OK",
         headers: Vec::new(),
         body: "ok",
     }])
-    .await?;
-    let client = reqwest::Client::builder().build()?;
+    .await;
+    let client = reqwest::Client::builder().build().unwrap();
     let policy = HttpRetryPolicy {
         max_attempts: 0,
         initial_backoff: Duration::ZERO,
@@ -841,19 +840,19 @@ async fn zero_attempt_policy_is_normalized_to_one_attempt() -> Result<()> {
     let response = send_with_retry("test", &policy, &ProviderRequestContext::default(), || {
         client.get(&url).send()
     })
-    .await?;
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    Ok(())
 }
 
 #[tokio::test]
-async fn shared_cooldown_beyond_the_budget_fails_fast_without_sending() -> Result<()> {
-    let cooldown = Arc::new(super::ProviderCooldown::default());
+async fn shared_cooldown_beyond_the_budget_fails_fast_without_sending() {
+    let cooldown = Arc::new(ProviderCooldown::default());
     cooldown.defer(kraai_test_support::HANG_TIMEOUT * 2);
     let context = ProviderRequestContext::default().with_cooldown(cooldown);
     let sent = std::sync::atomic::AtomicBool::new(false);
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder().build().unwrap();
     let Err(error) = send_with_retry("responses", &test_policy(), &context, || {
         sent.store(true, std::sync::atomic::Ordering::SeqCst);
         client.get("http://127.0.0.1:9/").send()
@@ -864,19 +863,18 @@ async fn shared_cooldown_beyond_the_budget_fails_fast_without_sending() -> Resul
     };
     assert!(!sent.load(std::sync::atomic::Ordering::SeqCst));
     assert!(matches!(
-        error.downcast_ref::<crate::ProviderError>(),
-        Some(crate::ProviderError::RateLimited {
+        error.downcast_ref::<ProviderError>(),
+        Some(ProviderError::RateLimited {
             retry_after: Some(_),
             ..
         })
     ));
     assert!(crate::is_transient_error(&error));
-    Ok(())
 }
 
 #[test]
 fn statuses_classify_into_transient_and_permanent_failures() {
-    let classify = |status| crate::ProviderError::from_status(status, None, String::new());
+    let classify = |status| ProviderError::from_status(status, None, String::new());
     for status in [
         StatusCode::TOO_MANY_REQUESTS,
         StatusCode::SERVICE_UNAVAILABLE,
@@ -893,12 +891,12 @@ fn statuses_classify_into_transient_and_permanent_failures() {
         assert!(!classify(status).is_transient(), "{status}");
     }
     assert!(matches!(
-        crate::ProviderError::from_body(
+        ProviderError::from_body(
             StatusCode::BAD_REQUEST,
             None,
             r#"{"error":{"code":"context_length_exceeded"}}"#,
             String::new()
         ),
-        crate::ProviderError::ContextWindowExceeded(_)
+        ProviderError::ContextWindowExceeded(_)
     ));
 }

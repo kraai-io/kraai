@@ -489,7 +489,11 @@ impl AgentManager {
                 }
                 return Ok(match &message.content {
                     ConversationItem::User { content } => Some(content.clone()),
-                    _ => None,
+                    ConversationItem::FileContext { .. }
+                    | ConversationItem::Compaction { .. }
+                    | ConversationItem::System { .. }
+                    | ConversationItem::Assistant { .. }
+                    | ConversationItem::ScriptResult { .. } => None,
                 });
             }
 

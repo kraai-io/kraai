@@ -470,18 +470,15 @@ fn execution_phase_counts_as_active_and_blocks_commands() {
 }
 
 #[test]
-#[expect(
-    clippy::panic_in_result_fn,
-    reason = "test assertions follow fallible fixture setup"
-)]
-fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::Result<()> {
+fn switching_back_installs_runtime_timer_from_session_snapshot() {
     let mut harness = test_harness();
     let timer: kraai_runtime::TurnTimer = serde_json::from_value(serde_json::json!({
         "started_at": std::time::SystemTime::now() - std::time::Duration::from_secs(90),
         "accumulated": std::time::Duration::from_secs(5),
         "active": true,
         "last_duration": null,
-    }))?;
+    }))
+    .unwrap();
     harness
         .app
         .reset_chat_session(Some(SessionId::new("other")));
@@ -516,7 +513,6 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() -> color_eyre::
             .elapsed(std::time::Instant::now())
             >= Some(std::time::Duration::from_secs(95))
     );
-    Ok(())
 }
 
 mod approval_overflow;
@@ -525,10 +521,6 @@ mod cost;
 mod enhancements;
 mod host_failure;
 mod session_load;
-#[expect(
-    clippy::unwrap_used,
-    reason = "snapshot delivery tests assert their fixtures and captured output"
-)]
 mod snapshot_delivery;
 
 mod auth_response;
@@ -543,6 +535,5 @@ mod responsiveness;
 mod running_scripts;
 mod session_model;
 mod sheets;
-#[path = "tests/startup.rs"]
 mod startup;
 mod submission_recovery;

@@ -2,13 +2,13 @@ use super::super::*;
 use super::common::{cleanup_dir, test_manager};
 
 #[tokio::test]
-async fn context_usage_selects_the_latest_complete_assistant_and_validates_older_messages()
--> Result<()> {
+async fn context_usage_selects_the_latest_complete_assistant_and_validates_older_messages() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let oldest = manager
         .add_message(&session_id, ChatRole::User, "oldest".into(), None)
-        .await?;
+        .await
+        .unwrap();
     for (role, status, total_tokens) in [
         (ChatRole::Assistant, MessageStatus::Complete, Some(10)),
         (ChatRole::Assistant, MessageStatus::Complete, Some(20)),
@@ -24,8 +24,9 @@ async fn context_usage_selects_the_latest_complete_assistant_and_validates_older
     ] {
         let id = manager
             .add_message(&session_id, role, "message".into(), None)
-            .await?;
-        let mut message = manager.message_store.get(&id).await?.unwrap();
+            .await
+            .unwrap();
+        let mut message = manager.message_store.get(&id).await.unwrap().unwrap();
         message.status = status;
         message.generation = Some(MessageGeneration {
             options: Default::default(),
@@ -37,27 +38,30 @@ async fn context_usage_selects_the_latest_complete_assistant_and_validates_older
                 ..Default::default()
             }),
         });
-        manager.message_store.save(&message).await?;
+        manager.message_store.save(&message).await.unwrap();
     }
 
     let usage = manager
         .get_session_context_usage(&session_id)
-        .await?
+        .await
+        .unwrap()
         .unwrap();
     assert_eq!(usage.usage.total_tokens, 20);
     assert_eq!(usage.max_context, Some(100));
     assert_eq!(
         manager
             .capture_session_snapshot(&session_id)
-            .await?
+            .await
+            .unwrap()
             .load()
-            .await?
+            .await
+            .unwrap()
             .context_usage,
         Some(usage)
     );
 
-    let mut oldest_message = manager.message_store.get(&oldest).await?.unwrap();
-    manager.message_store.delete(&oldest).await?;
+    let mut oldest_message = manager.message_store.get(&oldest).await.unwrap().unwrap();
+    manager.message_store.delete(&oldest).await.unwrap();
     assert!(
         manager
             .get_session_context_usage(&session_id)
@@ -66,7 +70,7 @@ async fn context_usage_selects_the_latest_complete_assistant_and_validates_older
             .to_string()
             .contains("disappeared while reading session history")
     );
-    super::common::corrupt_message(&data_dir, &oldest, "{}")?;
+    super::common::corrupt_message(&data_dir, &oldest, "{}");
     assert!(
         manager
             .get_session_context_usage(&session_id)
@@ -75,8 +79,8 @@ async fn context_usage_selects_the_latest_complete_assistant_and_validates_older
             .to_string()
             .contains("missing field")
     );
-    oldest_message.parent_id = manager.get_tip(&session_id).await?;
-    manager.message_store.save(&oldest_message).await?;
+    oldest_message.parent_id = manager.get_tip(&session_id).await.unwrap();
+    manager.message_store.save(&oldest_message).await.unwrap();
     assert!(
         manager
             .get_session_context_usage(&session_id)
@@ -86,33 +90,34 @@ async fn context_usage_selects_the_latest_complete_assistant_and_validates_older
             .contains("cycle repeats message")
     );
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn limited_user_history_rejects_invalid_ancestors_after_the_limit() -> Result<()> {
+async fn limited_user_history_rejects_invalid_ancestors_after_the_limit() {
     for corruption in ["cycle", "missing", "malformed"] {
         let (manager, data_dir) = test_manager().await;
-        let session_id = manager.create_session().await?;
+        let session_id = manager.create_session().await.unwrap();
         let oldest = manager
             .add_message(&session_id, ChatRole::User, "oldest".into(), None)
-            .await?;
+            .await
+            .unwrap();
         let newest = manager
             .add_message(&session_id, ChatRole::User, "newest".into(), None)
-            .await?;
+            .await
+            .unwrap();
         let expected = match corruption {
             "cycle" => {
-                let mut message = manager.message_store.get(&oldest).await?.unwrap();
+                let mut message = manager.message_store.get(&oldest).await.unwrap().unwrap();
                 message.parent_id = Some(newest);
-                manager.message_store.save(&message).await?;
+                manager.message_store.save(&message).await.unwrap();
                 "cycle repeats message"
             }
             "missing" => {
-                manager.message_store.delete(&oldest).await?;
+                manager.message_store.delete(&oldest).await.unwrap();
                 "disappeared while reading session history"
             }
             _ => {
-                super::common::corrupt_message(&data_dir, &oldest, "{}")?;
+                super::common::corrupt_message(&data_dir, &oldest, "{}");
                 "missing field"
             }
         };
@@ -122,40 +127,47 @@ async fn limited_user_history_rejects_invalid_ancestors_after_the_limit() -> Res
             error.to_string().contains(expected),
             "{corruption}: {error}"
         );
-        assert!(manager.list_user_input_history(0).await?.is_empty());
+        assert!(manager.list_user_input_history(0).await.unwrap().is_empty());
 
         cleanup_dir(data_dir).await;
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn limited_user_history_preserves_validation_at_the_session_boundary() -> Result<()> {
+async fn limited_user_history_preserves_validation_at_the_session_boundary() {
     for has_ancestor in [false, true] {
         let (manager, data_dir) = test_manager().await;
-        let newest_session = manager.create_session().await?;
+        let newest_session = manager.create_session().await.unwrap();
         if has_ancestor {
             manager
                 .add_message(&newest_session, ChatRole::Assistant, "reply".into(), None)
-                .await?;
+                .await
+                .unwrap();
         }
         manager
             .add_message(&newest_session, ChatRole::User, "newest".into(), None)
-            .await?;
-        let older_session = manager.create_session().await?;
+            .await
+            .unwrap();
+        let older_session = manager.create_session().await.unwrap();
         let missing = manager
             .add_message(&older_session, ChatRole::User, "older".into(), None)
-            .await?;
-        manager.message_store.delete(&missing).await?;
+            .await
+            .unwrap();
+        manager.message_store.delete(&missing).await.unwrap();
         for (session_id, updated_at) in [(newest_session, 2), (older_session, 1)] {
-            let mut session = manager.session_store.get(&session_id).await?.unwrap();
+            let mut session = manager
+                .session_store
+                .get(&session_id)
+                .await
+                .unwrap()
+                .unwrap();
             session.updated_at = updated_at;
-            manager.session_store.save(&session).await?;
+            manager.session_store.save(&session).await.unwrap();
         }
 
         let history = manager.list_user_input_history(1).await;
         if has_ancestor {
-            assert_eq!(history?, ["newest"]);
+            assert_eq!(history.unwrap(), ["newest"]);
         } else {
             assert!(
                 history
@@ -167,5 +179,4 @@ async fn limited_user_history_preserves_validation_at_the_session_boundary() -> 
 
         cleanup_dir(data_dir).await;
     }
-    Ok(())
 }

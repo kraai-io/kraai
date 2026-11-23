@@ -10,18 +10,17 @@ use axum::{
     body::{Body, Bytes},
     routing::{get, post},
 };
-use color_eyre::eyre::{Result, ensure, eyre};
 use futures::{StreamExt, stream};
 use kraai_runtime::{RuntimeBuilder, RuntimeEvent, RuntimeStartupState};
-use kraai_types::{MessageStatus, SessionId};
+use kraai_types::MessageStatus;
 use serde_json::json;
 use tokio_util::task::AbortOnDropHandle;
 
 use super::*;
 
 #[tokio::test]
-async fn own_session_lag_resyncs_without_cancelling_the_turn() -> Result<()> {
-    let root = tempfile::tempdir()?;
+async fn own_session_lag_resyncs_without_cancelling_the_turn() {
+    let root = tempfile::tempdir().unwrap();
     let requests = Arc::new(AtomicUsize::new(0));
     let seen = requests.clone();
     let router = Router::new()
@@ -38,8 +37,8 @@ async fn own_session_lag_resyncs_without_cancelling_the_turn() -> Result<()> {
                 ([("content-type", "text/event-stream")], Body::from_stream(stream::iter([Ok(Bytes::from(format!("data: {chunk}\n\n")))]).chain(tail)))
             }
         }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let address = listener.local_addr()?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
     let _server =
         AbortOnDropHandle::new(tokio::spawn(
             async move { axum::serve(listener, router).await },
@@ -61,14 +60,15 @@ provider_id = "mock"
 "#
         ),
     )
-    .await?;
+    .await
+    .unwrap();
     let runtime = RuntimeBuilder::new(kraai_providers::DefaultProviders)
         .storage_root(root.path().join("state"))
         .provider_config_path(root.path().join("providers.toml"))
         .mcp_config_path(root.path().join("mcp.toml"))
         .build_on(&tokio::runtime::Handle::current());
-    let startup = runtime.wait_for_startup().await?;
-    ensure!(
+    let startup = runtime.wait_for_startup().await.unwrap();
+    assert!(
         startup == RuntimeStartupState::ready(),
         "Runtime fixture did not become ready: {startup:?}"
     );
@@ -83,7 +83,8 @@ provider_id = "mock"
         acp::NewSessionRequest::new(root.path().to_path_buf()),
         Arc::default(),
     )
-    .await?;
+    .await
+    .unwrap();
     let lines = Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = futures::sink::unfold(lines.clone(), async |lines, line: String| {
         if let Ok(mut captured) = lines.lock() {
@@ -102,21 +103,27 @@ provider_id = "mock"
             futures::future::pending::<agent_client_protocol::Result<()>>().await
         },
     )));
-    let inner = connection_rx.await?;
-    kraai_test_support::hang_guard(check_lag(runtime, id, session, inner, requests, lines)).await?
+    let inner = connection_rx.await.unwrap();
+    kraai_test_support::hang_guard(check_lag(runtime, id, session, inner, requests, lines))
+        .await
+        .unwrap()
 }
 
 async fn check_lag(
-    runtime: kraai_runtime::RuntimeHandle,
+    runtime: RuntimeHandle,
     id: SessionId,
     session: Arc<crate::session::Session>,
     inner: ConnectionTo<Client>,
     requests: Arc<AtomicUsize>,
     lines: Arc<std::sync::Mutex<Vec<String>>>,
-) -> Result<()> {
-    let turn = session.begin_turn()?;
+) {
+    let turn = session.begin_turn().unwrap();
     let mut actual_events = runtime.subscribe_session(&id);
-    let prompt_start = runtime.get_tip(id.clone()).await?.map(MessageId::new);
+    let prompt_start = runtime
+        .get_tip(id.clone())
+        .await
+        .unwrap()
+        .map(MessageId::new);
     runtime
         .send_message(
             id.clone(),
@@ -125,35 +132,40 @@ async fn check_lag(
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let output = Output::new(
         id.clone(),
         Connection::new(inner.clone(), crate::Stdio::new().budget),
         prompt_start,
     );
     let (partial_id, partial_item) = loop {
-        let event = actual_events.recv().await?.event;
+        let event = actual_events.recv().await.unwrap().event;
         if let Event::ItemStarted {
             ref message_id,
             ref item,
             ..
         } = event
-            && matches!(item, kraai_types::AssistantItem::Text { text, .. } if text == "partial")
+            && matches!(item, AssistantItem::Text { text, .. } if text == "partial")
         {
             break (message_id.clone(), event);
         }
     };
     let (sender, mut lagged) = broadcast::channel(1);
-    sender.send(RuntimeEvent {
-        sequence: 1,
-        event: Event::HistoryUpdated {
-            session_id: id.clone(),
-        },
-    })?;
-    sender.send(RuntimeEvent {
-        sequence: 2,
-        event: partial_item,
-    })?;
+    sender
+        .send(RuntimeEvent {
+            sequence: 1,
+            event: Event::HistoryUpdated {
+                session_id: id.clone(),
+            },
+        })
+        .unwrap();
+    sender
+        .send(RuntimeEvent {
+            sequence: 2,
+            event: partial_item,
+        })
+        .unwrap();
     let stop_reason = {
         let prompt = finish_prompt(&runtime, &mut lagged, output, &turn.token);
         tokio::pin!(prompt);
@@ -166,19 +178,20 @@ async fn check_lag(
         assert!(
             runtime
                 .get_session_snapshot(id.clone())
-                .await?
+                .await
+                .unwrap()
                 .session
                 .is_running
         );
         turn.token.cancel();
-        prompt.await?.stop_reason
+        prompt.await.unwrap().stop_reason
     };
     assert_eq!(stop_reason, acp::StopReason::Cancelled);
     drop(sender);
     drop(turn);
     let partial_lines = lines
         .lock()
-        .map_err(|error| eyre!("{error}"))?
+        .unwrap()
         .iter()
         .filter(|line| line.contains("agent_message_chunk") && line.contains("\"partial\""))
         .count();
@@ -186,12 +199,12 @@ async fn check_lag(
         partial_lines, 1,
         "resync must send missed text exactly once"
     );
-    let snapshot = runtime.get_session_snapshot(id.clone()).await?;
+    let snapshot = runtime.get_session_snapshot(id.clone()).await.unwrap();
     assert!(!snapshot.session.is_running);
     let partial = snapshot
         .history
-        .get(&kraai_types::MessageId::new(partial_id.clone()))
-        .ok_or_else(|| eyre!("cancelled partial response was not persisted"))?;
+        .get(&MessageId::new(partial_id.clone()))
+        .expect("cancelled partial response was not persisted");
     assert_eq!(partial.status, MessageStatus::Complete);
     assert_eq!(partial.display_text(), "partial");
     let mut cancelled = false;
@@ -204,13 +217,14 @@ async fn check_lag(
     );
     let response = run(
         &runtime,
-        session.begin_turn()?,
+        session.begin_turn().unwrap(),
         acp::PromptRequest::new(id.to_string(), vec![content::text("second")]),
         Connection::new(inner, crate::Stdio::new().budget),
     )
-    .await?;
+    .await
+    .unwrap();
     assert_eq!(response.stop_reason, acp::StopReason::EndTurn);
-    let snapshot = runtime.get_session_snapshot(id).await?;
+    let snapshot = runtime.get_session_snapshot(id).await.unwrap();
     assert!(!snapshot.session.is_running);
     assert!(
         snapshot
@@ -220,6 +234,5 @@ async fn check_lag(
                 && message.display_text() == "after overflow")
     );
     assert_eq!(requests.load(Ordering::SeqCst), 2);
-    runtime.shutdown().await?;
-    Ok(())
+    runtime.shutdown().await.unwrap();
 }

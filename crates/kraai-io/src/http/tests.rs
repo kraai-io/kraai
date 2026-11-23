@@ -1,8 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    reason = "HTTP fixtures assert local transport operations directly"
-)]
-
 use super::*;
 use kraai_test_support::{HANG_TIMEOUT, http};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -110,4 +105,32 @@ async fn text_prefix_preserves_charset_and_bom_decoding() {
             .text,
         "{}"
     );
+}
+
+#[tokio::test]
+async fn finite_client_times_out_waiting_for_headers() {
+    let mut listener = http::Listener::bind(http::PATH).await.unwrap();
+    let url = listener.url().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request).await;
+        tokio::time::sleep(HANG_TIMEOUT).await;
+    });
+    let client = client_builder(
+        HttpTimeouts {
+            connect: Some(Duration::from_millis(100)),
+            read: Some(Duration::from_millis(100)),
+            request: None,
+        },
+        reqwest::redirect::Policy::default(),
+    )
+    .timeout(Duration::from_millis(25))
+    .tls_certs_only([])
+    .build()
+    .unwrap();
+
+    let error = client.get(url).send().await.unwrap_err();
+
+    assert!(error.is_timeout());
 }

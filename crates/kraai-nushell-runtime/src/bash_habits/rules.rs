@@ -17,7 +17,7 @@ pub(super) struct Edit {
     pub(super) change: String,
 }
 
-pub(super) fn edits(working_set: &StateWorkingSet, source: &str, offset: usize) -> Vec<Edit> {
+pub(super) fn edits(working_set: &StateWorkingSet<'_>, source: &str, offset: usize) -> Vec<Edit> {
     let mut scan = Scan {
         working_set,
         source: source.as_bytes(),
@@ -149,7 +149,15 @@ impl Scan<'_> {
                     self.command(&command, None);
                     command.clear();
                 }
-                _ => command.push(token),
+                TokenContents::Item
+                | TokenContents::Comment
+                | TokenContents::AssignmentOperator
+                | TokenContents::OutGreaterThan
+                | TokenContents::OutGreaterGreaterThan
+                | TokenContents::ErrGreaterThan
+                | TokenContents::ErrGreaterGreaterThan
+                | TokenContents::OutErrGreaterThan
+                | TokenContents::OutErrGreaterGreaterThan => command.push(token),
             }
         }
         self.command(&command, None);
@@ -299,7 +307,20 @@ impl Scan<'_> {
                         (text, change)
                     })
                 }
-                _ => None,
+                TokenContents::Comment
+                | TokenContents::Pipe
+                | TokenContents::PipePipe
+                | TokenContents::AssignmentOperator
+                | TokenContents::ErrGreaterPipe
+                | TokenContents::OutErrGreaterPipe
+                | TokenContents::Semicolon
+                | TokenContents::OutGreaterThan
+                | TokenContents::OutGreaterGreaterThan
+                | TokenContents::ErrGreaterThan
+                | TokenContents::ErrGreaterGreaterThan
+                | TokenContents::OutErrGreaterThan
+                | TokenContents::OutErrGreaterGreaterThan
+                | TokenContents::Eol => None,
             };
             if let Some((text, change)) = replacement {
                 self.edit(token.span.start, token.span.end, text, change);
@@ -358,6 +379,10 @@ impl Scan<'_> {
     }
 
     fn repair(&mut self, error: &ParseError, start: usize, end: usize) {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only variable lookup errors have a `$env` rewrite"
+        )]
         let env_error = match error {
             ParseError::EnvVarNotVar(..) | ParseError::VariableNotFound(..) => true,
             ParseError::ExpectedWithDidYouMean(expected, ..) => *expected == "valid variable name",
@@ -380,6 +405,10 @@ impl Scan<'_> {
             }
             return;
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only flag and positional errors hint at a shadowed external program"
+        )]
         let flag_owner = match error {
             ParseError::UnknownFlag(name, ..) => Some(name.as_bytes()),
             ParseError::ExtraPositional(..) => None,

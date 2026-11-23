@@ -5,7 +5,6 @@ mod trajectory;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{Result, ensure, eyre};
 use serde_json::{Value, json};
 
 use super::{Catalog, files};
@@ -13,17 +12,17 @@ use super::{Catalog, files};
 struct Fixture(PathBuf);
 
 impl Fixture {
-    fn new() -> Result<Self> {
+    fn new() -> Self {
         let root = std::env::temp_dir().join(format!("kraai-viewer-{}", ulid::Ulid::generate()));
-        fs::create_dir_all(&root)?;
-        Ok(Self(root))
+        fs::create_dir_all(&root).unwrap();
+        Self(root)
     }
 
-    fn write(&self, path: &str, value: &Value) -> Result<PathBuf> {
+    fn write(&self, path: &str, value: &Value) -> PathBuf {
         let path = self.0.join(path);
-        fs::create_dir_all(path.parent().ok_or_else(|| eyre!("missing parent"))?)?;
-        fs::write(&path, serde_json::to_vec(value)?)?;
-        Ok(path)
+        fs::create_dir_all(path.parent().expect("missing parent")).unwrap();
+        fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
+        path
     }
 }
 
@@ -37,12 +36,11 @@ const FOLDER: &str = "in-house/model/2026-01-01-codex-0123abcd";
 const NATIVE: &str = "in-house/model/2026-01-01-codex-0123abcd/task/attempt-1";
 const JOB: &str = "benchmark/model/2026-01-01-codex-0123abcd/harbor";
 
-fn set(value: &mut Value, key: &str, field: Value) -> Result<()> {
+fn set(value: &mut Value, key: &str, field: Value) {
     value
         .as_object_mut()
-        .ok_or_else(|| eyre!("expected fixture object"))?
+        .expect("expected fixture object")
         .insert(key.to_owned(), field);
-    Ok(())
 }
 
 fn native(metrics: Value) -> Value {
@@ -63,10 +61,10 @@ fn proxy() -> Value {
             "cache_write_tokens": 10, "output_tokens": 40, "reasoning_tokens": 20}})
 }
 
-fn accounting(directory: &Path) -> Result<()> {
+fn accounting(directory: &Path) {
     let events = b"{\"method\":\"POST\",\"path\":\"/responses\"}\n";
-    fs::create_dir_all(directory)?;
-    fs::write(directory.join("proxy.events.jsonl"), events)?;
+    fs::create_dir_all(directory).unwrap();
+    fs::write(directory.join("proxy.events.jsonl"), events).unwrap();
     fs::write(
         directory.join("request-accounting.json"),
         serde_json::to_vec(&json!({
@@ -75,9 +73,10 @@ fn accounting(directory: &Path) -> Result<()> {
             "context": {"samples": 2, "total_input_tokens": 60, "min_input_tokens": 25,
                 "peak_input_tokens": 35, "last_input_tokens": 35, "mean_input_tokens": 30.0},
             "requests": [request(0), request(1)]
-        }))?,
-    )?;
-    Ok(())
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 fn request(index: usize) -> Value {
@@ -86,13 +85,12 @@ fn request(index: usize) -> Value {
             "reasoning_tokens": 0, "cache_read_tokens": 0}})
 }
 
-fn prices(fixture: &Fixture) -> Result<()> {
+fn prices(fixture: &Fixture) {
     fixture.write(
         "prices.json",
         &json!({"schema_version": 1, "models": {
             "model": {"input": 1000.0, "output": 2000.0, "cache_read": 500.0}}}),
-    )?;
-    Ok(())
+    );
 }
 
 fn suite() -> Value {
@@ -121,20 +119,20 @@ fn harbor_result() -> Value {
 }
 
 #[test]
-fn discovers_saved_attempts_and_summary_launch_failures_once() -> Result<()> {
-    let fixture = Fixture::new()?;
+fn discovers_saved_attempts_and_summary_launch_failures_once() {
+    let fixture = Fixture::new();
     fixture.write(
         &format!("{NATIVE}/result.json"),
         &native(json!({"proxy": proxy(),
         "harness": {"schema_version": 1, "turns": 2, "final_context_tokens": 99}})),
-    )?;
-    accounting(&fixture.0.join(NATIVE))?;
-    fixture.write(&format!("{FOLDER}/summary.json"), &suite())?;
-    prices(&fixture)?;
-    let catalog = Catalog::load(&fixture.0)?;
-    ensure!(catalog.warnings.is_empty(), "{:?}", catalog.warnings);
-    ensure!(catalog.versions.len() == 1 && catalog.attempts.len() == 2);
-    ensure!(
+    );
+    accounting(&fixture.0.join(NATIVE));
+    fixture.write(&format!("{FOLDER}/summary.json"), &suite());
+    prices(&fixture);
+    let catalog = Catalog::load(&fixture.0).unwrap();
+    assert!(catalog.warnings.is_empty(), "{:?}", catalog.warnings);
+    assert!(catalog.versions.len() == 1 && catalog.attempts.len() == 2);
+    assert!(
         catalog
             .attempts
             .iter()
@@ -144,15 +142,15 @@ fn discovers_saved_attempts_and_summary_launch_failures_once() -> Result<()> {
         .attempts
         .iter()
         .find(|attempt| attempt.task == "task")
-        .ok_or_else(|| eyre!("missing attempt"))?;
+        .expect("missing attempt");
     let metrics = &attempt.metrics;
-    ensure!(metrics.input_tokens == Some(60));
-    ensure!(metrics.cached_input_tokens == Some(30) && metrics.uncached_input_tokens == Some(20));
-    ensure!(metrics.output_tokens == Some(60) && metrics.reasoning_tokens == Some(20));
-    ensure!(metrics.final_context_tokens == Some(35) && metrics.turns == Some(2));
-    ensure!(metrics.requests == Some(2) && metrics.duration_ms == Some(200));
-    ensure!(metrics.cost_usd == Some(1.25));
-    ensure!(
+    assert!(metrics.input_tokens == Some(60));
+    assert!(metrics.cached_input_tokens == Some(30) && metrics.uncached_input_tokens == Some(20));
+    assert!(metrics.output_tokens == Some(60) && metrics.reasoning_tokens == Some(20));
+    assert!(metrics.final_context_tokens == Some(35) && metrics.turns == Some(2));
+    assert!(metrics.requests == Some(2) && metrics.duration_ms == Some(200));
+    assert!(metrics.cost_usd == Some(1.25));
+    assert!(
         catalog
             .versions
             .first()
@@ -162,36 +160,35 @@ fn discovers_saved_attempts_and_summary_launch_failures_once() -> Result<()> {
                 && version.benchmark == "in-house"
                 && version.latest_at_ms == Some(100))
     );
-    Ok(())
 }
 
 #[test]
-fn unavailable_measurements_remain_null_and_corrupt_results_remain_visible() -> Result<()> {
-    let fixture = Fixture::new()?;
-    fixture.write(&format!("{NATIVE}/result.json"), &native(json!({})))?;
+fn unavailable_measurements_remain_null_and_corrupt_results_remain_visible() {
+    let fixture = Fixture::new();
+    fixture.write(&format!("{NATIVE}/result.json"), &native(json!({})));
     let broken = fixture.write(
         &format!("{FOLDER}/broken/attempt-1/result.json"),
         &Value::Null,
-    )?;
-    fs::write(broken, b"{partial")?;
-    fs::create_dir_all(fixture.0.join(FOLDER).join("missing/attempt-2"))?;
+    );
+    fs::write(broken, b"{partial").unwrap();
+    fs::create_dir_all(fixture.0.join(FOLDER).join("missing/attempt-2")).unwrap();
     fixture.write(
         ".cache/staging/in-house/model/2026-01-01-codex-0123abcd/task/attempt-3/result.json",
         &native(json!({})),
-    )?;
-    let catalog = Catalog::load(&fixture.0)?;
-    ensure!(catalog.attempts.len() == 3);
+    );
+    let catalog = Catalog::load(&fixture.0).unwrap();
+    assert!(catalog.attempts.len() == 3);
     let saved = catalog
         .attempts
         .iter()
         .find(|attempt| attempt.task == "task")
-        .ok_or_else(|| eyre!("missing saved attempt"))?;
-    let metrics = serde_json::to_value(&saved.metrics)?;
-    ensure!(
+        .expect("missing saved attempt");
+    let metrics = serde_json::to_value(&saved.metrics).unwrap();
+    assert!(
         metrics.get("input_tokens").is_some_and(Value::is_null)
             && metrics.get("cost_usd").is_some_and(Value::is_null)
     );
-    ensure!(
+    assert!(
         catalog
             .attempts
             .iter()
@@ -199,298 +196,279 @@ fn unavailable_measurements_remain_null_and_corrupt_results_remain_visible() -> 
             .count()
             == 2
     );
-    ensure!(catalog.warnings.len() == 2);
-    Ok(())
+    assert!(catalog.warnings.len() == 2);
 }
 
 #[test]
-fn harbor_preserves_unknown_metrics_and_retains_unfinished_trials() -> Result<()> {
-    let fixture = Fixture::new()?;
+fn harbor_preserves_unknown_metrics_and_retains_unfinished_trials() {
+    let fixture = Fixture::new();
     fixture.write(
         &format!("{JOB}/lock.json"),
         &json!({"trials": [{}, {}, {}]}),
-    )?;
-    fixture.write(&format!("{JOB}/task__trial/result.json"), &harbor_result())?;
+    );
+    fixture.write(&format!("{JOB}/task__trial/result.json"), &harbor_result());
     fixture.write(
         &format!("{JOB}/pending__trial/lock.json"),
         &json!({"task": {"name": "org/pending"}}),
-    )?;
+    );
     fixture.write(
         &format!("{JOB}/task__trial/artifacts/work/result.json"),
         &harbor_result(),
-    )?;
-    prices(&fixture)?;
-    let catalog = Catalog::load(&fixture.0)?;
-    ensure!(catalog.attempts.len() == 2);
+    );
+    prices(&fixture);
+    let catalog = Catalog::load(&fixture.0).unwrap();
+    assert!(catalog.attempts.len() == 2);
     let attempt = catalog
         .attempts
         .iter()
         .find(|attempt| attempt.task == "org/task")
-        .ok_or_else(|| eyre!("missing Harbor trial"))?;
-    ensure!(attempt.status == "passed");
-    ensure!(attempt.metrics.input_tokens == Some(100));
-    ensure!(attempt.metrics.uncached_input_tokens == Some(60));
-    ensure!(attempt.metrics.output_tokens == Some(20));
-    ensure!(attempt.metrics.reasoning_tokens.is_none() && attempt.metrics.turns.is_none());
-    ensure!(attempt.metrics.duration_ms == Some(2000) && attempt.metrics.cost_usd == Some(0.12));
-    ensure!(
+        .expect("missing Harbor trial");
+    assert!(attempt.status == "passed");
+    assert!(attempt.metrics.input_tokens == Some(100));
+    assert!(attempt.metrics.uncached_input_tokens == Some(60));
+    assert!(attempt.metrics.output_tokens == Some(20));
+    assert!(attempt.metrics.reasoning_tokens.is_none() && attempt.metrics.turns.is_none());
+    assert!(attempt.metrics.duration_ms == Some(2000) && attempt.metrics.cost_usd == Some(0.12));
+    assert!(
         catalog
             .attempts
             .iter()
             .any(|attempt| attempt.status == "interrupted")
     );
-    ensure!(
+    assert!(
         catalog
             .warnings
             .iter()
             .any(|warning| warning.contains("incomplete"))
     );
-    Ok(())
 }
 
 #[test]
-fn harbor_controller_accounting_supplies_shared_token_and_context_definitions() -> Result<()> {
-    let fixture = Fixture::new()?;
+fn harbor_controller_accounting_supplies_shared_token_and_context_definitions() {
+    let fixture = Fixture::new();
     fixture.write(
         &format!("{JOB}/kraai-run.json"),
         &json!({"identity": {
         "dataset": "benchmark@1", "model": "model", "spec": {"harness": "kraai"}}}),
-    )?;
+    );
     let trial = format!("{JOB}/task__trial");
-    fixture.write(&format!("{trial}/result.json"), &harbor_result())?;
+    fixture.write(&format!("{trial}/result.json"), &harbor_result());
     fixture.write(
         &format!("{trial}/kraai-controller/proxy-metrics.json"),
         &proxy(),
-    )?;
-    accounting(&fixture.0.join(&trial).join("kraai-controller"))?;
-    prices(&fixture)?;
-    let catalog = Catalog::load(&fixture.0)?;
-    let attempt = catalog
-        .attempts
-        .first()
-        .ok_or_else(|| eyre!("missing trial"))?;
-    ensure!(attempt.metrics.input_tokens == Some(60));
-    ensure!(attempt.metrics.output_tokens == Some(60));
-    ensure!(attempt.metrics.final_context_tokens == Some(35));
-    ensure!(attempt.metrics.cost_usd == Some(1.25));
-    ensure!(
+    );
+    accounting(&fixture.0.join(&trial).join("kraai-controller"));
+    prices(&fixture);
+    let catalog = Catalog::load(&fixture.0).unwrap();
+    let attempt = catalog.attempts.first().expect("missing trial");
+    assert!(attempt.metrics.input_tokens == Some(60));
+    assert!(attempt.metrics.output_tokens == Some(60));
+    assert!(attempt.metrics.final_context_tokens == Some(35));
+    assert!(attempt.metrics.cost_usd == Some(1.25));
+    assert!(
         attempt
             .logs
             .contains(&String::from("kraai-controller--proxy.events.jsonl"))
     );
-    Ok(())
 }
 
 #[test]
-fn costs_need_a_saved_price_and_ignore_costs_harbor_or_the_harness_report() -> Result<()> {
-    let fixture = Fixture::new()?;
+fn costs_need_a_saved_price_and_ignore_costs_harbor_or_the_harness_report() {
+    let fixture = Fixture::new();
     fixture.write(
         &format!("{NATIVE}/result.json"),
         &native(json!({"proxy": proxy()})),
-    )?;
-    accounting(&fixture.0.join(NATIVE))?;
-    fixture.write(&format!("{JOB}/task__trial/result.json"), &harbor_result())?;
-    let catalog = Catalog::load(&fixture.0)?;
-    ensure!(catalog.attempts.len() == 2);
-    ensure!(catalog.attempts.iter().all(
+    );
+    accounting(&fixture.0.join(NATIVE));
+    fixture.write(&format!("{JOB}/task__trial/result.json"), &harbor_result());
+    let catalog = Catalog::load(&fixture.0).unwrap();
+    assert!(catalog.attempts.len() == 2);
+    assert!(catalog.attempts.iter().all(
         |attempt| attempt.metrics.input_tokens.is_some() && attempt.metrics.cost_usd.is_none()
     ));
     fixture.write(
         "prices.json",
         &json!({"schema_version": 1, "models": {"other": {"input": 1.0, "output": 1.0}}}),
-    )?;
-    let catalog = Catalog::load(&fixture.0)?;
-    ensure!(
+    );
+    let catalog = Catalog::load(&fixture.0).unwrap();
+    assert!(
         catalog
             .attempts
             .iter()
             .all(|attempt| attempt.metrics.cost_usd.is_none())
     );
-    Ok(())
 }
 
 #[test]
-fn stale_accounting_never_contributes_cost_or_complete_usage() -> Result<()> {
-    let fixture = Fixture::new()?;
+fn stale_accounting_never_contributes_cost_or_complete_usage() {
+    let fixture = Fixture::new();
     fixture.write(
         &format!("{NATIVE}/result.json"),
         &native(json!({"proxy": proxy()})),
-    )?;
-    accounting(&fixture.0.join(NATIVE))?;
+    );
+    accounting(&fixture.0.join(NATIVE));
     fs::write(
         fixture.0.join(NATIVE).join("proxy.events.jsonl"),
         b"changed",
-    )?;
-    prices(&fixture)?;
-    let catalog = Catalog::load(&fixture.0)?;
-    let metrics = &catalog
-        .attempts
-        .first()
-        .ok_or_else(|| eyre!("missing attempt"))?
-        .metrics;
-    ensure!(metrics.input_tokens.is_none() && metrics.cost_usd.is_none());
-    ensure!(metrics.final_context_tokens.is_none());
-    ensure!(
+    )
+    .unwrap();
+    prices(&fixture);
+    let catalog = Catalog::load(&fixture.0).unwrap();
+    let metrics = &catalog.attempts.first().expect("missing attempt").metrics;
+    assert!(metrics.input_tokens.is_none() && metrics.cost_usd.is_none());
+    assert!(metrics.final_context_tokens.is_none());
+    assert!(
         catalog
             .warnings
             .iter()
             .any(|warning| warning.contains("does not match"))
     );
-    Ok(())
 }
 
 #[test]
-fn known_log_names_are_bounded_and_workspace_files_are_not_exposed() -> Result<()> {
-    let fixture = Fixture::new()?;
-    fixture.write(&format!("{NATIVE}/result.json"), &native(json!({})))?;
+fn known_log_names_are_bounded_and_workspace_files_are_not_exposed() {
+    let fixture = Fixture::new();
+    fixture.write(&format!("{NATIVE}/result.json"), &native(json!({})));
     let directory = fixture.0.join(NATIVE);
     fs::write(
         directory.join("runner.stderr.log"),
         vec![b'x'; files::LOG_LIMIT as usize + 20],
-    )?;
-    fs::write(directory.join("secret.txt"), b"private")?;
-    let catalog = Catalog::load(&fixture.0)?;
-    let attempt = catalog
-        .attempts
-        .first()
-        .ok_or_else(|| eyre!("missing attempt"))?;
-    ensure!(!attempt.logs.iter().any(|name| name == "secret.txt"));
-    ensure!(catalog.read_log(&attempt.id, "../secret.txt").is_err());
-    ensure!(catalog.read_log(&attempt.id, "secret.txt").is_err());
-    let log = catalog.read_log(&attempt.id, "runner.stderr.log")?;
-    ensure!(log.truncated && log.content.len() == files::LOG_LIMIT as usize);
-    Ok(())
+    )
+    .unwrap();
+    fs::write(directory.join("secret.txt"), b"private").unwrap();
+    let catalog = Catalog::load(&fixture.0).unwrap();
+    let attempt = catalog.attempts.first().expect("missing attempt");
+    assert!(!attempt.logs.iter().any(|name| name == "secret.txt"));
+    assert!(catalog.read_log(&attempt.id, "../secret.txt").is_err());
+    assert!(catalog.read_log(&attempt.id, "secret.txt").is_err());
+    let log = catalog.read_log(&attempt.id, "runner.stderr.log").unwrap();
+    assert!(log.truncated && log.content.len() == files::LOG_LIMIT as usize);
 }
 
 #[cfg(unix)]
 #[test]
-fn symlinks_are_rejected_at_registration_and_at_read_time() -> Result<()> {
+fn symlinks_are_rejected_at_registration_and_at_read_time() {
     use std::os::unix::fs::symlink;
-    let fixture = Fixture::new()?;
-    fixture.write(&format!("{NATIVE}/result.json"), &native(json!({})))?;
+    let fixture = Fixture::new();
+    fixture.write(&format!("{NATIVE}/result.json"), &native(json!({})));
     let directory = fixture.0.join(NATIVE);
-    fs::write(fixture.0.join("secret"), b"secret")?;
+    fs::write(fixture.0.join("secret"), b"secret").unwrap();
     symlink(
         fixture.0.join("secret"),
         directory.join("runner.stdout.log"),
-    )?;
-    fs::write(directory.join("runner.stderr.log"), b"allowed")?;
-    let catalog = Catalog::load(&fixture.0)?;
-    let attempt = catalog
-        .attempts
-        .first()
-        .ok_or_else(|| eyre!("missing attempt"))?;
-    ensure!(!attempt.logs.iter().any(|name| name == "runner.stdout.log"));
-    fs::remove_file(directory.join("runner.stderr.log"))?;
+    )
+    .unwrap();
+    fs::write(directory.join("runner.stderr.log"), b"allowed").unwrap();
+    let catalog = Catalog::load(&fixture.0).unwrap();
+    let attempt = catalog.attempts.first().expect("missing attempt");
+    assert!(!attempt.logs.iter().any(|name| name == "runner.stdout.log"));
+    fs::remove_file(directory.join("runner.stderr.log")).unwrap();
     symlink(
         fixture.0.join("secret"),
         directory.join("runner.stderr.log"),
-    )?;
-    ensure!(catalog.read_log(&attempt.id, "runner.stderr.log").is_err());
-    Ok(())
+    )
+    .unwrap();
+    assert!(catalog.read_log(&attempt.id, "runner.stderr.log").is_err());
 }
 
 #[test]
-fn one_folder_is_one_version_and_task_changes_are_reported() -> Result<()> {
-    let fixture = Fixture::new()?;
-    fixture.write(&format!("{NATIVE}/result.json"), &native(json!({})))?;
+fn one_folder_is_one_version_and_task_changes_are_reported() {
+    let fixture = Fixture::new();
+    fixture.write(&format!("{NATIVE}/result.json"), &native(json!({})));
     let mut revised = native(json!({}));
-    set(&mut revised, "task_sha256", json!("updated-task"))?;
-    set(&mut revised, "provider_config_sha256", json!("different"))?;
-    fixture.write(&format!("{FOLDER}/task/attempt-2/result.json"), &revised)?;
+    set(&mut revised, "task_sha256", json!("updated-task"));
+    set(&mut revised, "provider_config_sha256", json!("different"));
+    fixture.write(&format!("{FOLDER}/task/attempt-2/result.json"), &revised);
     fixture.write(
         "in-house/model/2026-02-01-codex-89abcdef/task/attempt-1/result.json",
         &native(json!({})),
-    )?;
-    let catalog = Catalog::load(&fixture.0)?;
-    ensure!(catalog.versions.len() == 2 && catalog.attempts.len() == 3);
-    ensure!(
+    );
+    let catalog = Catalog::load(&fixture.0).unwrap();
+    assert!(catalog.versions.len() == 2 && catalog.attempts.len() == 3);
+    assert!(
         catalog
             .versions
             .iter()
             .any(|version| version.harness == "codex" && version.label == "89abcdef")
     );
-    ensure!(
+    assert!(
         catalog
             .warnings
             .iter()
             .any(|warning| warning.contains("different saved task"))
     );
-    Ok(())
 }
 
 #[test]
-fn cancelled_harbor_trials_remain_interrupted_even_with_finish_time_and_reward() -> Result<()> {
-    let fixture = Fixture::new()?;
-    fixture.write(&format!("{JOB}/lock.json"), &json!({"trials": [{}]}))?;
+fn cancelled_harbor_trials_remain_interrupted_even_with_finish_time_and_reward() {
+    let fixture = Fixture::new();
+    fixture.write(&format!("{JOB}/lock.json"), &json!({"trials": [{}]}));
     let mut result = harbor_result();
     set(
         &mut result,
         "exception_info",
         json!({"exception_type": "CancelledError", "exception_message": "cancelled"}),
-    )?;
-    fixture.write(&format!("{JOB}/task__trial/result.json"), &result)?;
-    let catalog = Catalog::load(&fixture.0)?;
-    ensure!(
+    );
+    fixture.write(&format!("{JOB}/task__trial/result.json"), &result);
+    let catalog = Catalog::load(&fixture.0).unwrap();
+    assert!(
         catalog
             .attempts
             .first()
             .is_some_and(|attempt| attempt.status == "interrupted")
     );
-    Ok(())
 }
 
 #[test]
-fn harbor_attempts_count_from_one_per_task() -> Result<()> {
-    let fixture = Fixture::new()?;
+fn harbor_attempts_count_from_one_per_task() {
+    let fixture = Fixture::new();
     for (trial, started) in [
         ("task__a", "2026-09-20T10:00:00Z"),
         ("task__b", "2026-09-20T11:00:00Z"),
     ] {
         let mut result = harbor_result();
-        set(&mut result, "started_at", json!(started))?;
-        fixture.write(&format!("{JOB}/{trial}/result.json"), &result)?;
+        set(&mut result, "started_at", json!(started));
+        fixture.write(&format!("{JOB}/{trial}/result.json"), &result);
     }
     fixture.write(
         "benchmark/model/2026-01-01-codex-0123abcd/interrupted/task__c/result.json",
         &harbor_result(),
-    )?;
-    let catalog = Catalog::load(&fixture.0)?;
+    );
+    let catalog = Catalog::load(&fixture.0).unwrap();
     let mut attempts = catalog
         .attempts
         .iter()
         .map(|attempt| attempt.attempt)
         .collect::<Vec<_>>();
     attempts.sort_unstable();
-    ensure!(attempts == [1, 2], "{attempts:?}");
-    ensure!(catalog.versions.len() == 1);
-    Ok(())
+    assert!(attempts == [1, 2], "{attempts:?}");
+    assert!(catalog.versions.len() == 1);
 }
 
 #[test]
-fn native_failure_reasons_use_recorded_process_outcomes() -> Result<()> {
+fn native_failure_reasons_use_recorded_process_outcomes() {
     for (status, reason) in [
         ("runner_failed", "Runner timed out"),
         ("failed", "Grader 0 exited with code 7"),
     ] {
-        let fixture = Fixture::new()?;
+        let fixture = Fixture::new();
         let mut result = native(json!({}));
-        set(&mut result, "status", json!(status))?;
+        set(&mut result, "status", json!(status));
         set(
             &mut result,
             "runner",
             json!({"command": ["runner"], "exit_code": null,
             "timed_out": true, "output_limit_exceeded": false, "duration_ms": 100}),
-        )?;
+        );
         set(
             &mut result,
             "graders",
             json!([{"command": ["grader"], "exit_code": 7,
             "timed_out": false, "output_limit_exceeded": false, "duration_ms": 100}]),
-        )?;
-        fixture.write(&format!("{NATIVE}/result.json"), &result)?;
-        let catalog = Catalog::load(&fixture.0)?;
-        ensure!(
+        );
+        fixture.write(&format!("{NATIVE}/result.json"), &result);
+        let catalog = Catalog::load(&fixture.0).unwrap();
+        assert!(
             catalog
                 .attempts
                 .first()
@@ -498,5 +476,4 @@ fn native_failure_reasons_use_recorded_process_outcomes() -> Result<()> {
                 == Some(reason)
         );
     }
-    Ok(())
 }

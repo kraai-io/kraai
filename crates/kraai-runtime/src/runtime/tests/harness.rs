@@ -510,12 +510,13 @@ path = \"inherit\"\n",
 pub(super) async fn create_session_with_profile(
     handle: &RuntimeHandle,
     profile_id: &str,
-) -> Result<SessionId> {
-    let session_id = handle.create_session().await?;
+) -> SessionId {
+    let session_id = handle.create_session().await.unwrap();
     handle
         .set_session_profile(session_id.clone(), profile_id.to_string())
-        .await?;
-    Ok(session_id)
+        .await
+        .unwrap();
+    session_id
 }
 
 pub(super) fn queued(
@@ -611,7 +612,7 @@ pub(super) async fn cancel_if_lease_matches(
     runtime: &RuntimeCore,
     session: &SessionId,
     token: i64,
-) -> crate::RuntimeResult<bool> {
+) -> bool {
     let (response, cancelled) = tokio::sync::oneshot::channel();
     runtime.sessions.send(
         runtime,
@@ -625,18 +626,24 @@ pub(super) async fn cancel_if_lease_matches(
     cancelled
         .await
         .expect("session actor answered the cancellation")
+        .unwrap()
 }
 
 pub(super) fn started_stream(events: &[Event], session: &SessionId) -> kraai_types::MessageId {
     events
         .iter()
         .rev()
-        .find_map(|event| match event {
-            Event::StreamStart {
+        .find_map(|event| {
+            if let Event::StreamStart {
                 session_id,
                 message_id,
-            } if session_id == session => Some(kraai_types::MessageId::new(message_id.clone())),
-            _ => None,
+            } = event
+                && session_id == session
+            {
+                Some(kraai_types::MessageId::new(message_id.clone()))
+            } else {
+                None
+            }
         })
         .expect("stream start event")
 }
@@ -700,7 +707,7 @@ pub(super) async fn drive_stream(
 impl RuntimeCore {
     pub(in crate::runtime) async fn with_session_actor<T: Send + 'static>(
         &self,
-        session_id: &kraai_types::SessionId,
+        session_id: &SessionId,
         hook: impl for<'a> FnOnce(
             &'a mut super::super::session::SessionActor,
         ) -> futures::future::BoxFuture<'a, T>
@@ -723,18 +730,21 @@ impl RuntimeCore {
 }
 
 pub(super) fn streamed_text<'a>(event: &'a Event, session: &SessionId) -> Option<&'a str> {
-    match event {
-        Event::ItemStarted {
-            session_id,
-            item: kraai_types::AssistantItem::Text { text, .. },
-            ..
-        }
-        | Event::ItemDelta {
-            session_id,
-            delta: text,
-            ..
-        } if session_id == session => Some(text),
-        _ => None,
+    if let Event::ItemStarted {
+        session_id,
+        item: kraai_types::AssistantItem::Text { text, .. },
+        ..
+    }
+    | Event::ItemDelta {
+        session_id,
+        delta: text,
+        ..
+    } = event
+        && session_id == session
+    {
+        Some(text)
+    } else {
+        None
     }
 }
 
@@ -742,26 +752,25 @@ pub(super) trait FullHistory {
     async fn get_chat_history(
         &self,
         session_id: SessionId,
-    ) -> crate::RuntimeResult<
-        std::collections::BTreeMap<kraai_types::MessageId, kraai_types::Message>,
-    >;
+    ) -> std::collections::BTreeMap<kraai_types::MessageId, kraai_types::Message>;
 }
 
 impl FullHistory for RuntimeHandle {
     async fn get_chat_history(
         &self,
         session_id: SessionId,
-    ) -> crate::RuntimeResult<
-        std::collections::BTreeMap<kraai_types::MessageId, kraai_types::Message>,
-    > {
+    ) -> std::collections::BTreeMap<kraai_types::MessageId, kraai_types::Message> {
         let mut history = std::collections::BTreeMap::new();
         let mut from = None;
         loop {
-            let page = self.get_history_page(session_id.clone(), from, 2).await?;
+            let page = self
+                .get_history_page(session_id.clone(), from, 2)
+                .await
+                .unwrap();
             history.extend(page.messages);
             match page.older_history {
                 Some(older) => from = Some(older),
-                None => return Ok(history),
+                None => return history,
             }
         }
     }

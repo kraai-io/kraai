@@ -2,9 +2,9 @@ use super::super::*;
 use super::common::{cleanup_dir, test_manager};
 
 #[tokio::test]
-async fn explicit_continuation_matches_message_submission_after_restoring_session() -> Result<()> {
+async fn explicit_continuation_matches_message_submission_after_restoring_session() {
     let (manager, data_dir) = test_manager().await;
-    let session = manager.create_session().await?;
+    let session = manager.create_session().await.unwrap();
     let first = manager
         .prepare_start_stream(
             &session,
@@ -13,7 +13,8 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     manager
         .append_text_chunk(
             &first.message_id,
@@ -22,9 +23,9 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
             "answer",
         )
         .await;
-    manager.complete_message(&first.message_id).await?;
+    manager.complete_message(&first.message_id).await.unwrap();
     manager.clear_active_turn(&session);
-    super::super::lock(&manager.session_states).remove(&session);
+    lock(&manager.session_states).remove(&session);
 
     let continuation = manager
         .prepare_messages_stream(
@@ -34,11 +35,12 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
             ProviderId::new("mock-alternate"),
             Default::default(),
         )
-        .await?
+        .await
+        .unwrap()
         .expect("restored session can continue");
     assert_eq!(continuation.model_id.as_str(), "new-model");
     assert_eq!(continuation.provider_id.as_str(), "mock-alternate");
-    let history = manager.get_chat_history(&session).await?;
+    let history = manager.get_chat_history(&session).await.unwrap();
     assert_eq!(history.len(), 3);
     assert_eq!(
         history
@@ -50,7 +52,8 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
     );
     manager
         .abort_streaming_message(&continuation.message_id)
-        .await?;
+        .await
+        .unwrap();
     manager.clear_active_turn(&session);
 
     let normal = manager
@@ -61,7 +64,8 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
             ProviderId::new("mock-alternate"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let mut normal_history = normal.provider_request.messages;
     assert_eq!(
         normal_history.pop(),
@@ -79,13 +83,12 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
         normal.provider_request.cacheable_messages
     );
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn failed_explicit_continuation_restores_model_and_history() -> Result<()> {
+async fn failed_explicit_continuation_restores_model_and_history() {
     let (manager, data_dir) = test_manager().await;
-    let session = manager.create_session().await?;
+    let session = manager.create_session().await.unwrap();
     let first = manager
         .prepare_start_stream(
             &session,
@@ -94,8 +97,9 @@ async fn failed_explicit_continuation_restores_model_and_history() -> Result<()>
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
-    manager.complete_message(&first.message_id).await?;
+        .await
+        .unwrap();
+    manager.complete_message(&first.message_id).await.unwrap();
     manager.clear_active_turn(&session);
     assert!(
         manager
@@ -110,8 +114,11 @@ async fn failed_explicit_continuation_restores_model_and_history() -> Result<()>
             .is_err()
     );
     assert!(!manager.is_turn_active(&session));
-    assert_eq!(manager.get_tip(&session).await?, Some(first.message_id));
-    let state = super::super::lock(&manager.session_states)
+    assert_eq!(
+        manager.get_tip(&session).await.unwrap(),
+        Some(first.message_id)
+    );
+    let state = lock(&manager.session_states)
         .get(&session)
         .cloned()
         .expect("session state");
@@ -124,5 +131,4 @@ async fn failed_explicit_continuation_restores_model_and_history() -> Result<()>
         Some("mock")
     );
     cleanup_dir(data_dir).await;
-    Ok(())
 }

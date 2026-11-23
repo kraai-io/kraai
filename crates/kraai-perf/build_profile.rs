@@ -122,5 +122,5 @@ fn merge(target: &mut Value, source: &Value) {
 }
 
 #[cfg(test)]
-#[path = "build_profile_tests.rs"]
+#[path = "build_profile/tests.rs"]
 mod tests;

@@ -1,4 +1,3 @@
-#[path = "process/group_change.rs"]
 mod group_change;
 
 use std::io::Write;

@@ -1,13 +1,12 @@
 use super::super::*;
 use super::common::{cleanup_dir, test_manager};
-use color_eyre::eyre::Result;
 use kraai_types::ScriptCall;
 
 #[tokio::test]
-async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<()> {
+async fn encrypted_reasoning_survives_persistence_and_next_request() {
     use kraai_persistence::MessageStore;
     let (manager, data_dir) = test_manager().await;
-    let session = manager.create_session().await?;
+    let session = manager.create_session().await.unwrap();
     let provider = ProviderId::new("mock");
     let request = manager
         .prepare_start_stream(
@@ -17,7 +16,8 @@ async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<(
             provider.clone(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let payload = serde_json::json!({"type":"reasoning","id":"rs-1","encrypted_content":"opaque","summary":[]});
     manager
         .append_reasoning(&request.message_id, provider.clone(), payload.clone())
@@ -41,11 +41,12 @@ async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<(
             },
         })
     );
-    manager.complete_message(&request.message_id).await?;
+    manager.complete_message(&request.message_id).await.unwrap();
     manager.clear_active_turn(&session);
     let stored = kraai_persistence::SqliteMessageStore::new(&data_dir)
         .get(&request.message_id)
-        .await?
+        .await
+        .unwrap()
         .expect("saved message");
     assert!(
         matches!(stored.content.assistant_items().and_then(|items| items.first()), Some(AssistantItem::Reasoning { payload: actual, .. }) if actual == &payload)
@@ -59,17 +60,20 @@ async fn encrypted_reasoning_survives_persistence_and_next_request() -> Result<(
             provider,
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert!(next.provider_request.messages.contains(&stored.content));
-    manager.abort_streaming_message(&next.message_id).await?;
+    manager
+        .abort_streaming_message(&next.message_id)
+        .await
+        .unwrap();
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn cancelling_reasoning_only_stream_does_not_leave_an_orphan() -> Result<()> {
+async fn cancelling_reasoning_only_stream_does_not_leave_an_orphan() {
     let (manager, data_dir) = test_manager().await;
-    let session = manager.create_session().await?;
+    let session = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session,
@@ -78,7 +82,8 @@ async fn cancelling_reasoning_only_stream_does_not_leave_an_orphan() -> Result<(
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     manager
         .append_reasoning(
             &request.message_id,
@@ -89,21 +94,22 @@ async fn cancelling_reasoning_only_stream_does_not_leave_an_orphan() -> Result<(
         .expect("reasoning");
     manager
         .cancel_streaming_message(&request.message_id)
-        .await?;
+        .await
+        .unwrap();
     assert!(
         !manager
             .get_chat_history(&session)
-            .await?
+            .await
+            .unwrap()
             .contains_key(&request.message_id)
     );
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Result<()> {
+async fn failed_finalization_preserves_stream_content_and_allows_retry() {
     let (mut manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -112,7 +118,8 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     manager
         .append_text_chunk(
             &request.message_id,
@@ -124,11 +131,14 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
         .expect("text should be appended");
     let original = manager
         .get_chat_history(&session_id)
-        .await?
+        .await
+        .unwrap()
         .remove(&request.message_id)
         .expect("streaming message");
     let blocked_root = data_dir.join("blocked-storage");
-    tokio::fs::write(&blocked_root, b"not a directory").await?;
+    tokio::fs::write(&blocked_root, b"not a directory")
+        .await
+        .unwrap();
     let working_store = std::mem::replace(
         &mut manager.message_store,
         Arc::new(kraai_persistence::SqliteMessageStore::new(&blocked_root)),
@@ -144,7 +154,8 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
     manager.message_store = working_store;
     let restored = manager
         .get_chat_history(&session_id)
-        .await?
+        .await
+        .unwrap()
         .remove(&request.message_id)
         .expect("restored streaming message");
     assert_eq!(restored.status, original.status);
@@ -165,11 +176,12 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
         .as_deref(),
         Some(" output")
     );
-    manager.complete_message(&request.message_id).await?;
+    manager.complete_message(&request.message_id).await.unwrap();
     let saved = manager
         .message_store
         .get(&request.message_id)
-        .await?
+        .await
+        .unwrap()
         .expect("completed message");
     assert_eq!(saved.status, MessageStatus::Complete);
     assert_eq!(
@@ -183,13 +195,12 @@ async fn failed_finalization_preserves_stream_content_and_allows_retry() -> Resu
         )
     );
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<()> {
+async fn intercepted_messages_are_rolled_back_when_stream_is_active() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let first = manager
         .prepare_start_stream(
             &session_id,
@@ -198,7 +209,8 @@ async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let messages = vec!["queued one".into(), "queued two".into()];
     let result = manager
         .prepare_messages_stream(
@@ -208,13 +220,14 @@ async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert!(result.is_none());
     assert_eq!(
-        manager.get_tip(&session_id).await?,
+        manager.get_tip(&session_id).await.unwrap(),
         Some(first.message_id.clone())
     );
-    manager.complete_message(&first.message_id).await?;
+    manager.complete_message(&first.message_id).await.unwrap();
     let retry = manager
         .prepare_messages_stream(
             &session_id,
@@ -223,30 +236,34 @@ async fn intercepted_messages_are_rolled_back_when_stream_is_active() -> Result<
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?
+        .await
+        .unwrap()
         .expect("retry should start a stream");
     let users: Vec<_> = retry
         .provider_request
         .messages
         .iter()
-        .filter_map(|item| match item {
-            ConversationItem::User { content: text } => Some(text.as_text().unwrap_or("")),
-            _ => None,
+        .filter_map(|item| {
+            if let ConversationItem::User { content } = item {
+                Some(content.as_text().unwrap_or(""))
+            } else {
+                None
+            }
         })
         .collect();
     assert_eq!(users, vec!["first", "queued one", "queued two"]);
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn duplicate_continuation_trigger_is_ignored_while_stream_is_active() -> Result<()> {
+async fn duplicate_continuation_trigger_is_ignored_while_stream_is_active() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_session_profile(&session_id, String::from("coding"))
-        .await?;
+        .await
+        .unwrap();
 
     let first_request = manager
         .prepare_start_stream(
@@ -256,38 +273,50 @@ async fn duplicate_continuation_trigger_is_ignored_while_stream_is_active() -> R
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
-    manager.complete_message(&first_request.message_id).await?;
+        .await
+        .unwrap();
+    manager
+        .complete_message(&first_request.message_id)
+        .await
+        .unwrap();
 
     let continuation = manager
         .prepare_continuation_stream(&session_id)
-        .await?
+        .await
+        .unwrap()
         .expect("continuation request should exist");
 
-    let duplicate = manager.prepare_continuation_stream(&session_id).await?;
+    let duplicate = manager
+        .prepare_continuation_stream(&session_id)
+        .await
+        .unwrap();
     assert!(duplicate.is_none());
     assert!(manager.is_turn_active(&session_id));
 
-    manager.complete_message(&continuation.message_id).await?;
+    manager
+        .complete_message(&continuation.message_id)
+        .await
+        .unwrap();
 
     let next_continuation = manager
         .prepare_continuation_stream(&session_id)
-        .await?
+        .await
+        .unwrap()
         .expect("session should continue working after duplicate trigger");
     assert_ne!(next_continuation.message_id, continuation.message_id);
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn prepare_continuation_restarts_a_new_turn_after_previous_turn_is_cleared() -> Result<()> {
+async fn prepare_continuation_restarts_a_new_turn_after_previous_turn_is_cleared() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_session_profile(&session_id, String::from("coding"))
-        .await?;
+        .await
+        .unwrap();
 
     let first_request = manager
         .prepare_start_stream(
@@ -297,26 +326,30 @@ async fn prepare_continuation_restarts_a_new_turn_after_previous_turn_is_cleared
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
-    manager.complete_message(&first_request.message_id).await?;
+        .await
+        .unwrap();
+    manager
+        .complete_message(&first_request.message_id)
+        .await
+        .unwrap();
     manager.clear_active_turn(&session_id);
 
     let continuation = manager
         .prepare_continuation_stream(&session_id)
-        .await?
+        .await
+        .unwrap()
         .expect("continuation request should exist after clearing the previous turn");
 
     assert!(manager.is_turn_active(&session_id));
     assert_ne!(continuation.message_id, first_request.message_id);
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> {
+async fn intercepted_messages_are_batched_before_one_generation() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
 
     let first = manager
         .prepare_start_stream(
@@ -326,7 +359,8 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let call_id = ToolCallId::new("call-1");
     manager
         .append_script_call(
@@ -341,7 +375,7 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
         )
         .await
         .expect("script call should be appended");
-    manager.complete_message(&first.message_id).await?;
+    manager.complete_message(&first.message_id).await.unwrap();
     manager
         .add_script_result_to_history(
             &session_id,
@@ -354,7 +388,8 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
                 exit_code: Some(0),
             },
         )
-        .await?;
+        .await
+        .unwrap();
 
     let intercepted = manager
         .prepare_messages_stream(
@@ -364,7 +399,8 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
             ProviderId::new("mock-alternate"),
             Default::default(),
         )
-        .await?
+        .await
+        .unwrap()
         .expect("intercepted messages should start one generation");
 
     assert_eq!(intercepted.model_id, ModelId::new("new-model"));
@@ -373,9 +409,12 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
         .provider_request
         .messages
         .iter()
-        .filter_map(|item| match item {
-            ConversationItem::User { content: text } => Some(text.as_text().unwrap_or("")),
-            _ => None,
+        .filter_map(|item| {
+            if let ConversationItem::User { content } = item {
+                Some(content.as_text().unwrap_or(""))
+            } else {
+                None
+            }
         })
         .collect();
     assert_eq!(users, vec!["first", "queued one", "queued two"]);
@@ -394,13 +433,12 @@ async fn intercepted_messages_are_batched_before_one_generation() -> Result<()> 
     ));
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider() -> Result<()> {
+async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
 
     let first = manager
         .prepare_start_stream(
@@ -410,7 +448,8 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
         super::common::streamed_text(
             manager
@@ -425,7 +464,10 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
         .as_deref(),
         Some("I am partway through.")
     );
-    manager.cancel_streaming_message(&first.message_id).await?;
+    manager
+        .cancel_streaming_message(&first.message_id)
+        .await
+        .unwrap();
     manager.clear_active_turn(&session_id);
 
     let second = manager
@@ -436,7 +478,8 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
             ProviderId::new("mock-alternate"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
 
     assert_eq!(second.provider_id, ProviderId::new("mock-alternate"));
     assert!(second.provider_request.messages.iter().any(|item| {
@@ -451,13 +494,12 @@ async fn cancelled_output_remains_semantic_when_the_next_turn_switches_provider(
     }));
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn cancelling_after_a_failed_completion_drops_the_unrun_call() -> Result<()> {
+async fn cancelling_after_a_failed_completion_drops_the_unrun_call() {
     let (mut manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -466,7 +508,8 @@ async fn cancelling_after_a_failed_completion_drops_the_unrun_call() -> Result<(
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     manager
         .append_text_chunk(
             &request.message_id,
@@ -490,7 +533,9 @@ async fn cancelling_after_a_failed_completion_drops_the_unrun_call() -> Result<(
         .await
         .expect("script call should be appended");
     let blocked_root = data_dir.join("blocked-storage");
-    tokio::fs::write(&blocked_root, b"not a directory").await?;
+    tokio::fs::write(&blocked_root, b"not a directory")
+        .await
+        .unwrap();
     let working_store = std::mem::replace(
         &mut manager.message_store,
         Arc::new(kraai_persistence::SqliteMessageStore::new(&blocked_root)),
@@ -500,11 +545,13 @@ async fn cancelling_after_a_failed_completion_drops_the_unrun_call() -> Result<(
 
     manager
         .cancel_streaming_message(&request.message_id)
-        .await?;
+        .await
+        .unwrap();
     let saved = manager
         .message_store
         .get(&request.message_id)
-        .await?
+        .await
+        .unwrap()
         .expect("cancelled message");
     assert_eq!(
         saved.content.assistant_items(),
@@ -517,5 +564,4 @@ async fn cancelling_after_a_failed_completion_drops_the_unrun_call() -> Result<(
         )
     );
     cleanup_dir(data_dir).await;
-    Ok(())
 }

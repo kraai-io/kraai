@@ -1,5 +1,5 @@
 use crate::AuxiliaryUsageRecorder;
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::eyre;
 use futures::StreamExt;
 use kraai_provider_core::{ProviderError, ProviderRequestContext, ProviderStreamEvent};
 use kraai_types::{AssistantItem, AssistantPhase, ScriptCall};
@@ -82,7 +82,10 @@ impl ContextCompaction {
                             )
                             .into());
                         }
-                        _ => {}
+                        ProviderStreamEvent::Reasoning { .. }
+                        | ProviderStreamEvent::ReasoningDelta { .. }
+                        | ProviderStreamEvent::TextDelta { .. }
+                        | ProviderStreamEvent::Finished { .. } => {}
                     }
                 }
                 if native {
@@ -180,7 +183,7 @@ fn remove_oldest_exchange(messages: &mut Vec<ConversationItem>) -> bool {
             .into_iter()
             .filter_map(|item| match item {
                 AssistantItem::ScriptCall(ScriptCall { call_id, .. }) => Some(call_id),
-                _ => None,
+                AssistantItem::Reasoning { .. } | AssistantItem::Text { .. } => None,
             })
             .collect();
         messages.retain(|item| !matches!(item, ConversationItem::ScriptResult { call_id, .. } if calls.contains(call_id)));

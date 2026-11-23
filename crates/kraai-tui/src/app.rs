@@ -122,7 +122,7 @@ const INPUT_HISTORY_LIMIT: usize = 100;
 mod tests;
 
 impl App {
-    pub(super) fn mark_exit_usage_message_completed(&mut self, message_id: kraai_types::MessageId) {
+    pub(super) fn mark_exit_usage_message_completed(&mut self, message_id: MessageId) {
         self.state
             .exit_usage_totals
             .completed_message_ids
@@ -131,7 +131,7 @@ impl App {
 
     pub(super) fn accumulate_exit_usage_from_history(
         &mut self,
-        history: &std::collections::BTreeMap<kraai_types::MessageId, kraai_types::Message>,
+        history: &std::collections::BTreeMap<MessageId, kraai_types::Message>,
     ) {
         for message in history.values() {
             if !self
@@ -237,10 +237,10 @@ impl App {
         if !matches!(message.status, MessageStatus::Streaming { .. }) {
             return None;
         }
-        match &mut message.content {
-            ConversationItem::Assistant { items } => Some(items),
-            _ => None,
-        }
+        let ConversationItem::Assistant { items } = &mut message.content else {
+            return None;
+        };
+        Some(items)
     }
 
     pub(super) fn install_latest_history(

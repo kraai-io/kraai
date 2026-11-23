@@ -1,7 +1,5 @@
-#![expect(
-    clippy::expect_used,
-    reason = "integration tests assert real operating system permission decisions"
-)]
+// Clippy only applies its allow-*-in-tests settings to helpers under a `cfg(test)` ancestor.
+#![cfg(test)]
 
 use std::path::PathBuf;
 use std::time::Duration;

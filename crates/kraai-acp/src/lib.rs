@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 mod commands;
 mod config;
 mod config_updates;
@@ -67,7 +65,7 @@ impl Server {
         }
         let cwd = tokio::fs::canonicalize(&request.cwd)
             .await
-            .map_err(|error| crate::error::invalid(error.to_string()))?;
+            .map_err(|error| error::invalid(error.to_string()))?;
         let mcp = mcp::config(request.mcp_servers, &cwd)?;
         let id = session::runtime_id(&request.session_id)?;
         let existing = self

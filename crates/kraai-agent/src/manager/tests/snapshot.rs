@@ -2,14 +2,14 @@ use super::super::*;
 use super::common::{cleanup_dir, test_manager};
 
 #[tokio::test]
-async fn history_readers_preserve_duplicate_persisted_ids_and_captured_stream_precedence()
--> Result<()> {
+async fn history_readers_preserve_duplicate_persisted_ids_and_captured_stream_precedence() {
     for with_stream in [false, true] {
         let (manager, data_dir) = test_manager().await;
-        let session_id = manager.create_session().await?;
+        let session_id = manager.create_session().await.unwrap();
         let oldest = manager
             .add_message(&session_id, ChatRole::User, "oldest".into(), None)
-            .await?;
+            .await
+            .unwrap();
         let (duplicate_id, expected) = if with_stream {
             let request = manager
                 .prepare_start_stream(
@@ -19,7 +19,8 @@ async fn history_readers_preserve_duplicate_persisted_ids_and_captured_stream_pr
                     ProviderId::new("mock"),
                     Default::default(),
                 )
-                .await?;
+                .await
+                .unwrap();
             manager
                 .append_text_chunk(
                     &request.message_id,
@@ -47,17 +48,24 @@ async fn history_readers_preserve_duplicate_persisted_ids_and_captured_stream_pr
         };
         let newest = manager
             .add_message(&session_id, ChatRole::User, "newest".into(), None)
-            .await?;
-        let mut message = manager.message_store.get(&newest).await?.unwrap();
+            .await
+            .unwrap();
+        let mut message = manager.message_store.get(&newest).await.unwrap().unwrap();
         message.id = duplicate_id.clone();
 
-        super::common::corrupt_message(&data_dir, &newest, &serde_json::to_string(&message)?)?;
+        super::common::corrupt_message(
+            &data_dir,
+            &newest,
+            &serde_json::to_string(&message).unwrap(),
+        );
 
         let snapshot = manager
             .capture_session_snapshot(&session_id)
-            .await?
+            .await
+            .unwrap()
             .load()
-            .await?;
+            .await
+            .unwrap();
 
         assert_eq!(
             snapshot.history.get(&duplicate_id).unwrap().content,
@@ -66,7 +74,8 @@ async fn history_readers_preserve_duplicate_persisted_ids_and_captured_stream_pr
         assert_eq!(
             manager
                 .get_chat_history(&session_id)
-                .await?
+                .await
+                .unwrap()
                 .get(&duplicate_id)
                 .unwrap()
                 .content,
@@ -74,13 +83,12 @@ async fn history_readers_preserve_duplicate_persisted_ids_and_captured_stream_pr
         );
         cleanup_dir(data_dir).await;
     }
-    Ok(())
 }
 
 #[tokio::test]
-async fn snapshot_rejects_a_parent_cycle() -> Result<()> {
+async fn snapshot_rejects_a_parent_cycle() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -89,17 +97,24 @@ async fn snapshot_rejects_a_parent_cycle() -> Result<()> {
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
-    manager.complete_message(&request.message_id).await?;
+        .await
+        .unwrap();
+    manager.complete_message(&request.message_id).await.unwrap();
     let message = manager
         .message_store
         .get(&request.message_id)
-        .await?
+        .await
+        .unwrap()
         .unwrap();
     let parent_id = message.parent_id.unwrap();
-    let mut parent = manager.message_store.get(&parent_id).await?.unwrap();
+    let mut parent = manager
+        .message_store
+        .get(&parent_id)
+        .await
+        .unwrap()
+        .unwrap();
     parent.parent_id = Some(request.message_id.clone());
-    manager.message_store.save(&parent).await?;
+    manager.message_store.save(&parent).await.unwrap();
     let error = manager
         .capture_session_snapshot(&session_id)
         .await
@@ -112,13 +127,12 @@ async fn snapshot_rejects_a_parent_cycle() -> Result<()> {
             .contains(&format!("cycle repeats message {}", request.message_id))
     );
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> Result<()> {
+async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -127,7 +141,8 @@ async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> 
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     manager
         .append_text_chunk(
             &request.message_id,
@@ -136,7 +151,7 @@ async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> 
             "before",
         )
         .await;
-    let reader = manager.capture_session_snapshot(&session_id).await?;
+    let reader = manager.capture_session_snapshot(&session_id).await.unwrap();
     manager
         .append_text_chunk(
             &request.message_id,
@@ -145,13 +160,14 @@ async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> 
             " after",
         )
         .await;
-    manager.complete_message(&request.message_id).await?;
+    manager.complete_message(&request.message_id).await.unwrap();
     manager.clear_active_turn(&session_id);
     manager
         .set_session_profile(&session_id, "coding-no-sandbox".into())
-        .await?;
+        .await
+        .unwrap();
 
-    let snapshot = reader.load().await?;
+    let snapshot = reader.load().await.unwrap();
     assert!(snapshot.streaming);
     let captured = snapshot
         .history
@@ -175,13 +191,12 @@ async fn captured_snapshot_keeps_stream_contents_and_tip_across_completion() -> 
     assert!(snapshot.profiles.profile_locked);
     assert!(snapshot.context_usage.is_none());
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn captured_snapshot_survives_deletion_of_an_aborted_stream() -> Result<()> {
+async fn captured_snapshot_survives_deletion_of_an_aborted_stream() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -190,21 +205,24 @@ async fn captured_snapshot_survives_deletion_of_an_aborted_stream() -> Result<()
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
-    let reader = manager.capture_session_snapshot(&session_id).await?;
-    manager.abort_streaming_message(&request.message_id).await?;
+        .await
+        .unwrap();
+    let reader = manager.capture_session_snapshot(&session_id).await.unwrap();
+    manager
+        .abort_streaming_message(&request.message_id)
+        .await
+        .unwrap();
 
-    let snapshot = reader.load().await?;
+    let snapshot = reader.load().await.unwrap();
     assert!(snapshot.history.contains_key(&request.message_id));
     assert_eq!(snapshot.history.len(), 2);
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn snapshot_keeps_captured_streams_outside_the_tip_chain() -> Result<()> {
+async fn snapshot_keeps_captured_streams_outside_the_tip_chain() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -213,30 +231,34 @@ async fn snapshot_keeps_captured_streams_outside_the_tip_chain() -> Result<()> {
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let parent_id = manager
         .message_store
         .get(&request.message_id)
-        .await?
+        .await
+        .unwrap()
         .unwrap()
         .parent_id;
-    manager.set_tip(&session_id, parent_id.clone()).await?;
-    let reader = manager.capture_session_snapshot(&session_id).await?;
+    manager
+        .set_tip(&session_id, parent_id.clone())
+        .await
+        .unwrap();
+    let reader = manager.capture_session_snapshot(&session_id).await.unwrap();
 
-    let snapshot = reader.load().await?;
+    let snapshot = reader.load().await.unwrap();
 
     assert_eq!(snapshot.session.tip_id, parent_id);
     assert!(snapshot.streaming);
     assert!(snapshot.history.contains_key(&request.message_id));
     assert_eq!(snapshot.history.len(), 2);
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn snapshot_reports_missing_history_instead_of_returning_partial_state() -> Result<()> {
+async fn snapshot_reports_missing_history_instead_of_returning_partial_state() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -245,11 +267,15 @@ async fn snapshot_reports_missing_history_instead_of_returning_partial_state() -
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
-    manager.complete_message(&request.message_id).await?;
+        .await
+        .unwrap();
+    manager.complete_message(&request.message_id).await.unwrap();
     manager.clear_active_turn(&session_id);
-    manager.message_store.delete(&request.message_id).await?;
+    manager
+        .message_store
+        .delete(&request.message_id)
+        .await
+        .unwrap();
     assert!(manager.capture_session_snapshot(&session_id).await.is_err());
     cleanup_dir(data_dir).await;
-    Ok(())
 }

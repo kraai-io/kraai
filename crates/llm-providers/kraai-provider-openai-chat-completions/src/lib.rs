@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 mod auth;
 mod cache;
 mod messages;

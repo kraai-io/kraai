@@ -1,9 +1,4 @@
 #![cfg(unix)]
-#![expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "stdio fixture asserts protocol results"
-)]
 
 use kraai_execution_types::McpRequest;
 use kraai_mcp::{McpConfig, McpHost, McpManager, ServerConfig, TransportConfig};

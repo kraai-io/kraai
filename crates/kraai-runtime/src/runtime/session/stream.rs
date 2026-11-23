@@ -114,7 +114,11 @@ impl SessionActor {
     pub(super) async fn stream_ended(&mut self, generation: u64, result: StreamDriveResult) {
         let job = match std::mem::replace(&mut self.state, TurnState::Idle) {
             TurnState::Streaming(job) if job.generation == generation => job,
-            state => {
+            state @ (TurnState::Idle
+            | TurnState::Preparing(_)
+            | TurnState::Streaming(_)
+            | TurnState::AwaitingApproval(_)
+            | TurnState::RunningScript(_)) => {
                 self.state = state;
                 return;
             }

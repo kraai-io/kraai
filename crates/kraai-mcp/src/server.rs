@@ -77,7 +77,7 @@ impl Server {
                     events,
                 )))
             }
-            _ => None,
+            TransportConfig::Stdio { .. } | TransportConfig::Http { .. } => None,
         };
         Self {
             config,
@@ -131,7 +131,7 @@ impl Server {
             protocol: ProtocolVersion::LATEST,
         };
         let lifecycle = ClientLifecycleMode::Auto {
-            preferred_versions: vec![rmcp::model::ProtocolVersion::LATEST],
+            preferred_versions: vec![ProtocolVersion::LATEST],
             legacy_version: None,
         };
         match &self.config.transport {
@@ -233,6 +233,10 @@ impl Server {
         }
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "tools/call only answers with a tool result or an input request"
+    )]
     pub(crate) async fn call(
         &self,
         tool: String,

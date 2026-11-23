@@ -395,5 +395,4 @@ pub(crate) fn parse_rates(cost: &Value, usage: &TokenUsage) -> Option<TokenRates
 }
 
 #[cfg(test)]
-#[path = "model_catalog_tests.rs"]
 mod tests;

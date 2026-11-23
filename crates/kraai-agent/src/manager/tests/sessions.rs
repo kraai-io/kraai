@@ -1,24 +1,24 @@
 use super::super::*;
 use super::common::{cleanup_dir, open_persistence, test_manager};
-use color_eyre::eyre::Result;
-use kraai_types::MessageStatus;
-use std::path::PathBuf;
 
 #[tokio::test]
-async fn a_foreign_workspace_change_refreshes_cached_state_before_the_next_turn() -> Result<()> {
+async fn a_foreign_workspace_change_refreshes_cached_state_before_the_next_turn() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
-    assert!(manager.prepare_session(&session_id).await?);
+    let session_id = manager.create_session().await.unwrap();
+    assert!(manager.prepare_session(&session_id).await.unwrap());
     let obsolete = data_dir.join("obsolete-workspace");
-    manager.set_workspace_dir(&session_id, obsolete).await?;
-    let foreign = open_persistence(&data_dir).await?;
+    manager
+        .set_workspace_dir(&session_id, obsolete)
+        .await
+        .unwrap();
+    let foreign = open_persistence(&data_dir).await;
     let workspace = data_dir.join("foreign-workspace");
-    tokio::fs::create_dir_all(&workspace).await?;
-    let mut session = foreign.sessions().get(&session_id).await?.unwrap();
+    tokio::fs::create_dir_all(&workspace).await.unwrap();
+    let mut session = foreign.sessions().get(&session_id).await.unwrap().unwrap();
     session.workspace_dir = workspace.clone();
-    foreign.sessions().save(&session).await?;
+    foreign.sessions().save(&session).await.unwrap();
     assert_eq!(
-        manager.get_workspace_dir_state(&session_id).await?,
+        manager.get_workspace_dir_state(&session_id).await.unwrap(),
         Some((workspace.clone(), false))
     );
     manager
@@ -29,19 +29,22 @@ async fn a_foreign_workspace_change_refreshes_cached_state_before_the_next_turn(
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
-        manager.script_turn_context(&session_id)?.workspace_dir,
+        manager
+            .script_turn_context(&session_id)
+            .unwrap()
+            .workspace_dir,
         workspace
     );
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn undo_returns_input_after_the_tip_commit_even_if_cleanup_fails() -> Result<()> {
+async fn undo_returns_input_after_the_tip_commit_even_if_cleanup_fails() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .add_message(
             &session_id,
@@ -49,22 +52,22 @@ async fn undo_returns_input_after_the_tip_commit_even_if_cleanup_fails() -> Resu
             "restore this input".into(),
             None,
         )
-        .await?;
-    let connection = rusqlite::Connection::open(data_dir.join("kraai.sqlite3"))?;
-    connection.execute_batch("CREATE TRIGGER fail_cleanup BEFORE DELETE ON records WHEN OLD.kind = 'message' BEGIN SELECT RAISE(FAIL, 'injected cleanup failure'); END;")?;
+        .await
+        .unwrap();
+    let connection = rusqlite::Connection::open(data_dir.join("kraai.sqlite3")).unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_cleanup BEFORE DELETE ON records WHEN OLD.kind = 'message' BEGIN SELECT RAISE(FAIL, 'injected cleanup failure'); END;").unwrap();
     assert_eq!(
-        manager.undo_last_user_message(&session_id).await?,
+        manager.undo_last_user_message(&session_id).await.unwrap(),
         Some("restore this input".into())
     );
-    assert!(manager.get_tip(&session_id).await?.is_none());
+    assert!(manager.get_tip(&session_id).await.unwrap().is_none());
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn preparing_session_rejects_a_parent_cycle() -> Result<()> {
+async fn preparing_session_rejects_a_parent_cycle() {
     let (manager, data_dir) = test_manager().await;
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let message_id = manager
         .add_message(
             &session_id,
@@ -72,10 +75,16 @@ async fn preparing_session_rejects_a_parent_cycle() -> Result<()> {
             String::from("cycle").into(),
             None,
         )
-        .await?;
-    let mut message = manager.message_store.get(&message_id).await?.unwrap();
+        .await
+        .unwrap();
+    let mut message = manager
+        .message_store
+        .get(&message_id)
+        .await
+        .unwrap()
+        .unwrap();
     message.parent_id = Some(message_id.clone());
-    manager.message_store.save(&message).await?;
+    manager.message_store.save(&message).await.unwrap();
 
     let error = manager.prepare_session(&session_id).await.unwrap_err();
 
@@ -85,19 +94,19 @@ async fn preparing_session_rejects_a_parent_cycle() -> Result<()> {
             .contains(&format!("cycle repeats message {message_id}"))
     );
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn restored_session_supplies_script_workspace_independently_of_executable() -> Result<()> {
+async fn restored_session_supplies_script_workspace_independently_of_executable() {
     let (manager, data_dir) = test_manager().await;
     let workspace = data_dir.join("configured-workspace");
-    tokio::fs::create_dir_all(&workspace).await?;
+    tokio::fs::create_dir_all(&workspace).await.unwrap();
     let session_id = manager
         .create_session_with(Some(workspace.clone()), None)
-        .await?;
-    super::super::lock(&manager.session_states).clear();
-    assert!(manager.prepare_session(&session_id).await?);
+        .await
+        .unwrap();
+    lock(&manager.session_states).clear();
+    assert!(manager.prepare_session(&session_id).await.unwrap());
     manager
         .prepare_start_stream(
             &session_id,
@@ -106,36 +115,41 @@ async fn restored_session_supplies_script_workspace_independently_of_executable(
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
-    let context = manager.script_turn_context(&session_id)?;
+        .await
+        .unwrap();
+    let context = manager.script_turn_context(&session_id).unwrap();
     assert_eq!(context.workspace_dir, workspace);
-    assert!(!std::env::current_exe()?.starts_with(&context.workspace_dir));
+    assert!(
+        !std::env::current_exe()
+            .unwrap()
+            .starts_with(&context.workspace_dir)
+    );
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn create_session_returns_usable_session_id() -> Result<()> {
+async fn create_session_returns_usable_session_id() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
-    let sessions = manager.list_sessions().await?;
+    let session_id = manager.create_session().await.unwrap();
+    let sessions = manager.list_sessions().await.unwrap();
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, session_id);
     assert_eq!(sessions[0].selected_profile_id.as_deref(), Some("coding"));
-    assert_eq!(manager.get_tip(&session_id).await?, None);
+    assert_eq!(manager.get_tip(&session_id).await.unwrap(), None);
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn session_defaults_follow_profiles_available_in_the_target_workspace() -> Result<()> {
+async fn session_defaults_follow_profiles_available_in_the_target_workspace() {
     let (manager, data_dir) = test_manager().await;
     let workspace_a = data_dir.join("workspace-a");
     let workspace_b = data_dir.join("workspace-b");
-    tokio::fs::create_dir_all(workspace_a.join(".kraai")).await?;
-    tokio::fs::create_dir_all(&workspace_b).await?;
+    tokio::fs::create_dir_all(workspace_a.join(".kraai"))
+        .await
+        .unwrap();
+    tokio::fs::create_dir_all(&workspace_b).await.unwrap();
     tokio::fs::write(
         workspace_a.join(".kraai/agents.toml"),
         r#"[[profiles]]
@@ -149,21 +163,27 @@ capabilities = []
 nushell_startup = "clean"
 "#,
     )
-    .await?;
+    .await
+    .unwrap();
     manager
         .create_session_with(Some(workspace_a.clone()), Some("workspace-only".into()))
-        .await?;
+        .await
+        .unwrap();
 
     let (_, catalog_a) = manager.list_agent_profiles_for_workspace(Some(&workspace_a));
     assert_eq!(
         catalog_a.selected_profile_id.as_deref(),
         Some("workspace-only")
     );
-    let session_a = manager.create_session_with(Some(workspace_a), None).await?;
+    let session_a = manager
+        .create_session_with(Some(workspace_a), None)
+        .await
+        .unwrap();
     assert_eq!(
         manager
             .require_session(&session_a)
-            .await?
+            .await
+            .unwrap()
             .selected_profile_id
             .as_deref(),
         Some("workspace-only")
@@ -173,16 +193,18 @@ nushell_startup = "clean"
     assert_eq!(catalog_b.selected_profile_id.as_deref(), Some("coding"));
     let session_b = manager
         .create_session_with(Some(workspace_b.clone()), None)
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(
         manager
             .require_session(&session_b)
-            .await?
+            .await
+            .unwrap()
             .selected_profile_id,
         catalog_b.selected_profile_id
     );
 
-    let count = manager.list_sessions().await?.len();
+    let count = manager.list_sessions().await.unwrap().len();
     let error = manager
         .create_session_with(Some(workspace_b), Some("workspace-only".into()))
         .await
@@ -192,9 +214,8 @@ nushell_startup = "clean"
             .to_string()
             .contains("Unknown profile: workspace-only")
     );
-    assert_eq!(manager.list_sessions().await?.len(), count);
+    assert_eq!(manager.list_sessions().await.unwrap().len(), count);
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[test]
@@ -222,13 +243,14 @@ fn title_from_user_prompt_preserves_unicode_whitespace_and_truncation_boundaries
 }
 
 #[tokio::test]
-async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
+async fn profile_changes_are_rejected_while_turn_is_active() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_session_profile(&session_id, String::from("coding-no-sandbox"))
-        .await?;
+        .await
+        .unwrap();
     let _request = manager
         .prepare_start_stream(
             &session_id,
@@ -237,7 +259,8 @@ async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
 
     let locked = manager
         .set_session_profile(&session_id, String::from("coding"))
@@ -247,18 +270,18 @@ async fn profile_changes_are_rejected_while_turn_is_active() -> Result<()> {
     manager.clear_active_turn(&session_id);
     manager
         .set_session_profile(&session_id, String::from("coding"))
-        .await?;
+        .await
+        .unwrap();
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn sessions_keep_independent_tips_and_histories() -> Result<()> {
+async fn sessions_keep_independent_tips_and_histories() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_a = manager.create_session().await?;
-    let session_b = manager.create_session().await?;
+    let session_a = manager.create_session().await.unwrap();
+    let session_b = manager.create_session().await.unwrap();
 
     let a_message = manager
         .add_message(
@@ -267,7 +290,8 @@ async fn sessions_keep_independent_tips_and_histories() -> Result<()> {
             String::from("hello a").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
     let b_message = manager
         .add_message(
             &session_b,
@@ -275,13 +299,20 @@ async fn sessions_keep_independent_tips_and_histories() -> Result<()> {
             String::from("hello b").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
 
-    assert_eq!(manager.get_tip(&session_a).await?, Some(a_message.clone()));
-    assert_eq!(manager.get_tip(&session_b).await?, Some(b_message.clone()));
+    assert_eq!(
+        manager.get_tip(&session_a).await.unwrap(),
+        Some(a_message.clone())
+    );
+    assert_eq!(
+        manager.get_tip(&session_b).await.unwrap(),
+        Some(b_message.clone())
+    );
 
-    let history_a = manager.get_chat_history(&session_a).await?;
-    let history_b = manager.get_chat_history(&session_b).await?;
+    let history_a = manager.get_chat_history(&session_a).await.unwrap();
+    let history_b = manager.get_chat_history(&session_b).await.unwrap();
 
     assert_eq!(history_a.len(), 1);
     assert_eq!(history_b.len(), 1);
@@ -295,14 +326,13 @@ async fn sessions_keep_independent_tips_and_histories() -> Result<()> {
     );
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn user_input_history_lists_persisted_user_messages_newest_first() -> Result<()> {
+async fn user_input_history_lists_persisted_user_messages_newest_first() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .add_message(
             &session_id,
@@ -310,7 +340,8 @@ async fn user_input_history_lists_persisted_user_messages_newest_first() -> Resu
             String::from("first").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
     manager
         .add_message(
             &session_id,
@@ -318,7 +349,8 @@ async fn user_input_history_lists_persisted_user_messages_newest_first() -> Resu
             String::from("assistant reply").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
     manager
         .add_message(
             &session_id,
@@ -326,23 +358,23 @@ async fn user_input_history_lists_persisted_user_messages_newest_first() -> Resu
             String::from("  second  ").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
 
-    let history = manager.list_user_input_history(10).await?;
+    let history = manager.list_user_input_history(10).await.unwrap();
     assert_eq!(history, vec![String::from("second"), String::from("first")]);
 
-    let limited = manager.list_user_input_history(1).await?;
+    let limited = manager.list_user_input_history(1).await.unwrap();
     assert_eq!(limited, vec![String::from("second")]);
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn later_user_messages_do_not_overwrite_session_title() -> Result<()> {
+async fn later_user_messages_do_not_overwrite_session_title() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .add_message(
             &session_id,
@@ -350,7 +382,8 @@ async fn later_user_messages_do_not_overwrite_session_title() -> Result<()> {
             String::from("first prompt").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
     manager
         .add_message(
             &session_id,
@@ -358,7 +391,8 @@ async fn later_user_messages_do_not_overwrite_session_title() -> Result<()> {
             String::from("assistant response").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
     manager
         .add_message(
             &session_id,
@@ -366,20 +400,20 @@ async fn later_user_messages_do_not_overwrite_session_title() -> Result<()> {
             String::from("second prompt should not replace the title").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
 
-    let session = manager.require_session(&session_id).await?;
+    let session = manager.require_session(&session_id).await.unwrap();
     assert_eq!(session.title.as_deref(), Some("first prompt"));
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<()> {
+async fn deleting_session_aborts_stream_and_removes_transient_state() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let stable_tip = manager
         .add_message(
             &session_id,
@@ -387,11 +421,12 @@ async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<
             String::from("before stream").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
     let streaming_id = manager
         .start_streaming_message(
             &session_id,
-            super::super::stream_requests::TurnInput {
+            stream_requests::TurnInput {
                 tip: Some(stable_tip.clone()),
                 users: Vec::new(),
                 title: None,
@@ -401,17 +436,24 @@ async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<
             None,
             None,
         )
-        .await?;
+        .await
+        .unwrap();
 
     assert_eq!(
-        manager.get_tip(&session_id).await?,
+        manager.get_tip(&session_id).await.unwrap(),
         Some(streaming_id.clone())
     );
 
-    manager.delete_session(&session_id).await?;
+    manager.delete_session(&session_id).await.unwrap();
 
-    assert!(manager.get_tip(&session_id).await?.is_none());
-    assert!(manager.get_chat_history(&session_id).await?.is_empty());
+    assert!(manager.get_tip(&session_id).await.unwrap().is_none());
+    assert!(
+        manager
+            .get_chat_history(&session_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert!(
         manager
             .streaming_messages
@@ -420,25 +462,33 @@ async fn deleting_session_aborts_stream_and_removes_transient_state() -> Result<
             .get(&streaming_id)
             .is_none()
     );
-    assert!(!manager.message_store.exists(&stable_tip).await?);
+    assert!(!manager.message_store.exists(&stable_tip).await.unwrap());
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn pending_workspace_changes_are_isolated_per_session() -> Result<()> {
+async fn pending_workspace_changes_are_isolated_per_session() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_a = manager.create_session().await?;
-    let session_b = manager.create_session().await?;
+    let session_a = manager.create_session().await.unwrap();
+    let session_b = manager.create_session().await.unwrap();
 
     manager
         .set_workspace_dir(&session_a, PathBuf::from("/tmp/workspace-a"))
-        .await?;
+        .await
+        .unwrap();
 
-    let workspace_a = manager.get_workspace_dir_state(&session_a).await?.unwrap();
-    let workspace_b = manager.get_workspace_dir_state(&session_b).await?.unwrap();
+    let workspace_a = manager
+        .get_workspace_dir_state(&session_a)
+        .await
+        .unwrap()
+        .unwrap();
+    let workspace_b = manager
+        .get_workspace_dir_state(&session_b)
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(workspace_a.0, PathBuf::from("/tmp/workspace-a"));
     assert!(workspace_a.1);
@@ -446,17 +496,17 @@ async fn pending_workspace_changes_are_isolated_per_session() -> Result<()> {
     assert!(!workspace_b.1);
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn new_sessions_inherit_last_used_profile_after_turn_starts() -> Result<()> {
+async fn new_sessions_inherit_last_used_profile_after_turn_starts() {
     let (manager, data_dir) = test_manager().await;
 
-    let first_session = manager.create_session().await?;
+    let first_session = manager.create_session().await.unwrap();
     manager
         .set_session_profile(&first_session, String::from("coding"))
-        .await?;
+        .await
+        .unwrap();
     let pending = manager
         .prepare_start_stream(
             &first_session,
@@ -465,14 +515,19 @@ async fn new_sessions_inherit_last_used_profile_after_turn_starts() -> Result<()
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
-    manager.abort_streaming_message(&pending.message_id).await?;
+        .await
+        .unwrap();
+    manager
+        .abort_streaming_message(&pending.message_id)
+        .await
+        .unwrap();
     manager.clear_active_turn(&first_session);
 
-    let second_session = manager.create_session().await?;
+    let second_session = manager.create_session().await.unwrap();
     let inherited = manager
         .list_sessions()
-        .await?
+        .await
+        .unwrap()
         .into_iter()
         .find(|session| session.id == second_session)
         .unwrap();
@@ -480,21 +535,21 @@ async fn new_sessions_inherit_last_used_profile_after_turn_starts() -> Result<()
     assert_eq!(inherited.selected_profile_id.as_deref(), Some("coding"));
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn prepare_start_stream_fails_when_no_profile_is_selected() -> Result<()> {
+async fn prepare_start_stream_fails_when_no_profile_is_selected() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let mut session = manager
         .session_store
         .get(&session_id)
-        .await?
+        .await
+        .unwrap()
         .expect("session should exist");
     session.selected_profile_id = None;
-    manager.session_store.save(&session).await?;
+    manager.session_store.save(&session).await.unwrap();
     let error = manager
         .prepare_start_stream(
             &session_id,
@@ -509,14 +564,13 @@ async fn prepare_start_stream_fails_when_no_profile_is_selected() -> Result<()> 
     assert!(error.to_string().contains("No profile selected"));
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn undo_last_user_message_rewinds_tip_and_returns_message_content() -> Result<()> {
+async fn undo_last_user_message_rewinds_tip_and_returns_message_content() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let first_user = manager
         .add_message(
             &session_id,
@@ -524,7 +578,8 @@ async fn undo_last_user_message_rewinds_tip_and_returns_message_content() -> Res
             String::from("first").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
     let second_user = manager
         .add_message(
             &session_id,
@@ -532,7 +587,8 @@ async fn undo_last_user_message_rewinds_tip_and_returns_message_content() -> Res
             String::from("second").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
     let assistant = manager
         .add_message(
             &session_id,
@@ -540,35 +596,36 @@ async fn undo_last_user_message_rewinds_tip_and_returns_message_content() -> Res
             String::from("reply").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
 
-    assert_eq!(manager.get_tip(&session_id).await?, Some(assistant));
+    assert_eq!(manager.get_tip(&session_id).await.unwrap(), Some(assistant));
 
-    let restored = manager.undo_last_user_message(&session_id).await?;
+    let restored = manager.undo_last_user_message(&session_id).await.unwrap();
 
     assert_eq!(restored, Some("second".into()));
     assert_eq!(
-        manager.get_tip(&session_id).await?,
+        manager.get_tip(&session_id).await.unwrap(),
         Some(first_user.clone())
     );
 
-    let history = manager.get_chat_history(&session_id).await?;
+    let history = manager.get_chat_history(&session_id).await.unwrap();
     assert!(history.contains_key(&first_user));
     assert!(!history.contains_key(&second_user));
     assert_eq!(history.len(), 1);
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result<()> {
+async fn start_stream_failure_rolls_tip_back_to_last_durable_message() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     manager
         .set_session_profile(&session_id, String::from("coding-no-sandbox"))
-        .await?;
+        .await
+        .unwrap();
     manager
         .add_message(
             &session_id,
@@ -576,7 +633,8 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
             String::from("hello").into(),
             None,
         )
-        .await?;
+        .await
+        .unwrap();
 
     let request = manager
         .prepare_start_stream(
@@ -586,7 +644,8 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     let result = ProviderManager::new()
         .generate_reply_stream(
             request.provider_id,
@@ -596,10 +655,13 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
         )
         .await;
     assert!(result.is_err());
-    manager.abort_streaming_message(&request.message_id).await?;
+    manager
+        .abort_streaming_message(&request.message_id)
+        .await
+        .unwrap();
 
-    let tip = manager.get_tip(&session_id).await?;
-    let history = manager.get_chat_history(&session_id).await?;
+    let tip = manager.get_tip(&session_id).await.unwrap();
+    let history = manager.get_chat_history(&session_id).await.unwrap();
     let latest_user_message = history
         .values()
         .find(|message| {
@@ -616,14 +678,13 @@ async fn start_stream_failure_rolls_tip_back_to_last_durable_message() -> Result
     );
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn loading_is_passive_and_owned_recovery_restores_interrupted_stream() -> Result<()> {
+async fn loading_is_passive_and_owned_recovery_restores_interrupted_stream() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -632,22 +693,24 @@ async fn loading_is_passive_and_owned_recovery_restores_interrupted_stream() -> 
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
 
     // Simulate process loss: the in-memory active-stream map vanishes, while the
     // persisted session still points at the durable streaming placeholder.
     manager.streaming_messages.write().await.clear();
 
-    assert!(manager.prepare_session(&session_id).await?);
+    assert!(manager.prepare_session(&session_id).await.unwrap());
     assert_eq!(
-        manager.get_tip(&session_id).await?,
+        manager.get_tip(&session_id).await.unwrap(),
         Some(request.message_id.clone())
     );
     manager
-        .recover_interrupted_stream(manager.require_session(&session_id).await?)
-        .await?;
+        .recover_interrupted_stream(manager.require_session(&session_id).await.unwrap())
+        .await
+        .unwrap();
 
-    let history = manager.get_chat_history(&session_id).await?;
+    let history = manager.get_chat_history(&session_id).await.unwrap();
     assert_eq!(history.len(), 1);
     let user_message = history
         .values()
@@ -657,26 +720,26 @@ async fn loading_is_passive_and_owned_recovery_restores_interrupted_stream() -> 
         })
         .expect("persisted user message");
     assert_eq!(
-        manager.get_tip(&session_id).await?,
+        manager.get_tip(&session_id).await.unwrap(),
         Some(user_message.id.clone())
     );
     assert!(
         manager
             .message_store
             .get(&request.message_id)
-            .await?
+            .await
+            .unwrap()
             .is_none()
     );
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn loading_active_session_does_not_recover_live_stream() -> Result<()> {
+async fn loading_active_session_does_not_recover_live_stream() {
     let (manager, data_dir) = test_manager().await;
 
-    let session_id = manager.create_session().await?;
+    let session_id = manager.create_session().await.unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,
@@ -685,15 +748,15 @@ async fn loading_active_session_does_not_recover_live_stream() -> Result<()> {
             ProviderId::new("mock"),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
 
-    assert!(manager.prepare_session(&session_id).await?);
+    assert!(manager.prepare_session(&session_id).await.unwrap());
     assert_eq!(
-        manager.get_tip(&session_id).await?,
+        manager.get_tip(&session_id).await.unwrap(),
         Some(request.message_id)
     );
     assert!(manager.session_has_active_stream(&session_id).await);
 
     cleanup_dir(data_dir).await;
-    Ok(())
 }

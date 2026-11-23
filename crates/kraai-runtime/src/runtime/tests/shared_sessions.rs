@@ -48,8 +48,7 @@ impl Provider for ControlledProvider {
 }
 
 #[tokio::test]
-async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_completion()
--> Result<()> {
+async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_completion() {
     let (sender, receiver) = mpsc::unbounded_channel();
     let mut providers = ProviderManager::new();
     providers.register_provider(
@@ -64,10 +63,24 @@ async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_com
         owner.data_dir.clone(),
     )
     .await;
-    let session = create_session_with_profile(&owner.handle, "test-profile").await?;
-    assert!(observer.handle.load_session(session.clone()).await?);
-    assert!(!owner.runtime.session_store.owns_turn(&session).await?);
-    assert!(!observer.runtime.session_store.owns_turn(&session).await?);
+    let session = create_session_with_profile(&owner.handle, "test-profile").await;
+    assert!(observer.handle.load_session(session.clone()).await.unwrap());
+    assert!(
+        !owner
+            .runtime
+            .session_store
+            .owns_turn(&session)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !observer
+            .runtime
+            .session_store
+            .owns_turn(&session)
+            .await
+            .unwrap()
+    );
     owner
         .handle
         .send_message(
@@ -77,12 +90,15 @@ async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_com
             "mock".into(),
             Default::default(),
         )
-        .await?;
-    sender.send(Ok(ProviderStreamEvent::TextDelta {
-        item_id: "text".into(),
-        phase: AssistantPhase::FinalAnswer,
-        delta: "partial".into(),
-    }))?;
+        .await
+        .unwrap();
+    sender
+        .send(Ok(ProviderStreamEvent::TextDelta {
+            item_id: "text".into(),
+            phase: AssistantPhase::FinalAnswer,
+            delta: "partial".into(),
+        }))
+        .unwrap();
     observer.events.wait_for("observer update", |events| events.iter().any(|event| matches!(event, Event::HistoryUpdated { session_id } if session_id == &session))).await;
     let snapshot = hang_guard(async {
         loop {
@@ -100,10 +116,12 @@ async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_com
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
-    .await??;
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(snapshot.activity, SessionActivity::Streaming);
     assert!(snapshot.session.is_running);
-    let before = serde_json::to_value(&snapshot.history)?;
+    let before = serde_json::to_value(&snapshot.history).unwrap();
     assert!(
         observer
             .handle
@@ -132,22 +150,37 @@ async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_com
             .is_err()
     );
     assert_eq!(
-        serde_json::to_value(observer.handle.get_chat_history(session.clone()).await?)?,
+        serde_json::to_value(observer.handle.get_chat_history(session.clone()).await).unwrap(),
         before
     );
     assert_eq!(
         observer
             .handle
             .get_session_snapshot(session.clone())
-            .await?
+            .await
+            .unwrap()
             .queued_messages,
         0
     );
-    assert!(observer.handle.load_session(session.clone()).await?);
-    assert!(owner.runtime.session_store.owns_turn(&session).await?);
+    assert!(observer.handle.load_session(session.clone()).await.unwrap());
+    assert!(
+        owner
+            .runtime
+            .session_store
+            .owns_turn(&session)
+            .await
+            .unwrap()
+    );
     drop(sender);
     owner.events.wait_for("owner completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id } if session_id == &session))).await;
-    assert!(!owner.runtime.session_store.owns_turn(&session).await?);
+    assert!(
+        !owner
+            .runtime
+            .session_store
+            .owns_turn(&session)
+            .await
+            .unwrap()
+    );
     observer
         .handle
         .send_message(
@@ -157,16 +190,23 @@ async fn observers_receive_live_text_reject_busy_submissions_and_claim_after_com
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     observer.events.wait_for("observer completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id } if session_id == &session))).await;
-    assert!(!observer.runtime.session_store.owns_turn(&session).await?);
+    assert!(
+        !observer
+            .runtime
+            .session_store
+            .owns_turn(&session)
+            .await
+            .unwrap()
+    );
     observer.shutdown().await;
     owner.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Result<()> {
+async fn queued_turn_claims_ownership_before_starting_the_next_request() {
     let (first_sender, first_receiver) = mpsc::unbounded_channel();
     let (second_sender, second_receiver) = mpsc::unbounded_channel();
     let mut providers = ProviderManager::new();
@@ -178,7 +218,7 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
     );
     let owner = RuntimeTestHarness::new_with_parts(providers).await;
     let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone()).await;
-    let session = create_session_with_profile(&owner.handle, "test-profile").await?;
+    let session = create_session_with_profile(&owner.handle, "test-profile").await;
     owner
         .handle
         .send_message(
@@ -188,7 +228,8 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     assert!(matches!(
         owner
             .handle
@@ -199,15 +240,18 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
                 "mock".into(),
                 Default::default(),
             )
-            .await?,
+            .await
+            .unwrap(),
         crate::SubmitMessageOutcome::Queued { .. }
     ));
     drop(first_sender);
-    second_sender.send(Ok(ProviderStreamEvent::TextDelta {
-        item_id: "second-text".into(),
-        phase: AssistantPhase::FinalAnswer,
-        delta: "second request is running".into(),
-    }))?;
+    second_sender
+        .send(Ok(ProviderStreamEvent::TextDelta {
+            item_id: "second-text".into(),
+            phase: AssistantPhase::FinalAnswer,
+            delta: "second request is running".into(),
+        }))
+        .unwrap();
     owner
         .events
         .wait_for("queued request", |events| {
@@ -216,7 +260,14 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
             })
         })
         .await;
-    assert!(owner.runtime.session_store.owns_turn(&session).await?);
+    assert!(
+        owner
+            .runtime
+            .session_store
+            .owns_turn(&session)
+            .await
+            .unwrap()
+    );
     assert!(
         observer
             .runtime
@@ -229,11 +280,10 @@ async fn queued_turn_claims_ownership_before_starting_the_next_request() -> Resu
     owner.events.wait_for("queued completion", |events| events.iter().filter(|event| matches!(event, Event::TurnCompleted { session_id } if session_id == &session)).count() == 2).await;
     observer.shutdown().await;
     owner.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn failed_intercepted_continuation_releases_ownership_and_preserves_input() -> Result<()> {
+async fn failed_intercepted_continuation_releases_ownership_and_preserves_input() {
     let (sender, receiver) = mpsc::unbounded_channel();
     let mut providers = ProviderManager::new();
     providers.register_provider(
@@ -244,7 +294,7 @@ async fn failed_intercepted_continuation_releases_ownership_and_preserves_input(
     );
     let owner = RuntimeTestHarness::new_with_parts(providers).await;
     let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone()).await;
-    let session = create_session_with_profile(&owner.handle, "test-profile").await?;
+    let session = create_session_with_profile(&owner.handle, "test-profile").await;
     owner
         .handle
         .send_message(
@@ -254,7 +304,8 @@ async fn failed_intercepted_continuation_releases_ownership_and_preserves_input(
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     owner
         .handle
         .send_message(
@@ -264,29 +315,47 @@ async fn failed_intercepted_continuation_releases_ownership_and_preserves_input(
             "mock".into(),
             Default::default(),
         )
-        .await?;
-    tokio::fs::write(owner.data_dir.join("AGENTS.md"), [0xff]).await?;
-    sender.send(Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
-        call_id: kraai_types::ToolCallId::new("call"),
-        name: "kraai_nushell".into(),
-        input: "# timeout=30sec permissions=workspace-write\nprint hello".into(),
-        arguments_error: None,
-        rewrite: None,
-    })))?;
+        .await
+        .unwrap();
+    tokio::fs::write(owner.data_dir.join("AGENTS.md"), [0xff])
+        .await
+        .unwrap();
+    sender
+        .send(Ok(ProviderStreamEvent::ScriptCall(ScriptCall {
+            call_id: kraai_types::ToolCallId::new("call"),
+            name: "kraai_nushell".into(),
+            input: "# timeout=30sec permissions=workspace-write\nprint hello".into(),
+            arguments_error: None,
+            rewrite: None,
+        })))
+        .unwrap();
     drop(sender);
     owner.events.wait_for("approval", |events| events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id, .. } if session_id == &session))).await;
     let pending = owner
         .handle
         .get_pending_script(session.clone())
-        .await?
+        .await
+        .unwrap()
         .expect("pending approval");
     owner
         .handle
         .deny_script(session.clone(), pending.execution_id)
-        .await?;
+        .await
+        .unwrap();
     owner.events.wait_for("continuation failure", |events| events.iter().any(|event| matches!(event, Event::ContinuationFailed { session_id, .. } if session_id == &session))).await;
-    assert!(!owner.runtime.session_store.owns_turn(&session).await?);
-    let snapshot = owner.handle.get_session_snapshot(session.clone()).await?;
+    assert!(
+        !owner
+            .runtime
+            .session_store
+            .owns_turn(&session)
+            .await
+            .unwrap()
+    );
+    let snapshot = owner
+        .handle
+        .get_session_snapshot(session.clone())
+        .await
+        .unwrap();
     assert!(!snapshot.session.is_running);
     assert!(!snapshot.session.profile_locked);
     assert_eq!(snapshot.queued_messages, 1);
@@ -296,19 +365,24 @@ async fn failed_intercepted_continuation_releases_ownership_and_preserves_input(
             .values()
             .any(|message| message.display_text() == "preserve this message")
     );
-    observer.runtime.session_store.claim_turn(&session).await?;
+    observer
+        .runtime
+        .session_store
+        .claim_turn(&session)
+        .await
+        .unwrap();
     observer
         .runtime
         .session_store
         .release_turn(&session)
-        .await?;
+        .await
+        .unwrap();
     observer.shutdown().await;
     owner.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn delayed_lease_cancellation_does_not_cancel_a_replacement_turn() -> Result<()> {
+async fn delayed_lease_cancellation_does_not_cancel_a_replacement_turn() {
     let (sender, receiver) = mpsc::unbounded_channel();
     let mut providers = ProviderManager::new();
     providers.register_provider(
@@ -318,15 +392,15 @@ async fn delayed_lease_cancellation_does_not_cancel_a_replacement_turn() -> Resu
         }),
     );
     let owner = RuntimeTestHarness::new_with_parts(providers).await;
-    let session = create_session_with_profile(&owner.handle, "test-profile").await?;
+    let session = create_session_with_profile(&owner.handle, "test-profile").await;
     let store = &owner.runtime.session_store;
-    store.claim_turn(&session).await?;
+    store.claim_turn(&session).await.unwrap();
     let (_, stale_token) = store
         .owned_turns()
         .into_iter()
         .find(|(id, _)| id == &session)
         .expect("owned session");
-    store.release_turn(&session).await?;
+    store.release_turn(&session).await.unwrap();
     owner
         .handle
         .send_message(
@@ -336,26 +410,32 @@ async fn delayed_lease_cancellation_does_not_cancel_a_replacement_turn() -> Resu
             "mock".into(),
             Default::default(),
         )
-        .await?;
-    assert!(!super::harness::cancel_if_lease_matches(&owner.runtime, &session, stale_token).await?);
-    assert!(owner.runtime.session_store.owns_turn(&session).await?);
+        .await
+        .unwrap();
+    assert!(!super::harness::cancel_if_lease_matches(&owner.runtime, &session, stale_token).await);
+    assert!(
+        owner
+            .runtime
+            .session_store
+            .owns_turn(&session)
+            .await
+            .unwrap()
+    );
     assert!(owner.runtime.agent_manager.is_turn_active(&session));
     drop(sender);
     owner.events.wait_for("replacement completion", |events| events.iter().any(|event| matches!(event, Event::TurnCompleted { session_id, .. } if session_id == &session))).await;
     owner.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manager_lock()
--> Result<()> {
+async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manager_lock() {
     let owner = RuntimeTestHarness::new(vec![vec![ScriptedChunk::native_call(
         "call",
         "# timeout=30sec permissions=workspace-write\nprint hello",
     )]])
     .await;
     let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone()).await;
-    let session = create_session_with_profile(&owner.handle, "test-profile").await?;
+    let session = create_session_with_profile(&owner.handle, "test-profile").await;
     owner
         .handle
         .send_message(
@@ -365,18 +445,21 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     owner.events.wait_for("approval", |events| events.iter().any(|event| matches!(event, Event::ScriptApprovalRequested { session_id, .. } if session_id == &session))).await;
     let snapshot = observer
         .handle
         .get_session_snapshot(session.clone())
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(snapshot.activity, SessionActivity::AwaitingApproval);
     assert!(snapshot.profiles.profile_locked);
     let pending = owner
         .handle
         .get_pending_script(session.clone())
-        .await?
+        .await
+        .unwrap()
         .expect("approval");
     assert!(
         observer
@@ -391,13 +474,15 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
                 .runtime
                 .execution_store
                 .mark_running(&ScriptExecutionId::new(&pending.execution_id))
-                .await?;
+                .await
+                .unwrap();
         }
         let before = owner
             .runtime
             .session_store
             .observe(&session)
-            .await?
+            .await
+            .unwrap()
             .expect("lease");
         hang_guard(async {
             loop {
@@ -413,7 +498,9 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
         })
-        .await??;
+        .await
+        .unwrap()
+        .unwrap();
         assert!(
             observer
                 .runtime
@@ -438,15 +525,15 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
                 stderr: Vec::new(),
             },
         )
-        .await?;
+        .await
+        .unwrap();
     owner.runtime.finish_turn(&session).await;
     observer.shutdown().await;
     owner.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn observers_follow_the_owners_turn_timer() -> Result<()> {
+async fn observers_follow_the_owners_turn_timer() {
     let (sender, receiver) = mpsc::unbounded_channel();
     let mut providers = ProviderManager::new();
     providers.register_provider(
@@ -457,8 +544,8 @@ async fn observers_follow_the_owners_turn_timer() -> Result<()> {
     );
     let owner = RuntimeTestHarness::new_with_parts(providers).await;
     let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone()).await;
-    let session = create_session_with_profile(&owner.handle, "test-profile").await?;
-    assert!(observer.handle.load_session(session.clone()).await?);
+    let session = create_session_with_profile(&owner.handle, "test-profile").await;
+    assert!(observer.handle.load_session(session.clone()).await.unwrap());
     let timer_of = |events: &[Event], running: bool| {
         events.iter().any(|event| {
             matches!(event, Event::TurnTimingChanged { session_id, timer }
@@ -477,7 +564,8 @@ async fn observers_follow_the_owners_turn_timer() -> Result<()> {
             "mock".into(),
             Default::default(),
         )
-        .await?;
+        .await
+        .unwrap();
     observer
         .events
         .wait_for("running timer", |events| timer_of(events, true))
@@ -485,7 +573,8 @@ async fn observers_follow_the_owners_turn_timer() -> Result<()> {
     let running = observer
         .handle
         .get_session_snapshot(session.clone())
-        .await?
+        .await
+        .unwrap()
         .turn_timer;
     assert!(running.elapsed(std::time::Instant::now()).is_some());
 
@@ -497,11 +586,11 @@ async fn observers_follow_the_owners_turn_timer() -> Result<()> {
     let finished = observer
         .handle
         .get_session_snapshot(session.clone())
-        .await?
+        .await
+        .unwrap()
         .turn_timer;
     assert!(finished.elapsed(std::time::Instant::now()).is_none());
     assert!(finished.last_duration().is_some());
     observer.shutdown().await;
     owner.shutdown().await;
-    Ok(())
 }

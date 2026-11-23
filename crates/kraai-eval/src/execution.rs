@@ -165,7 +165,7 @@ pub(crate) fn execute(execution: Execution<'_>) -> Result<RunResult> {
         );
     }
     let runner_outcome = run_sandboxed(SandboxRequest {
-        command: runner_command.clone(),
+        command: runner_command,
         workspace: agent_workspace.clone(),
         timeout: Duration::from_secs(task.runner.timeout_seconds),
         network: task.runner.network.clone(),
