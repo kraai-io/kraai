@@ -154,6 +154,8 @@ fn leaves_nushell_and_ambiguous_bash_alone() {
         "false && echo unexpected",
         "[ -d build ] && rm -rf build",
         "{ ls; } && pwd",
+        "$ready && make",
+        "'x' && make",
         "print $undefined_lowercase",
     ] {
         assert_eq!(rewrite(input), None, "{input}");

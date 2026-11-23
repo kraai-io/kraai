@@ -159,7 +159,10 @@ impl Scan<'_> {
     fn runs_a_command(&self, tokens: &[&Token]) -> bool {
         tokens.first().is_some_and(|first| {
             let bytes = self.bytes(first.span);
-            !matches!(bytes.first(), Some(b'[' | b'{')) && bytes != b"false"
+            bytes.first().is_some_and(|byte| {
+                byte.is_ascii_alphabetic()
+                    || matches!(byte, b'^' | b'.' | b'/' | b'_' | b'~' | b'(')
+            }) && bytes != b"false"
         })
     }
 
