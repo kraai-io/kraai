@@ -30,10 +30,6 @@ pub struct SessionSnapshotData {
 }
 
 impl AgentManager {
-    pub fn request_usage_store(&self) -> Arc<dyn kraai_persistence::RequestUsageStore> {
-        self.usage_store.clone()
-    }
-
     pub async fn capture_session_snapshot(
         &self,
         session_id: &SessionId,

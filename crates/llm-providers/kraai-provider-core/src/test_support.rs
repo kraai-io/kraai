@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use color_eyre::Result;
 use futures::{StreamExt, stream::BoxStream};
 use kraai_types::{AssistantPhase, ModelId, ProviderId};
@@ -14,9 +12,6 @@ use crate::stream::ProviderStreamEvent;
 pub(crate) struct MockProvider {
     id: ProviderId,
     models: Vec<Model>,
-    reply_count: AtomicUsize,
-    pub(crate) warming: Option<crate::CacheWarmingPolicy>,
-    pub(crate) usage: Option<kraai_types::TokenUsage>,
 }
 
 impl MockProvider {
@@ -31,9 +26,6 @@ impl MockProvider {
                 max_output: None,
                 options: Vec::new(),
             }],
-            reply_count: AtomicUsize::new(0),
-            warming: None,
-            usage: None,
         }
     }
 }
@@ -52,31 +44,23 @@ impl Provider for MockProvider {
         Ok(())
     }
 
-    fn cache_warming_policy(&self, _model_id: &ModelId) -> Option<crate::CacheWarmingPolicy> {
-        self.warming
-    }
-
     async fn generate_reply_stream(
         &self,
         _model_id: &ModelId,
         request: ProviderRequest,
         _request_context: &ProviderRequestContext,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent>>> {
-        self.reply_count.fetch_add(1, Ordering::SeqCst);
         let last_content = request
             .messages
             .last()
             .map(kraai_types::ConversationItem::display_text)
             .unwrap_or_default();
         let response = format!("Streamed response to: {last_content}");
-        let mut events = vec![Ok(ProviderStreamEvent::TextDelta {
+        let events = vec![Ok(ProviderStreamEvent::TextDelta {
             item_id: String::from("mock-message"),
             phase: AssistantPhase::FinalAnswer,
             delta: response,
         })];
-        if let Some(usage) = &self.usage {
-            events.push(Ok(ProviderStreamEvent::Usage(usage.clone())));
-        }
         Ok(futures::stream::iter(events).boxed())
     }
 }

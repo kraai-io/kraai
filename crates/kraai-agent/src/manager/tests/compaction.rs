@@ -98,7 +98,6 @@ async fn compaction_restart_selects_latest_ancestor_and_refreshes_system_context
         let pending = built.compact_first.then_some(());
         let request = built.request;
         assert!(pending.is_none());
-        assert_eq!(request.cacheable_messages, None);
         assert_eq!(request.messages.len(), 3);
         assert_eq!(
             request.messages.first(),

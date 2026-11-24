@@ -104,7 +104,7 @@ impl StreamReader {
         );
         let mut compaction = context_compaction.map(|compaction| {
             compaction
-                .observe_usage(self.barrier.clone(), on_auxiliary_usage.clone())
+                .observe_usage(self.barrier.clone(), on_auxiliary_usage)
                 .with_image_resolver(self.image_resolver())
         });
         let provider_request = match compaction.take_if(|_| compact_first) {
@@ -120,13 +120,6 @@ impl StreamReader {
             None => provider_request,
         };
         log_file_contexts(&self.session_id, &message_id, &provider_request);
-        self.warm_cache(
-            &provider_id,
-            &model_id,
-            &provider_request,
-            on_auxiliary_usage,
-        )
-        .await;
         if let Err(error) = self.record_request_started(&message_id).await {
             return StreamDriveResult::FailedToStart { error };
         }
@@ -199,46 +192,6 @@ impl StreamReader {
                 self.notify(String::from("Conversation context compaction failed."));
                 Err(format!("{error:#}"))
             }
-        }
-    }
-
-    async fn warm_cache(
-        &self,
-        provider_id: &ProviderId,
-        model_id: &ModelId,
-        provider_request: &ProviderRequest,
-        on_auxiliary_usage: Arc<dyn Fn(kraai_types::RequestUsage) + Send + Sync>,
-    ) {
-        let warmup = match self.providers.prepare_cache_warmup(
-            provider_id,
-            model_id,
-            self.session_id.as_str(),
-            provider_request,
-        ) {
-            Ok(Some(warmup)) => warmup,
-            Ok(None) => return,
-            Err(error) => {
-                tracing::warn!(error = %format!("{error:#}"), "Cache warming failed; continuing with the conversation");
-                return;
-            }
-        };
-        let recorder = kraai_agent::AuxiliaryUsageRecorder {
-            store: self.agent_manager.request_usage_store(),
-            session_id: self.session_id.clone(),
-            barrier: Some(self.barrier.clone()),
-            on_usage: Some(on_auxiliary_usage),
-        };
-        if let Err(error) = super::cache_warming::warm_cache(
-            &self.providers,
-            provider_id,
-            model_id,
-            warmup,
-            recorder,
-            self.image_resolver(),
-        )
-        .await
-        {
-            tracing::warn!(error = %format!("{error:#}"), "Cache warming failed; continuing with the conversation");
         }
     }
 

@@ -174,7 +174,6 @@ async fn generate_reply_stream_forwards_retry_observer_to_http_retry_layer() {
         .generate_reply_stream(
             &ModelId::new("gpt-4.1-mini"),
             ProviderRequest {
-                cacheable_messages: None,
                 options: Default::default(),
                 messages: vec![kraai_types::ConversationItem::User {
                     content: String::from("hello").into(),
@@ -232,7 +231,6 @@ async fn successful_http_status_does_not_hide_a_streamed_provider_failure() {
         .generate_reply_stream(
             &ModelId::new("fixture-model"),
             ProviderRequest {
-                cacheable_messages: None,
                 options: Default::default(),
                 messages: vec![kraai_types::ConversationItem::User {
                     content: String::from("hello").into(),
@@ -360,7 +358,6 @@ async fn discovery_requires_advertised_reasoning_and_applies_native_modes_to_htt
     let make_request = |options| ProviderRequest {
         messages: Vec::new(),
         script_tool: None,
-        cacheable_messages: None,
         options,
     };
     assert!(
@@ -433,7 +430,6 @@ async fn supported_reasoning_levels_preserve_explicit_descriptors_and_generic_to
     let make_request = |options| ProviderRequest {
         messages: Vec::new(),
         script_tool: None,
-        cacheable_messages: None,
         options,
     };
     for (model, effort) in [
@@ -550,7 +546,6 @@ async fn configured_reasoning_options_keep_unconditional_and_custom_conditions_a
     let make_request = |options| ProviderRequest {
         messages: Vec::new(),
         script_tool: None,
-        cacheable_messages: None,
         options,
     };
     for enabled in [true, false] {
@@ -665,7 +660,6 @@ async fn configured_custom_models_absent_from_discovery_apply_custom_settings() 
     let request = ProviderRequest {
         messages: Vec::new(),
         script_tool: None,
-        cacheable_messages: None,
         options: kraai_types::ModelOptionValues::from([(
             "custom-budget".into(),
             kraai_types::ModelOptionValue::Integer(4000),
@@ -712,7 +706,6 @@ async fn cache_hint_request_body(enabled: bool) -> serde_json::Value {
         .generate_reply_stream(
             &ModelId::new("fixture-model"),
             ProviderRequest {
-                cacheable_messages: None,
                 options: Default::default(),
                 messages: vec![
                     kraai_types::ConversationItem::System {

@@ -45,7 +45,7 @@ async fn request(manager: &AgentManager, session: &SessionId) -> ProviderRequest
         .get_model_history(&tip, (&provider, &model), false)
         .await
         .unwrap();
-    let request = manager
+    manager
         .build_model_context(
             session,
             history,
@@ -65,9 +65,7 @@ async fn request(manager: &AgentManager, session: &SessionId) -> ProviderRequest
         )
         .await
         .unwrap()
-        .request;
-    assert!(request.cacheable_messages.is_none());
-    request
+        .request
 }
 
 fn texts(request: &ProviderRequest) -> Vec<String> {

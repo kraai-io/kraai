@@ -37,7 +37,7 @@ impl RequestUsageStore for ControlledUsageStore {
 async fn rejected_usage_writes_leave_stream_state_unchanged_and_can_be_retried() {
     let (mut manager, data_dir) = test_manager().await;
     let store = Arc::new(ControlledUsageStore {
-        inner: manager.request_usage_store(),
+        inner: manager.usage_store.clone(),
         reject_writes: AtomicBool::new(true),
     });
     manager.usage_store = store.clone();

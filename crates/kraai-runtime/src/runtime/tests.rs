@@ -1,6 +1,5 @@
 mod assistant_text;
 mod basic;
-mod cache_warming;
 mod cancellation;
 mod client_sync;
 mod compaction;

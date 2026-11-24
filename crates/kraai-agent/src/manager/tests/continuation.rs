@@ -78,10 +78,6 @@ async fn explicit_continuation_matches_message_submission_after_restoring_sessio
         continuation.provider_request.script_tool,
         normal.provider_request.script_tool
     );
-    assert_eq!(
-        continuation.provider_request.cacheable_messages,
-        normal.provider_request.cacheable_messages
-    );
     cleanup_dir(data_dir).await;
 }
 
