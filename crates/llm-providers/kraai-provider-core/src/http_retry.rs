@@ -1,11 +1,11 @@
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use rand::RngExt;
-use reqwest::header::RETRY_AFTER;
-use reqwest::{Response, StatusCode};
+use reqwest::{Response, ResponseBuilderExt, StatusCode};
 use tracing::warn;
 
 use crate::ProviderError;
+use crate::rate_limit::RateLimit;
 use crate::request_context::{ProviderRequestContext, ProviderRetryEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,8 +16,8 @@ pub struct HttpRetryPolicy {
     /// Attempts must enforce their own timeout; one started within this budget may complete
     /// after it expires. Time spent waiting out rate limits does not count.
     pub max_elapsed: Duration,
-    /// Rate-limited attempts and the waits after them don't count toward `max_attempts` or
-    /// `max_elapsed`; this caps their total time instead.
+    /// Rate limits with a provider-given reset time, and the waits after them, don't count toward
+    /// `max_attempts` or `max_elapsed`; this caps their total time instead.
     pub max_rate_limit_wait: Duration,
 }
 
@@ -118,7 +118,18 @@ where
         match send().await {
             Ok(response) => {
                 let status = response.status();
-                let retry_after = parse_retry_after(&response);
+                let (response, rate_limit) = if status == StatusCode::TOO_MANY_REQUESTS {
+                    let (response, rate_limit) = buffer_rate_limit(response).await?;
+                    (response, Some(rate_limit))
+                } else {
+                    (response, None)
+                };
+                let retry_after = match rate_limit {
+                    Some(RateLimit::Exhausted) => return Ok(response),
+                    Some(RateLimit::ResetsIn(delay)) => Some(delay),
+                    Some(RateLimit::Unknown) => None,
+                    None => crate::rate_limit::retry_after(response.headers()),
+                };
                 if let (Some(cooldown), Some(retry_after)) =
                     (request_context.cooldown(), retry_after)
                     && matches!(
@@ -128,7 +139,7 @@ where
                 {
                     cooldown.defer(retry_after);
                 }
-                let is_rate_limit = status == StatusCode::TOO_MANY_REQUESTS;
+                let is_rate_limit = matches!(rate_limit, Some(RateLimit::ResetsIn(_)));
                 if is_rate_limit {
                     rate_limited += attempt_started.elapsed();
                 } else {
@@ -230,23 +241,20 @@ fn notify_retry(
     }
 }
 
-pub fn parse_retry_after(response: &Response) -> Option<Duration> {
-    let header = response.headers().get(RETRY_AFTER)?;
-    let raw = header.to_str().ok()?.trim();
-    if raw.is_empty() {
-        return None;
-    }
-
-    if let Ok(seconds) = raw.parse::<u64>() {
-        return Some(Duration::from_secs(seconds));
-    }
-
-    let retry_at = httpdate::parse_http_date(raw).ok()?;
-    Some(
-        retry_at
-            .duration_since(SystemTime::now())
-            .unwrap_or(Duration::ZERO),
-    )
+async fn buffer_rate_limit(response: Response) -> color_eyre::Result<(Response, RateLimit)> {
+    let status = response.status();
+    let version = response.version();
+    let headers = response.headers().clone();
+    let url = response.url().clone();
+    let body = crate::read_error_body(response).await;
+    let rate_limit = crate::rate_limit::classify(&headers, &body);
+    let mut rebuilt = http::Response::builder()
+        .status(status)
+        .version(version)
+        .url(url)
+        .body(body)?;
+    *rebuilt.headers_mut() = headers;
+    Ok((Response::from(rebuilt), rate_limit))
 }
 
 fn is_retryable_status(status: StatusCode) -> bool {

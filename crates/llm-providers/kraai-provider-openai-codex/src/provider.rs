@@ -542,7 +542,7 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
     }
 
     let url = response.url().to_string();
-    let retry_after = kraai_provider_core::parse_retry_after(&response);
+    let headers = response.headers().clone();
     let body = kraai_provider_core::read_error_body(response).await;
     error!(
         operation,
@@ -563,7 +563,7 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
     }
     Err(kraai_provider_core::ProviderError::from_body(
         status,
-        retry_after,
+        &headers,
         &body,
         format!("OpenAI Codex {operation} failed with status {status} at {url}: {body}"),
     )

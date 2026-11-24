@@ -469,10 +469,10 @@ async fn stops_after_max_attempts() {
 }
 
 #[tokio::test]
-async fn rate_limits_retry_past_the_attempt_and_elapsed_limits() {
+async fn rate_limits_with_a_reset_retry_past_the_attempt_and_elapsed_limits() {
     let rate_limited = || ScriptedResponse::Status {
         status_line: "429 Too Many Requests",
-        headers: Vec::new(),
+        headers: vec![("Retry-After", String::from("0"))],
         body: "slow down",
     };
     let url = spawn_server(vec![
@@ -549,7 +549,7 @@ async fn returns_rate_limit_once_waits_exceed_the_rate_limit_budget() {
 async fn zero_delay_rate_limits_stop_at_the_rate_limit_budget() {
     let url = spawn_server(vec![ScriptedResponse::Status {
         status_line: "429 Too Many Requests",
-        headers: Vec::new(),
+        headers: vec![("Retry-After", String::from("0"))],
         body: "slow down",
     }])
     .await;
@@ -577,12 +577,142 @@ async fn zero_delay_rate_limits_stop_at_the_rate_limit_budget() {
 }
 
 #[tokio::test]
+async fn rate_limits_without_a_reset_count_toward_the_attempt_limit() {
+    let rate_limited = || ScriptedResponse::Status {
+        status_line: "429 Too Many Requests",
+        headers: Vec::new(),
+        body: "slow down",
+    };
+    let url = spawn_server(vec![rate_limited(), rate_limited(), rate_limited()]).await;
+    let policy = HttpRetryPolicy {
+        max_attempts: 2,
+        ..test_policy()
+    };
+    let collector = Arc::new(RetryCollector::default());
+    let client = reqwest::Client::builder().build().unwrap();
+
+    let response = send_with_retry(
+        "test",
+        &policy,
+        &ProviderRequestContext::with_retry_observer(collector.clone()),
+        || client.get(&url).send(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.text().await.unwrap(), "slow down");
+    assert_eq!(collector.snapshot().len(), 1);
+}
+
+#[tokio::test]
+async fn exhausted_quota_fails_without_retrying() {
+    let body = r#"{"error":{"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}"#;
+    let url = spawn_server(vec![ScriptedResponse::Status {
+        status_line: "429 Too Many Requests",
+        headers: vec![("Retry-After", String::from("0"))],
+        body,
+    }])
+    .await;
+    let collector = Arc::new(RetryCollector::default());
+    let client = reqwest::Client::builder().build().unwrap();
+
+    let response = send_with_retry(
+        "test",
+        &test_policy(),
+        &ProviderRequestContext::with_retry_observer(collector.clone()),
+        || client.get(&url).send(),
+    )
+    .await
+    .unwrap();
+
+    assert!(collector.snapshot().is_empty());
+    let error = ProviderError::from_response("OpenAI", "responses", response).await;
+    assert!(matches!(error, ProviderError::QuotaExhausted(_)), "{error}");
+    assert!(!error.is_transient());
+    assert!(error.to_string().contains(body), "{error}");
+}
+
+#[tokio::test]
+async fn usage_limits_wait_for_a_reset_within_the_budget() {
+    let url = spawn_server(vec![
+        ScriptedResponse::Status {
+            status_line: "429 Too Many Requests",
+            headers: Vec::new(),
+            body: r#"{"error":{"type":"usage_limit_reached","resets_at":1}}"#,
+        },
+        ScriptedResponse::Status {
+            status_line: "200 OK",
+            headers: Vec::new(),
+            body: "ok",
+        },
+    ])
+    .await;
+    let policy = HttpRetryPolicy {
+        max_attempts: 1,
+        ..test_policy()
+    };
+    let collector = Arc::new(RetryCollector::default());
+    let client = reqwest::Client::builder().build().unwrap();
+
+    let response = send_with_retry(
+        "responses",
+        &policy,
+        &ProviderRequestContext::with_retry_observer(collector.clone()),
+        || client.get(&url).send(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let events = collector.snapshot();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events.first().unwrap().reason, "HTTP 429 Too Many Requests");
+}
+
+#[tokio::test]
+async fn usage_limits_beyond_the_budget_fail_at_once_with_their_reset() {
+    let url = spawn_server(vec![ScriptedResponse::Status {
+        status_line: "429 Too Many Requests",
+        headers: Vec::new(),
+        body: r#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","resets_in_seconds":7260}}"#,
+    }])
+    .await;
+    let cooldown = Arc::new(ProviderCooldown::default());
+    let collector = Arc::new(RetryCollector::default());
+    let context = ProviderRequestContext::with_retry_observer(collector.clone())
+        .with_cooldown(cooldown.clone());
+    let client = reqwest::Client::builder().build().unwrap();
+
+    let response = send_with_retry("responses", &test_policy(), &context, || {
+        client.get(&url).send()
+    })
+    .await
+    .unwrap();
+
+    assert!(collector.snapshot().is_empty());
+    assert!(cooldown.remaining() > Duration::from_secs(7200));
+    let error = ProviderError::from_response("OpenAI Codex", "responses", response).await;
+    assert!(
+        matches!(
+            error,
+            ProviderError::RateLimited {
+                retry_after: Some(delay),
+                ..
+            } if delay == Duration::from_secs(7260)
+        ),
+        "{error}"
+    );
+    assert!(error.to_string().ends_with("(resets in 2h 1m)"), "{error}");
+}
+
+#[tokio::test]
 async fn slow_rate_limited_responses_leave_the_error_budget_alone() {
     let url = spawn_server(vec![
         ScriptedResponse::DelayedStatus {
             delay: Duration::from_millis(400),
             status_line: "429 Too Many Requests",
-            headers: Vec::new(),
+            headers: vec![("Retry-After", String::from("0"))],
             body: "slow down",
         },
         ScriptedResponse::Status {
@@ -893,7 +1023,7 @@ fn statuses_classify_into_transient_and_permanent_failures() {
     assert!(matches!(
         ProviderError::from_body(
             StatusCode::BAD_REQUEST,
-            None,
+            &reqwest::header::HeaderMap::new(),
             r#"{"error":{"code":"context_length_exceeded"}}"#,
             String::new()
         ),
