@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use agent_client_protocol::{Result, v1::schema as acp};
-use kraai_runtime::{Event, PendingScriptInfo, RuntimeHandle, TurnOutcome};
+use kraai_runtime::{Event, PendingScriptInfo, RuntimeHandle, SubmitMessageOutcome, TurnOutcome};
 use kraai_types::{AssistantItem, ConversationItem, MessageId, ScriptCall, SessionId};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -32,20 +32,18 @@ pub(crate) async fn run(
     let id = crate::session::runtime_id(&request.session_id)?;
     let mut events = runtime.subscribe_session(&id);
     let model = crate::session::selected_model(runtime, &id).await?;
-    let prompt_start = runtime
-        .get_tip(id.clone())
-        .await
-        .map_err(error::runtime)?
-        .map(MessageId::new);
     if commands::is_undo(&request.prompt)? {
         commands::undo(runtime, &id, &connection).await?;
         return Ok(command_response());
     }
     let message = content::prompt(runtime, request.prompt).await?;
+    let Some(idle) = wait_until_idle(runtime, &id, &mut events, cancelled).await? else {
+        return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
+    };
     if cancelled.is_cancelled() {
         return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
     }
-    runtime
+    let outcome = runtime
         .send_content(
             id.clone(),
             message,
@@ -55,13 +53,68 @@ pub(crate) async fn run(
         )
         .await
         .map_err(error::runtime)?;
+    let stream = match outcome {
+        SubmitMessageOutcome::Started { message_id } => message_id,
+        SubmitMessageOutcome::Queued { .. } => {
+            return Err(error::invalid(
+                "Another turn started in this session first, so the prompt was queued behind it",
+            ));
+        }
+    };
+    let prompt_start = idle.session.tip_id.map(MessageId::new);
     finish_prompt(
         runtime,
         &mut events,
-        Output::new(id, connection, prompt_start),
+        Output::new(id, connection, prompt_start, stream),
         cancelled,
     )
     .await
+}
+
+async fn wait_until_idle(
+    runtime: &RuntimeHandle,
+    id: &SessionId,
+    events: &mut broadcast::Receiver<kraai_runtime::RuntimeEvent>,
+    cancelled: &CancellationToken,
+) -> Result<Option<kraai_runtime::SessionSnapshot>> {
+    loop {
+        let snapshot = runtime
+            .get_session_snapshot(id.clone())
+            .await
+            .map_err(error::runtime)?;
+        if !snapshot.session.is_running && snapshot.queued_messages == 0 {
+            return Ok(Some(snapshot));
+        }
+        loop {
+            let received = tokio::select! {
+                biased;
+                () = cancelled.cancelled() => return Ok(None),
+                received = events.recv() => received,
+            };
+            let event = match received {
+                Ok(event) => event,
+                Err(broadcast::error::RecvError::Lagged(_)) => break,
+                Err(broadcast::error::RecvError::Closed) => {
+                    return Err(error::internal("Runtime event stream interrupted: closed"));
+                }
+            };
+            if let Event::ServiceError { error } = event.event {
+                return Err(error::runtime(error));
+            }
+            if event.sequence > snapshot.event_sequence
+                && event.event.session_id() == Some(id)
+                && matches!(
+                    event.event,
+                    Event::SessionStateChanged {
+                        is_running: false,
+                        ..
+                    } | Event::HistoryUpdated { .. }
+                )
+            {
+                break;
+            }
+        }
+    }
 }
 
 async fn finish_prompt(
@@ -71,27 +124,15 @@ async fn finish_prompt(
     cancelled: &CancellationToken,
 ) -> Result<acp::PromptResponse> {
     let result = drive(runtime, events, &mut output, cancelled).await;
-    if cancelled.is_cancelled() || result.is_err() {
-        runtime
-            .cancel_turn(output.session_id.clone())
-            .await
-            .map_err(error::runtime)?;
-        loop {
-            match events.try_recv() {
-                Ok(event) => {
-                    if output.uncovered(&event) {
-                        output.event(runtime, event.event).await?;
-                    }
-                }
-                Err(broadcast::error::TryRecvError::Lagged(_)) => {
-                    output.resync(runtime).await?;
-                    break;
-                }
-                Err(broadcast::error::TryRecvError::Empty) => break,
-                Err(broadcast::error::TryRecvError::Closed) => {
-                    return Err(error::internal("Runtime event stream interrupted: closed"));
-                }
-            }
+    if !output.ended && (cancelled.is_cancelled() || result.is_err()) {
+        flush(runtime, events, &mut output).await?;
+        if !output.ended {
+            runtime
+                .cancel_stream(output.session_id.clone())
+                .await
+                .map_err(error::runtime)?;
+            output.cancel_sent = true;
+            flush(runtime, events, &mut output).await?;
         }
     }
     output.settle_retry(match result {
@@ -100,6 +141,67 @@ async fn finish_prompt(
     })?;
     let reason = result?;
     Ok(acp::PromptResponse::new(reason))
+}
+
+async fn flush(
+    runtime: &RuntimeHandle,
+    events: &mut broadcast::Receiver<kraai_runtime::RuntimeEvent>,
+    output: &mut Output,
+) -> Result<()> {
+    while !output.ended {
+        match events.try_recv() {
+            Ok(event) => {
+                if !output.accepts(&event) {
+                    continue;
+                }
+                match event.event {
+                    Event::TurnCompleted { .. }
+                    | Event::StreamCancelled { .. }
+                    | Event::StreamError { .. }
+                    | Event::ContinuationFailed { .. } => output.ended = true,
+                    Event::StreamStart { message_id, .. }
+                        if output.cancel_sent && message_id != output.stream =>
+                    {
+                        output.ended = true;
+                    }
+                    event @ (Event::ScriptPrepared { .. }
+                    | Event::ScriptStarted { .. }
+                    | Event::ScriptOutputTail { .. }
+                    | Event::RequestUsageUpdated { .. }
+                    | Event::TurnTimingChanged { .. }
+                    | Event::ConfigLoaded
+                    | Event::ModelsUpdated
+                    | Event::ServiceError { .. }
+                    | Event::SessionError { .. }
+                    | Event::StreamStart { .. }
+                    | Event::ItemStarted { .. }
+                    | Event::ItemDelta { .. }
+                    | Event::ReasoningDelta { .. }
+                    | Event::StreamComplete { .. }
+                    | Event::ProviderRetryScheduled { .. }
+                    | Event::StreamRestarted { .. }
+                    | Event::ScriptApprovalRequested { .. }
+                    | Event::ScriptResultReady { .. }
+                    | Event::ContextStateChanged { .. }
+                    | Event::SessionStateChanged { .. }
+                    | Event::MessageUpserted { .. }
+                    | Event::MessagesRemoved { .. }
+                    | Event::HistoryUpdated { .. }
+                    | Event::ProviderAuthUpdated { .. }
+                    | Event::McpAuthUpdated { .. }) => output.event(runtime, event).await?,
+                }
+            }
+            Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                output.resync(runtime).await?;
+                break;
+            }
+            Err(broadcast::error::TryRecvError::Empty) => break,
+            Err(broadcast::error::TryRecvError::Closed) => {
+                return Err(error::internal("Runtime event stream interrupted: closed"));
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn drive(
@@ -129,16 +231,23 @@ async fn drive(
         if let Event::ServiceError { error } = event.event {
             return Err(error::runtime(error));
         }
-        if !output.uncovered(&event) {
+        if !output.accepts(&event) {
             continue;
         }
         match event.event {
-            Event::TurnCompleted { .. } => return Ok(acp::StopReason::EndTurn),
+            Event::TurnCompleted { .. } => {
+                output.ended = true;
+                return Ok(acp::StopReason::EndTurn);
+            }
             Event::StreamError { error, .. } | Event::ContinuationFailed { error, .. } => {
+                output.ended = true;
                 return Err(error::internal(error));
             }
             Event::SessionError { error, .. } => return Err(error::runtime(error)),
-            Event::StreamCancelled { .. } => return Ok(acp::StopReason::Cancelled),
+            Event::StreamCancelled { .. } => {
+                output.ended = true;
+                return Ok(acp::StopReason::Cancelled);
+            }
             Event::HistoryUpdated { .. } => {
                 if let Some(reason) = output.catch_up(runtime, cancelled).await? {
                     return Ok(reason);
@@ -185,12 +294,21 @@ struct Output {
     announced: HashSet<String>,
     open: HashSet<String>,
     prompt_start: Option<MessageId>,
+    stream: String,
+    started: bool,
+    ended: bool,
+    cancel_sent: bool,
     covered: u64,
     retry: Option<String>,
 }
 
 impl Output {
-    fn new(session_id: SessionId, connection: Connection, prompt_start: Option<MessageId>) -> Self {
+    fn new(
+        session_id: SessionId,
+        connection: Connection,
+        prompt_start: Option<MessageId>,
+        stream: String,
+    ) -> Self {
         Self {
             id: acp::SessionId::new(session_id.to_string()),
             session_id,
@@ -201,13 +319,26 @@ impl Output {
             announced: HashSet::new(),
             open: HashSet::new(),
             prompt_start,
+            stream,
+            started: false,
+            ended: false,
+            cancel_sent: false,
             covered: 0,
             retry: None,
         }
     }
 
-    fn uncovered(&self, event: &kraai_runtime::RuntimeEvent) -> bool {
-        event.sequence > self.covered && event.event.session_id() == Some(&self.session_id)
+    fn accepts(&mut self, event: &kraai_runtime::RuntimeEvent) -> bool {
+        if event.sequence <= self.covered || event.event.session_id() != Some(&self.session_id) {
+            return false;
+        }
+        if !self.started {
+            self.started = matches!(
+                &event.event,
+                Event::StreamStart { message_id, .. } if *message_id == self.stream
+            );
+        }
+        self.started
     }
 
     fn prompt_messages<'a>(
@@ -437,6 +568,7 @@ impl Output {
             .await
             .map_err(error::runtime)?;
         self.covered = self.covered.max(snapshot.event_sequence);
+        self.started = true;
         for message in self.prompt_messages(&snapshot) {
             let id = message.id.to_string();
             match &message.content {
@@ -489,6 +621,7 @@ impl Output {
         if snapshot.session.is_running {
             return Ok(None);
         }
+        self.ended = true;
         match snapshot.turn_outcome {
             Some(TurnOutcome::Failed { error }) => Err(error::runtime(error)),
             Some(TurnOutcome::Cancelled) => Ok(Some(acp::StopReason::Cancelled)),
