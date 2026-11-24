@@ -199,3 +199,39 @@ async fn records_from_before_merged_calls_keep_their_bash_rewrites() {
     assert_eq!(old.rewrites.merged_calls, 0);
     fs::remove_dir_all(data_dir).await.unwrap();
 }
+
+#[tokio::test]
+async fn output_appends_leave_the_record_alone_and_require_a_running_execution() {
+    let data_dir = test_dir("output-record");
+    let id = ScriptExecutionId::new(Ulid::generate());
+    let store = SqliteScriptExecutionStore::new(&data_dir);
+    store.create(execution(&id)).await.unwrap();
+    let chunk = || vec![(ScriptOutputStream::Stdout, b"out".to_vec())];
+    assert!(store.append_output(&id, chunk()).await.is_err());
+    let running = store.mark_running(&id).await.unwrap();
+    store.append_output(&id, chunk()).await.unwrap();
+    assert_eq!(store.get(&id).await.unwrap(), Some(running));
+    assert!(
+        store
+            .append_output(&ScriptExecutionId::new(Ulid::generate()), chunk())
+            .await
+            .is_err()
+    );
+    store
+        .finish(
+            &id,
+            ScriptExecutionCompletion {
+                status: ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+                sandbox_denied: false,
+                error: None,
+                stdout: b"out".to_vec(),
+                stderr: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(store.append_output(&id, chunk()).await.is_err());
+    assert_eq!(store.read_output(&id).await.unwrap().stdout, b"out");
+    fs::remove_dir_all(data_dir).await.unwrap();
+}

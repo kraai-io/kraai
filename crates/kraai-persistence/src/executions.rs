@@ -1,11 +1,13 @@
-use crate::database::{Database, assert_owner, list_records, read_record, write_record};
+use crate::database::{
+    Database, assert_owner, list_records, parse_session_id, read_record, write_record,
+};
 use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_execution_types::{
     SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
     ScriptOutputStream, ScriptProfileSnapshot, ScriptRewrites,
 };
 use kraai_types::{MessageId, SessionId, ToolCallId};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -358,22 +360,39 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
         if chunks.is_empty() {
             return Ok(());
         }
-        self.update(id, move |connection, record| {
-            require_phase(record, &[ScriptExecutionPhase::Running])?;
-            let mut insert = connection.prepare_cached(
-                "INSERT INTO execution_output(execution_id, stream, bytes) VALUES (?1, ?2, ?3)",
-            )?;
-            for (stream, bytes) in chunks {
-                let stream = match stream {
-                    ScriptOutputStream::Stdout => "stdout",
-                    ScriptOutputStream::Stderr => "stderr",
-                };
-                insert.execute(params![record.id.as_str(), stream, bytes])?;
-            }
-            Ok(())
-        })
-        .await
-        .map(|_| ())
+        let id = id.to_string();
+        self.database
+            .transaction(move |transaction, leases| {
+                let (session, phase) = transaction
+                    .query_row(
+                        "SELECT session_id, json_extract(data, '$.phase') FROM records
+                         WHERE kind = 'execution' AND id = ?1",
+                        [&id],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .optional()?
+                    .ok_or_else(|| eyre!("Execution not found: {id}"))?;
+                assert_owner(transaction, leases, &parse_session_id(session)?)?;
+                let phase: ScriptExecutionPhase =
+                    serde_json::from_value(serde_json::Value::String(phase))?;
+                ensure!(
+                    phase == ScriptExecutionPhase::Running,
+                    "Execution {id} has status {phase:?}; expected one of {:?}",
+                    [ScriptExecutionPhase::Running]
+                );
+                let mut insert = transaction.prepare_cached(
+                    "INSERT INTO execution_output(execution_id, stream, bytes) VALUES (?1, ?2, ?3)",
+                )?;
+                for (stream, bytes) in chunks {
+                    let stream = match stream {
+                        ScriptOutputStream::Stdout => "stdout",
+                        ScriptOutputStream::Stderr => "stderr",
+                    };
+                    insert.execute(params![id, stream, bytes])?;
+                }
+                Ok(())
+            })
+            .await
     }
     async fn finish(
         &self,
