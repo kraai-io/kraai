@@ -445,6 +445,9 @@ impl App {
         if !self.runtime_bridge_connected {
             return RuntimeRequestDelivery::Disconnected;
         }
+        if !self.refreshes.start(&req) {
+            return RuntimeRequestDelivery::Delivered;
+        }
 
         if self.runtime_tx.send(req).is_ok() {
             return RuntimeRequestDelivery::Delivered;

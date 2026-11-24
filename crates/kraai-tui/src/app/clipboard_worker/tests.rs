@@ -1,4 +1,5 @@
-use super::super::{RuntimeRequest, runtime_bridge::route_requests};
+use super::super::RuntimeRequest;
+use super::super::runtime_bridge::{Lanes, route_requests};
 use super::*;
 use crossbeam_channel::unbounded;
 use kraai_types::SessionId;
@@ -6,7 +7,9 @@ use kraai_types::SessionId;
 #[test]
 fn clipboard_work_does_not_block_ordered_requests_and_rejects_queued_pastes() {
     let (requests, receiver) = unbounded();
-    let (ordered, ordinary) = unbounded();
+    let (queries, _queued) = unbounded();
+    let (model_lists, _fetches) = unbounded();
+    let (commands, ordinary) = unbounded();
     let (responses, results) = unbounded();
     let (entered, started) = bounded(1);
     let (release, released) = bounded(1);
@@ -25,8 +28,14 @@ fn clipboard_work_does_not_block_ordered_requests_and_rejects_queued_pastes() {
             byte_length: 1,
         }))
     });
-    let router =
-        std::thread::spawn(move || route_requests(receiver, ordered, |id| worker.submit(id)));
+    let router = std::thread::spawn(move || {
+        let lanes = Lanes {
+            queries,
+            model_lists,
+            commands,
+        };
+        route_requests(receiver, &lanes, |id| worker.submit(id))
+    });
     requests
         .send(RuntimeRequest::PasteImage { request_id: 1 })
         .unwrap();

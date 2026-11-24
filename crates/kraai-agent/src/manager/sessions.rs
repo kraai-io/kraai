@@ -250,29 +250,11 @@ impl AgentManager {
     }
 
     pub async fn list_user_input_history(&self, limit: usize) -> AgentResult<Vec<String>> {
-        let mut history = Vec::new();
-        if limit == 0 {
-            return Ok(history);
-        }
-        let in_flight = self.capture_in_flight_messages(None).await;
-        for session in self.session_store.list().await? {
-            let mut messages = HistoryCursor::new(self.message_store.as_ref(), session.tip_id)
-                .with_overlay(&in_flight);
-            while let Some(page) = messages.next_page().await? {
-                for message in page {
-                    if history.len() >= limit {
-                        return Ok(history);
-                    }
-                    if let ConversationItem::User { content } = &message.content {
-                        let content = content.text_only().trim().to_string();
-                        if !content.is_empty() {
-                            history.push(content);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(history)
+        Ok(self
+            .persistence
+            .sessions()
+            .recent_user_inputs(limit)
+            .await?)
     }
 
     pub async fn delete_session(&self, session_id: &SessionId) -> AgentResult<()> {

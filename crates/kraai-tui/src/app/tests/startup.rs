@@ -33,11 +33,37 @@ fn initial_config_and_lag_share_one_startup_batch_then_reloads_sync_again() {
     assert_startup_batch(&harness.drain_requests());
     assert_eq!(harness.app.startup_sync, StartupSync::Synchronizing);
     harness.app.handle_runtime_event(Event::ConfigLoaded);
-    assert_eq!(harness.drain_requests().len(), 5);
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [
+            RuntimeRequest::GetMcpAuthStatuses,
+            RuntimeRequest::ListModels,
+            RuntimeRequest::GetAgentProfileCatalog,
+        ]
+    ));
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Sessions(Ok(Vec::new())));
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::UserInputHistory(Ok(Vec::new())));
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [
+            RuntimeRequest::ListSessions,
+            RuntimeRequest::ListUserInputHistory { .. },
+        ]
+    ));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::StartupSyncComplete);
     assert_eq!(harness.app.startup_sync, StartupSync::Complete);
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Sessions(Ok(Vec::new())));
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::UserInputHistory(Ok(Vec::new())));
     harness.app.handle_runtime_event(Event::ConfigLoaded);
     assert_eq!(harness.drain_requests().len(), 5);
 }

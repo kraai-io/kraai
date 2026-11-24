@@ -43,6 +43,7 @@ mod model_sheet;
 mod palette;
 mod provider_config;
 mod providers_sheet;
+mod refreshes;
 mod runtime_bridge;
 mod runtime_events;
 mod runtime_responses;
@@ -108,6 +109,7 @@ pub struct App {
     last_statusline_animation_tick: Option<Instant>,
     last_runtime_event_sequence: u64,
     last_session_event_sequences: HashMap<SessionId, u64>,
+    refreshes: refreshes::Refreshes,
     session_snapshot_sequences: HashMap<SessionId, u64>,
     event_lag_session_resync_pending: bool,
     event_lag_script_resync_pending: bool,

@@ -69,6 +69,7 @@ impl App {
             last_statusline_animation_tick: None,
             last_runtime_event_sequence: 0,
             last_session_event_sequences: HashMap::new(),
+            refreshes: refreshes::Refreshes::default(),
             session_snapshot_sequences: HashMap::new(),
             event_lag_session_resync_pending: false,
             event_lag_script_resync_pending: false,

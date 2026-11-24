@@ -2,6 +2,12 @@ use super::*;
 
 impl App {
     pub(super) fn handle_runtime_response(&mut self, response: RuntimeResponse) {
+        let finished = self.refreshes.finish(&response);
+        self.apply_runtime_response(response);
+        self.continue_refresh(finished);
+    }
+
+    fn apply_runtime_response(&mut self, response: RuntimeResponse) {
         if let RuntimeResponse::ApproveScript {
             session_id,
             execution_id,

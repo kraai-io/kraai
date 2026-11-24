@@ -156,6 +156,11 @@ impl App {
                 session_id,
                 message,
             } => {
+                if matches!(message.content, kraai_types::ConversationItem::User { .. }) {
+                    self.request(RuntimeRequest::ListUserInputHistory {
+                        limit: INPUT_HISTORY_LIMIT,
+                    });
+                }
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.upsert_message(*message);
                 }
@@ -192,9 +197,6 @@ impl App {
             } => {
                 let message_id = MessageId::new(message_id);
                 self.mark_exit_usage_message_completed(message_id);
-                self.request(RuntimeRequest::ListUserInputHistory {
-                    limit: INPUT_HISTORY_LIMIT,
-                });
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     if apply_state {
                         self.state.is_streaming = false;

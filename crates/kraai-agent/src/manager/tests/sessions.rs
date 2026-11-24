@@ -371,6 +371,38 @@ async fn user_input_history_lists_persisted_user_messages_newest_first() {
 }
 
 #[tokio::test]
+async fn user_input_history_orders_sessions_by_message_age_and_skips_broken_chains() {
+    let (manager, data_dir) = test_manager().await;
+    let first = manager.create_session().await.unwrap();
+    let second = manager.create_session().await.unwrap();
+    let mut broken = None;
+    for (session_id, role, content) in [
+        (&first, ChatRole::User, "one"),
+        (&second, ChatRole::User, "two"),
+        (&first, ChatRole::Assistant, "reply"),
+        (&first, ChatRole::User, "   "),
+        (&second, ChatRole::User, "three"),
+    ] {
+        let id = manager
+            .add_message(session_id, role, content.into(), None)
+            .await
+            .unwrap();
+        broken.get_or_insert(id);
+    }
+    if let Some(broken) = broken {
+        super::common::corrupt_message(&data_dir, &broken, "{}");
+    }
+
+    assert_eq!(
+        manager.list_user_input_history(10).await.unwrap(),
+        ["three", "two"]
+    );
+    assert!(manager.list_user_input_history(0).await.unwrap().is_empty());
+
+    cleanup_dir(data_dir).await;
+}
+
+#[tokio::test]
 async fn later_user_messages_do_not_overwrite_session_title() {
     let (manager, data_dir) = test_manager().await;
 
