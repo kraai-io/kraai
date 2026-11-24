@@ -242,18 +242,22 @@ impl StreamReader {
                     if kraai_provider_core::is_context_overflow_error(&error)
                         && let Some(compaction) = compaction.take()
                     {
-                        if let Err(error) = self.ensure_turn_owned().await {
-                            return StreamDriveResult::FailedToStart { error };
-                        }
                         match self
-                            .compact(&compaction, &provider_request, &provider_id, &model_id)
+                            .restart(
+                                None,
+                                Some(&compaction),
+                                &mut provider_request,
+                                &provider_id,
+                                &model_id,
+                            )
                             .await
                         {
-                            Ok(compacted) => {
-                                provider_request = compacted;
-                                continue;
-                            }
-                            Err(error) => return StreamDriveResult::FailedToStart { error },
+                            Ok(()) => continue,
+                            Err(
+                                RestartFailure::Ownership(error)
+                                | RestartFailure::Compaction(error),
+                            ) => return StreamDriveResult::FailedToStart { error },
+                            Err(RestartFailure::Stopped) => return StreamDriveResult::Stopped,
                         }
                     }
                     let error = format!(
@@ -288,48 +292,41 @@ impl StreamReader {
                     let context_bound = model.as_ref().is_some_and(|model| {
                         model.output_limited_by_context(&provider_request.messages)
                     });
-                    let recovery =
-                        match compaction.take_if(|_| context_bound) {
-                            Some(compaction) => OutputLimitRecovery::Compact(Box::new(compaction)),
-                            None if !warned_about_output_limit
-                                && response.boundary.is_none()
-                                && !response.answered =>
-                            {
-                                OutputLimitRecovery::Warn(model.and_then(|model| {
-                                    model.output_limit(&provider_request.messages)
-                                }))
-                            }
-                            None => return response.finish(),
-                        };
-                    if let Err(error) = self.ensure_turn_owned().await {
-                        return StreamDriveResult::FailedDuringStream { error };
-                    }
-                    match recovery {
-                        OutputLimitRecovery::Compact(compaction) => match self
-                            .compact(&compaction, &provider_request, &provider_id, &model_id)
-                            .await
+                    let compaction = match compaction.take_if(|_| context_bound) {
+                        Some(compaction) => Some(compaction),
+                        None if !warned_about_output_limit
+                            && response.boundary.is_none()
+                            && !response.answered =>
                         {
-                            Ok(compacted) => provider_request = compacted,
-                            Err(error) => {
-                                tracing::warn!(%error, "Compaction after a cut off response failed; keeping the response");
-                                return response.finish();
-                            }
-                        },
-                        OutputLimitRecovery::Warn(limit) => {
                             warned_about_output_limit = true;
+                            let limit = model
+                                .and_then(|model| model.output_limit(&provider_request.messages));
                             provider_request
                                 .messages
                                 .push(ConversationItem::FileContext {
                                     text: output_limit_notice(limit),
                                 });
+                            None
                         }
+                        None => return response.finish(),
+                    };
+                    match self
+                        .restart(
+                            Some(String::from("The response reached the output token limit")),
+                            compaction.as_ref(),
+                            &mut provider_request,
+                            &provider_id,
+                            &model_id,
+                        )
+                        .await
+                    {
+                        Ok(()) => response = ResponseState::default(),
+                        Err(RestartFailure::Compaction(error)) => {
+                            tracing::warn!(%error, "Compaction after a cut off response failed; keeping the response");
+                            return response.finish();
+                        }
+                        Err(failure) => return failure.during_stream(),
                     }
-                    if !self.forward(StreamEvent::Restart {
-                        reason: String::from("The response reached the output token limit"),
-                    }) {
-                        return StreamDriveResult::Stopped;
-                    }
-                    response = ResponseState::default();
                 }
                 ResponseEnd::Finished => return response.finish(),
                 ResponseEnd::Stopped => return StreamDriveResult::Stopped,
@@ -351,37 +348,54 @@ impl StreamReader {
                     if response.boundary.is_some() {
                         return response.finish();
                     }
-                    if overflow && let Some(compaction) = compaction.take() {
-                        if let Err(error) = self.ensure_turn_owned().await {
+                    let compaction = compaction.take_if(|_| overflow);
+                    if compaction.is_none() {
+                        if !transient || reissues >= MAX_STREAM_REISSUES {
                             return StreamDriveResult::FailedDuringStream { error };
                         }
-                        if !self.forward(StreamEvent::Restart { reason: error }) {
-                            return StreamDriveResult::Stopped;
-                        }
-                        response = ResponseState::default();
-                        match self
-                            .compact(&compaction, &provider_request, &provider_id, &model_id)
-                            .await
-                        {
-                            Ok(compacted) => provider_request = compacted,
-                            Err(error) => return StreamDriveResult::FailedDuringStream { error },
-                        }
-                        continue;
+                        reissues += 1;
                     }
-                    if !transient || reissues >= MAX_STREAM_REISSUES {
-                        return StreamDriveResult::FailedDuringStream { error };
+                    if let Err(failure) = self
+                        .restart(
+                            Some(error),
+                            compaction.as_ref(),
+                            &mut provider_request,
+                            &provider_id,
+                            &model_id,
+                        )
+                        .await
+                    {
+                        return failure.during_stream();
                     }
-                    if let Err(error) = self.ensure_turn_owned().await {
-                        return StreamDriveResult::FailedDuringStream { error };
-                    }
-                    reissues += 1;
                     response = ResponseState::default();
-                    if !self.forward(StreamEvent::Restart { reason: error }) {
-                        return StreamDriveResult::Stopped;
-                    }
                 }
             }
         }
+    }
+
+    async fn restart(
+        &self,
+        reason: Option<String>,
+        compaction: Option<&ContextCompaction>,
+        provider_request: &mut ProviderRequest,
+        provider_id: &ProviderId,
+        model_id: &ModelId,
+    ) -> Result<(), RestartFailure> {
+        self.ensure_turn_owned()
+            .await
+            .map_err(RestartFailure::Ownership)?;
+        if let Some(compaction) = compaction {
+            *provider_request = self
+                .compact(compaction, provider_request, provider_id, model_id)
+                .await
+                .map_err(RestartFailure::Compaction)?;
+        }
+        if let Some(reason) = reason
+            && !self.forward(StreamEvent::Restart { reason })
+        {
+            return Err(RestartFailure::Stopped);
+        }
+        Ok(())
     }
 
     async fn settle_calls(&self, response: &mut ResponseState) {
@@ -562,9 +576,21 @@ enum ResponseEnd {
     },
 }
 
-enum OutputLimitRecovery {
-    Compact(Box<ContextCompaction>),
-    Warn(Option<usize>),
+enum RestartFailure {
+    Ownership(String),
+    Compaction(String),
+    Stopped,
+}
+
+impl RestartFailure {
+    fn during_stream(self) -> StreamDriveResult {
+        match self {
+            Self::Ownership(error) | Self::Compaction(error) => {
+                StreamDriveResult::FailedDuringStream { error }
+            }
+            Self::Stopped => StreamDriveResult::Stopped,
+        }
+    }
 }
 
 fn output_limit_notice(limit: Option<usize>) -> String {
