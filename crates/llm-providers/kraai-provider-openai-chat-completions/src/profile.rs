@@ -138,24 +138,6 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
             });
         }
 
-        let inline_key = config
-            .get("api_key")
-            .and_then(DynamicValue::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let env_var = config
-            .get("env_var_api_key")
-            .and_then(DynamicValue::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-
-        if inline_key.is_none() && env_var.is_none() {
-            errors.push(ValidationError {
-                field: String::from("credentials"),
-                message: String::from("Provide either an API key or an environment variable name"),
-            });
-        }
-
         for (field, label) in [
             ("only_listed_models", "Only Listed Models"),
             (BREAKPOINTS_KEY, "Cache Breakpoints"),
