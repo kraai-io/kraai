@@ -33,6 +33,13 @@ pub(crate) enum StreamEvent {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamFailure {
+    Start,
+    Stream,
+    Completion,
+}
+
 impl SessionActor {
     pub(super) fn start_stream(
         &mut self,
@@ -106,7 +113,7 @@ impl SessionActor {
             && let TurnState::Streaming(job) = std::mem::replace(&mut self.state, TurnState::Idle)
         {
             job.cancel.cancel();
-            self.stream_failed(job.kind, job.message_id, error, false)
+            self.stream_failed(job.kind, job.message_id, error, StreamFailure::Stream)
                 .await;
         }
     }
@@ -134,17 +141,19 @@ impl SessionActor {
                 self.stream_completed(kind, message_id, *completed).await;
             }
             StreamDriveResult::FailedToStart { error } => {
-                self.stream_failed(kind, message_id, error, true).await;
+                self.stream_failed(kind, message_id, error, StreamFailure::Start)
+                    .await;
             }
             StreamDriveResult::FailedDuringStream { error } => {
-                self.stream_failed(kind, message_id, error, false).await;
+                self.stream_failed(kind, message_id, error, StreamFailure::Stream)
+                    .await;
             }
             StreamDriveResult::Stopped => {
                 self.stream_failed(
                     kind,
                     message_id,
                     String::from("Provider stream stopped unexpectedly"),
-                    false,
+                    StreamFailure::Stream,
                 )
                 .await;
             }
@@ -183,8 +192,13 @@ impl SessionActor {
             Ok(Some(_)) => {}
             Ok(None) => return,
             Err(error) => {
-                self.completion_persistence_failed(kind, message_id, error.into())
-                    .await;
+                self.stream_failed(
+                    kind,
+                    message_id,
+                    error.to_string(),
+                    StreamFailure::Completion,
+                )
+                .await;
                 return;
             }
         }
@@ -211,39 +225,37 @@ impl SessionActor {
         .await;
     }
 
-    pub(super) async fn stream_failed(
+    async fn stream_failed(
         &mut self,
         kind: StreamKind,
         message_id: MessageId,
         error: String,
-        before_start: bool,
+        failure: StreamFailure,
     ) {
-        let recovery_target = match kind {
+        let target = match kind {
             StreamKind::Continuation => "continuation stream",
             StreamKind::Initial => "stream",
         };
-        let moment = if before_start {
-            "start failure"
-        } else {
-            "runtime error"
+        let moment = match failure {
+            StreamFailure::Start => "start failure",
+            StreamFailure::Stream => "runtime error",
+            StreamFailure::Completion => "completion error",
         };
-        match self.abort_stream_for_recovery(&message_id).await {
+        match self.fail_stream(&message_id).await {
             Ok(true) => self.drain().await,
             Ok(false) => self.runtime.send_session_error(
                 &self.session_id,
-                format!("Failed to recover {recovery_target} {message_id} after {moment}"),
+                format!("Failed to recover {target} {message_id} after {moment}"),
             ),
-            Err(rollback_error) => self.runtime.send_session_error(
+            Err(recovery_error) => self.runtime.send_session_error(
                 &self.session_id,
-                format!(
-                    "Failed to roll back {recovery_target} {message_id} after {moment}: {rollback_error}"
-                ),
+                format!("Failed to recover {target} {message_id} after {moment}: {recovery_error}"),
             ),
         }
         if kind == StreamKind::Continuation {
             tracing::error!("Continuation stream error: {error}");
         }
-        if before_start && kind == StreamKind::Continuation {
+        if kind == StreamKind::Continuation && failure != StreamFailure::Stream {
             self.runtime.send_event(Event::ContinuationFailed {
                 session_id: self.session_id.clone(),
                 error,
@@ -257,14 +269,11 @@ impl SessionActor {
         }
     }
 
-    async fn abort_stream_for_recovery(
-        &mut self,
-        message_id: &MessageId,
-    ) -> color_eyre::Result<bool> {
+    async fn fail_stream(&mut self, message_id: &MessageId) -> color_eyre::Result<bool> {
         match self
             .runtime
             .agent_manager
-            .abort_streaming_message(message_id)
+            .fail_streaming_message(message_id)
             .await
         {
             Ok(Some(_)) => {
@@ -284,57 +293,6 @@ impl SessionActor {
                 }
                 Err(error.into())
             }
-        }
-    }
-
-    async fn completion_persistence_failed(
-        &mut self,
-        kind: StreamKind,
-        message_id: MessageId,
-        error: color_eyre::Report,
-    ) {
-        match self
-            .runtime
-            .agent_manager
-            .abort_streaming_message(&message_id)
-            .await
-        {
-            Ok(Some(_)) => {
-                self.finish_turn().await;
-                self.drain().await;
-            }
-            Ok(None) => self.runtime.send_session_error(
-                &self.session_id,
-                format!(
-                    "Failed to recover stream state for message {message_id} after completion error"
-                ),
-            ),
-            Err(rollback_error) => {
-                if matches!(
-                    self.runtime.session_store.owns_turn(&self.session_id).await,
-                    Ok(false)
-                ) {
-                    self.finish_turn().await;
-                }
-                self.runtime.send_session_error(
-                    &self.session_id,
-                    format!(
-                        "Failed to roll back stream {message_id} after completion error: {rollback_error}"
-                    ),
-                );
-            }
-        }
-        if kind == StreamKind::Continuation {
-            self.runtime.send_event(Event::ContinuationFailed {
-                session_id: self.session_id.clone(),
-                error: error.to_string(),
-            });
-        } else {
-            self.runtime.send_event(Event::StreamError {
-                session_id: self.session_id.clone(),
-                message_id: message_id.to_string(),
-                error: error.to_string(),
-            });
         }
     }
 }

@@ -565,3 +565,64 @@ async fn cancelling_after_a_failed_completion_drops_the_unrun_call() {
     );
     cleanup_dir(data_dir).await;
 }
+
+#[tokio::test]
+async fn failed_streams_keep_text_without_script_calls() {
+    let (manager, data_dir) = test_manager().await;
+    let session = manager.create_session().await.unwrap();
+    let request = manager
+        .prepare_start_stream(
+            &session,
+            "start".into(),
+            ModelId::new("mock-model"),
+            ProviderId::new("mock"),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    manager
+        .append_text_chunk(
+            &request.message_id,
+            "answer",
+            AssistantPhase::FinalAnswer,
+            "partial",
+        )
+        .await
+        .expect("text");
+    manager
+        .append_script_call(
+            &request.message_id,
+            ScriptCall {
+                call_id: ToolCallId::new("call"),
+                name: String::from("kraai_nushell"),
+                input: String::from("print partial"),
+                arguments_error: None,
+                rewrite: None,
+            },
+        )
+        .await
+        .expect("call");
+    let failed = manager
+        .fail_streaming_message(&request.message_id)
+        .await
+        .unwrap()
+        .expect("streaming message");
+    assert!(failed.persisted);
+    let saved = manager
+        .message_store
+        .get(&request.message_id)
+        .await
+        .unwrap()
+        .expect("kept message");
+    assert_eq!(saved.status, MessageStatus::Cancelled);
+    assert_eq!(
+        saved.content,
+        ConversationItem::Assistant {
+            items: vec![AssistantItem::Text {
+                phase: AssistantPhase::FinalAnswer,
+                text: String::from("partial"),
+            }],
+        }
+    );
+    cleanup_dir(data_dir).await;
+}

@@ -351,6 +351,23 @@ impl AgentManager {
         &self,
         message_id: &MessageId,
     ) -> AgentResult<Option<CancelledStreamResult>> {
+        self.keep_streamed_text(message_id, MessageStatus::Complete)
+            .await
+    }
+
+    pub async fn fail_streaming_message(
+        &self,
+        message_id: &MessageId,
+    ) -> AgentResult<Option<CancelledStreamResult>> {
+        self.keep_streamed_text(message_id, MessageStatus::Cancelled)
+            .await
+    }
+
+    async fn keep_streamed_text(
+        &self,
+        message_id: &MessageId,
+        status: MessageStatus,
+    ) -> AgentResult<Option<CancelledStreamResult>> {
         let _persistence = self.streaming_persistence.lock().await;
         let state = self.streaming_messages.write().await.remove(message_id);
         let Some(mut state) = state else {
@@ -371,7 +388,7 @@ impl AgentManager {
                     .any(|item| !matches!(item, AssistantItem::Reasoning { .. }))
             });
         let persist_result = if persisted {
-            state.message.status = MessageStatus::Complete;
+            state.message.status = status;
             self.message_store.save(&state.message).await
         } else {
             self.conversation_store
