@@ -27,10 +27,10 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 pub(super) fn render_error(state: &AppState, area: Rect, buf: &mut Buffer) {
-    if !state.error_open {
+    if !state.errors.open {
         return;
     }
-    let Some(error) = &state.last_error else {
+    let Some(error) = &state.errors.last else {
         return;
     };
     let popup = centered_rect(
@@ -45,7 +45,7 @@ pub(super) fn render_error(state: &AppState, area: Rect, buf: &mut Buffer) {
         .border_style(Style::default().fg(Color::Red));
     let inner = block.inner(popup);
     block.render(popup, buf);
-    let notice = state.error_notice.as_ref().filter(|_| inner.height > 1);
+    let notice = state.errors.notice.as_ref().filter(|_| inner.height > 1);
     let body = Rect::new(
         inner.x,
         inner.y,
@@ -59,10 +59,11 @@ pub(super) fn render_error(state: &AppState, area: Rect, buf: &mut Buffer) {
         "",
     );
     let offset = state
-        .error_scroll
+        .errors
+        .scroll
         .get()
         .min(lines.len().saturating_sub(usize::from(body.height)));
-    state.error_scroll.set(offset);
+    state.errors.scroll.set(offset);
     let visible: Vec<Line<'_>> = lines
         .iter()
         .skip(offset)

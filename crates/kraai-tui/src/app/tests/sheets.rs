@@ -5,7 +5,6 @@ use kraai_execution_types::{
 use kraai_runtime::{AgentProfileSource, AgentProfileSummary};
 
 use super::*;
-use crate::app::{KeyCode, UiMode};
 
 fn agent(id: &str, name: &str, description: &str) -> AgentProfileSummary {
     AgentProfileSummary {
@@ -23,11 +22,11 @@ fn agent(id: &str, name: &str, description: &str) -> AgentProfileSummary {
 }
 
 fn with_agents(harness: &mut TestHarness) {
-    harness.app.state.agent_profiles = vec![
+    harness.app.state.agents.profiles = vec![
         agent("coding", "Coding", "Writes code"),
         agent("review", "Review", "Reads code"),
     ];
-    harness.app.state.selected_profile_id = Some("review".into());
+    harness.app.state.agents.selected_profile_id = Some("review".into());
 }
 
 fn agent_sheet_with_sandbox_warning(selected: &str) -> Vec<String> {
@@ -35,8 +34,8 @@ fn agent_sheet_with_sandbox_warning(selected: &str) -> Vec<String> {
     with_agents(&mut harness);
     let mut unsandboxed = agent("loose", "Loose", "Runs anywhere");
     unsandboxed.capabilities = SandboxCapabilities::new([SandboxCapability::NoSandbox]);
-    harness.app.state.agent_profiles.push(unsandboxed);
-    harness.app.state.selected_profile_id = Some(selected.into());
+    harness.app.state.agents.profiles.push(unsandboxed);
+    harness.app.state.agents.selected_profile_id = Some(selected.into());
     harness
         .app
         .set_sandbox_check(|| Some(String::from("bwrap is missing")));
@@ -55,13 +54,13 @@ fn session(id: &str, title: &str, workspace: &str) -> Session {
 
 fn with_sessions(harness: &mut TestHarness) {
     let state = &mut harness.app.state;
-    state.workspace_dir = String::from("/home/me/code/kraai");
-    state.home_dir = String::from("/home/me");
+    state.sessions.workspace_dir = String::from("/home/me/code/kraai");
+    state.sessions.home_dir = String::from("/home/me");
     let mut other = session("other", "Other work", "/home/me/elsewhere");
     other.is_running = true;
     let mut waiting = session("waiting", "Add sign-in", "/home/me/code/kraai");
     waiting.waiting_for_approval = true;
-    state.sessions = vec![
+    state.sessions.list = vec![
         other,
         session("fetch", "Fix fetch", "/home/me/code/kraai"),
         waiting,
@@ -124,7 +123,7 @@ fn agent_sheet_opens_on_the_agent_in_use_and_describes_the_highlighted_one() {
     with_agents(&mut harness);
     harness.app.handle_command("agent");
     assert_eq!(harness.app.state.mode, UiMode::Agent);
-    assert_eq!(harness.app.state.sheet_index, 1);
+    assert_eq!(harness.app.state.sheet.index, 1);
     assert_eq!(
         sheet(&harness, 50),
         [
@@ -146,12 +145,12 @@ fn agent_sheet_opens_on_the_agent_in_use_and_describes_the_highlighted_one() {
     assert!(rows.iter().any(|row| row.trim() == "/agent"));
 
     key(&mut harness, KeyCode::Tab);
-    assert_eq!(harness.app.state.sheet_index, 0);
+    assert_eq!(harness.app.state.sheet.index, 0);
     assert!(sheet(&harness, 50).contains(&String::from("  id          coding")));
     key(&mut harness, KeyCode::Esc);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert_eq!(
-        harness.app.state.selected_profile_id.as_deref(),
+        harness.app.state.agents.selected_profile_id.as_deref(),
         Some("review")
     );
 }
@@ -181,11 +180,11 @@ fn typing_filters_agents_and_enter_uses_the_highlighted_one() {
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert_eq!(
-        harness.app.state.selected_profile_id.as_deref(),
+        harness.app.state.agents.selected_profile_id.as_deref(),
         Some("coding")
     );
-    assert!(harness.app.state.sheet_query.is_empty());
-    assert!(harness.app.state.input.is_empty());
+    assert!(harness.app.state.sheet.query.is_empty());
+    assert!(harness.app.state.composer.text.is_empty());
 }
 
 #[test]
@@ -211,7 +210,7 @@ fn choosing_an_agent_in_a_session_waits_for_the_runtime_to_accept_it() {
         });
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert_eq!(
-        harness.app.state.selected_profile_id.as_deref(),
+        harness.app.state.agents.selected_profile_id.as_deref(),
         Some("coding")
     );
 }
@@ -224,7 +223,7 @@ fn backspace_on_an_empty_filter_hands_the_command_back_to_the_composer() {
         assert_ne!(harness.app.state.mode, UiMode::Chat);
         key(&mut harness, KeyCode::Backspace);
         assert_eq!(harness.app.state.mode, UiMode::Chat);
-        assert_eq!(harness.app.state.input, format!("/{command}"));
+        assert_eq!(harness.app.state.composer.text, format!("/{command}"));
     }
 }
 
@@ -285,7 +284,7 @@ fn typing_filters_sessions_and_enter_opens_the_first_match() {
     key(&mut harness, KeyCode::Enter);
     key(&mut harness, KeyCode::Delete);
     assert!(harness.drain_requests().is_empty());
-    assert!(!harness.app.state.sheet_armed);
+    assert!(!harness.app.state.sheet.armed);
 }
 
 #[test]
@@ -295,7 +294,7 @@ fn deleting_a_session_takes_the_key_twice_and_any_other_key_keeps_it() {
     harness.app.handle_command("sessions");
     harness.drain_requests();
     key(&mut harness, KeyCode::Delete);
-    assert!(!harness.app.state.sheet_armed);
+    assert!(!harness.app.state.sheet.armed);
 
     key(&mut harness, KeyCode::Down);
     key(&mut harness, KeyCode::Delete);
@@ -310,12 +309,12 @@ fn deleting_a_session_takes_the_key_twice_and_any_other_key_keeps_it() {
             .any(|row| row.ends_with("del delete this session · any other key keeps it"))
     );
     key(&mut harness, KeyCode::Down);
-    assert!(!harness.app.state.sheet_armed);
-    assert_eq!(harness.app.state.sheet_index, 2);
+    assert!(!harness.app.state.sheet.armed);
+    assert_eq!(harness.app.state.sheet.index, 2);
     key(&mut harness, KeyCode::Up);
     key(&mut harness, KeyCode::Delete);
     key(&mut harness, KeyCode::Char('f'));
-    assert!(!harness.app.state.sheet_armed);
+    assert!(!harness.app.state.sheet.armed);
     assert!(harness.drain_requests().is_empty());
     key(&mut harness, KeyCode::Backspace);
 
@@ -332,7 +331,7 @@ fn deleting_a_session_takes_the_key_twice_and_any_other_key_keeps_it() {
             session_id: SessionId::new("fetch"),
             result: Ok(()),
         });
-    assert_eq!(harness.app.state.sessions.len(), 2);
+    assert_eq!(harness.app.state.sessions.list.len(), 2);
 }
 
 #[test]
@@ -341,14 +340,14 @@ fn a_refreshed_session_list_keeps_the_highlight_on_the_same_session() {
     with_sessions(&mut harness);
     harness.app.handle_command("sessions");
     key(&mut harness, KeyCode::Up);
-    assert_eq!(harness.app.state.sheet_index, 3);
-    let mut sessions = harness.app.state.sessions.clone();
+    assert_eq!(harness.app.state.sheet.index, 3);
+    let mut sessions = harness.app.state.sessions.list.clone();
     sessions.insert(0, session("new", "Newer", "/home/me/code/kraai"));
     sessions.push(session("far", "Far away", "/srv"));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Sessions(Ok(sessions)));
-    assert_eq!(harness.app.state.sheet_index, 4);
+    assert_eq!(harness.app.state.sheet.index, 4);
     assert_eq!(
         sheet(&harness, 60).get(7),
         Some(&spaced("▌ Other work  ~/elsewhere", "running   0s", 60))
@@ -363,13 +362,13 @@ fn a_refresh_that_drops_the_session_waiting_to_be_deleted_drops_the_delete() {
     harness.drain_requests();
     key(&mut harness, KeyCode::Down);
     key(&mut harness, KeyCode::Delete);
-    assert!(harness.app.state.sheet_armed);
+    assert!(harness.app.state.sheet.armed);
 
-    let sessions = harness.app.state.sessions.clone();
+    let sessions = harness.app.state.sessions.list.clone();
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Sessions(Ok(sessions.clone())));
-    assert!(harness.app.state.sheet_armed);
+    assert!(harness.app.state.sheet.armed);
 
     let without_fetch = sessions
         .into_iter()
@@ -378,7 +377,7 @@ fn a_refresh_that_drops_the_session_waiting_to_be_deleted_drops_the_delete() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Sessions(Ok(without_fetch)));
-    assert!(!harness.app.state.sheet_armed);
+    assert!(!harness.app.state.sheet.armed);
     key(&mut harness, KeyCode::Delete);
     assert!(harness.drain_requests().is_empty());
 }

@@ -1,18 +1,27 @@
-use super::*;
+use super::chat_render::build_tip_chain;
+use super::types::{OptimisticMessage, RuntimeRequest, ScriptApprovalAction, ScriptPhase};
+use super::ui::copy_via_osc52;
+use super::{App, INPUT_HISTORY_LIMIT, RuntimeRequestDelivery};
+use super::{draft_images, feedback, types};
+use crate::components::TextInput;
+use color_eyre::eyre::Result;
+use kraai_types::{ChatRole, MessageContent, SessionId};
+use std::collections::HashMap;
+use std::time::Instant;
 
 impl App {
     pub(super) fn set_error(&mut self, error: String) {
         self.state.feedback.completion_until = None;
         self.state.feedback.clear_copy();
-        self.state.error_scroll.set(0);
-        self.state.last_error = Some(error);
-        self.state.turn_cancelled = false;
+        self.state.errors.scroll.set(0);
+        self.state.errors.last = Some(error);
+        self.state.turn.cancelled = false;
     }
 
     pub(super) fn clear_error(&mut self) {
-        self.state.last_error = None;
-        self.state.error_open = false;
-        self.state.error_scroll.set(0);
+        self.state.errors.last = None;
+        self.state.errors.open = false;
+        self.state.errors.scroll.set(0);
     }
 
     pub(super) fn copy_text_to_clipboard(
@@ -62,22 +71,31 @@ impl App {
     }
 
     pub(super) fn insert_input_text(&mut self, text: &str) {
-        let cursor = self.state.input_cursor.min(self.state.input.len());
-        if self.state.input.is_char_boundary(cursor) {
+        let cursor = self
+            .state
+            .composer
+            .cursor
+            .min(self.state.composer.text.len());
+        if self.state.composer.text.is_char_boundary(cursor) {
             self.replace_input_range(cursor..cursor, text);
         }
     }
 
     pub(super) fn backspace_input_char(&mut self) {
         self.reset_input_history_navigation();
-        let cursor = self.state.input_cursor.min(self.state.input.len());
-        if cursor == 0 || !self.state.input.is_char_boundary(cursor) {
+        let cursor = self
+            .state
+            .composer
+            .cursor
+            .min(self.state.composer.text.len());
+        if cursor == 0 || !self.state.composer.text.is_char_boundary(cursor) {
             return;
         }
 
         let prev = self
             .state
-            .input
+            .composer
+            .text
             .char_indices()
             .take_while(|(idx, _)| *idx < cursor)
             .last()
@@ -87,23 +105,29 @@ impl App {
     }
 
     pub(super) fn move_input_cursor_left(&mut self) {
-        let cursor = self.state.input_cursor.min(self.state.input.len());
+        let cursor = self
+            .state
+            .composer
+            .cursor
+            .min(self.state.composer.text.len());
         let prev = self
             .state
-            .input
+            .composer
+            .text
             .char_indices()
             .take_while(|(idx, _)| *idx < cursor)
             .last()
             .map(|(idx, _)| idx)
             .unwrap_or(0);
-        self.state.input_cursor = self.state.draft_images.snap(prev, false);
+        self.state.composer.cursor = self.state.composer.images.snap(prev, false);
     }
 
     pub(super) fn delete_input_char(&mut self) {
-        let cursor = self.state.input_cursor;
+        let cursor = self.state.composer.cursor;
         let next = self
             .state
-            .input
+            .composer
+            .text
             .get(cursor..)
             .and_then(|text| text.chars().next())
             .map_or(cursor, |ch| cursor + ch.len_utf8());
@@ -111,69 +135,76 @@ impl App {
     }
 
     pub(super) fn move_input_cursor_right(&mut self) {
-        let cursor = self.state.input_cursor.min(self.state.input.len());
-        if cursor >= self.state.input.len() {
-            self.state.input_cursor = self.state.input.len();
+        let cursor = self
+            .state
+            .composer
+            .cursor
+            .min(self.state.composer.text.len());
+        if cursor >= self.state.composer.text.len() {
+            self.state.composer.cursor = self.state.composer.text.len();
             return;
         }
 
         let next = self
             .state
-            .input
+            .composer
+            .text
             .char_indices()
             .map(|(idx, _)| idx)
             .find(|idx| *idx > cursor)
-            .unwrap_or(self.state.input.len());
-        self.state.input_cursor = self.state.draft_images.snap(next, true);
+            .unwrap_or(self.state.composer.text.len());
+        self.state.composer.cursor = self.state.composer.images.snap(next, true);
     }
 
     pub(super) fn reset_input_history_navigation(&mut self) {
-        self.state.input_history_index = None;
-        self.state.input_history_draft = None;
+        self.state.composer.history_index = None;
+        self.state.composer.history_draft = None;
     }
 
     pub(super) fn handle_input_up(&mut self) {
         let nav = TextInput::cursor_navigation(
-            &self.state.input,
-            self.state.input_cursor,
-            self.state.input_width,
+            &self.state.composer.text,
+            self.state.composer.cursor,
+            self.state.composer.width,
         );
         if nav.can_move_up {
-            self.state.input_cursor = self.state.draft_images.snap(nav.cursor_above, false);
+            self.state.composer.cursor = self.state.composer.images.snap(nav.cursor_above, false);
             return;
         }
 
-        if !self.state.draft_images.pending() {
+        if !self.state.composer.images.pending() {
             self.recall_older_input_history();
         }
     }
 
     pub(super) fn handle_input_down(&mut self) {
         let nav = TextInput::cursor_navigation(
-            &self.state.input,
-            self.state.input_cursor,
-            self.state.input_width,
+            &self.state.composer.text,
+            self.state.composer.cursor,
+            self.state.composer.width,
         );
         if nav.can_move_down {
-            self.state.input_cursor = self.state.draft_images.snap(nav.cursor_below, true);
+            self.state.composer.cursor = self.state.composer.images.snap(nav.cursor_below, true);
             return;
         }
 
-        if !self.state.draft_images.pending() {
+        if !self.state.composer.images.pending() {
             self.recall_newer_input_history();
         }
     }
 
     fn recall_older_input_history(&mut self) {
-        if self.state.input_history.is_empty() {
+        if self.state.composer.history.is_empty() {
             return;
         }
 
-        let next_index = match self.state.input_history_index {
-            Some(index) => (index + 1).min(self.state.input_history.len().saturating_sub(1)),
+        let next_index = match self.state.composer.history_index {
+            Some(index) => (index + 1).min(self.state.composer.history.len().saturating_sub(1)),
             None => {
-                self.state.input_history_draft =
-                    Some((self.state.input.clone(), self.state.draft_images.clone()));
+                self.state.composer.history_draft = Some((
+                    self.state.composer.text.clone(),
+                    self.state.composer.images.clone(),
+                ));
                 0
             }
         };
@@ -181,16 +212,16 @@ impl App {
     }
 
     fn recall_newer_input_history(&mut self) {
-        let Some(index) = self.state.input_history_index else {
+        let Some(index) = self.state.composer.history_index else {
             return;
         };
 
         if index == 0 {
-            let draft = self.state.input_history_draft.take().unwrap_or_default();
-            self.state.input = draft.0;
-            self.state.draft_images = draft.1;
-            self.state.input_cursor = self.state.input.len();
-            self.state.input_history_index = None;
+            let draft = self.state.composer.history_draft.take().unwrap_or_default();
+            self.state.composer.text = draft.0;
+            self.state.composer.images = draft.1;
+            self.state.composer.cursor = self.state.composer.text.len();
+            self.state.composer.history_index = None;
             return;
         }
 
@@ -198,17 +229,17 @@ impl App {
     }
 
     fn apply_input_history_index(&mut self, index: usize) {
-        let Some(message) = self.state.input_history.get(index).cloned() else {
+        let Some(message) = self.state.composer.history.get(index).cloned() else {
             return;
         };
-        self.state.draft_images = draft_images::DraftImages::default();
-        self.state.input = message;
-        self.state.input_cursor = self.state.input.len();
-        self.state.input_history_index = Some(index);
+        self.state.composer.images = draft_images::DraftImages::default();
+        self.state.composer.text = message;
+        self.state.composer.cursor = self.state.composer.text.len();
+        self.state.composer.history_index = Some(index);
     }
 
     pub(super) fn select_previous_script_action(&mut self) {
-        self.state.script_approval_action = match self.state.script_approval_action {
+        self.state.turn.script_approval_action = match self.state.turn.script_approval_action {
             ScriptApprovalAction::Allow => ScriptApprovalAction::Reject,
             ScriptApprovalAction::Reject => ScriptApprovalAction::Allow,
         };
@@ -220,7 +251,7 @@ impl App {
 
     pub(super) fn confirm_current_script_action(&mut self) {
         let approved = matches!(
-            self.state.script_approval_action,
+            self.state.turn.script_approval_action,
             ScriptApprovalAction::Allow
         );
         self.submit_script_decision(approved);
@@ -232,6 +263,7 @@ impl App {
         }
         let Some(execution_id) = self
             .state
+            .turn
             .pending_script
             .as_ref()
             .map(|script| script.execution_id.clone())
@@ -256,6 +288,7 @@ impl App {
         if self.request(request) == RuntimeRequestDelivery::Delivered {
             self.clear_error();
             self.state
+                .turn
                 .submitted_script_decisions
                 .entry(session_id)
                 .or_default()
@@ -264,11 +297,11 @@ impl App {
     }
 
     pub(super) fn enter_script_decision_phase(&mut self) {
-        self.state.approval_scroll.set(0);
-        self.state.approval_expanded = false;
+        self.state.turn.approval_scroll.set(0);
+        self.state.turn.approval_expanded = false;
         self.leave_sheet();
-        self.state.script_phase = ScriptPhase::AwaitingApproval;
-        self.state.script_approval_action = ScriptApprovalAction::Allow;
+        self.state.turn.script_phase = ScriptPhase::AwaitingApproval;
+        self.state.turn.script_approval_action = ScriptApprovalAction::Allow;
     }
 
     pub(super) fn request_sync(&mut self) {
@@ -296,7 +329,7 @@ impl App {
             self.clear_message_draft();
         }
         self.reset_session_state(session_id.clone());
-        if let Some(messages) = self.state.failed_messages.remove(&session_id) {
+        if let Some(messages) = self.state.sessions.failed_messages.remove(&session_id) {
             for message in messages.into_iter().rev() {
                 self.recover_message_draft(message);
             }
@@ -307,59 +340,59 @@ impl App {
         let has_session = session_id.is_some();
         self.leave_sheet();
         self.state.current_session_id = session_id;
-        self.state.last_session_model = None;
+        self.state.models.last_session_model = None;
         self.restore_pending_session_model();
-        self.state.current_tip_id = None;
+        self.state.chat.tip_id = None;
         self.clear_error();
-        self.state.chat_history.clear();
-        self.state.approval_scroll.set(0);
-        self.state.approval_expanded = false;
-        self.state.context_usage = None;
+        self.state.chat.history.clear();
+        self.state.turn.approval_scroll.set(0);
+        self.state.turn.approval_expanded = false;
+        self.state.turn.context_usage = None;
         self.restore_session_cost();
-        self.state.optimistic_messages.clear();
-        self.state.pending_script = None;
-        self.state.running_scripts.clear();
+        self.state.chat.optimistic_messages.clear();
+        self.state.turn.pending_script = None;
+        self.state.turn.running_scripts.clear();
         if has_session {
-            self.state.agent_profiles.clear();
+            self.state.agents.profiles.clear();
         }
-        self.state.agent_profile_warnings.clear();
+        self.state.agents.warnings.clear();
         if has_session {
-            self.state.selected_profile_id = None;
+            self.state.agents.selected_profile_id = None;
         }
-        self.state.profile_locked = false;
-        self.state.profile_lock_stale_after_terminal_event = false;
-        self.state.script_approval_action = ScriptApprovalAction::Allow;
-        self.state.script_phase = ScriptPhase::Idle;
-        self.state.is_streaming = false;
-        self.state.retry_waiting = false;
-        self.state.profile_lock_stale_after_terminal_event = false;
-        self.state.turn_timer = kraai_runtime::TurnTimer::default();
+        self.state.turn.profile_locked = false;
+        self.state.turn.profile_lock_stale_after_terminal_event = false;
+        self.state.turn.script_approval_action = ScriptApprovalAction::Allow;
+        self.state.turn.script_phase = ScriptPhase::Idle;
+        self.state.turn.is_streaming = false;
+        self.state.turn.retry_waiting = false;
+        self.state.turn.profile_lock_stale_after_terminal_event = false;
+        self.state.turn.timer = kraai_runtime::TurnTimer::default();
         self.state.feedback = feedback::VisualFeedback::default();
         self.last_statusline_animation_tick = None;
-        self.state.auto_scroll = true;
-        self.state.scroll = 0;
-        self.state.turn_cancelled = false;
-        self.invalidate_chat_cache();
+        self.state.chat.auto_scroll = true;
+        self.state.chat.scroll = 0;
+        self.state.turn.cancelled = false;
+        self.state.chat.invalidate();
         self.clamp_chat_scroll();
     }
 
     pub(super) fn start_new_chat(&mut self) {
         self.clear_message_draft();
-        self.state.pending_submit = None;
-        self.state.pending_session_load_id = None;
+        self.state.sessions.pending_submit = None;
+        self.state.sessions.pending_load_id = None;
         self.reset_chat_session(None);
         self.request(RuntimeRequest::GetAgentProfileCatalog);
     }
 
     pub(super) fn load_session(&mut self, session_id: SessionId) {
-        let load_id = self.state.next_session_load_id;
-        self.state.next_session_load_id = load_id.wrapping_add(1);
+        let load_id = self.state.sessions.next_load_id;
+        self.state.sessions.next_load_id = load_id.wrapping_add(1);
         if self.request(RuntimeRequest::LoadSession {
             load_id,
             session_id,
         }) == RuntimeRequestDelivery::Delivered
         {
-            self.state.pending_session_load_id = Some(load_id);
+            self.state.sessions.pending_load_id = Some(load_id);
         }
     }
 
@@ -390,9 +423,10 @@ impl App {
         }
         self.mark_session_model_active(&session_id);
 
-        self.state.optimistic_seq = self.state.optimistic_seq.saturating_add(1);
-        let local_id = format!("local-user-{}", self.state.optimistic_seq);
+        self.state.chat.optimistic_seq = self.state.chat.optimistic_seq.saturating_add(1);
+        let local_id = format!("local-user-{}", self.state.chat.optimistic_seq);
         self.state
+            .sessions
             .pending_messages
             .push_back(types::PendingMessage {
                 session_id,
@@ -412,12 +446,13 @@ impl App {
         let visible_count = self.visible_user_message_count(&content_key);
         let optimistic_same_count = self
             .state
+            .chat
             .optimistic_messages
             .iter()
             .filter(|optimistic| optimistic.content_key == content_key)
             .count();
 
-        self.state.optimistic_messages.push(OptimisticMessage {
+        self.state.chat.optimistic_messages.push(OptimisticMessage {
             local_id,
             content: display_text,
             content_key,
@@ -426,19 +461,19 @@ impl App {
         });
 
         if !is_queued {
-            self.state.script_phase = ScriptPhase::Idle;
-            self.state.profile_lock_stale_after_terminal_event = false;
-            self.state.is_streaming = true;
+            self.state.turn.script_phase = ScriptPhase::Idle;
+            self.state.turn.profile_lock_stale_after_terminal_event = false;
+            self.state.turn.is_streaming = true;
             self.state.breath_origin = Instant::now();
             self.last_statusline_animation_tick = None;
-            self.state.turn_cancelled = false;
+            self.state.turn.cancelled = false;
         }
-        self.state.auto_scroll = true;
-        self.state.current_tip_id = None;
+        self.state.chat.auto_scroll = true;
+        self.state.chat.tip_id = None;
         if let Some(text) = message.as_text() {
             self.remember_submitted_input(text);
         }
-        self.invalidate_chat_cache();
+        self.state.chat.invalidate();
     }
 
     pub(super) fn request(&mut self, req: RuntimeRequest) -> RuntimeRequestDelivery {
@@ -460,17 +495,17 @@ impl App {
     pub(super) fn handle_runtime_bridge_disconnect(&mut self) {
         let message = String::from("Runtime bridge disconnected");
         self.runtime_bridge_connected = false;
-        self.state.submitted_script_decisions.clear();
+        self.state.turn.submitted_script_decisions.clear();
         self.runtime_bridge_error.get_or_insert(message);
         let mut messages: std::collections::BTreeMap<Option<SessionId>, Vec<MessageContent>> =
             std::collections::BTreeMap::new();
-        while let Some(pending) = self.state.pending_messages.pop_front() {
+        while let Some(pending) = self.state.sessions.pending_messages.pop_front() {
             messages
                 .entry(Some(pending.session_id))
                 .or_default()
                 .push(pending.message);
         }
-        if let Some(pending) = self.state.pending_submit.take() {
+        if let Some(pending) = self.state.sessions.pending_submit.take() {
             messages
                 .entry(pending.session_id)
                 .or_default()
@@ -479,50 +514,40 @@ impl App {
         for (session_id, messages) in messages {
             self.recover_session_messages(session_id, messages);
         }
-        self.state.pending_session_load_id = None;
-        self.state.optimistic_messages.clear();
-        self.state.pending_script = None;
-        self.state.is_streaming = false;
-        self.state.retry_waiting = false;
-        self.state.profile_locked = false;
-        self.state.profile_lock_stale_after_terminal_event = false;
-        self.state.script_phase = ScriptPhase::Idle;
+        self.state.sessions.pending_load_id = None;
+        self.state.chat.optimistic_messages.clear();
+        self.state.turn.pending_script = None;
+        self.state.turn.is_streaming = false;
+        self.state.turn.retry_waiting = false;
+        self.state.turn.profile_locked = false;
+        self.state.turn.profile_lock_stale_after_terminal_event = false;
+        self.state.turn.script_phase = ScriptPhase::Idle;
         self.last_statusline_animation_tick = None;
         self.event_lag_session_resync_pending = false;
         self.event_lag_script_resync_pending = false;
-        self.state.profile_lock_stale_after_terminal_event = false;
-        self.state.turn_timer = kraai_runtime::TurnTimer::default();
+        self.state.turn.profile_lock_stale_after_terminal_event = false;
+        self.state.turn.timer = kraai_runtime::TurnTimer::default();
         self.state.feedback = feedback::VisualFeedback::default();
-        self.invalidate_chat_cache();
+        self.state.chat.invalidate();
         self.state.exit = true;
     }
 
-    pub(super) fn invalidate_chat_cache(&mut self) {
-        self.state.chat_epoch = self.state.chat_epoch.wrapping_add(1);
-    }
-
-    pub(super) fn invalidate_script_cards(&mut self) {
-        self.state.cards_epoch = self.state.cards_epoch.wrapping_add(1);
-    }
-
     pub(super) fn clear_running_scripts(&mut self) {
-        if !self.state.running_scripts.is_empty() {
-            self.state.running_scripts.clear();
-            self.invalidate_script_cards();
+        if !self.state.turn.running_scripts.is_empty() {
+            self.state.turn.running_scripts.clear();
+            self.state.chat.invalidate_cards();
         }
     }
 
     pub(super) fn reconcile_optimistic_messages(&mut self) {
-        if self.state.optimistic_messages.is_empty() {
+        if self.state.chat.optimistic_messages.is_empty() {
             return;
         }
 
-        let before_len = self.state.optimistic_messages.len();
+        let before_len = self.state.chat.optimistic_messages.len();
 
-        let visible_chain = build_tip_chain(
-            &self.state.chat_history,
-            self.state.current_tip_id.as_deref(),
-        );
+        let visible_chain =
+            build_tip_chain(&self.state.chat.history, self.state.chat.tip_id.as_deref());
         let mut seen_users: HashMap<String, usize> = HashMap::new();
         for msg in visible_chain {
             if msg.role() == ChatRole::User {
@@ -531,26 +556,23 @@ impl App {
             }
         }
 
-        self.state.optimistic_messages.retain(|optimistic| {
+        self.state.chat.optimistic_messages.retain(|optimistic| {
             seen_users
                 .get(&optimistic.content_key)
                 .is_none_or(|count| *count < optimistic.occurrence)
         });
 
-        if self.state.optimistic_messages.len() != before_len {
-            self.invalidate_chat_cache();
+        if self.state.chat.optimistic_messages.len() != before_len {
+            self.state.chat.invalidate();
         }
     }
 
     pub(super) fn visible_user_message_count(&self, content_key: &str) -> usize {
-        build_tip_chain(
-            &self.state.chat_history,
-            self.state.current_tip_id.as_deref(),
-        )
-        .into_iter()
-        .filter(|message| message.role() == ChatRole::User)
-        .filter(|message| message.display_text().trim() == content_key)
-        .count()
+        build_tip_chain(&self.state.chat.history, self.state.chat.tip_id.as_deref())
+            .into_iter()
+            .filter(|message| message.role() == ChatRole::User)
+            .filter(|message| message.display_text().trim() == content_key)
+            .count()
     }
 
     pub(super) fn remember_submitted_input(&mut self, message: &str) {
@@ -559,8 +581,8 @@ impl App {
             return;
         }
 
-        self.state.input_history.insert(0, content);
-        self.state.input_history.truncate(INPUT_HISTORY_LIMIT);
+        self.state.composer.history.insert(0, content);
+        self.state.composer.history.truncate(INPUT_HISTORY_LIMIT);
         self.reset_input_history_navigation();
     }
 }

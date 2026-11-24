@@ -1,4 +1,7 @@
-use super::*;
+use super::types::UiMode;
+use super::ui::{next_wrapping, previous_wrapping};
+use super::{App, AppState};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub(super) struct SlashCommand {
     pub(super) name: &'static str,
@@ -65,17 +68,21 @@ pub(super) fn slash_command_matches(query: &str) -> Vec<&'static SlashCommand> {
 impl AppState {
     pub(super) fn command_matches(&self) -> Vec<&'static SlashCommand> {
         if self.mode != UiMode::Chat
-            || self.command_popup_dismissed
+            || self.composer.command_popup_dismissed
             || self.has_local_script_approval()
-            || self.draft_images.len() != 0
+            || self.composer.images.len() != 0
         {
             return Vec::new();
         }
-        let mut matches =
-            active_command_prefix(self.command_filter.as_deref().unwrap_or(&self.input))
-                .map(slash_command_matches)
-                .unwrap_or_default();
-        matches.retain(|command| !command.needs_error || self.last_error.is_some());
+        let mut matches = active_command_prefix(
+            self.composer
+                .command_filter
+                .as_deref()
+                .unwrap_or(&self.composer.text),
+        )
+        .map(slash_command_matches)
+        .unwrap_or_default();
+        matches.retain(|command| !command.needs_error || self.errors.last.is_some());
         matches
     }
 }
@@ -86,19 +93,19 @@ impl App {
     }
 
     pub(super) fn reset_command_selection(&mut self) {
-        self.state.command_filter = None;
-        self.state.sheet_index = 0;
-        self.state.sheet_scroll.set(0);
+        self.state.composer.command_filter = None;
+        self.state.sheet.index = 0;
+        self.state.sheet.scroll.set(0);
     }
 
     pub(super) fn handle_command_list_key(&mut self, key: KeyEvent) -> bool {
         let matches = self.state.command_matches();
         let len = matches.len();
-        let index = self.state.sheet_index.min(len.saturating_sub(1));
+        let index = self.state.sheet.index.min(len.saturating_sub(1));
         let Some(selected) = matches.get(index).copied() else {
             return false;
         };
-        let written = self.state.input.strip_prefix('/') == Some(selected.name);
+        let written = self.state.composer.text.strip_prefix('/') == Some(selected.name);
         #[expect(
             clippy::wildcard_enum_match_arm,
             reason = "only Tab, BackTab, Up and Down walk the command list"
@@ -126,7 +133,7 @@ impl App {
             KeyCode::Char(' ')
                 if written
                     && selected.opens_list
-                    && self.state.input_cursor == self.state.input.len() =>
+                    && self.state.composer.cursor == self.state.composer.text.len() =>
             {
                 self.run_listed_command(selected.name)
             }
@@ -139,17 +146,18 @@ impl App {
     fn walk_command_list(&mut self, index: usize, name: &str) {
         let filter = self
             .state
+            .composer
             .command_filter
             .take()
-            .unwrap_or_else(|| self.state.input.clone());
+            .unwrap_or_else(|| self.state.composer.text.clone());
         self.set_input_text(format!("/{name}"));
-        self.state.command_filter = Some(filter);
-        self.state.sheet_index = index;
+        self.state.composer.command_filter = Some(filter);
+        self.state.sheet.index = index;
     }
 
     fn run_listed_command(&mut self, name: &str) {
         self.clear_message_draft();
-        self.state.command_popup_dismissed = false;
+        self.state.composer.command_popup_dismissed = false;
         self.reset_command_selection();
         self.handle_command(name);
     }

@@ -1,5 +1,4 @@
 use super::*;
-use crate::app::{KeyCode, KeyEvent, KeyModifiers, UiMode};
 use kraai_types::ScriptCall;
 use ratatui::layout::Rect;
 
@@ -11,7 +10,7 @@ fn approval_scroll_reaches_end_and_moves_back_with_metadata_pinned() {
         .map(|line| format!("echo line-{line:03}"))
         .collect::<Vec<_>>()
         .join("\n");
-    harness.app.state.pending_script = Some(script);
+    harness.app.state.turn.pending_script = Some(script);
     harness.app.enter_script_decision_phase();
     assert!(screen(&harness.app.state, 90, 30).contains("line-000"));
     harness
@@ -20,15 +19,15 @@ fn approval_scroll_reaches_end_and_moves_back_with_metadata_pinned() {
     let rendered = screen(&harness.app.state, 90, 30);
     assert!(rendered.contains("line-099"));
     assert!(rendered.contains("Additional: workspace-write"));
-    let end = harness.app.state.approval_scroll.get();
+    let end = harness.app.state.turn.approval_scroll.get();
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(harness.app.state.approval_scroll.get(), end - 1);
+    assert_eq!(harness.app.state.turn.approval_scroll.get(), end - 1);
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
-    assert!(harness.app.state.approval_expanded);
+    assert!(harness.app.state.turn.approval_expanded);
     assert_eq!(
         crate::app::ui::bottom_panel_height(&harness.app.state, Rect::new(0, 0, 90, 30)),
         28
@@ -38,10 +37,8 @@ fn approval_scroll_reaches_end_and_moves_back_with_metadata_pinned() {
 
 #[test]
 fn narrow_status_keeps_error_ahead_of_model_metadata() {
-    let state = AppState {
-        last_error: Some(String::from("Stream error: offline")),
-        ..AppState::default()
-    };
+    let mut state = AppState::default();
+    state.errors.last = Some(String::from("Stream error: offline"));
     assert!(screen(&state, 28, 12).contains("/error"));
     for (phase, streaming, retry, expected) in [
         (ScriptPhase::Idle, true, false, "Working"),
@@ -54,12 +51,10 @@ fn narrow_status_keeps_error_ahead_of_model_metadata() {
             "Needs approval",
         ),
     ] {
-        let state = AppState {
-            script_phase: phase,
-            is_streaming: streaming,
-            retry_waiting: retry,
-            ..AppState::default()
-        };
+        let mut state = AppState::default();
+        state.turn.script_phase = phase;
+        state.turn.is_streaming = streaming;
+        state.turn.retry_waiting = retry;
         assert!(screen(&state, 60, 15).contains(expected));
     }
 }
@@ -70,16 +65,14 @@ fn composer_scroll_keeps_cursor_and_tail_visible() {
         .map(|line| format!("line-{line:03} 你好"))
         .collect::<Vec<_>>()
         .join("\n");
-    let state = AppState {
-        input_cursor: input.len(),
-        input,
-        ..AppState::default()
-    };
+    let mut state = AppState::default();
+    state.composer.cursor = input.len();
+    state.composer.text = input;
     let area = Rect::new(0, 0, 40, 24);
     let [chat, _, composer] = crate::app::ui::chat_layout(&state, area);
     assert!(chat.height >= 14);
     assert!(screen(&state, 40, 24).contains("line-049"));
-    let cursor = crate::components::TextInput::new(&state.input, state.input_cursor)
+    let cursor = crate::components::TextInput::new(&state.composer.text, state.composer.cursor)
         .get_cursor_position(composer);
     assert!(composer.contains(cursor.into()));
     for height in 1..6 {
@@ -113,7 +106,7 @@ fn clearing_multiline_input_restores_three_row_background() {
             assert_eq!(input.height, 3);
             assert_eq!(input.bottom(), height);
             assert_eq!(
-                crate::components::TextInput::new(&harness.app.state.input, 0)
+                crate::components::TextInput::new(&harness.app.state.composer.text, 0)
                     .get_cursor_position(input),
                 (1, height - 2)
             );
@@ -138,21 +131,21 @@ fn word_editing_preserves_unicode() {
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
-    assert_eq!(harness.app.state.input_cursor, "hello 你好 ".len());
+    assert_eq!(harness.app.state.composer.cursor, "hello 你好 ".len());
     for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
         harness
             .app
             .handle_key_event(KeyEvent::new(KeyCode::Char('w'), modifiers));
-        assert_eq!(harness.app.state.input, "hello 你好 world");
+        assert_eq!(harness.app.state.composer.text, "hello 你好 world");
     }
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL));
-    assert_eq!(harness.app.state.input, "hello world");
+    assert_eq!(harness.app.state.composer.text, "hello world");
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL));
-    assert_eq!(harness.app.state.input, "hello ");
+    assert_eq!(harness.app.state.composer.text, "hello ");
 }
 
 #[test]
@@ -192,13 +185,14 @@ fn ctrl_o_expands_script_source_and_output_in_the_chat_and_keeps_the_draft() {
         agent_profile_id: None,
         generation: None,
     };
-    harness.app.state.chat_history.insert(call.id.clone(), call);
+    harness.app.state.chat.history.insert(call.id.clone(), call);
     harness
         .app
         .state
-        .chat_history
+        .chat
+        .history
         .insert(result.id.clone(), result);
-    harness.app.state.input = String::from("draft-to-preserve");
+    harness.app.state.composer.text = String::from("draft-to-preserve");
     let collapsed = screen(&harness.app.state, 100, 30);
     assert!(collapsed.contains("1 script · 0.1s  [ctrl+o]"));
     assert!(!collapsed.contains("secret-source"));
@@ -213,7 +207,7 @@ fn ctrl_o_expands_script_source_and_output_in_the_chat_and_keeps_the_draft() {
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     harness.app.handle_key_event(ctrl_o);
     assert_eq!(screen(&harness.app.state, 100, 30), collapsed);
-    assert_eq!(harness.app.state.input, "draft-to-preserve");
+    assert_eq!(harness.app.state.composer.text, "draft-to-preserve");
     assert!(harness.drain_requests().is_empty());
 }
 
@@ -226,7 +220,7 @@ fn model_search_preserves_order_unicode_and_cross_field_matches() {
         name: name.to_owned(),
         max_context: Some(1000),
     };
-    harness.app.state.models_by_provider = HashMap::from([
+    harness.app.state.models.by_provider = HashMap::from([
         (String::from("zeta"), vec![model("z-model", "Last")]),
         (
             String::from("Alpha"),
@@ -249,7 +243,7 @@ fn model_search_preserves_order_unicode_and_cross_field_matches() {
         ("alpha  z", Vec::new()),
         ("missing", Vec::new()),
     ] {
-        harness.app.state.sheet_query.set(query.to_owned());
+        harness.app.state.sheet.query.set(query.to_owned());
         let actual: Vec<_> = harness
             .app
             .state
@@ -260,15 +254,18 @@ fn model_search_preserves_order_unicode_and_cross_field_matches() {
         assert_eq!(actual, expected, "query: {query}");
     }
     harness.app.state.mode = UiMode::Model;
-    harness.app.state.sheet_query.set(String::from("Β ÉLAN"));
+    harness.app.state.sheet.query.set(String::from("Β ÉLAN"));
     harness
         .app
         .handle_model_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
-        harness.app.state.selected_provider_id.as_deref(),
+        harness.app.state.models.selected_provider_id.as_deref(),
         Some("Alpha")
     );
-    assert_eq!(harness.app.state.selected_model_id.as_deref(), Some("Z-β"));
+    assert_eq!(
+        harness.app.state.models.selected_model_id.as_deref(),
+        Some("Z-β")
+    );
     assert_eq!(harness.app.state.mode, UiMode::Chat);
 }
 
@@ -288,47 +285,50 @@ fn model_refresh_preserves_selection_and_clamps_missing_or_filtered_entries() {
                 .collect(),
         )])
     };
-    harness.app.state.selected_provider_id = Some(String::from("provider"));
-    harness.app.state.selected_model_id = Some(String::from("keep"));
-    harness.app.state.models_by_provider = models(&["keep", "target"]);
+    harness.app.state.models.selected_provider_id = Some(String::from("provider"));
+    harness.app.state.models.selected_model_id = Some(String::from("keep"));
+    harness.app.state.models.by_provider = models(&["keep", "target"]);
     harness.app.state.mode = UiMode::Model;
-    harness.app.state.sheet_index = 1;
+    harness.app.state.sheet.index = 1;
 
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models(&[
             "other", "keep", "target",
         ]))));
-    assert_eq!(harness.app.state.sheet_index, 2);
+    assert_eq!(harness.app.state.sheet.index, 2);
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models(&["other", "keep"]))));
-    assert_eq!(harness.app.state.sheet_index, 0);
+    assert_eq!(harness.app.state.sheet.index, 0);
 
-    harness.app.state.sheet_index = 99;
+    harness.app.state.sheet.index = 99;
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models(&["keep", "other"]))));
-    assert_eq!(harness.app.state.sheet_index, 1);
+    assert_eq!(harness.app.state.sheet.index, 1);
 
-    harness.app.state.sheet_query.set(String::from("missing"));
+    harness.app.state.sheet.query.set(String::from("missing"));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models(&["keep", "other"]))));
-    assert_eq!(harness.app.state.sheet_index, 0);
-    harness.app.state.sheet_query.clear();
+    assert_eq!(harness.app.state.sheet.index, 0);
+    harness.app.state.sheet.query.clear();
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(HashMap::new())));
-    assert_eq!(harness.app.state.sheet_index, 0);
-    assert_eq!(harness.app.state.selected_model_id.as_deref(), Some("keep"));
+    assert_eq!(harness.app.state.sheet.index, 0);
+    assert_eq!(
+        harness.app.state.models.selected_model_id.as_deref(),
+        Some("keep")
+    );
 }
 
 #[test]
 fn enter_on_an_empty_model_search_selects_nothing() {
     let mut harness = test_harness();
     harness.app.state.mode = UiMode::Model;
-    harness.app.state.models_by_provider.insert(
+    harness.app.state.models.by_provider.insert(
         String::from("provider"),
         vec![kraai_runtime::Model {
             options: Vec::new(),
@@ -337,22 +337,22 @@ fn enter_on_an_empty_model_search_selects_nothing() {
             max_context: Some(1000),
         }],
     );
-    harness.app.state.sheet_query.set(String::from("missing"));
+    harness.app.state.sheet.query.set(String::from("missing"));
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(harness.app.state.selected_model_id.is_none());
+    assert!(harness.app.state.models.selected_model_id.is_none());
     assert!(harness.drain_requests().is_empty());
 }
 
 #[test]
 fn error_details_preserve_draft_mode_and_pending_approval() {
     let mut harness = test_harness();
-    harness.app.state.input = String::from("draft");
-    harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
+    harness.app.state.composer.text = String::from("draft");
+    harness.app.state.turn.script_phase = ScriptPhase::AwaitingApproval;
     harness.app.set_error(String::from(
         "first
 second
@@ -364,14 +364,14 @@ final",
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(harness.app.state.input, "draft");
+    assert_eq!(harness.app.state.composer.text, "draft");
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(!harness.app.state.error_open);
-    assert!(harness.app.state.last_error.is_some());
+    assert!(!harness.app.state.errors.open);
+    assert!(harness.app.state.errors.last.is_some());
     assert_eq!(
-        harness.app.state.script_phase,
+        harness.app.state.turn.script_phase,
         ScriptPhase::AwaitingApproval
     );
     assert!(harness.drain_requests().is_empty());
@@ -379,28 +379,28 @@ final",
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
-    assert!(harness.app.state.last_error.is_none());
+    assert!(harness.app.state.errors.last.is_none());
 }
 
 #[test]
 fn error_dialog_ctrl_c_closes_without_cancelling_or_dismissing() {
     let mut harness = test_harness();
     harness.app.set_error(String::from("error"));
-    harness.app.state.error_open = true;
-    harness.app.state.input = String::from("draft");
+    harness.app.state.errors.open = true;
+    harness.app.state.composer.text = String::from("draft");
     for (key, modifiers) in [('d', KeyModifiers::CONTROL), ('c', KeyModifiers::ALT)] {
         harness
             .app
             .handle_key_event(KeyEvent::new(KeyCode::Char(key), modifiers));
-        assert!(harness.app.state.error_open);
-        assert_eq!(harness.app.state.last_error.as_deref(), Some("error"));
+        assert!(harness.app.state.errors.open);
+        assert_eq!(harness.app.state.errors.last.as_deref(), Some("error"));
     }
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-    assert!(!harness.app.state.error_open);
-    assert_eq!(harness.app.state.last_error.as_deref(), Some("error"));
-    assert_eq!(harness.app.state.input, "draft");
+    assert!(!harness.app.state.errors.open);
+    assert_eq!(harness.app.state.errors.last.as_deref(), Some("error"));
+    assert_eq!(harness.app.state.composer.text, "draft");
     assert!(!harness.app.state.exit);
     assert!(!harness.app.state.ctrl_c_exit_armed);
     assert!(harness.drain_requests().is_empty());
@@ -421,11 +421,11 @@ fn error_details_reach_end_of_large_error_and_resize() {
         .app
         .handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     assert!(screen(&harness.app.state, 60, 12).contains("last error line"));
-    assert!(harness.app.state.error_scroll.get() > 65_535);
+    assert!(harness.app.state.errors.scroll.get() > 65_535);
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-    assert_eq!(harness.app.state.error_scroll.get(), 0);
+    assert_eq!(harness.app.state.errors.scroll.get(), 0);
     harness
         .app
         .set_error(String::from("small error for resize"));
@@ -439,13 +439,13 @@ fn error_details_reach_end_of_large_error_and_resize() {
 #[test]
 fn shift_enter_inserts_newline_without_submitting_a_command() {
     let mut harness = test_harness();
-    harness.app.state.input = String::from("/undo");
-    harness.app.state.input_cursor = 5;
+    harness.app.state.composer.text = String::from("/undo");
+    harness.app.state.composer.cursor = 5;
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
-    assert_eq!(harness.app.state.input, "/undo\n");
-    assert_eq!(harness.app.state.input_cursor, 6);
+    assert_eq!(harness.app.state.composer.text, "/undo\n");
+    assert_eq!(harness.app.state.composer.cursor, 6);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert!(harness.drain_requests().is_empty());
 }
@@ -456,7 +456,7 @@ fn pasted_line_endings_are_preserved_as_newlines() {
     harness
         .app
         .handle_paste(String::from("one\r\ntwo\rthree\nfour"));
-    assert_eq!(harness.app.state.input, "one\ntwo\nthree\nfour");
+    assert_eq!(harness.app.state.composer.text, "one\ntwo\nthree\nfour");
     assert!(harness.drain_requests().is_empty());
 }
 
@@ -465,7 +465,7 @@ fn animation_and_copy_feedback_expire_without_idle_redraws() {
     use crate::app::feedback::CopyTarget;
     let mut harness = test_harness();
     let now = std::time::Instant::now();
-    harness.app.state.is_streaming = true;
+    harness.app.state.turn.is_streaming = true;
     assert!(!harness.app.advance_statusline_animation(now));
     assert!(
         !harness
@@ -490,7 +490,7 @@ fn animation_and_copy_feedback_expire_without_idle_redraws() {
             .advance_statusline_animation(now + std::time::Duration::from_millis(600))
     );
     harness.app.state.palette.muted = None;
-    harness.app.state.is_streaming = false;
+    harness.app.state.turn.is_streaming = false;
     assert!(!harness.app.advance_statusline_animation(now));
     harness.app.state.feedback.completion_until = Some(now + std::time::Duration::from_secs(1));
     harness
@@ -498,8 +498,8 @@ fn animation_and_copy_feedback_expire_without_idle_redraws() {
         .state
         .feedback
         .show_copied(CopyTarget::Error, now);
-    harness.app.state.last_error = Some(String::from("An error"));
-    harness.app.state.error_open = true;
+    harness.app.state.errors.last = Some(String::from("An error"));
+    harness.app.state.errors.open = true;
     assert!(screen(&harness.app.state, 80, 20).contains("Copied"));
     assert!(!harness.app.state.feedback.copied(CopyTarget::Auth));
     assert!(
@@ -568,7 +568,7 @@ fn only_newly_finished_turns_show_completion_feedback() {
     harness.app.state.feedback.completion_until = Some(std::time::Instant::now());
     harness.app.set_error(String::from("Failed"));
     assert!(harness.app.state.feedback.completion_until.is_none());
-    harness.app.state.last_error = None;
+    harness.app.state.errors.last = None;
     harness.app.state.feedback.completion_until = Some(std::time::Instant::now());
     harness.app.handle_runtime_event(Event::StreamCancelled {
         session_id: SessionId::new("session"),

@@ -1,25 +1,24 @@
 use super::*;
-use crate::app::{KeyCode, KeyEvent, KeyModifiers};
 
 #[test]
 fn page_keys_follow_viewport_size_in_chat() {
     for height in [0, 1, 2, 20, 50] {
         let mut harness = test_harness();
-        harness.app.state.chat_render_cache.borrow_mut().total_lines = 200;
-        harness.app.state.chat_viewport_height = height;
+        harness.app.state.chat.render_cache.borrow_mut().total_lines = 200;
+        harness.app.state.chat.viewport_height = height;
         let bottom = 200 - usize::from(height);
         let step = usize::from(height.saturating_sub(2).max(1));
 
         harness
             .app
             .handle_key_event(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
-        assert_eq!(harness.app.state.scroll, bottom - step);
-        assert!(!harness.app.state.auto_scroll);
+        assert_eq!(harness.app.state.chat.scroll, bottom - step);
+        assert!(!harness.app.state.chat.auto_scroll);
         harness
             .app
             .handle_key_event(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
-        assert_eq!(harness.app.state.scroll, bottom);
-        assert!(harness.app.state.auto_scroll);
+        assert_eq!(harness.app.state.chat.scroll, bottom);
+        assert!(harness.app.state.chat.auto_scroll);
     }
 }
 
@@ -127,13 +126,13 @@ fn input_arriving_during_runtime_processing_stops_the_batch() {
 #[test]
 fn chat_scroll_reaches_lines_beyond_u16_range() {
     let mut harness = test_harness();
-    harness.app.state.chat_render_cache.borrow_mut().total_lines = 100_000;
-    harness.app.state.chat_viewport_height = 20;
+    harness.app.state.chat.render_cache.borrow_mut().total_lines = 100_000;
+    harness.app.state.chat.viewport_height = 20;
 
     harness.app.scroll_chat_to_bottom();
-    assert_eq!(harness.app.state.scroll, 99_980);
+    assert_eq!(harness.app.state.chat.scroll, 99_980);
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
-    assert_eq!(harness.app.state.scroll, 99_962);
+    assert_eq!(harness.app.state.chat.scroll, 99_962);
 }

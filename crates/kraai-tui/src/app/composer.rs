@@ -1,5 +1,6 @@
+use super::App;
 use super::line_edit::{word_left, word_right};
-use super::*;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl App {
     pub(super) fn handle_composer_shortcut(&mut self, key: KeyEvent) -> bool {
@@ -12,28 +13,28 @@ impl App {
         match key.code {
             KeyCode::Char('v') if key.modifiers == KeyModifiers::CONTROL => self.paste_image(),
             KeyCode::Left if control => {
-                self.state.input_cursor = self
-                    .state
-                    .draft_images
-                    .snap(word_left(&self.state.input, self.state.input_cursor), false)
+                self.state.composer.cursor = self.state.composer.images.snap(
+                    word_left(&self.state.composer.text, self.state.composer.cursor),
+                    false,
+                )
             }
             KeyCode::Right if control => {
-                self.state.input_cursor = self
-                    .state
-                    .draft_images
-                    .snap(word_right(&self.state.input, self.state.input_cursor), true)
+                self.state.composer.cursor = self.state.composer.images.snap(
+                    word_right(&self.state.composer.text, self.state.composer.cursor),
+                    true,
+                )
             }
             KeyCode::Char('b') if alt => {
-                self.state.input_cursor = self
-                    .state
-                    .draft_images
-                    .snap(word_left(&self.state.input, self.state.input_cursor), false)
+                self.state.composer.cursor = self.state.composer.images.snap(
+                    word_left(&self.state.composer.text, self.state.composer.cursor),
+                    false,
+                )
             }
             KeyCode::Char('f') if alt => {
-                self.state.input_cursor = self
-                    .state
-                    .draft_images
-                    .snap(word_right(&self.state.input, self.state.input_cursor), true)
+                self.state.composer.cursor = self.state.composer.images.snap(
+                    word_right(&self.state.composer.text, self.state.composer.cursor),
+                    true,
+                )
             }
             KeyCode::Backspace if control || alt => self.delete_input_word(false),
             KeyCode::Delete if control => self.delete_input_word(true),
@@ -46,11 +47,11 @@ impl App {
 
     fn delete_input_word(&mut self, forward: bool) {
         self.reset_input_history_navigation();
-        let cursor = self.state.input_cursor;
+        let cursor = self.state.composer.cursor;
         let boundary = if forward {
-            word_right(&self.state.input, cursor)
+            word_right(&self.state.composer.text, cursor)
         } else {
-            word_left(&self.state.input, cursor)
+            word_left(&self.state.composer.text, cursor)
         };
         self.replace_input_range(cursor.min(boundary)..cursor.max(boundary), "");
     }

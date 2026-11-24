@@ -1,3 +1,5 @@
+use crate::app::auth::{ProviderAuthState, ProviderAuthStatus};
+use crate::app::types::ProvidersView;
 use kraai_runtime::{
     FieldDefinition, FieldValueEntry, FieldValueKind, FieldViolation, Model, ModelSettings,
     ProviderDefinition, ProviderSettings, RuntimeError, RuntimeErrorKind, SettingsDocument,
@@ -5,8 +7,6 @@ use kraai_runtime::{
 };
 
 use super::*;
-use crate::app::auth::{ProviderAuthState, ProviderAuthStatus};
-use crate::app::{KeyCode, ProvidersView, UiMode};
 
 fn field(key: &str, label: &str, value_kind: FieldValueKind, required: bool) -> FieldDefinition {
     FieldDefinition {
@@ -89,7 +89,7 @@ fn auth(state: ProviderAuthState) -> ProviderAuthStatus {
 }
 
 fn open_providers(harness: &mut TestHarness) {
-    harness.app.state.provider_definitions = vec![
+    harness.app.state.providers.definitions = vec![
         definition(
             "openai-codex",
             "OpenAI Codex",
@@ -100,9 +100,10 @@ fn open_providers(harness: &mut TestHarness) {
     harness
         .app
         .state
-        .models_by_provider
+        .models
+        .by_provider
         .insert(String::from("local"), vec![model("a"), model("b")]);
-    harness.app.state.provider_auth.insert(
+    harness.app.state.providers.auth.insert(
         String::from("openai-codex"),
         auth(ProviderAuthState::Authenticated),
     );
@@ -134,7 +135,7 @@ fn open_config(harness: &mut TestHarness) {
     type_text(harness, "edit");
     key(harness, KeyCode::Enter);
     harness.drain_requests();
-    assert_eq!(harness.app.state.providers_view, ProvidersView::Config);
+    assert_eq!(harness.app.state.providers.view, ProvidersView::Config);
 }
 
 #[test]
@@ -155,7 +156,7 @@ fn provider_list_waits_for_settings_then_lists_providers_and_a_connect_row() {
         Some("  Loading providers")
     );
     key(&mut harness, KeyCode::Enter);
-    assert_eq!(harness.app.state.providers_view, ProvidersView::List);
+    assert_eq!(harness.app.state.providers.view, ProvidersView::List);
 
     let mut harness = test_harness();
     open_providers(&mut harness);
@@ -189,7 +190,7 @@ fn provider_list_waits_for_settings_then_lists_providers_and_a_connect_row() {
     );
     key(&mut harness, KeyCode::Esc);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
-    assert!(harness.app.state.sheet_query.is_empty());
+    assert!(harness.app.state.sheet.query.is_empty());
 }
 
 #[test]
@@ -197,7 +198,7 @@ fn a_provider_offers_the_actions_its_sign_in_allows_and_typing_narrows_them() {
     let mut harness = test_harness();
     open_providers(&mut harness);
     key(&mut harness, KeyCode::Enter);
-    assert_eq!(harness.app.state.providers_view, ProvidersView::Provider);
+    assert_eq!(harness.app.state.providers.view, ProvidersView::Provider);
     assert_eq!(
         sheet(&harness, 70),
         [
@@ -232,7 +233,8 @@ fn a_provider_offers_the_actions_its_sign_in_allows_and_typing_narrows_them() {
     harness
         .app
         .state
-        .provider_auth
+        .providers
+        .auth
         .insert(pending.provider_type.clone(), pending);
     ctrl(&mut harness, 'u');
     assert_eq!(
@@ -258,8 +260,8 @@ fn a_provider_offers_the_actions_its_sign_in_allows_and_typing_narrows_them() {
         [RuntimeRequest::CancelProviderLogin { .. }]
     ));
     key(&mut harness, KeyCode::Esc);
-    assert_eq!(harness.app.state.providers_view, ProvidersView::List);
-    assert_eq!(harness.app.state.sheet_index, 0);
+    assert_eq!(harness.app.state.providers.view, ProvidersView::List);
+    assert_eq!(harness.app.state.sheet.index, 0);
 
     key(&mut harness, KeyCode::Down);
     key(&mut harness, KeyCode::Enter);
@@ -284,8 +286,8 @@ fn a_provider_offers_the_actions_its_sign_in_allows_and_typing_narrows_them() {
         Some("  Refreshing models")
     );
     key(&mut harness, KeyCode::Backspace);
-    assert_eq!(harness.app.state.providers_view, ProvidersView::List);
-    assert_eq!(harness.app.state.sheet_index, 1);
+    assert_eq!(harness.app.state.providers.view, ProvidersView::List);
+    assert_eq!(harness.app.state.sheet.index, 1);
 }
 
 #[test]
@@ -309,10 +311,10 @@ fn removing_a_provider_asks_twice_from_the_list_and_from_its_own_sheet() {
     );
     key(&mut harness, KeyCode::Up);
     key(&mut harness, KeyCode::Down);
-    assert!(!harness.app.state.sheet_armed);
+    assert!(!harness.app.state.sheet.armed);
     key(&mut harness, KeyCode::Down);
     key(&mut harness, KeyCode::Delete);
-    assert!(!harness.app.state.sheet_armed);
+    assert!(!harness.app.state.sheet.armed);
     key(&mut harness, KeyCode::Up);
 
     key(&mut harness, KeyCode::Delete);
@@ -349,7 +351,7 @@ fn removing_a_provider_asks_twice_from_the_list_and_from_its_own_sheet() {
             .first()
             .is_some_and(|document| document.providers.is_empty())
     );
-    assert_eq!(harness.app.state.providers_view, ProvidersView::List);
+    assert_eq!(harness.app.state.providers.view, ProvidersView::List);
     assert_eq!(
         sheet(&harness, 70).get(1..).unwrap_or_default(),
         [
@@ -365,7 +367,7 @@ fn connecting_lists_the_kinds_of_provider_and_opens_the_new_one() {
     open_providers(&mut harness);
     key(&mut harness, KeyCode::Up);
     key(&mut harness, KeyCode::Enter);
-    assert_eq!(harness.app.state.providers_view, ProvidersView::Connect);
+    assert_eq!(harness.app.state.providers.view, ProvidersView::Connect);
     assert_eq!(
         sheet(&harness, 70),
         [
@@ -382,8 +384,8 @@ fn connecting_lists_the_kinds_of_provider_and_opens_the_new_one() {
     );
     assert_eq!(composer(&harness), "/providers › connect ›");
     key(&mut harness, KeyCode::Esc);
-    assert_eq!(harness.app.state.providers_view, ProvidersView::List);
-    assert_eq!(harness.app.state.sheet_index, 2);
+    assert_eq!(harness.app.state.providers.view, ProvidersView::List);
+    assert_eq!(harness.app.state.sheet.index, 2);
 
     key(&mut harness, KeyCode::Enter);
     type_text(&mut harness, "chat");
@@ -406,7 +408,7 @@ fn connecting_lists_the_kinds_of_provider_and_opens_the_new_one() {
         added.map(|provider| (provider.id, provider.type_id)),
         Some((String::from("chat"), String::from("chat")))
     );
-    assert_eq!(harness.app.state.providers_view, ProvidersView::Provider);
+    assert_eq!(harness.app.state.providers.view, ProvidersView::Provider);
     assert_eq!(composer(&harness), "/providers › chat ›");
     assert_eq!(
         sheet(&harness, 70).last().map(String::as_str),
@@ -450,7 +452,7 @@ fn configuration_is_one_form_edited_in_the_composer() {
         Some("▌ ID              local2")
     );
     key(&mut harness, KeyCode::Down);
-    assert_eq!(harness.app.state.sheet_index, 0);
+    assert_eq!(harness.app.state.sheet.index, 0);
     key(&mut harness, KeyCode::Enter);
     let document = saved(&harness).pop().unwrap_or_default();
     assert_eq!(
@@ -488,9 +490,9 @@ fn configuration_is_one_form_edited_in_the_composer() {
         Some("  Limit takes a whole number")
     );
     key(&mut harness, KeyCode::Esc);
-    assert_eq!(harness.app.state.providers_view, ProvidersView::Config);
-    assert!(harness.app.state.config_editing.is_none());
-    assert!(harness.app.state.sheet_query.is_empty());
+    assert_eq!(harness.app.state.providers.view, ProvidersView::Config);
+    assert!(harness.app.state.providers.config_editing.is_none());
+    assert!(harness.app.state.sheet.query.is_empty());
     harness.app.handle_paste(String::from("25"));
     key(&mut harness, KeyCode::Enter);
     let limit = |document: &SettingsDocument| {
@@ -522,11 +524,11 @@ fn a_config_value_is_edited_where_the_arrows_put_the_cursor() {
     for _ in "localhost".chars() {
         key(&mut harness, KeyCode::Left);
     }
-    assert!(harness.app.state.config_editing.is_some());
+    assert!(harness.app.state.providers.config_editing.is_some());
     let area = ratatui::layout::Rect::new(0, 0, 80, 3);
     let prefix = "/providers › local › config › Base URL = http://";
     assert_eq!(
-        harness.app.state.composer().get_cursor_position(area),
+        harness.app.state.composer_input().get_cursor_position(area),
         (1 + prefix.chars().count() as u16, 1)
     );
     type_text(&mut harness, "my");
@@ -544,7 +546,7 @@ fn a_config_value_is_edited_where_the_arrows_put_the_cursor() {
 fn a_secret_shows_in_full_only_while_it_is_edited() {
     let mut harness = test_harness();
     open_providers(&mut harness);
-    for definition in &mut harness.app.state.provider_definitions {
+    for definition in &mut harness.app.state.providers.definitions {
         definition.provider_fields.push(FieldDefinition {
             secret: true,
             ..field("key", "API key", FieldValueKind::SecretString, false)
@@ -625,7 +627,7 @@ fn a_secret_shows_in_full_only_while_it_is_edited() {
     ctrl(&mut harness, 'u');
     key(&mut harness, KeyCode::Enter);
     key(&mut harness, KeyCode::Esc);
-    assert!(!harness.app.state.sheet_armed);
+    assert!(!harness.app.state.sheet.armed);
     key(&mut harness, KeyCode::Enter);
     ctrl(&mut harness, 'u');
     key(&mut harness, KeyCode::Enter);
@@ -657,7 +659,7 @@ fn toggles_and_the_type_step_in_place_and_models_are_added_and_removed() {
         Some(SettingsValue::Bool(true))
     );
     type_text(&mut harness, "x");
-    assert!(harness.app.state.config_editing.is_none());
+    assert!(harness.app.state.providers.config_editing.is_none());
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
         saved(&harness).last().and_then(stream),
@@ -683,7 +685,7 @@ fn toggles_and_the_type_step_in_place_and_models_are_added_and_removed() {
     }
     assert_eq!(hints(&harness), "tab or ↑↓ select · enter add · esc back");
     key(&mut harness, KeyCode::Delete);
-    assert!(!harness.app.state.sheet_armed);
+    assert!(!harness.app.state.sheet.armed);
     key(&mut harness, KeyCode::Enter);
     let document = saved(&harness).pop().unwrap_or_default();
     assert_eq!(
@@ -760,9 +762,9 @@ fn a_refused_save_marks_the_row_and_says_why_when_it_is_highlighted() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SaveSettings(Ok(())));
-    assert!(harness.app.state.settings_errors.is_empty());
+    assert!(harness.app.state.providers.settings_errors.is_empty());
     key(&mut harness, KeyCode::Esc);
-    assert_eq!(harness.app.state.providers_view, ProvidersView::Provider);
+    assert_eq!(harness.app.state.providers.view, ProvidersView::Provider);
     assert_eq!(
         sheet(&harness, 70).get(3).map(String::as_str),
         Some("▌ Edit configuration")
@@ -777,12 +779,18 @@ fn highlight(harness: &mut TestHarness, row: &crate::app::provider_config::Confi
         .iter()
         .position(|candidate| candidate == row)
     {
-        harness.app.state.sheet_index = index;
+        harness.app.state.sheet.index = index;
     }
 }
 
 fn draft_ids(harness: &TestHarness) -> (Vec<String>, Vec<(String, String)>) {
-    let draft = harness.app.state.settings_draft.clone().unwrap_or_default();
+    let draft = harness
+        .app
+        .state
+        .providers
+        .settings_draft
+        .clone()
+        .unwrap_or_default();
     (
         draft
             .providers
@@ -804,10 +812,10 @@ fn a_provider_cannot_take_the_id_of_another_provider() {
     open_config(&mut harness);
     highlight(&mut harness, &ConfigRow::ProviderId);
     key(&mut harness, KeyCode::Enter);
-    harness.app.state.sheet_query.set(String::from("codex"));
+    harness.app.state.sheet.query.set(String::from("codex"));
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
-        harness.app.state.sheet_notice.as_deref(),
+        harness.app.state.sheet.notice.as_deref(),
         Some("A provider is already named codex")
     );
     assert!(saved(&harness).is_empty());

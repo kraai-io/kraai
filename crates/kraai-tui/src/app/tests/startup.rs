@@ -123,17 +123,17 @@ fn startup_message_waits_for_all_selections_and_is_submitted_once() {
         assert_eq!(harness.app.startup_options.message.as_ref(), Some(&message));
         match selection {
             0 => harness.app.state.config_loaded = true,
-            1 => harness.app.state.selected_provider_id = Some(String::from("provider")),
-            2 => harness.app.state.selected_model_id = Some(String::from("model")),
-            _ => harness.app.state.selected_profile_id = Some(String::from("coding")),
+            1 => harness.app.state.models.selected_provider_id = Some(String::from("provider")),
+            2 => harness.app.state.models.selected_model_id = Some(String::from("model")),
+            _ => harness.app.state.agents.selected_profile_id = Some(String::from("coding")),
         }
     }
 
-    harness.app.state.is_streaming = true;
+    harness.app.state.turn.is_streaming = true;
     harness.app.maybe_send_startup_message();
     assert!(harness.drain_requests().is_empty());
     assert!(!harness.app.startup_message_sent);
-    harness.app.state.is_streaming = false;
+    harness.app.state.turn.is_streaming = false;
 
     harness.app.maybe_send_startup_message();
     assert!(matches!(
@@ -145,6 +145,7 @@ fn startup_message_waits_for_all_selections_and_is_submitted_once() {
         harness
             .app
             .state
+            .sessions
             .pending_submit
             .as_ref()
             .and_then(|submit| submit.message.as_text()),

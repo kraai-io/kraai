@@ -1,11 +1,12 @@
 use super::{RuntimeRequest, RuntimeResponse, TestHarness, session_snapshot, test_harness};
-use crate::app::{KeyCode, KeyEvent, KeyModifiers, UiMode};
+use crate::app::types::UiMode;
 use crossbeam_channel::unbounded;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn begin_load(harness: &mut TestHarness) -> (u64, kraai_types::SessionId) {
-    harness.app.state.sessions = vec![session_snapshot(None).session];
+    harness.app.state.sessions.list = vec![session_snapshot(None).session];
     harness.app.state.mode = UiMode::Sessions;
-    harness.app.state.sheet_index = 1;
+    harness.app.state.sheet.index = 1;
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -63,8 +64,8 @@ fn new_chat_ignores_late_load_success_and_failure() {
 
         assert!(harness.app.state.current_session_id.is_none());
         assert_eq!(harness.app.state.mode, UiMode::Chat);
-        assert_eq!(harness.app.state.input, "new conversation draft");
-        assert!(harness.app.state.last_error.is_none());
+        assert_eq!(harness.app.state.composer.text, "new conversation draft");
+        assert!(harness.app.state.errors.last.is_none());
     }
 }
 
@@ -109,15 +110,15 @@ fn current_load_failure_keeps_existing_error_messages() {
                 result,
             });
         assert!(harness.app.state.current_session_id.is_none());
-        assert_eq!(harness.app.state.last_error.as_deref(), error);
-        assert!(harness.app.state.pending_session_load_id.is_none());
+        assert_eq!(harness.app.state.errors.last.as_deref(), error);
+        assert!(harness.app.state.sessions.pending_load_id.is_none());
     }
 }
 
 #[test]
 fn only_the_latest_load_can_change_navigation_when_request_ids_wrap() {
     let mut harness = test_harness();
-    harness.app.state.next_session_load_id = u64::MAX;
+    harness.app.state.sessions.next_load_id = u64::MAX;
     let (previous_id, previous_session) = begin_load(&mut harness);
     let (current_id, current_session) = begin_load(&mut harness);
     assert_eq!(previous_id, u64::MAX);
@@ -135,9 +136,9 @@ fn only_the_latest_load_can_change_navigation_when_request_ids_wrap() {
                 result,
             });
         assert!(harness.app.state.current_session_id.is_none());
-        assert!(harness.app.state.last_error.is_none());
+        assert!(harness.app.state.errors.last.is_none());
         assert_eq!(harness.app.state.mode, UiMode::Sessions);
-        assert_eq!(harness.app.state.pending_session_load_id, Some(current_id));
+        assert_eq!(harness.app.state.sessions.pending_load_id, Some(current_id));
     }
     harness
         .app
@@ -147,5 +148,5 @@ fn only_the_latest_load_can_change_navigation_when_request_ids_wrap() {
             result: Ok(true),
         });
     assert_eq!(harness.app.state.current_session_id, Some(current_session));
-    assert!(harness.app.state.pending_session_load_id.is_none());
+    assert!(harness.app.state.sessions.pending_load_id.is_none());
 }

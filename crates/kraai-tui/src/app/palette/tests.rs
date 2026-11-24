@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn start() -> CrosstermEvent {
     CrosstermEvent::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::ALT))

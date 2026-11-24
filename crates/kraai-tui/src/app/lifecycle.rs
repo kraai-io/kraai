@@ -1,51 +1,60 @@
-use super::*;
+use super::runtime_bridge::{RuntimeEventBridgeMessage, spawn_event_bridge, spawn_runtime_bridge};
+use super::types::{RuntimeRequest, StartupOptions, UiMode};
+use super::ui::{activity_text, format_token_count};
+use super::{App, AppState, STATUSLINE_ANIMATION_INTERVAL, StartupSync};
+use super::{cursor, frame_pacer, input, refreshes, ui};
+use crate::components::running_dot;
+use color_eyre::eyre::Result;
+use kraai_runtime::RuntimeHandle;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 const RUNTIME_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(2);
 const RUNTIME_EVENT_BATCH_ROUNDS: usize = 64;
 
 impl App {
     pub(super) fn update_chat_viewport(&mut self, height: u16) {
-        self.state.chat_viewport_height = height;
+        self.state.chat.viewport_height = height;
         self.clamp_chat_scroll();
     }
 
     pub(super) fn effective_chat_scroll(&self) -> usize {
-        let max_scroll = self.state.chat_max_scroll();
-        if self.state.auto_scroll {
+        let max_scroll = self.state.chat.max_scroll();
+        if self.state.chat.auto_scroll {
             max_scroll
         } else {
-            self.state.scroll.min(max_scroll)
+            self.state.chat.scroll.min(max_scroll)
         }
     }
 
     pub(super) fn clamp_chat_scroll(&mut self) {
-        self.state.scroll = self.effective_chat_scroll();
+        self.state.chat.scroll = self.effective_chat_scroll();
     }
 
     pub(super) fn scroll_chat_by(&mut self, delta: i16) {
-        let max_scroll = self.state.chat_max_scroll();
+        let max_scroll = self.state.chat.max_scroll();
         let next_scroll = self
             .effective_chat_scroll()
             .saturating_add_signed(isize::from(delta))
             .min(max_scroll);
-        self.state.scroll = next_scroll;
-        self.state.auto_scroll = delta > 0 && next_scroll == max_scroll;
+        self.state.chat.scroll = next_scroll;
+        self.state.chat.auto_scroll = delta > 0 && next_scroll == max_scroll;
     }
 
     pub(super) fn scroll_chat_to_top(&mut self) {
-        self.state.auto_scroll = false;
-        self.state.scroll = 0;
+        self.state.chat.auto_scroll = false;
+        self.state.chat.scroll = 0;
     }
 
     pub(super) fn page_chat(&mut self, down: bool) {
-        let lines = self.state.chat_viewport_height.saturating_sub(2).max(1);
+        let lines = self.state.chat.viewport_height.saturating_sub(2).max(1);
         let lines = i16::try_from(lines).unwrap_or(i16::MAX);
         self.scroll_chat_by(if down { lines } else { -lines });
     }
 
     pub(super) fn scroll_chat_to_bottom(&mut self) {
-        self.state.auto_scroll = true;
-        self.state.scroll = self.state.chat_max_scroll();
+        self.state.chat.auto_scroll = true;
+        self.state.chat.scroll = self.state.chat.max_scroll();
     }
 
     pub fn new(runtime: RuntimeHandle, startup_options: StartupOptions) -> Self {
@@ -106,7 +115,7 @@ impl App {
             } else {
                 let fading = self.state.palette.muted.is_some();
                 let animation = (self.state.runtime_is_active()
-                    || !self.state.running_scripts.is_empty())
+                    || !self.state.turn.running_scripts.is_empty())
                 .then_some(if fading {
                     crate::theme::BREATH_FRAME
                 } else {
@@ -161,14 +170,18 @@ impl App {
                 cursor.position = None;
                 let [_, _, input_area] = ui::chat_layout(&self.state, area);
                 if self.state.mode == UiMode::Chat {
-                    self.state.input_width = input_area.width;
+                    self.state.composer.width = input_area.width;
                 }
                 if self.state.composer_cursor_enabled()
                     && input_area.width > 0
                     && input_area.height > 0
                 {
-                    cursor.position =
-                        Some(self.state.composer().get_cursor_position(input_area).into());
+                    cursor.position = Some(
+                        self.state
+                            .composer_input()
+                            .get_cursor_position(input_area)
+                            .into(),
+                    );
                 }
                 if let Some(position) = cursor.position
                     && (!self.state.cursor_preferences.custom_blink() || cursor.visible)
@@ -187,7 +200,7 @@ impl App {
     }
 
     pub fn exit_token_usage_summary(&self) -> Option<String> {
-        if self.state.exit_usage_totals.usage_by_model.is_empty() {
+        if self.state.usage.exit_totals.usage_by_model.is_empty() {
             let lines = self.exit_cost_summary();
             return (!lines.is_empty()).then(|| lines.join("\n"));
         }
@@ -195,7 +208,7 @@ impl App {
         let mut lines = vec![String::from("Token usage since launch:")];
         let mut total = kraai_runtime::TokenUsage::default();
 
-        for (model_key, usage) in &self.state.exit_usage_totals.usage_by_model {
+        for (model_key, usage) in &self.state.usage.exit_totals.usage_by_model {
             accumulate_token_usage(&mut total, usage);
             lines.push(format!(
                 "  {}/{}: {}",
@@ -288,10 +301,10 @@ impl App {
                 self.route_runtime_event(event);
             }
             RuntimeEventBridgeMessage::Lagged => {
-                self.state.cost_recovery_list_pending = true;
+                self.state.usage.cost_recovery_list_pending = true;
                 self.event_lag_session_resync_pending = true;
                 self.event_lag_script_resync_pending = true;
-                self.state.retry_waiting = false;
+                self.state.turn.retry_waiting = false;
                 if self.startup_sync != StartupSync::WaitingForRuntime {
                     self.request_sync();
                 }
@@ -300,11 +313,11 @@ impl App {
     }
 
     pub(super) fn advance_script_clock(&mut self, now: Instant) -> bool {
-        let Some(clock) = self.state.script_clock else {
+        let Some(clock) = self.state.turn.script_clock else {
             return false;
         };
-        if self.state.running_scripts.is_empty() {
-            self.state.script_clock = None;
+        if self.state.turn.running_scripts.is_empty() {
+            self.state.turn.script_clock = None;
             return false;
         }
         let dot = |at: Instant| running_dot(self.state.breath(at), self.state.palette.muted);
@@ -313,12 +326,13 @@ impl App {
         let moved = dot(now) != dot(clock)
             || self
                 .state
+                .turn
                 .running_scripts
                 .values()
                 .any(|script| seconds(now, script.started) != seconds(clock, script.started));
         if moved {
-            self.state.script_clock = Some(now);
-            self.invalidate_script_cards();
+            self.state.turn.script_clock = Some(now);
+            self.state.chat.invalidate_cards();
         }
         moved
     }

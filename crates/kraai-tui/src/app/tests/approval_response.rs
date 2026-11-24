@@ -1,9 +1,13 @@
 use super::{
-    Event, RuntimeEvent, RuntimeEventBridgeMessage, RuntimeResponse, ScriptApprovalAction,
-    ScriptPhase, pending_script, session_snapshot_at, test_harness,
+    RuntimeEvent, RuntimeEventBridgeMessage, RuntimeResponse, pending_script, session_snapshot_at,
+    test_harness,
 };
+use crate::app::types::{ScriptApprovalAction, ScriptPhase};
+use color_eyre::eyre::Result;
 use crossbeam_channel::unbounded;
+use kraai_runtime::Event;
 use kraai_types::SessionId;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
 
 fn rendered(harness: &super::TestHarness) -> String {
@@ -18,16 +22,15 @@ fn submitting_a_decision_hides_the_prompt_before_the_reply() {
     for action in [ScriptApprovalAction::Allow, ScriptApprovalAction::Reject] {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(SessionId::new("session"));
-        harness.app.state.pending_script = Some(pending_script("execution"));
+        harness.app.state.turn.pending_script = Some(pending_script("execution"));
         harness.app.enter_script_decision_phase();
-        harness.app.state.script_approval_action = action;
-        harness.app.state.approval_expanded = true;
+        harness.app.state.turn.script_approval_action = action;
+        harness.app.state.turn.approval_expanded = true;
         assert!(rendered(&harness).contains("Permission required"));
 
-        harness.app.handle_key_event(crate::app::KeyEvent::new(
-            crate::app::KeyCode::Enter,
-            crate::app::KeyModifiers::NONE,
-        ));
+        harness
+            .app
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert!(!rendered(&harness).contains("Permission required"));
         assert!(rendered(&harness).contains("Submitting decision"));
@@ -73,8 +76,8 @@ fn submitting_a_decision_hides_the_prompt_before_the_reply() {
             .app
             .handle_runtime_response(decision_response(action, "execution", Ok(())));
         assert!(!harness.app.state.has_local_script_approval());
-        assert!(harness.app.state.submitted_script_decisions.is_empty());
-        assert!(harness.app.state.pending_script.is_none());
+        assert!(harness.app.state.turn.submitted_script_decisions.is_empty());
+        assert!(harness.app.state.turn.pending_script.is_none());
     }
 }
 
@@ -83,9 +86,9 @@ fn failed_decision_restores_the_prompt_and_allows_retry() {
     for action in [ScriptApprovalAction::Allow, ScriptApprovalAction::Reject] {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(SessionId::new("session"));
-        harness.app.state.pending_script = Some(pending_script("execution"));
+        harness.app.state.turn.pending_script = Some(pending_script("execution"));
         harness.app.enter_script_decision_phase();
-        harness.app.state.script_approval_action = action;
+        harness.app.state.turn.script_approval_action = action;
         harness.app.confirm_current_script_action();
         harness.drain_requests();
 
@@ -96,8 +99,8 @@ fn failed_decision_restores_the_prompt_and_allows_retry() {
         ));
 
         assert!(rendered(&harness).contains("Permission required"));
-        assert!(harness.app.state.last_error.is_some());
-        assert!(harness.app.state.submitted_script_decisions.is_empty());
+        assert!(harness.app.state.errors.last.is_some());
+        assert!(harness.app.state.turn.submitted_script_decisions.is_empty());
         harness.app.confirm_current_script_action();
         assert!(!harness.app.state.has_local_script_approval());
         assert_eq!(harness.drain_requests().len(), 1);
@@ -108,7 +111,7 @@ fn failed_decision_restores_the_prompt_and_allows_retry() {
 fn undelivered_decision_is_not_marked_as_submitted() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.state.pending_script = Some(pending_script("execution"));
+    harness.app.state.turn.pending_script = Some(pending_script("execution"));
     harness.app.enter_script_decision_phase();
     let (runtime_tx, runtime_rx) = unbounded();
     harness.app.runtime_tx = runtime_tx;
@@ -116,7 +119,7 @@ fn undelivered_decision_is_not_marked_as_submitted() {
 
     harness.app.confirm_current_script_action();
 
-    assert!(harness.app.state.submitted_script_decisions.is_empty());
+    assert!(harness.app.state.turn.submitted_script_decisions.is_empty());
     assert!(!harness.app.runtime_bridge_connected);
 }
 
@@ -144,9 +147,9 @@ fn delayed_decision_reply_preserves_a_newer_approval_prompt() {
     for action in [ScriptApprovalAction::Allow, ScriptApprovalAction::Reject] {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(SessionId::new("session"));
-        harness.app.state.pending_script = Some(pending_script("previous"));
-        harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
-        harness.app.state.script_approval_action = action;
+        harness.app.state.turn.pending_script = Some(pending_script("previous"));
+        harness.app.state.turn.script_phase = ScriptPhase::AwaitingApproval;
+        harness.app.state.turn.script_approval_action = action;
         harness.app.confirm_current_script_action();
         let (event_tx, event_rx) = unbounded();
         let (response_tx, response_rx) = unbounded();
@@ -201,13 +204,14 @@ fn delayed_decision_reply_preserves_a_newer_approval_prompt() {
                 result: Box::new(Ok(session_snapshot_at(3, None))),
             });
         assert_eq!(
-            harness.app.state.script_phase,
+            harness.app.state.turn.script_phase,
             ScriptPhase::AwaitingApproval
         );
         assert_eq!(
             harness
                 .app
                 .state
+                .turn
                 .pending_script
                 .as_ref()
                 .map(|script| script.execution_id.as_str()),
@@ -227,9 +231,9 @@ fn delayed_decision_reply_does_not_restart_a_finished_script() {
     for action in [ScriptApprovalAction::Allow, ScriptApprovalAction::Reject] {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(SessionId::new("session"));
-        harness.app.state.pending_script = Some(pending_script("previous"));
-        harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
-        harness.app.state.script_approval_action = action;
+        harness.app.state.turn.pending_script = Some(pending_script("previous"));
+        harness.app.state.turn.script_phase = ScriptPhase::AwaitingApproval;
+        harness.app.state.turn.script_approval_action = action;
         harness.app.confirm_current_script_action();
         harness.app.handle_runtime_event(Event::ScriptResultReady {
             session_id: SessionId::new("session"),
@@ -246,8 +250,8 @@ fn delayed_decision_reply_does_not_restart_a_finished_script() {
             .app
             .handle_runtime_response(decision_response(action, "previous", Ok(())));
 
-        assert_eq!(harness.app.state.script_phase, ScriptPhase::Idle);
-        assert!(harness.app.state.pending_script.is_none());
+        assert_eq!(harness.app.state.turn.script_phase, ScriptPhase::Idle);
+        assert!(harness.app.state.turn.pending_script.is_none());
     }
 }
 
@@ -256,28 +260,27 @@ fn current_decision_reply_moves_the_script_on() {
     for action in [ScriptApprovalAction::Allow, ScriptApprovalAction::Reject] {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(SessionId::new("session"));
-        harness.app.state.pending_script = Some(pending_script("current"));
-        harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
+        harness.app.state.turn.pending_script = Some(pending_script("current"));
+        harness.app.state.turn.script_phase = ScriptPhase::AwaitingApproval;
 
         harness
             .app
             .handle_runtime_response(decision_response(action, "current", Ok(())));
 
-        assert_eq!(harness.app.state.script_phase, ScriptPhase::Executing);
-        assert!(harness.app.state.pending_script.is_none());
+        assert_eq!(harness.app.state.turn.script_phase, ScriptPhase::Executing);
+        assert!(harness.app.state.turn.pending_script.is_none());
     }
 }
 
 #[test]
 fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
-    use crate::app::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
 
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness.app.state.config_loaded = true;
-    harness.app.state.selected_provider_id = Some("provider".into());
-    harness.app.state.selected_model_id = Some("model".into());
+    harness.app.state.models.selected_provider_id = Some("provider".into());
+    harness.app.state.models.selected_model_id = Some("model".into());
     let mut snapshot = super::session_snapshot(None);
     snapshot.activity = kraai_runtime::SessionActivity::AwaitingApproval;
     snapshot.session.waiting_for_approval = true;
@@ -291,26 +294,26 @@ fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
             result: Box::new(Ok(snapshot)),
         });
     assert_eq!(
-        harness.app.state.script_phase,
+        harness.app.state.turn.script_phase,
         ScriptPhase::AwaitingApproval
     );
-    assert!(harness.app.state.pending_script.is_none());
+    assert!(harness.app.state.turn.pending_script.is_none());
     harness
         .app
         .handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
     harness.app.handle_paste("ello".into());
-    assert_eq!(harness.app.state.input, "hello");
+    assert_eq!(harness.app.state.composer.text, "hello");
 
-    harness.app.state.chat_render_cache.borrow_mut().total_lines = 100;
-    harness.app.state.chat_viewport_height = 20;
+    harness.app.state.chat.render_cache.borrow_mut().total_lines = 100;
+    harness.app.state.chat.viewport_height = 20;
     harness.app.handle_mouse_event(MouseEvent {
         kind: MouseEventKind::ScrollUp,
         column: 0,
         row: 0,
         modifiers: KeyModifiers::NONE,
     });
-    assert_eq!(harness.app.state.scroll, 77);
-    assert_eq!(harness.app.state.approval_scroll.get(), 0);
+    assert_eq!(harness.app.state.chat.scroll, 77);
+    assert_eq!(harness.app.state.turn.approval_scroll.get(), 0);
 
     let area = Rect::new(0, 0, 80, 24);
     let mut buffer = Buffer::empty(area);
@@ -331,7 +334,7 @@ fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
         Ok(super::RuntimeRequest::SendMessage { session_id, message, .. })
             if session_id == SessionId::new("session") && message.as_text() == Some("hello")
     ));
-    assert!(harness.app.state.input.is_empty());
+    assert!(harness.app.state.composer.text.is_empty());
     harness
         .app
         .handle_runtime_response(RuntimeResponse::SendMessage {
@@ -340,19 +343,19 @@ fn foreign_approval_keeps_the_composer_available_and_recovers_rejected_input() {
                 "Owned by another runtime",
             )),
         });
-    assert_eq!(harness.app.state.input, "hello");
-    assert!(harness.app.state.pending_messages.is_empty());
+    assert_eq!(harness.app.state.composer.text, "hello");
+    assert!(harness.app.state.sessions.pending_messages.is_empty());
 }
 
 #[test]
 fn a_decision_clears_the_error_a_refused_one_left() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.state.pending_script = Some(pending_script("execution"));
+    harness.app.state.turn.pending_script = Some(pending_script("execution"));
     harness.app.enter_script_decision_phase();
     harness
         .app
         .set_error(String::from("Failed to approve script"));
     harness.app.confirm_current_script_action();
-    assert!(harness.app.state.last_error.is_none());
+    assert!(harness.app.state.errors.last.is_none());
 }

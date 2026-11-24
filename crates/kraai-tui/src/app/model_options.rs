@@ -3,7 +3,12 @@ use kraai_types::{
     REASONING_EFFORT_OPTION_ID,
 };
 
-use super::*;
+use super::types::UiMode;
+use super::ui::{next_wrapping, previous_wrapping};
+use super::{App, AppState};
+use color_eyre::eyre::Result;
+use kraai_runtime::Model;
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 #[derive(Clone)]
 pub(super) struct ModelSettingsTarget {
@@ -155,8 +160,8 @@ fn resolve_option_input(option: &ModelOptionDefinition, raw: &str) -> Option<Str
 impl AppState {
     pub(super) fn selected_model(&self) -> Option<&Model> {
         self.find_model(
-            self.selected_provider_id.as_ref()?,
-            self.selected_model_id.as_ref()?,
+            self.models.selected_provider_id.as_ref()?,
+            self.models.selected_model_id.as_ref()?,
         )
     }
 
@@ -166,9 +171,10 @@ impl AppState {
         model_id: &str,
     ) -> ModelOptionValues {
         let mut values = if self.is_current_model(provider_id, model_id) {
-            self.selected_model_options.clone()
+            self.models.selected_options.clone()
         } else {
-            self.remembered_model_options
+            self.models
+                .remembered_options
                 .get(provider_id)
                 .and_then(|models| models.get(model_id))
                 .cloned()
@@ -189,7 +195,7 @@ impl AppState {
     }
 
     pub(super) fn model_settings_view(&self) -> Option<(&Model, ModelOptionValues)> {
-        let target = self.model_settings.as_ref()?;
+        let target = self.sheet.model_settings.as_ref()?;
         let model = self.find_model(&target.provider_id, &target.model_id)?;
         let values = self.model_option_values(&target.provider_id, &target.model_id);
         Some((model, values))
@@ -198,7 +204,7 @@ impl AppState {
     pub(super) fn highlighted_model_setting(&self) -> Option<String> {
         let (model, values) = self.model_settings_view()?;
         active_options(model, &values)
-            .nth(self.sheet_index)
+            .nth(self.sheet.index)
             .map(|option| option.id.clone())
     }
 
@@ -209,30 +215,31 @@ impl AppState {
         let last = active_options(model, &values).count().saturating_sub(1);
         let index = active_options(model, &values)
             .position(|option| option.id == id)
-            .unwrap_or(self.sheet_index);
-        self.sheet_index = index.min(last);
+            .unwrap_or(self.sheet.index);
+        self.sheet.index = index.min(last);
     }
 }
 
 impl App {
     pub(super) fn reconcile_model_options(&mut self) {
         if let Some(model) = self.state.selected_model() {
-            let mut values = self.state.selected_model_options.clone();
+            let mut values = self.state.models.selected_options.clone();
             kraai_types::reconcile_model_option_values(&model.options, &mut values);
-            self.state.selected_model_options = values;
+            self.state.models.selected_options = values;
         }
     }
 
     pub(super) fn remember_model_options(&mut self) {
         if let (Some(provider_id), Some(model_id)) = (
-            self.state.selected_provider_id.clone(),
-            self.state.selected_model_id.clone(),
+            self.state.models.selected_provider_id.clone(),
+            self.state.models.selected_model_id.clone(),
         ) {
             self.state
-                .remembered_model_options
+                .models
+                .remembered_options
                 .entry(provider_id)
                 .or_default()
-                .insert(model_id, self.state.selected_model_options.clone());
+                .insert(model_id, self.state.models.selected_options.clone());
         }
     }
 
@@ -265,11 +272,12 @@ impl App {
         values: ModelOptionValues,
     ) {
         if self.state.is_current_model(provider_id, model_id) {
-            self.state.selected_model_options = values;
+            self.state.models.selected_options = values;
             self.save_model_selection();
         } else {
             self.state
-                .remembered_model_options
+                .models
+                .remembered_options
                 .entry(provider_id.to_owned())
                 .or_default()
                 .insert(model_id.to_owned(), values);
@@ -306,35 +314,35 @@ impl App {
             return;
         };
         if let Err(error) = self.set_model_option(provider_id, model_id, &id, &value) {
-            self.state.sheet_notice = Some(error);
+            self.state.sheet.notice = Some(error);
         }
     }
 
     pub(super) fn open_model_settings(&mut self, provider_id: String, model_id: String) {
-        self.state.model_settings = Some(ModelSettingsTarget {
+        self.state.sheet.model_settings = Some(ModelSettingsTarget {
             provider_id,
             model_id,
         });
-        self.state.sheet_query.clear();
-        self.state.sheet_notice = None;
+        self.state.sheet.query.clear();
+        self.state.sheet.notice = None;
         self.state.mode = UiMode::ModelSettings;
-        self.state.reset_sheet_selection();
+        self.state.sheet.reset_selection();
     }
 
     pub(super) fn close_model_settings(&mut self) {
-        match self.state.model_settings.take() {
+        match self.state.sheet.model_settings.take() {
             Some(target) => self.return_to_model_sheet(&target.provider_id, &target.model_id),
             None => self.close_sheet(),
         }
     }
 
     pub(super) fn handle_model_settings_key_event(&mut self, key: KeyEvent) {
-        self.state.sheet_notice = None;
-        let Some(target) = self.state.model_settings.clone() else {
+        self.state.sheet.notice = None;
+        let Some(target) = self.state.sheet.model_settings.clone() else {
             self.close_sheet();
             return;
         };
-        let query_is_empty = self.state.sheet_query.is_empty();
+        let query_is_empty = self.state.sheet.query.is_empty();
         if self.state.wants_back(key) {
             self.close_model_settings();
             return;
@@ -350,7 +358,7 @@ impl App {
             return;
         }
         let len = active.len();
-        let index = self.state.sheet_index.min(len.saturating_sub(1));
+        let index = self.state.sheet.index.min(len.saturating_sub(1));
         let option = active.get(index);
         #[expect(
             clippy::wildcard_enum_match_arm,
@@ -358,9 +366,9 @@ impl App {
         )]
         match key.code {
             KeyCode::Up | KeyCode::BackTab => {
-                self.state.sheet_index = previous_wrapping(index, len)
+                self.state.sheet.index = previous_wrapping(index, len)
             }
-            KeyCode::Down | KeyCode::Tab => self.state.sheet_index = next_wrapping(index, len),
+            KeyCode::Down | KeyCode::Tab => self.state.sheet.index = next_wrapping(index, len),
             KeyCode::Left | KeyCode::Right => {
                 let Some(option) = option else {
                     return;
@@ -375,17 +383,17 @@ impl App {
                     self.apply_model_setting(&target, &option.id, "");
                 }
             }
-            KeyCode::Enter if self.state.sheet_query.as_str().trim().is_empty() => {
+            KeyCode::Enter if self.state.sheet.query.as_str().trim().is_empty() => {
                 self.select_model(&target.provider_id, &target.model_id)
             }
             KeyCode::Enter => {
                 let Some(option) = option else {
-                    self.state.sheet_notice = Some(String::from("No setting to change"));
+                    self.state.sheet.notice = Some(String::from("No setting to change"));
                     return;
                 };
-                let query = self.state.sheet_query.as_str().trim().to_owned();
+                let query = self.state.sheet.query.as_str().trim().to_owned();
                 let Some(value) = resolve_option_input(option, &query) else {
-                    self.state.sheet_notice = Some(match option.kind {
+                    self.state.sheet.notice = Some(match option.kind {
                         ModelOptionKind::Integer { .. } => {
                             format!("{} takes a whole number", option.label)
                         }
@@ -396,7 +404,7 @@ impl App {
                     return;
                 };
                 if self.apply_model_setting(&target, &option.id, &value) {
-                    self.state.sheet_query.clear();
+                    self.state.sheet.query.clear();
                 }
             }
             _ => {}
@@ -406,7 +414,7 @@ impl App {
     fn apply_model_setting(&mut self, target: &ModelSettingsTarget, id: &str, value: &str) -> bool {
         if let Err(error) = self.set_model_option(&target.provider_id, &target.model_id, id, value)
         {
-            self.state.sheet_notice = Some(error);
+            self.state.sheet.notice = Some(error);
             return false;
         }
         self.state.highlight_model_setting(id);

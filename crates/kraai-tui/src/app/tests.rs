@@ -1,12 +1,12 @@
+use super::types::{ScriptApprovalAction, ScriptPhase, UiMode};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use std::collections::HashMap;
 
 #[test]
 fn wheel_scrolling_moves_three_lines_and_resumes_following_at_bottom() {
-    use super::{KeyModifiers, MouseEvent, MouseEventKind};
-
     let mut harness = test_harness();
-    harness.app.state.chat_render_cache.borrow_mut().total_lines = 100;
-    harness.app.state.chat_viewport_height = 20;
+    harness.app.state.chat.render_cache.borrow_mut().total_lines = 100;
+    harness.app.state.chat.viewport_height = 20;
     let wheel = |kind| MouseEvent {
         kind,
         column: 0,
@@ -17,34 +17,34 @@ fn wheel_scrolling_moves_three_lines_and_resumes_following_at_bottom() {
     harness
         .app
         .handle_mouse_event(wheel(MouseEventKind::ScrollUp));
-    assert_eq!(harness.app.state.scroll, 77);
-    assert!(!harness.app.state.auto_scroll);
+    assert_eq!(harness.app.state.chat.scroll, 77);
+    assert!(!harness.app.state.chat.auto_scroll);
     harness
         .app
         .handle_mouse_event(wheel(MouseEventKind::ScrollUp));
-    assert_eq!(harness.app.state.scroll, 74);
+    assert_eq!(harness.app.state.chat.scroll, 74);
     harness
         .app
         .handle_mouse_event(wheel(MouseEventKind::ScrollDown));
-    assert_eq!(harness.app.state.scroll, 77);
+    assert_eq!(harness.app.state.chat.scroll, 77);
     harness
         .app
         .handle_mouse_event(wheel(MouseEventKind::ScrollDown));
-    assert_eq!(harness.app.state.scroll, 80);
-    assert!(harness.app.state.auto_scroll);
+    assert_eq!(harness.app.state.chat.scroll, 80);
+    assert!(harness.app.state.chat.auto_scroll);
 
     harness.app.scroll_chat_to_top();
     harness
         .app
         .handle_mouse_event(wheel(MouseEventKind::ScrollUp));
-    assert_eq!(harness.app.state.scroll, 0);
-    assert!(!harness.app.state.auto_scroll);
+    assert_eq!(harness.app.state.chat.scroll, 0);
+    assert!(!harness.app.state.chat.auto_scroll);
 
-    harness.app.state.mode = super::UiMode::Model;
+    harness.app.state.mode = UiMode::Model;
     harness
         .app
         .handle_mouse_event(wheel(MouseEventKind::ScrollDown));
-    assert_eq!(harness.app.state.scroll, 0);
+    assert_eq!(harness.app.state.chat.scroll, 0);
 }
 
 use crossbeam_channel::{Receiver, unbounded};
@@ -55,10 +55,7 @@ use kraai_runtime::{
 use kraai_types::{Message, MessageId, MessageStatus, SessionId};
 
 use super::runtime_bridge::RuntimeEventBridgeMessage;
-use super::{
-    App, AppState, RuntimeRequest, RuntimeResponse, ScriptApprovalAction, ScriptPhase,
-    StartupOptions,
-};
+use super::{App, AppState, RuntimeRequest, RuntimeResponse, StartupOptions};
 
 struct TestHarness {
     app: App,
@@ -69,18 +66,17 @@ struct TestHarness {
 fn escape_cancels_an_executing_script() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.state.script_phase = ScriptPhase::Executing;
+    harness.app.state.turn.script_phase = ScriptPhase::Executing;
 
-    harness.app.handle_key_event(super::KeyEvent::new(
-        super::KeyCode::Esc,
-        super::KeyModifiers::NONE,
-    ));
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
     assert!(matches!(
         harness.requests_rx.try_recv(),
         Ok(RuntimeRequest::CancelStream { session_id }) if session_id == SessionId::new("session")
     ));
-    assert_eq!(harness.app.state.script_phase, ScriptPhase::Executing);
+    assert_eq!(harness.app.state.turn.script_phase, ScriptPhase::Executing);
 }
 
 fn test_harness() -> TestHarness {
@@ -115,22 +111,21 @@ fn test_harness() -> TestHarness {
     }
 }
 
-fn key(harness: &mut TestHarness, code: super::KeyCode) {
+fn key(harness: &mut TestHarness, code: KeyCode) {
     harness
         .app
-        .handle_key_event(super::KeyEvent::new(code, super::KeyModifiers::NONE));
+        .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
 }
 
 fn ctrl(harness: &mut TestHarness, ch: char) {
-    harness.app.handle_key_event(super::KeyEvent::new(
-        super::KeyCode::Char(ch),
-        super::KeyModifiers::CONTROL,
-    ));
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL));
 }
 
 fn type_text(harness: &mut TestHarness, text: &str) {
     for ch in text.chars() {
-        key(harness, super::KeyCode::Char(ch));
+        key(harness, KeyCode::Char(ch));
     }
 }
 
@@ -297,8 +292,8 @@ fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
             sequence: 9,
             event: retry_scheduled("other-session"),
         }));
-    assert!(harness.app.state.retry_waiting);
-    harness.app.state.retry_waiting = false;
+    assert!(harness.app.state.turn.retry_waiting);
+    harness.app.state.turn.retry_waiting = false;
 
     harness.app.state.current_session_id = Some(SessionId::new("session"));
     harness
@@ -307,7 +302,7 @@ fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
             sequence: 10,
             event: retry_scheduled("session"),
         }));
-    assert!(!harness.app.state.retry_waiting);
+    assert!(!harness.app.state.turn.retry_waiting);
 }
 
 #[test]
@@ -325,17 +320,18 @@ fn script_approval_event_enters_single_script_decision_state() {
         harness
             .app
             .state
+            .turn
             .pending_script
             .as_ref()
             .map(|script| script.execution_id.as_str()),
         Some("execution")
     );
     assert_eq!(
-        harness.app.state.script_phase,
+        harness.app.state.turn.script_phase,
         ScriptPhase::AwaitingApproval
     );
     assert_eq!(
-        harness.app.state.script_approval_action,
+        harness.app.state.turn.script_approval_action,
         ScriptApprovalAction::Allow
     );
 }
@@ -344,7 +340,7 @@ fn script_approval_event_enters_single_script_decision_state() {
 fn background_script_approval_does_not_replace_foreground_state() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("foreground"));
-    harness.app.state.pending_script = Some(pending_script("foreground-execution"));
+    harness.app.state.turn.pending_script = Some(pending_script("foreground-execution"));
 
     harness
         .app
@@ -357,6 +353,7 @@ fn background_script_approval_does_not_replace_foreground_state() {
         harness
             .app
             .state
+            .turn
             .pending_script
             .as_ref()
             .map(|script| script.execution_id.as_str()),
@@ -374,8 +371,8 @@ fn background_script_approval_does_not_replace_foreground_state() {
 fn approval_response_is_correlated_to_foreground_session_and_execution() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.state.pending_script = Some(pending_script("current"));
-    harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
+    harness.app.state.turn.pending_script = Some(pending_script("current"));
+    harness.app.state.turn.script_phase = ScriptPhase::AwaitingApproval;
 
     harness
         .app
@@ -385,7 +382,7 @@ fn approval_response_is_correlated_to_foreground_session_and_execution() {
             result: Ok(()),
         });
     assert_eq!(
-        harness.app.state.script_phase,
+        harness.app.state.turn.script_phase,
         ScriptPhase::AwaitingApproval
     );
 
@@ -400,6 +397,7 @@ fn approval_response_is_correlated_to_foreground_session_and_execution() {
         harness
             .app
             .state
+            .turn
             .pending_script
             .as_ref()
             .map(|script| script.execution_id.as_str()),
@@ -411,8 +409,8 @@ fn approval_response_is_correlated_to_foreground_session_and_execution() {
 fn pending_script_resync_clears_stale_approval_state() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.state.pending_script = Some(pending_script("execution"));
-    harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
+    harness.app.state.turn.pending_script = Some(pending_script("execution"));
+    harness.app.state.turn.script_phase = ScriptPhase::AwaitingApproval;
 
     harness
         .app
@@ -422,22 +420,20 @@ fn pending_script_resync_clears_stale_approval_state() {
             result: Box::new(Ok(session_snapshot(None))),
         });
 
-    assert!(harness.app.state.pending_script.is_none());
-    assert_eq!(harness.app.state.script_phase, ScriptPhase::Idle);
+    assert!(harness.app.state.turn.pending_script.is_none());
+    assert_eq!(harness.app.state.turn.script_phase, ScriptPhase::Idle);
 }
 
 #[test]
 fn execution_phase_counts_as_active_and_blocks_commands() {
-    let mut state = AppState {
-        script_phase: ScriptPhase::Executing,
-        ..AppState::default()
-    };
+    let mut state = AppState::default();
+    state.turn.script_phase = ScriptPhase::Executing;
     assert!(state.runtime_is_active());
-    assert!(state.turn_blocks_user_commands());
+    assert!(state.turn.blocks_user_commands());
 
-    state.script_phase = ScriptPhase::AwaitingApproval;
+    state.turn.script_phase = ScriptPhase::AwaitingApproval;
     assert!(!state.runtime_is_active());
-    assert!(state.turn_blocks_user_commands());
+    assert!(state.turn.blocks_user_commands());
 }
 
 #[test]
@@ -458,7 +454,7 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() {
         timer,
     });
     assert_eq!(
-        harness.app.state.turn_timer,
+        harness.app.state.turn.timer,
         kraai_runtime::TurnTimer::default()
     );
     harness
@@ -475,12 +471,13 @@ fn switching_back_installs_runtime_timer_from_session_snapshot() {
             session_id: SessionId::new("session"),
             result: Box::new(Ok(snapshot)),
         });
-    assert_eq!(harness.app.state.turn_timer, timer);
+    assert_eq!(harness.app.state.turn.timer, timer);
     assert!(
         harness
             .app
             .state
-            .turn_timer
+            .turn
+            .timer
             .elapsed(std::time::Instant::now())
             >= Some(std::time::Duration::from_secs(95))
     );

@@ -12,21 +12,14 @@ use crate::components::{ChatHistory, RenderedLine};
 use super::state::AppState;
 
 impl AppState {
-    pub(super) fn chat_max_scroll(&self) -> usize {
-        let cache = self.chat_render_cache.borrow();
-        cache
-            .total_lines
-            .saturating_sub(usize::from(self.chat_viewport_height))
-    }
-
     pub(super) fn rendered_messages(&self) -> Vec<Cow<'_, Message>> {
         let mut rendered_messages: Vec<Cow<'_, Message>> =
-            build_tip_chain(&self.chat_history, self.current_tip_id.as_deref())
+            build_tip_chain(&self.chat.history, self.chat.tip_id.as_deref())
                 .into_iter()
                 .map(Cow::Borrowed)
                 .collect();
 
-        for optimistic in &self.optimistic_messages {
+        for optimistic in &self.chat.optimistic_messages {
             let content = if optimistic.is_queued {
                 format!("{} [queued]", optimistic.content)
             } else {
@@ -39,7 +32,7 @@ impl AppState {
                     content: content.into(),
                 },
                 status: MessageStatus::Complete,
-                agent_profile_id: self.selected_profile_id.clone(),
+                agent_profile_id: self.agents.selected_profile_id.clone(),
                 generation: None,
             }));
         }
@@ -49,11 +42,11 @@ impl AppState {
 
     pub(super) fn refresh_chat_render_cache(&self, width: u16) {
         let (stale, streamed, cards_stale) = {
-            let cache = self.chat_render_cache.borrow();
+            let cache = self.chat.render_cache.borrow();
             (
-                cache.epoch != self.chat_epoch || cache.width != width,
+                cache.epoch != self.chat.epoch || cache.width != width,
                 !cache.streamed.is_empty(),
-                cache.cards_epoch != self.cards_epoch,
+                cache.cards_epoch != self.chat.cards_epoch,
             )
         };
         if stale
@@ -67,11 +60,11 @@ impl AppState {
     /// False when a streamed message has no section of its own yet or came out empty, which
     /// only a full rebuild can lay out.
     fn refresh_streamed_messages(&self) -> bool {
-        let mut cache = self.chat_render_cache.borrow_mut();
+        let mut cache = self.chat.render_cache.borrow_mut();
         let cache = &mut *cache;
         for id in std::mem::take(&mut cache.streamed) {
             let (Some(&section), Some(message)) =
-                (cache.message_sections.get(&id), self.chat_history.get(&id))
+                (cache.message_sections.get(&id), self.chat.history.get(&id))
             else {
                 return false;
             };
@@ -97,14 +90,14 @@ impl AppState {
 
     /// False when a card came out empty, which only a full rebuild can lay out.
     fn refresh_script_cards(&self) -> bool {
-        let mut cache = self.chat_render_cache.borrow_mut();
+        let mut cache = self.chat.render_cache.borrow_mut();
         let cache = &mut *cache;
         for index in 0..cache.live.len() {
             let Some(live) = cache.live.get(index) else {
                 continue;
             };
             let (section, base) = (live.section, live.base);
-            let Some(message) = self.chat_history.get(&live.id) else {
+            let Some(message) = self.chat.history.get(&live.id) else {
                 return false;
             };
             let key = live.id.as_str().to_owned();
@@ -121,7 +114,7 @@ impl AppState {
                 return false;
             }
         }
-        cache.cards_epoch = self.cards_epoch;
+        cache.cards_epoch = self.chat.cards_epoch;
         true
     }
 
@@ -182,7 +175,7 @@ impl AppState {
                 }
             }
         }
-        let mut cache = self.chat_render_cache.borrow_mut();
+        let mut cache = self.chat.render_cache.borrow_mut();
         let mut prior_entries = std::mem::take(&mut cache.message_cache);
         if cache.width != width {
             prior_entries.clear();
@@ -200,7 +193,7 @@ impl AppState {
             .filter(|msg| is_visible(msg, &completed))
             .collect();
         for group in visible.chunk_by(|left, right| {
-            !self.scripts_expanded
+            !self.chat.scripts_expanded
                 && matches!(left.content, ConversationItem::ScriptResult { .. })
                 && matches!(right.content, ConversationItem::ScriptResult { .. })
         }) {
@@ -210,7 +203,7 @@ impl AppState {
             let key = msg.id.as_str().to_string();
             let fingerprint;
             let mut live_base = None;
-            let grouped = !self.scripts_expanded
+            let grouped = !self.chat.scripts_expanded
                 && matches!(msg.content, ConversationItem::ScriptResult { .. });
             let lines = if grouped {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -307,8 +300,8 @@ impl AppState {
         cache.completed = completed;
         cache.streamed.clear();
         cache.width = width;
-        cache.epoch = self.chat_epoch;
-        cache.cards_epoch = self.cards_epoch;
+        cache.epoch = self.chat.epoch;
+        cache.cards_epoch = self.chat.cards_epoch;
         cache.live = live;
     }
 }

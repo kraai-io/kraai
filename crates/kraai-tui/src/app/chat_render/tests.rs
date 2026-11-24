@@ -3,6 +3,7 @@ use kraai_types::{
 };
 
 use super::*;
+use crate::app::state::ChatView;
 use crate::app::types::OptimisticMessage;
 
 fn message(id: &str, parent: Option<&str>, content: ConversationItem) -> Message {
@@ -35,7 +36,8 @@ fn call_item(id: &str, input: &str) -> AssistantItem {
 
 fn rendered_lines(state: &AppState) -> Vec<String> {
     state
-        .chat_render_cache
+        .chat
+        .render_cache
         .borrow()
         .sections
         .iter()
@@ -73,17 +75,20 @@ fn completed_calls_preserve_mixed_text_pending_calls_and_queued_messages() {
         },
     );
     let mut state = AppState {
-        chat_history: [(call.id.clone(), call), (result.id.clone(), result)]
-            .into_iter()
-            .collect(),
-        current_tip_id: Some(String::from("result")),
-        optimistic_messages: vec![OptimisticMessage {
-            local_id: String::from("queued"),
-            content: String::from("next question"),
-            content_key: String::from("next question"),
-            occurrence: 1,
-            is_queued: true,
-        }],
+        chat: ChatView {
+            history: [(call.id.clone(), call), (result.id.clone(), result)]
+                .into_iter()
+                .collect(),
+            tip_id: Some(String::from("result")),
+            optimistic_messages: vec![OptimisticMessage {
+                local_id: String::from("queued"),
+                content: String::from("next question"),
+                content_key: String::from("next question"),
+                occurrence: 1,
+                is_queued: true,
+            }],
+            ..ChatView::default()
+        },
         ..AppState::default()
     };
 
@@ -101,14 +106,15 @@ fn completed_calls_preserve_mixed_text_pending_calls_and_queued_messages() {
     assert!(!collapsed.iter().any(|line| line.contains("hidden-output")));
     assert_eq!(
         state
-            .chat_history
+            .chat
+            .history
             .get(&MessageId::new("call"))
             .map(|message| &message.content),
         Some(&original_content),
     );
 
-    state.scripts_expanded = true;
-    state.chat_epoch += 1;
+    state.chat.scripts_expanded = true;
+    state.chat.epoch += 1;
     state.refresh_chat_render_cache(100);
     let expanded = rendered_lines(&state);
     assert!(expanded.iter().any(|line| line.contains("hidden-source")));
@@ -118,8 +124,8 @@ fn completed_calls_preserve_mixed_text_pending_calls_and_queued_messages() {
     }
     assert!(expanded.iter().any(|line| line.contains("pending-source")));
 
-    state.scripts_expanded = false;
-    state.chat_epoch += 1;
+    state.chat.scripts_expanded = false;
+    state.chat.epoch += 1;
     state.refresh_chat_render_cache(100);
     assert_eq!(rendered_lines(&state), collapsed);
 }
@@ -141,16 +147,20 @@ fn streaming_refresh_reuses_unchanged_messages_and_rebuilds_after_resize() {
         },
     );
     let mut state = AppState {
-        chat_history: [(user.id.clone(), user), (assistant.id.clone(), assistant)]
-            .into_iter()
-            .collect(),
-        current_tip_id: Some(String::from("assistant")),
+        chat: ChatView {
+            history: [(user.id.clone(), user), (assistant.id.clone(), assistant)]
+                .into_iter()
+                .collect(),
+            tip_id: Some(String::from("assistant")),
+            ..ChatView::default()
+        },
         ..AppState::default()
     };
     state.refresh_chat_render_cache(80);
     let user_lines = Arc::clone(
         &state
-            .chat_render_cache
+            .chat
+            .render_cache
             .borrow()
             .message_cache
             .get("user")
@@ -159,18 +169,20 @@ fn streaming_refresh_reuses_unchanged_messages_and_rebuilds_after_resize() {
     );
 
     state
-        .chat_history
+        .chat
+        .history
         .get_mut(&MessageId::new("assistant"))
         .expect("assistant message")
         .content = ConversationItem::Assistant {
         items: vec![text_item("first second")],
     };
-    state.chat_epoch += 1;
+    state.chat.epoch += 1;
     state.refresh_chat_render_cache(80);
     assert!(Arc::ptr_eq(
         &user_lines,
         &state
-            .chat_render_cache
+            .chat
+            .render_cache
             .borrow()
             .message_cache
             .get("user")
@@ -187,7 +199,8 @@ fn streaming_refresh_reuses_unchanged_messages_and_rebuilds_after_resize() {
     assert!(!Arc::ptr_eq(
         &user_lines,
         &state
-            .chat_render_cache
+            .chat
+            .render_cache
             .borrow()
             .message_cache
             .get("user")
@@ -300,12 +313,15 @@ fn duplicate_completed_call_sources_use_last_item_and_update_cached_result() {
         },
     );
     let mut state = AppState {
-        chat_history: [first, second, result]
-            .into_iter()
-            .map(|message| (message.id.clone(), message))
-            .collect(),
-        current_tip_id: Some(String::from("result")),
-        scripts_expanded: true,
+        chat: ChatView {
+            history: [first, second, result]
+                .into_iter()
+                .map(|message| (message.id.clone(), message))
+                .collect(),
+            tip_id: Some(String::from("result")),
+            scripts_expanded: true,
+            ..ChatView::default()
+        },
         ..AppState::default()
     };
     state.refresh_chat_render_cache(100);
@@ -313,9 +329,9 @@ fn duplicate_completed_call_sources_use_last_item_and_update_cached_result() {
     assert!(initial.iter().any(|line| line.contains("final-source")));
     assert!(!initial.iter().any(|line| line.contains("first-source")));
     assert!(!initial.iter().any(|line| line.contains("second-source")));
-    assert_eq!(state.chat_render_cache.borrow().sections.len(), 1);
+    assert_eq!(state.chat.render_cache.borrow().sections.len(), 1);
 
-    state.chat_history.insert(
+    state.chat.history.insert(
         MessageId::new("second"),
         message(
             "second",
@@ -325,7 +341,7 @@ fn duplicate_completed_call_sources_use_last_item_and_update_cached_result() {
             },
         ),
     );
-    state.chat_epoch += 1;
+    state.chat.epoch += 1;
     state.refresh_chat_render_cache(100);
     let updated = rendered_lines(&state);
     assert!(updated.iter().any(|line| line.contains("replaced-source")));
@@ -345,29 +361,32 @@ fn consecutive_scripts_group_across_hidden_calls_but_not_visible_messages() {
     })
     };
     let mut state = AppState {
-        chat_history: [
-            result("a", None, 0),
-            message(
-                "call",
-                Some("a"),
-                ConversationItem::Assistant {
-                    items: vec![call_item("b", "source-b")],
-                },
-            ),
-            result("b", Some("call"), 1),
-            message(
-                "text",
-                Some("b"),
-                ConversationItem::Assistant {
-                    items: vec![text_item("Next step")],
-                },
-            ),
-            result("c", Some("text"), 0),
-        ]
-        .into_iter()
-        .map(|message| (message.id.clone(), message))
-        .collect(),
-        current_tip_id: Some(String::from("c")),
+        chat: ChatView {
+            history: [
+                result("a", None, 0),
+                message(
+                    "call",
+                    Some("a"),
+                    ConversationItem::Assistant {
+                        items: vec![call_item("b", "source-b")],
+                    },
+                ),
+                result("b", Some("call"), 1),
+                message(
+                    "text",
+                    Some("b"),
+                    ConversationItem::Assistant {
+                        items: vec![text_item("Next step")],
+                    },
+                ),
+                result("c", Some("text"), 0),
+            ]
+            .into_iter()
+            .map(|message| (message.id.clone(), message))
+            .collect(),
+            tip_id: Some(String::from("c")),
+            ..ChatView::default()
+        },
         ..AppState::default()
     };
     state.refresh_chat_render_cache(100);
@@ -387,9 +406,10 @@ fn consecutive_scripts_group_across_hidden_calls_but_not_visible_messages() {
     assert!(lines.iter().any(|line| line.contains("1 script · 0.3s")));
     assert!(lines.iter().any(|line| line.contains("Next step")));
     state
-        .chat_history
+        .chat
+        .history
         .insert(MessageId::new("b"), result("b", Some("call"), 0));
-    state.chat_epoch += 1;
+    state.chat.epoch += 1;
     state.refresh_chat_render_cache(100);
     assert!(
         rendered_lines(&state)
@@ -401,8 +421,8 @@ fn consecutive_scripts_group_across_hidden_calls_but_not_visible_messages() {
             .iter()
             .any(|line| line.contains("failed"))
     );
-    state.scripts_expanded = true;
-    state.chat_epoch += 1;
+    state.chat.scripts_expanded = true;
+    state.chat.epoch += 1;
     state.refresh_chat_render_cache(100);
     let lines = rendered_lines(&state);
     assert!(!lines.iter().any(|line| line.contains("[ctrl+o]")));
@@ -435,22 +455,26 @@ fn a_changed_outcome_redraws_a_script_whose_text_stayed_the_same() {
         )
     };
     let mut state = AppState {
-        chat_history: [(MessageId::new("result"), result(0))]
-            .into_iter()
-            .collect(),
-        current_tip_id: Some(String::from("result")),
+        chat: ChatView {
+            history: [(MessageId::new("result"), result(0))]
+                .into_iter()
+                .collect(),
+            tip_id: Some(String::from("result")),
+            ..ChatView::default()
+        },
         ..AppState::default()
     };
     for expanded in [false, true] {
-        state.scripts_expanded = expanded;
+        state.chat.scripts_expanded = expanded;
         for (exit_code, expected) in [
             (0, "0.3s"),
             (3, if expanded { "exit 3" } else { "1 failed" }),
         ] {
             state
-                .chat_history
+                .chat
+                .history
                 .insert(MessageId::new("result"), result(exit_code));
-            state.chat_epoch += 1;
+            state.chat.epoch += 1;
             state.refresh_chat_render_cache(80);
             let lines = rendered_lines(&state);
             assert!(
@@ -497,9 +521,12 @@ fn a_result_with_images_reads_its_sections_and_lists_the_images_after_them() {
         },
     );
     let state = AppState {
-        chat_history: [(MessageId::new("result"), result)].into_iter().collect(),
-        current_tip_id: Some(String::from("result")),
-        scripts_expanded: true,
+        chat: ChatView {
+            history: [(MessageId::new("result"), result)].into_iter().collect(),
+            tip_id: Some(String::from("result")),
+            scripts_expanded: true,
+            ..ChatView::default()
+        },
         ..AppState::default()
     };
     state.refresh_chat_render_cache(80);
@@ -536,14 +563,17 @@ fn a_changed_card_rebuilds_only_the_messages_with_running_scripts() {
         },
     );
     let mut state = AppState {
-        chat_history: [(user.id.clone(), user), (assistant.id.clone(), assistant)]
-            .into_iter()
-            .collect(),
-        current_tip_id: Some(String::from("assistant")),
+        chat: ChatView {
+            history: [(user.id.clone(), user), (assistant.id.clone(), assistant)]
+                .into_iter()
+                .collect(),
+            tip_id: Some(String::from("assistant")),
+            ..ChatView::default()
+        },
         ..AppState::default()
     };
     let started = std::time::Instant::now();
-    state.running_scripts.insert(
+    state.turn.running_scripts.insert(
         String::from("call"),
         crate::app::types::RunningScript {
             started,
@@ -551,29 +581,29 @@ fn a_changed_card_rebuilds_only_the_messages_with_running_scripts() {
             tail: Vec::new(),
         },
     );
-    state.script_clock = Some(started);
+    state.turn.script_clock = Some(started);
     state.refresh_chat_render_cache(80);
-    let user_section = state.chat_render_cache.borrow().sections.first().cloned();
+    let user_section = state.chat.render_cache.borrow().sections.first().cloned();
 
-    if let Some(script) = state.running_scripts.get_mut("call") {
+    if let Some(script) = state.turn.running_scripts.get_mut("call") {
         script.tail = vec![kraai_runtime::ScriptOutputLine {
             stream: kraai_execution_types::ScriptOutputStream::Stdout,
             text: String::from("Compiling kraai"),
         }];
     }
-    if let Some(user) = state.chat_history.get_mut(&MessageId::new("user")) {
+    if let Some(user) = state.chat.history.get_mut(&MessageId::new("user")) {
         user.content = ConversationItem::User {
             content: String::from("changed without a new epoch").into(),
         };
     }
-    state.cards_epoch += 1;
+    state.chat.cards_epoch += 1;
     state.refresh_chat_render_cache(80);
 
     let lines = rendered_lines(&state);
     assert!(lines.iter().any(|line| line.contains("Compiling kraai")));
     assert!(lines.iter().any(|line| line.contains("question")));
     assert!(!lines.iter().any(|line| line.contains("changed without")));
-    let cache = state.chat_render_cache.borrow();
+    let cache = state.chat.render_cache.borrow();
     assert!(matches!(
         (&user_section, cache.sections.first()),
         (Some(before), Some(after)) if Arc::ptr_eq(before, after)
@@ -616,21 +646,25 @@ fn streamed_text_rerenders_only_its_own_section() {
     );
     next.status = assistant.status.clone();
     let mut state = AppState {
-        chat_history: [
-            (user.id.clone(), user),
-            (assistant.id.clone(), assistant),
-            (next.id.clone(), next),
-        ]
-        .into_iter()
-        .collect(),
-        current_tip_id: Some(String::from("next")),
+        chat: ChatView {
+            history: [
+                (user.id.clone(), user),
+                (assistant.id.clone(), assistant),
+                (next.id.clone(), next),
+            ]
+            .into_iter()
+            .collect(),
+            tip_id: Some(String::from("next")),
+            ..ChatView::default()
+        },
         ..AppState::default()
     };
     state.refresh_chat_render_cache(80);
-    let user_section = state.chat_render_cache.borrow().sections.first().cloned();
+    let user_section = state.chat.render_cache.borrow().sections.first().cloned();
     let set_text = |state: &mut AppState, id: &str, text: &str| {
         if let Some(ConversationItem::Assistant { items }) = state
-            .chat_history
+            .chat
+            .history
             .get_mut(&MessageId::new(id))
             .map(|message| &mut message.content)
             && let Some(AssistantItem::Text { text: current, .. }) = items.first_mut()
@@ -638,7 +672,8 @@ fn streamed_text_rerenders_only_its_own_section() {
             *current = text.to_string();
         }
         state
-            .chat_render_cache
+            .chat
+            .render_cache
             .get_mut()
             .mark_streamed(MessageId::new(id));
     };
@@ -646,7 +681,7 @@ fn streamed_text_rerenders_only_its_own_section() {
     set_text(&mut state, "assistant", "first second");
     state.refresh_chat_render_cache(80);
     {
-        let cache = state.chat_render_cache.borrow();
+        let cache = state.chat.render_cache.borrow();
         assert!(matches!(
             (&user_section, cache.sections.first()),
             (Some(before), Some(after)) if Arc::ptr_eq(before, after)
@@ -667,6 +702,6 @@ fn streamed_text_rerenders_only_its_own_section() {
 
     set_text(&mut state, "next", "later");
     state.refresh_chat_render_cache(80);
-    assert_eq!(state.chat_render_cache.borrow().sections.len(), 5);
+    assert_eq!(state.chat.render_cache.borrow().sections.len(), 5);
     assert!(rendered_lines(&state).iter().any(|line| line == " • later"));
 }

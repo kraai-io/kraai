@@ -1,5 +1,6 @@
-use super::super::super::UiMode;
 use super::*;
+use crate::app::state::{Models, Turn};
+use crate::app::types::UiMode;
 use ratatui::style::Color;
 
 fn row(state: &AppState, width: u16) -> String {
@@ -25,17 +26,23 @@ fn context(state: &AppState) -> String {
 
 fn astra() -> AppState {
     AppState {
-        selected_provider_id: Some(String::from("provider")),
-        selected_model_id: Some(String::from("Astra")),
-        context_usage: Some(kraai_runtime::SessionContextUsage {
-            provider_id: String::from("provider"),
-            model_id: String::from("Astra"),
-            max_context: Some(272_000),
-            usage: kraai_types::TokenUsage {
-                input_tokens: 136_000,
-                ..Default::default()
-            },
-        }),
+        models: Models {
+            selected_provider_id: Some(String::from("provider")),
+            selected_model_id: Some(String::from("Astra")),
+            ..Models::default()
+        },
+        turn: Turn {
+            context_usage: Some(kraai_runtime::SessionContextUsage {
+                provider_id: String::from("provider"),
+                model_id: String::from("Astra"),
+                max_context: Some(272_000),
+                usage: kraai_types::TokenUsage {
+                    input_tokens: 136_000,
+                    ..Default::default()
+                },
+            }),
+            ..Turn::default()
+        },
         ..AppState::default()
     }
 }
@@ -50,14 +57,14 @@ fn the_line_starts_one_column_in_with_what_the_turn_is_doing() {
     assert_eq!(colour_at(&state, 60, "Astra"), Some(theme::MUTED));
     assert_eq!(colour_at(&state, 60, "50%"), Some(theme::MUTED));
 
-    state.is_streaming = true;
+    state.turn.is_streaming = true;
     assert_eq!(
         row(&state, 60).trim_end(),
         " Working  Astra  136,000/272,000  50%  $0.0000"
     );
     assert_eq!(colour_at(&state, 60, "Working"), Some(theme::ACCENT));
     assert_eq!(colour_at(&state, 60, "Astra"), Some(theme::MUTED));
-    state.retry_waiting = true;
+    state.turn.retry_waiting = true;
     assert_eq!(colour_at(&state, 60, "Retrying"), Some(theme::WAITING));
 
     state.palette.muted = Some(Color::Rgb(88, 82, 115));
@@ -65,16 +72,16 @@ fn the_line_starts_one_column_in_with_what_the_turn_is_doing() {
         .checked_sub(Duration::from_millis(800))
         .unwrap();
     assert_eq!(colour_at(&state, 60, "Retrying"), Some(theme::WAITING));
-    state.retry_waiting = false;
+    state.turn.retry_waiting = false;
     assert_eq!(
         colour_at(&state, 60, "Working"),
         Some(Color::Rgb(101, 97, 129))
     );
     state.palette.muted = None;
 
-    state.is_streaming = false;
-    state.retry_waiting = false;
-    state.script_phase = ScriptPhase::AwaitingApproval;
+    state.turn.is_streaming = false;
+    state.turn.retry_waiting = false;
+    state.turn.script_phase = ScriptPhase::AwaitingApproval;
     assert!(row(&state, 60).starts_with(" Needs approval  Astra  "));
     assert_eq!(colour_at(&state, 60, "Needs"), Some(theme::WAITING));
 }
@@ -92,8 +99,8 @@ fn a_missing_model_takes_the_waiting_colour() {
 #[test]
 fn a_narrow_line_gives_up_facts_from_the_least_important_and_then_cuts_from_the_right() {
     let mut state = astra();
-    state.is_streaming = true;
-    state.selected_profile_id = Some(String::from("Coding"));
+    state.turn.is_streaming = true;
+    state.agents.selected_profile_id = Some(String::from("Coding"));
     for (width, expected) in [
         (66, " Working  Astra  Coding  136,000/272,000  50%  $0.0000"),
         (52, " Working  Astra  Coding  50%  $0.0000"),
@@ -114,16 +121,16 @@ fn footer_layout_leaves_a_row_above_status_that_holds_the_hints_of_an_open_sheet
         (None, UiMode::Agent),
         (Some(String::from("error")), UiMode::Agent),
     ] {
-        let state = AppState {
-            last_error,
+        let mut state = AppState {
             mode,
             ..AppState::default()
         };
+        state.errors.last = last_error;
         let area = Rect::new(0, 0, 80, 24);
         let [history, footer, input] = super::super::chat_layout(&state, area);
         assert_eq!(history.bottom(), footer.y);
         assert_eq!(footer.bottom(), input.y);
-        assert_eq!(footer.height, 2 + u16::from(state.last_error.is_some()));
+        assert_eq!(footer.height, 2 + u16::from(state.errors.last.is_some()));
         let mut buffer = Buffer::empty(footer);
         render_status(&state, footer, &mut buffer);
         let rows: Vec<String> = buffer
@@ -143,7 +150,7 @@ fn footer_layout_leaves_a_row_above_status_that_holds_the_hints_of_an_open_sheet
             rows.last()
                 .is_some_and(|row| row.starts_with(" No model selected  "))
         );
-        if state.last_error.is_some() {
+        if state.errors.last.is_some() {
             assert!(rows.get(1).is_some_and(|row| row.contains("/error")));
         }
     }
@@ -152,7 +159,7 @@ fn footer_layout_leaves_a_row_above_status_that_holds_the_hints_of_an_open_sheet
 #[test]
 fn an_error_gets_a_red_row_above_the_facts_that_names_the_command_to_read_it() {
     let mut state = astra();
-    state.last_error = Some(String::from("Stream error: offline\nsecond line"));
+    state.errors.last = Some(String::from("Stream error: offline\nsecond line"));
     let area = Rect::new(0, 0, 50, 2);
     let mut buffer = Buffer::empty(area);
     render_status(&state, area, &mut buffer);
@@ -171,7 +178,7 @@ fn an_error_gets_a_red_row_above_the_facts_that_names_the_command_to_read_it() {
     assert_eq!(buffer[(1, 0)].fg, theme::DANGER);
     assert_eq!(buffer[(43, 0)].fg, theme::DANGER);
 
-    state.last_error = Some("A long error ".repeat(30));
+    state.errors.last = Some("A long error ".repeat(30));
     for width in [28, 40, 80, 120] {
         let area = Rect::new(0, 0, width, 2);
         let mut buffer = Buffer::empty(area);
@@ -192,8 +199,8 @@ fn an_error_gets_a_red_row_above_the_facts_that_names_the_command_to_read_it() {
 #[test]
 fn the_line_draws_nothing_outside_a_tiny_area() {
     let mut state = astra();
-    state.is_streaming = true;
-    state.last_error = Some(String::from("error"));
+    state.turn.is_streaming = true;
+    state.errors.last = Some(String::from("error"));
     for (width, height) in [(0, 0), (1, 1), (2, 1), (3, 2), (1, 3)] {
         let mut buffer = Buffer::empty(Rect::new(0, 0, width, height));
         render_status(&state, buffer.area, &mut buffer);
@@ -203,45 +210,51 @@ fn the_line_draws_nothing_outside_a_tiny_area() {
 #[test]
 fn context_limit_follows_model_and_provider_selection() {
     let mut state = AppState {
-        selected_provider_id: Some(String::from("first")),
-        selected_model_id: Some(String::from("model")),
-        models_by_provider: std::collections::HashMap::from([
-            (
-                String::from("first"),
-                vec![
-                    kraai_runtime::Model {
+        models: Models {
+            selected_provider_id: Some(String::from("first")),
+            selected_model_id: Some(String::from("model")),
+            by_provider: std::collections::HashMap::from([
+                (
+                    String::from("first"),
+                    vec![
+                        kraai_runtime::Model {
+                            id: String::from("model"),
+                            name: String::from("Model"),
+                            max_context: Some(100_000),
+                            options: Vec::new(),
+                        },
+                        kraai_runtime::Model {
+                            id: String::from("other"),
+                            name: String::from("Other"),
+                            max_context: Some(200_000),
+                            options: Vec::new(),
+                        },
+                    ],
+                ),
+                (
+                    String::from("second"),
+                    vec![kraai_runtime::Model {
                         id: String::from("model"),
                         name: String::from("Model"),
-                        max_context: Some(100_000),
+                        max_context: Some(50_000),
                         options: Vec::new(),
-                    },
-                    kraai_runtime::Model {
-                        id: String::from("other"),
-                        name: String::from("Other"),
-                        max_context: Some(200_000),
-                        options: Vec::new(),
-                    },
-                ],
-            ),
-            (
-                String::from("second"),
-                vec![kraai_runtime::Model {
-                    id: String::from("model"),
-                    name: String::from("Model"),
-                    max_context: Some(50_000),
-                    options: Vec::new(),
-                }],
-            ),
-        ]),
-        context_usage: Some(kraai_runtime::SessionContextUsage {
-            provider_id: String::from("first"),
-            model_id: String::from("model"),
-            max_context: Some(100_000),
-            usage: kraai_types::TokenUsage {
-                input_tokens: 20_000,
-                ..Default::default()
-            },
-        }),
+                    }],
+                ),
+            ]),
+            ..Models::default()
+        },
+        turn: Turn {
+            context_usage: Some(kraai_runtime::SessionContextUsage {
+                provider_id: String::from("first"),
+                model_id: String::from("model"),
+                max_context: Some(100_000),
+                usage: kraai_types::TokenUsage {
+                    input_tokens: 20_000,
+                    ..Default::default()
+                },
+            }),
+            ..Turn::default()
+        },
         ..AppState::default()
     };
     for (provider, model, expected) in [
@@ -251,15 +264,15 @@ fn context_limit_follows_model_and_provider_selection() {
         ("second", "unknown", "20,000 tokens"),
         ("first", "model", "20,000/100,000 20%"),
     ] {
-        state.selected_provider_id = Some(provider.into());
-        state.selected_model_id = Some(model.into());
+        state.models.selected_provider_id = Some(provider.into());
+        state.models.selected_model_id = Some(model.into());
         assert_eq!(context(&state), expected);
     }
     for (limit, expected) in [
         (Some(400_000), "20,000/400,000 5%"),
         (None, "20,000 tokens"),
     ] {
-        for model in state.models_by_provider.values_mut().flatten() {
+        for model in state.models.by_provider.values_mut().flatten() {
             model.max_context = limit;
         }
         assert_eq!(context(&state), expected);
@@ -269,15 +282,18 @@ fn context_limit_follows_model_and_provider_selection() {
 #[test]
 fn undiscovered_model_uses_only_its_own_recorded_context_limit() {
     let mut state = AppState {
-        context_usage: Some(kraai_runtime::SessionContextUsage {
-            provider_id: String::from("provider"),
-            model_id: String::from("model"),
-            max_context: Some(100_000),
-            usage: kraai_types::TokenUsage {
-                input_tokens: 20_000,
-                ..Default::default()
-            },
-        }),
+        turn: Turn {
+            context_usage: Some(kraai_runtime::SessionContextUsage {
+                provider_id: String::from("provider"),
+                model_id: String::from("model"),
+                max_context: Some(100_000),
+                usage: kraai_types::TokenUsage {
+                    input_tokens: 20_000,
+                    ..Default::default()
+                },
+            }),
+            ..Turn::default()
+        },
         ..AppState::default()
     };
     for (provider, model, expected) in [
@@ -288,8 +304,8 @@ fn undiscovered_model_uses_only_its_own_recorded_context_limit() {
         (None, Some("model"), "20,000 tokens"),
         (None, None, "20,000 tokens"),
     ] {
-        state.selected_provider_id = provider.map(String::from);
-        state.selected_model_id = model.map(String::from);
+        state.models.selected_provider_id = provider.map(String::from);
+        state.models.selected_model_id = model.map(String::from);
         assert_eq!(context(&state), expected);
     }
 }

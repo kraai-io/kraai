@@ -1,8 +1,6 @@
 use super::*;
-use crate::app::UiMode;
 use crate::app::mcp_auth::McpAction;
 use kraai_runtime::{McpAuthState, McpAuthStatus};
-use ratatui::crossterm::event::KeyCode;
 use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
 
 fn status(sequence: u64, state: McpAuthState) -> McpAuthStatus {
@@ -71,7 +69,8 @@ fn cancel_clears_browser_intent_and_late_pending_cannot_replace_completion() {
         harness
             .app
             .state
-            .mcp_auth
+            .mcp
+            .auth
             .get("example")
             .map(|status| &status.state),
         Some(McpAuthState::Authenticated)
@@ -122,7 +121,7 @@ fn rapid_login_cancel_login_only_opens_latest_attempt() {
                 "old failure",
             )),
         });
-    assert!(harness.app.state.last_error.is_none());
+    assert!(harness.app.state.errors.last.is_none());
     let old = harness
         .app
         .acknowledge_mcp_login(0, status(1, McpAuthState::Starting));
@@ -187,8 +186,8 @@ fn background_auth_updates_do_not_change_chat_feedback() {
     let mut failed = status(1, McpAuthState::SignedOut);
     failed.error = Some("Login failed".into());
     harness.app.apply_mcp_auth_status(failed);
-    assert!(harness.app.state.last_error.is_none());
-    assert!(!harness.app.state.error_open);
+    assert!(harness.app.state.errors.last.is_none());
+    assert!(!harness.app.state.errors.open);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
 }
 
@@ -222,7 +221,7 @@ fn server_list_opens_a_server_whose_rows_follow_its_sign_in_state() {
 
     key(&mut harness, KeyCode::Down);
     key(&mut harness, KeyCode::Enter);
-    assert_eq!(harness.app.state.mcp_open.as_deref(), Some("other"));
+    assert_eq!(harness.app.state.mcp.open.as_deref(), Some("other"));
     assert!(
         screen_rows(&harness.app.state, 60, 30).contains(&String::from(
             "  This server does not sign in through a browser"
@@ -232,13 +231,13 @@ fn server_list_opens_a_server_whose_rows_follow_its_sign_in_state() {
     assert!(harness.drain_requests().is_empty());
     key(&mut harness, KeyCode::Esc);
     assert_eq!(harness.app.state.mode, UiMode::Mcp);
-    assert_eq!(harness.app.state.mcp_open, None);
-    assert_eq!(harness.app.state.sheet_index, 1);
+    assert_eq!(harness.app.state.mcp.open, None);
+    assert_eq!(harness.app.state.sheet.index, 1);
 
     type_text(&mut harness, "exam");
     key(&mut harness, KeyCode::Enter);
-    assert_eq!(harness.app.state.mcp_open.as_deref(), Some("example"));
-    assert!(harness.app.state.sheet_query.is_empty());
+    assert_eq!(harness.app.state.mcp.open.as_deref(), Some("example"));
+    assert!(harness.app.state.sheet.query.is_empty());
     key(&mut harness, KeyCode::Enter);
     key(&mut harness, KeyCode::Enter);
     assert!(
@@ -275,7 +274,7 @@ fn server_list_opens_a_server_whose_rows_follow_its_sign_in_state() {
         [RuntimeRequest::GetMcpAuthStatuses]
     ));
     key(&mut harness, KeyCode::Backspace);
-    assert_eq!(harness.app.state.mcp_open, None);
+    assert_eq!(harness.app.state.mcp.open, None);
     key(&mut harness, KeyCode::Esc);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
 }
@@ -296,14 +295,15 @@ fn duplicate_pending_snapshot_preserves_browser_failure_feedback() {
         harness
             .app
             .state
-            .mcp_feedback
+            .mcp
+            .feedback
             .get("example")
             .is_some_and(|message| message.contains("no browser"))
     );
     harness
         .app
         .apply_mcp_auth_status(status(3, McpAuthState::Authenticated));
-    assert!(!harness.app.state.mcp_feedback.contains_key("example"));
+    assert!(!harness.app.state.mcp.feedback.contains_key("example"));
 }
 
 #[test]

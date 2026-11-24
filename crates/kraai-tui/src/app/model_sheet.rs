@@ -1,21 +1,25 @@
-use super::*;
+use super::types::{RuntimeRequest, UiMode};
+use super::{App, AppState};
+use kraai_runtime::Model;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl AppState {
     pub(super) fn find_model(&self, provider_id: &str, model_id: &str) -> Option<&Model> {
-        self.models_by_provider
+        self.models
+            .by_provider
             .get(provider_id)?
             .iter()
             .find(|model| model.id == model_id)
     }
 
     pub(super) fn is_current_model(&self, provider_id: &str, model_id: &str) -> bool {
-        self.selected_provider_id.as_deref() == Some(provider_id)
-            && self.selected_model_id.as_deref() == Some(model_id)
+        self.models.selected_provider_id.as_deref() == Some(provider_id)
+            && self.models.selected_model_id.as_deref() == Some(model_id)
     }
 
     pub(super) fn highlighted_model(&self) -> Option<(&str, &Model)> {
         let models = self.filtered_models();
-        let index = self.sheet_index.min(models.len().checked_sub(1)?);
+        let index = self.sheet.index.min(models.len().checked_sub(1)?);
         models.get(index).copied()
     }
 
@@ -29,15 +33,16 @@ impl AppState {
 impl App {
     pub(super) fn open_model_sheet(&mut self, query: String) {
         self.open_sheet(UiMode::Model);
-        self.state.sheet_query.set(query);
-        if self.state.sheet_query.is_empty()
+        self.state.sheet.query.set(query);
+        if self.state.sheet.query.is_empty()
             && let Some((provider_id, model_id)) = self
                 .state
+                .models
                 .selected_provider_id
                 .as_deref()
-                .zip(self.state.selected_model_id.as_deref())
+                .zip(self.state.models.selected_model_id.as_deref())
         {
-            self.state.sheet_index = self
+            self.state.sheet.index = self
                 .state
                 .model_position(provider_id, model_id)
                 .unwrap_or(0);
@@ -49,7 +54,7 @@ impl App {
 
     pub(super) fn return_to_model_sheet(&mut self, provider_id: &str, model_id: &str) {
         self.open_sheet(UiMode::Model);
-        self.state.sheet_index = self
+        self.state.sheet.index = self
             .state
             .model_position(provider_id, model_id)
             .unwrap_or(0);
@@ -62,7 +67,7 @@ impl App {
     }
 
     fn step_model_sheet(&mut self, key: KeyEvent) {
-        self.state.sheet_notice = None;
+        self.state.sheet.notice = None;
         let len = self.state.filtered_models().len();
         let steps_option =
             matches!(key.code, KeyCode::Left | KeyCode::Right) && key.modifiers.is_empty();
@@ -88,7 +93,7 @@ impl App {
                     if self.state.model_has_more_settings(&provider_id, &model_id) {
                         self.open_model_settings(provider_id, model_id);
                     } else {
-                        self.state.sheet_notice = Some(format!("{name} has no other settings"));
+                        self.state.sheet.notice = Some(format!("{name} has no other settings"));
                     }
                 }
             }
@@ -107,9 +112,9 @@ impl App {
         }
         let values = self.state.model_option_values(provider_id, model_id);
         self.remember_model_options();
-        self.state.selected_provider_id = Some(provider_id.to_owned());
-        self.state.selected_model_id = Some(model_id.to_owned());
-        self.state.selected_model_options = values;
+        self.state.models.selected_provider_id = Some(provider_id.to_owned());
+        self.state.models.selected_model_id = Some(model_id.to_owned());
+        self.state.models.selected_options = values;
         self.save_model_selection();
         self.close_sheet();
     }

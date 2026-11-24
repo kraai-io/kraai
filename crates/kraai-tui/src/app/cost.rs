@@ -1,14 +1,15 @@
+use super::types::UsageModelKey;
 use std::collections::BTreeMap;
 
 use kraai_types::{CostSummary, MessageId, RequestUsage, SessionId};
 
-use super::{App, UsageModelKey};
+use super::App;
 
 impl App {
     pub(super) fn costs_incomplete(&self) -> bool {
-        let total = summarize(self.state.launch_requests.values());
-        self.state.cost_recovery_list_pending
-            || !self.state.cost_recovery_sessions.is_empty()
+        let total = summarize(self.state.usage.launch_requests.values());
+        self.state.usage.cost_recovery_list_pending
+            || !self.state.usage.cost_recovery_sessions.is_empty()
             || total.unknown != 0
             || total.overflow
     }
@@ -20,6 +21,7 @@ impl App {
     ) {
         let session_requests = self
             .state
+            .usage
             .session_requests
             .entry(session_id.clone())
             .or_default();
@@ -49,31 +51,31 @@ impl App {
                     }
                 })
                 .or_insert(request);
-            if request.started_at >= self.state.launched_at {
-                self.state.launch_requests.insert(id, request.clone());
+            if request.started_at >= self.state.usage.launched_at {
+                self.state.usage.launch_requests.insert(id, request.clone());
             }
         }
         if self.state.current_session_id.as_ref() == Some(session_id) {
-            self.state.session_cost = summarize_reported(session_requests.values());
+            self.state.usage.session_cost = summarize_reported(session_requests.values());
         }
     }
 
     pub(super) fn restore_session_cost(&mut self) {
-        self.state.session_cost = self
+        self.state.usage.session_cost = self
             .state
             .current_session_id
             .as_ref()
-            .and_then(|id| self.state.session_requests.get(id))
+            .and_then(|id| self.state.usage.session_requests.get(id))
             .map(|requests| summarize_reported(requests.values()))
             .unwrap_or_default();
     }
 
     pub(super) fn exit_cost_summary(&self) -> Vec<String> {
-        if self.state.launch_requests.is_empty() && !self.costs_incomplete() {
+        if self.state.usage.launch_requests.is_empty() && !self.costs_incomplete() {
             return Vec::new();
         }
         let mut models: BTreeMap<UsageModelKey, CostSummary> = BTreeMap::new();
-        for request in self.state.launch_requests.values() {
+        for request in self.state.usage.launch_requests.values() {
             models
                 .entry(UsageModelKey {
                     provider_id: request.provider_id.to_string(),
@@ -89,8 +91,10 @@ impl App {
                 model.provider_id, model.model_id
             ));
         }
-        let total = summarize(self.state.launch_requests.values());
-        if self.state.cost_recovery_list_pending || !self.state.cost_recovery_sessions.is_empty() {
+        let total = summarize(self.state.usage.launch_requests.values());
+        if self.state.usage.cost_recovery_list_pending
+            || !self.state.usage.cost_recovery_sessions.is_empty()
+        {
             lines.push(format!(
                 "  total: {total} (incomplete: runtime events missed)"
             ));

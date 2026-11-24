@@ -1,13 +1,14 @@
 use super::*;
 use crate::app::auth::{ProviderAuthState, ProviderAuthStatus};
-use crate::app::{ProvidersView, UiMode};
+use crate::app::types::ProvidersView;
 use kraai_runtime::{ProviderAuthStatus as RuntimeProviderAuthStatus, ProviderLoginState};
 
 const PROVIDER: &str = "openai-codex";
 
 fn auth(state: &AppState) -> ProviderAuthStatus {
     state
-        .provider_auth
+        .providers
+        .auth
         .get(PROVIDER)
         .cloned()
         .unwrap_or_default()
@@ -72,7 +73,7 @@ fn delayed_auth_snapshot_cannot_restore_completed_login_state() {
 fn delayed_auth_event_cannot_overwrite_a_newer_snapshot_or_status() {
     let mut harness = test_harness();
     harness.app.state.mode = UiMode::Providers;
-    harness.app.state.providers_view = ProvidersView::Provider;
+    harness.app.state.providers.view = ProvidersView::Provider;
     harness
         .app
         .handle_runtime_response(RuntimeResponse::ProviderAuthStatus(Ok(

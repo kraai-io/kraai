@@ -1,4 +1,12 @@
-use super::*;
+use super::auth::{
+    ProviderAuthState, ProviderAuthStatus, open_external_target, pending_auth_target,
+};
+use super::feedback;
+use super::settings::{default_values, next_provider_id, provider_definition_rank};
+use super::types::{ProvidersView, RuntimeRequest, UiMode};
+use super::{App, AppState, RuntimeRequestDelivery};
+use kraai_runtime::{ProviderDefinition, ProviderSettings};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 pub(super) const CONNECT_LABEL: &str = "Connect a provider";
 
@@ -68,25 +76,28 @@ impl ProviderAction {
 
 impl AppState {
     pub(super) fn open_provider(&self) -> Option<&ProviderSettings> {
-        self.settings_draft
+        self.providers
+            .settings_draft
             .as_ref()?
             .providers
-            .get(self.settings_provider_index)
+            .get(self.providers.settings_provider_index)
     }
 
     pub(super) fn provider_definition(&self, type_id: &str) -> Option<&ProviderDefinition> {
-        self.provider_definitions
+        self.providers
+            .definitions
             .iter()
             .find(|definition| definition.type_id == type_id)
     }
 
     pub(super) fn open_provider_auth(&self) -> Option<&ProviderAuthStatus> {
-        self.provider_auth.get(&self.open_provider()?.type_id)
+        self.providers.auth.get(&self.open_provider()?.type_id)
     }
 
     pub(super) fn listed_providers(&self) -> Vec<(usize, &ProviderSettings)> {
-        let query = self.sheet_query.as_str().to_lowercase();
-        self.settings_draft
+        let query = self.sheet.query.as_str().to_lowercase();
+        self.providers
+            .settings_draft
             .iter()
             .flat_map(|draft| draft.providers.iter().enumerate())
             .filter(|(_, provider)| {
@@ -101,16 +112,17 @@ impl AppState {
     }
 
     pub(super) fn offers_connect(&self) -> bool {
-        self.settings_draft.is_some()
+        self.providers.settings_draft.is_some()
             && CONNECT_LABEL
                 .to_lowercase()
-                .contains(&self.sheet_query.as_str().to_lowercase())
+                .contains(&self.sheet.query.as_str().to_lowercase())
     }
 
     pub(super) fn listed_provider_definitions(&self) -> Vec<&ProviderDefinition> {
-        let query = self.sheet_query.as_str().trim().to_lowercase();
+        let query = self.sheet.query.as_str().trim().to_lowercase();
         let mut definitions: Vec<_> = self
-            .provider_definitions
+            .providers
+            .definitions
             .iter()
             .filter(|definition| {
                 format!("{} {}", definition.display_name, definition.type_id)
@@ -127,7 +139,7 @@ impl AppState {
             return Vec::new();
         }
         let auth = self.open_provider_auth().map(|auth| auth.state);
-        let query = self.sheet_query.as_str().to_lowercase();
+        let query = self.sheet.query.as_str().to_lowercase();
         ProviderAction::offered(auth)
             .iter()
             .copied()
@@ -139,7 +151,7 @@ impl AppState {
         let id = self
             .open_provider()
             .map_or("", |provider| provider.id.as_str());
-        match (self.providers_view, &self.config_editing) {
+        match (self.providers.view, &self.providers.config_editing) {
             (ProvidersView::List, _) => String::from("/providers "),
             (ProvidersView::Connect, _) => String::from("/providers › connect › "),
             (ProvidersView::Provider, _) => format!("/providers › {id} › "),
@@ -161,21 +173,21 @@ impl App {
 
     pub(super) fn show_providers_view(&mut self, view: ProvidersView) {
         self.open_sheet(UiMode::Providers);
-        self.state.providers_view = view;
+        self.state.providers.view = view;
     }
 
     pub(super) fn close_providers_level(&mut self) {
-        if self.state.config_editing.take().is_some() {
-            self.state.sheet_query.clear();
-            self.state.sheet_notice = None;
-            self.state.sheet_armed = false;
+        if self.state.providers.config_editing.take().is_some() {
+            self.state.sheet.query.clear();
+            self.state.sheet.notice = None;
+            self.state.sheet.armed = false;
             return;
         }
-        match self.state.providers_view {
+        match self.state.providers.view {
             ProvidersView::List => self.close_sheet(),
             ProvidersView::Connect => {
                 self.show_providers_view(ProvidersView::List);
-                self.state.sheet_index = self.state.listed_providers().len();
+                self.state.sheet.index = self.state.listed_providers().len();
             }
             ProvidersView::Provider => self.return_to_provider_list(),
             ProvidersView::Config => self.return_to_provider(ProviderAction::EditConfig),
@@ -183,9 +195,9 @@ impl App {
     }
 
     fn return_to_provider_list(&mut self) {
-        let open = self.state.settings_provider_index;
+        let open = self.state.providers.settings_provider_index;
         self.show_providers_view(ProvidersView::List);
-        self.state.sheet_index = self
+        self.state.sheet.index = self
             .state
             .listed_providers()
             .iter()
@@ -195,7 +207,7 @@ impl App {
 
     pub(super) fn return_to_provider(&mut self, action: ProviderAction) {
         self.show_providers_view(ProvidersView::Provider);
-        self.state.sheet_index = self
+        self.state.sheet.index = self
             .state
             .listed_provider_actions()
             .iter()
@@ -204,9 +216,9 @@ impl App {
     }
 
     pub(super) fn handle_providers_key_event(&mut self, key: KeyEvent) {
-        self.state.sheet_notice = None;
-        self.state.sheet_feedback = None;
-        match self.state.providers_view {
+        self.state.sheet.notice = None;
+        self.state.sheet.feedback = None;
+        match self.state.providers.view {
             ProvidersView::List => self.handle_provider_list_key(key),
             ProvidersView::Connect => self.handle_connect_key(key),
             ProvidersView::Provider => self.handle_provider_key(key),
@@ -215,7 +227,7 @@ impl App {
     }
 
     fn handle_provider_list_key(&mut self, key: KeyEvent) {
-        let armed = std::mem::take(&mut self.state.sheet_armed);
+        let armed = std::mem::take(&mut self.state.sheet.armed);
         let providers: Vec<usize> = self
             .state
             .listed_providers()
@@ -226,16 +238,16 @@ impl App {
         if self.filter_sheet(key, "/providers") || self.walk_sheet(key, rows) {
             return;
         }
-        let highlighted = self.state.sheet_index.min(rows.saturating_sub(1));
+        let highlighted = self.state.sheet.index.min(rows.saturating_sub(1));
         match (key.code, providers.get(highlighted).copied()) {
             (KeyCode::Enter, Some(provider)) => {
-                self.state.settings_provider_index = provider;
+                self.state.providers.settings_provider_index = provider;
                 self.show_providers_view(ProvidersView::Provider);
                 self.request(RuntimeRequest::GetProviderAuthStatuses);
             }
             (KeyCode::Enter, None) if rows > 0 => self.show_providers_view(ProvidersView::Connect),
             (KeyCode::Delete, Some(provider)) if armed => self.remove_provider(provider),
-            (KeyCode::Delete, Some(_)) => self.state.sheet_armed = true,
+            (KeyCode::Delete, Some(_)) => self.state.sheet.armed = true,
             _ => {}
         }
     }
@@ -255,7 +267,7 @@ impl App {
     }
 
     fn handle_provider_key(&mut self, key: KeyEvent) {
-        let armed = std::mem::take(&mut self.state.sheet_armed);
+        let armed = std::mem::take(&mut self.state.sheet.armed);
         if self.state.wants_back(key) {
             self.return_to_provider_list();
             return;
@@ -264,7 +276,7 @@ impl App {
         if self.edit_sheet_filter(key) || self.walk_sheet(key, actions.len()) {
             return;
         }
-        let highlighted = self.state.sheet_index.min(actions.len().saturating_sub(1));
+        let highlighted = self.state.sheet.index.min(actions.len().saturating_sub(1));
         if key.code == KeyCode::Enter
             && let Some(action) = actions.get(highlighted).copied()
         {
@@ -317,10 +329,10 @@ impl App {
             ProviderAction::CopySignIn => return self.copy_pending_sign_in(),
             ProviderAction::EditConfig => return self.show_providers_view(ProvidersView::Config),
             ProviderAction::Remove if armed => {
-                return self.remove_provider(self.state.settings_provider_index);
+                return self.remove_provider(self.state.providers.settings_provider_index);
             }
             ProviderAction::Remove => {
-                self.state.sheet_armed = true;
+                self.state.sheet.armed = true;
                 return;
             }
         };
@@ -332,7 +344,7 @@ impl App {
     pub(super) fn provider_feedback(&mut self, text: impl Into<String>) {
         let text = text.into();
         if self.state.mode == UiMode::Providers {
-            self.state.sheet_feedback = Some(text);
+            self.state.sheet.feedback = Some(text);
         }
     }
 
@@ -345,7 +357,7 @@ impl App {
     }
 
     fn remove_provider(&mut self, index: usize) {
-        let Some(draft) = self.state.settings_draft.as_mut() else {
+        let Some(draft) = self.state.providers.settings_draft.as_mut() else {
             return;
         };
         if index >= draft.providers.len() {
@@ -355,9 +367,9 @@ impl App {
         draft
             .models
             .retain(|model| model.provider_id != provider.id);
-        self.state.settings_provider_index = 0;
+        self.state.providers.settings_provider_index = 0;
         self.show_providers_view(ProvidersView::List);
-        self.state.sheet_index = index;
+        self.state.sheet.index = index;
         self.provider_feedback(format!("Removed {}", provider.id));
         self.save_settings_draft();
     }
@@ -366,7 +378,8 @@ impl App {
         let definitions = self.state.listed_provider_definitions();
         let highlighted = self
             .state
-            .sheet_index
+            .sheet
+            .index
             .min(definitions.len().saturating_sub(1));
         let Some((type_id, fields, prefix)) = definitions.get(highlighted).map(|definition| {
             (
@@ -377,8 +390,8 @@ impl App {
         }) else {
             return;
         };
-        let Some(draft) = self.state.settings_draft.as_mut() else {
-            self.state.sheet_notice = Some(String::from("Provider settings are still loading"));
+        let Some(draft) = self.state.providers.settings_draft.as_mut() else {
+            self.state.sheet.notice = Some(String::from("Provider settings are still loading"));
             return;
         };
         let id = next_provider_id(&draft.providers, &prefix);
@@ -387,7 +400,7 @@ impl App {
             type_id,
             values: default_values(&fields),
         });
-        self.state.settings_provider_index = draft.providers.len().saturating_sub(1);
+        self.state.providers.settings_provider_index = draft.providers.len().saturating_sub(1);
         self.show_providers_view(ProvidersView::Provider);
         self.provider_feedback(format!("Connected {id}"));
         self.save_settings_draft();
@@ -395,13 +408,13 @@ impl App {
     }
 
     pub(super) fn save_settings_draft(&mut self) {
-        if let Some(settings) = self.state.settings_draft.clone() {
+        if let Some(settings) = self.state.providers.settings_draft.clone() {
             self.request(RuntimeRequest::SaveSettings { settings });
         }
     }
 
     pub(super) fn apply_provider_auth_status(&mut self, status: ProviderAuthStatus) -> bool {
-        let previous = self.state.provider_auth.get(&status.provider_type);
+        let previous = self.state.providers.auth.get(&status.provider_type);
         if previous.is_some_and(|previous| status.sequence < previous.sequence) {
             return false;
         }
@@ -409,7 +422,8 @@ impl App {
         let next_target = pending_auth_target(&status).map(str::to_owned);
         let device_code = status.state == ProviderAuthState::DeviceCodePending;
         self.state
-            .provider_auth
+            .providers
+            .auth
             .insert(status.provider_type.clone(), status);
 
         if let Some(target) = next_target
@@ -438,13 +452,13 @@ impl App {
             .and_then(pending_auth_target)
             .map(str::to_owned);
         let Some(target) = target else {
-            self.state.sheet_notice = Some(String::from("No sign-in is waiting"));
+            self.state.sheet.notice = Some(String::from("No sign-in is waiting"));
             return;
         };
         match open_external_target(&target) {
             Ok(()) => self.provider_feedback("Opened the browser"),
             Err(error) => {
-                self.state.sheet_notice = Some(format!("Could not open the browser: {error}"));
+                self.state.sheet.notice = Some(format!("Could not open the browser: {error}"));
             }
         }
     }
@@ -459,12 +473,12 @@ impl App {
                 ProviderAuthState::SignedOut | ProviderAuthState::Authenticated => None,
             });
         let Some(value) = value else {
-            self.state.sheet_notice = Some(String::from("No sign-in is waiting"));
+            self.state.sheet.notice = Some(String::from("No sign-in is waiting"));
             return;
         };
         match self.copy_text_to_clipboard(&value, feedback::CopyTarget::Auth) {
             Ok(()) => self.provider_feedback("Copied"),
-            Err(error) => self.state.sheet_notice = Some(format!("Copy failed: {error}")),
+            Err(error) => self.state.sheet.notice = Some(format!("Copy failed: {error}")),
         }
     }
 }

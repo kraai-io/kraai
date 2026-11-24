@@ -6,7 +6,7 @@ use super::{notice, plural};
 
 pub(super) fn agents(state: &AppState) -> Sheet {
     let agents = state.filtered_agents();
-    let highlighted = agents.get(state.sheet_index.min(agents.len().saturating_sub(1)));
+    let highlighted = agents.get(state.sheet.index.min(agents.len().saturating_sub(1)));
     let mut notes = Vec::new();
     if let Some(profile) = highlighted {
         notes.push(Note::default());
@@ -23,7 +23,7 @@ pub(super) fn agents(state: &AppState) -> Sheet {
                 .join("  "),
         ));
         if !profile.capabilities.is_unsandboxed()
-            && let Some(warning) = &state.sandbox_warning
+            && let Some(warning) = &state.agents.sandbox_warning
         {
             notes.push(Note::new(warning, Tone::Danger));
         }
@@ -42,7 +42,8 @@ pub(super) fn agents(state: &AppState) -> Sheet {
     }
     notes.extend(
         state
-            .agent_profile_warnings
+            .agents
+            .warnings
             .iter()
             .map(|warning| Note::new(&warning.message, Tone::Waiting)),
     );
@@ -56,7 +57,7 @@ pub(super) fn agents(state: &AppState) -> Sheet {
                 SheetRow::Item(SheetItem {
                     label: profile.display_name.clone(),
                     detail: profile.description.clone(),
-                    tag: if state.selected_profile_id.as_ref() == Some(&profile.id) {
+                    tag: if state.agents.selected_profile_id.as_ref() == Some(&profile.id) {
                         String::from("current")
                     } else {
                         String::new()
@@ -65,8 +66,8 @@ pub(super) fn agents(state: &AppState) -> Sheet {
                 })
             })
             .collect(),
-        selected: state.sheet_index,
-        empty: if state.agent_profiles.is_empty() {
+        selected: state.sheet.index,
+        empty: if state.agents.profiles.is_empty() {
             String::from("No agents available")
         } else {
             String::from("No agents match")

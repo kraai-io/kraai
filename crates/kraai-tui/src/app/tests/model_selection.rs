@@ -21,7 +21,7 @@ fn default_selection_is_deterministic_and_stays_with_the_selected_provider() {
         if reverse {
             providers.reverse();
         }
-        harness.app.state.models_by_provider = providers
+        harness.app.state.models.by_provider = providers
             .into_iter()
             .map(|(provider, models)| (provider.into(), models))
             .collect();
@@ -31,15 +31,15 @@ fn default_selection_is_deterministic_and_stays_with_the_selected_provider() {
             (Some("empty"), None),
             (Some("unavailable"), None),
         ] {
-            harness.app.state.selected_provider_id = selected_provider.map(String::from);
-            harness.app.state.selected_model_id = None;
+            harness.app.state.models.selected_provider_id = selected_provider.map(String::from);
+            harness.app.state.models.selected_model_id = None;
             harness.app.ensure_selected_model();
             assert_eq!(
-                harness.app.state.selected_provider_id.as_deref(),
+                harness.app.state.models.selected_provider_id.as_deref(),
                 expected.map(|(provider, _)| provider).or(selected_provider)
             );
             assert_eq!(
-                harness.app.state.selected_model_id.as_deref(),
+                harness.app.state.models.selected_model_id.as_deref(),
                 expected.map(|(_, model)| model)
             );
         }
@@ -49,21 +49,21 @@ fn default_selection_is_deterministic_and_stays_with_the_selected_provider() {
 #[test]
 fn a_selected_model_never_moves_to_another_provider() {
     let mut harness = test_harness();
-    harness.app.state.models_by_provider = HashMap::from([
+    harness.app.state.models.by_provider = HashMap::from([
         ("empty".into(), Vec::new()),
         ("alpha".into(), vec![model("first"), model("shared")]),
         ("zeta".into(), vec![model("shared")]),
     ]);
     for provider in ["missing", "empty", "zeta"] {
-        harness.app.state.selected_provider_id = Some(provider.into());
-        harness.app.state.selected_model_id = Some("shared".into());
+        harness.app.state.models.selected_provider_id = Some(provider.into());
+        harness.app.state.models.selected_model_id = Some("shared".into());
         harness.app.ensure_selected_model();
         assert_eq!(
-            harness.app.state.selected_provider_id.as_deref(),
+            harness.app.state.models.selected_provider_id.as_deref(),
             Some(provider)
         );
         assert_eq!(
-            harness.app.state.selected_model_id.as_deref(),
+            harness.app.state.models.selected_model_id.as_deref(),
             Some("shared")
         );
     }
@@ -74,8 +74,8 @@ fn loading_models_never_saves_over_the_session_model() {
     for (selected, expected) in [(Some("added-later"), "added-later"), (None, "first")] {
         let mut harness = test_harness();
         harness.app.state.current_session_id = Some(SessionId::new("session"));
-        harness.app.state.selected_provider_id = Some("provider".into());
-        harness.app.state.selected_model_id = selected.map(String::from);
+        harness.app.state.models.selected_provider_id = Some("provider".into());
+        harness.app.state.models.selected_model_id = selected.map(String::from);
         harness.drain_requests();
         harness
             .app
@@ -84,7 +84,7 @@ fn loading_models_never_saves_over_the_session_model() {
                 vec![model("first")],
             )]))));
         assert_eq!(
-            harness.app.state.selected_model_id.as_deref(),
+            harness.app.state.models.selected_model_id.as_deref(),
             Some(expected)
         );
         assert!(

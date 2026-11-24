@@ -81,22 +81,20 @@ fn option_picker_saves_partial_choices_before_any_message() {
     let mut harness = test_harness();
     configure(&mut harness);
     harness.app.handle_command("model");
-    harness.app.handle_key_event(super::super::KeyEvent::new(
-        super::super::KeyCode::Char('s'),
-        super::super::KeyModifiers::CONTROL,
-    ));
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
     harness.drain_requests();
     for code in [
-        super::super::KeyCode::Char('h'),
-        super::super::KeyCode::Char('i'),
-        super::super::KeyCode::Char('g'),
-        super::super::KeyCode::Char('h'),
-        super::super::KeyCode::Enter,
+        KeyCode::Char('h'),
+        KeyCode::Char('i'),
+        KeyCode::Char('g'),
+        KeyCode::Char('h'),
+        KeyCode::Enter,
     ] {
-        harness.app.handle_key_event(super::super::KeyEvent::new(
-            code,
-            super::super::KeyModifiers::NONE,
-        ));
+        harness
+            .app
+            .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
     }
     let requests = harness.drain_requests();
     assert!(
@@ -104,7 +102,7 @@ fn option_picker_saves_partial_choices_before_any_message() {
         if session_id.as_str() == "session" && selection.model_id.as_str() == "model" && selection.provider_id.as_str() == "provider"
             && selection.options == ModelOptionValues::from([("effort".into(), ModelOptionValue::Choice("high".into()))]))
     );
-    assert!(harness.app.state.pending_messages.is_empty());
+    assert!(harness.app.state.sessions.pending_messages.is_empty());
 }
 
 #[test]
@@ -115,7 +113,7 @@ fn clearing_an_optional_parent_saves_the_map_without_its_dependents() {
     set_option(&mut harness, "thinking", "").unwrap();
     let expected =
         ModelOptionValues::from([("effort".into(), ModelOptionValue::Choice("high".into()))]);
-    assert_eq!(harness.app.state.selected_model_options, expected);
+    assert_eq!(harness.app.state.models.selected_options, expected);
     assert!(
         matches!(saves(&harness).as_slice(), [(session, _, selection)]
         if session.as_str() == "session" && selection.options == expected)
@@ -129,33 +127,34 @@ fn model_picker_saves_the_complete_typed_selection() {
     let models = harness
         .app
         .state
-        .models_by_provider
+        .models
+        .by_provider
         .get_mut("provider")
         .expect("missing provider");
     let mut second = models.first().cloned().expect("missing model");
     second.id = "second".into();
     models.push(second);
     let values = options("high", true, Some(50));
-    harness.app.state.selected_model_options = options("low", false, None);
+    harness.app.state.models.selected_options = options("low", false, None);
     harness
         .app
         .state
-        .remembered_model_options
+        .models
+        .remembered_options
         .entry("provider".into())
         .or_default()
         .insert("second".into(), values.clone());
-    harness.app.state.mode = super::super::UiMode::Model;
-    harness.app.state.sheet_index = harness
+    harness.app.state.mode = UiMode::Model;
+    harness.app.state.sheet.index = harness
         .app
         .state
         .filtered_models()
         .iter()
         .position(|(_, model)| model.id == "second")
         .expect("missing second model");
-    harness.app.handle_key_event(super::super::KeyEvent::new(
-        super::super::KeyCode::Enter,
-        super::super::KeyModifiers::NONE,
-    ));
+    harness
+        .app
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(
         matches!(saves(&harness).as_slice(), [(session, _, selection)]
         if session.as_str() == "session" && selection.model_id.as_str() == "second" && selection.options == values)
@@ -179,7 +178,7 @@ fn rapid_edits_coalesce_and_stale_responses_preserve_the_latest_selection() {
     let mut stale = session_snapshot(None);
     stale.session.selected_model = Some(first);
     snapshot(&mut harness, &SessionId::new("session"), 0, stale.clone());
-    assert_eq!(harness.app.state.selected_model_options, desired);
+    assert_eq!(harness.app.state.models.selected_options, desired);
     acknowledge(&mut harness, &SessionId::new("session"), first_id);
     let (_, second_id, second) = saves(&harness)
         .into_iter()
@@ -193,9 +192,9 @@ fn rapid_edits_coalesce_and_stale_responses_preserve_the_latest_selection() {
     harness.drain_requests();
     stale.session.tip_id = Some("new-history".into());
     snapshot(&mut harness, &SessionId::new("session"), first_id, stale);
-    assert_eq!(harness.app.state.selected_model_options, desired);
+    assert_eq!(harness.app.state.models.selected_options, desired);
     assert_eq!(
-        harness.app.state.current_tip_id.as_deref(),
+        harness.app.state.chat.tip_id.as_deref(),
         Some("new-history")
     );
     let mut confirmed = session_snapshot(None);
@@ -206,7 +205,7 @@ fn rapid_edits_coalesce_and_stale_responses_preserve_the_latest_selection() {
         second_id,
         confirmed,
     );
-    assert_eq!(harness.app.state.selected_model_options, desired);
+    assert_eq!(harness.app.state.models.selected_options, desired);
 }
 
 #[test]
@@ -214,7 +213,7 @@ fn active_and_queued_turns_defer_saves_and_retain_submitted_options() {
     let mut harness = test_harness();
     configure(&mut harness);
     let submitted = options("high", false, None);
-    harness.app.state.selected_model_options = submitted.clone();
+    harness.app.state.models.selected_options = submitted.clone();
     let mut active = session_snapshot(None);
     active.activity = SessionActivity::Streaming;
     active.session.is_running = true;
@@ -257,8 +256,8 @@ fn session_switches_keep_deferred_saves_and_ignore_background_acknowledgements()
     harness
         .app
         .reset_chat_session(Some(SessionId::new("other")));
-    harness.app.state.selected_model_id = Some("other-model".into());
-    harness.app.state.selected_model_options.clear();
+    harness.app.state.models.selected_model_id = Some("other-model".into());
+    harness.app.state.models.selected_options.clear();
     let idle = session_snapshot(None);
     harness
         .app
@@ -271,10 +270,10 @@ fn session_switches_keep_deferred_saves_and_ignore_background_acknowledgements()
         .expect("missing background save");
     acknowledge(&mut harness, &SessionId::new("session"), save_id);
     assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
+        harness.app.state.models.selected_model_id.as_deref(),
         Some("other-model")
     );
-    assert!(harness.app.state.selected_model_options.is_empty());
+    assert!(harness.app.state.models.selected_options.is_empty());
     harness
         .app
         .reset_chat_session(Some(SessionId::new("session")));
@@ -282,7 +281,7 @@ fn session_switches_keep_deferred_saves_and_ignore_background_acknowledgements()
     restored.session.selected_model = Some(selection);
     snapshot(&mut harness, &SessionId::new("session"), save_id, restored);
     assert_eq!(
-        harness.app.state.selected_model_options.get("effort"),
+        harness.app.state.models.selected_options.get("effort"),
         Some(&ModelOptionValue::Choice("high".into()))
     );
 }
@@ -291,7 +290,7 @@ fn session_switches_keep_deferred_saves_and_ignore_background_acknowledgements()
 fn admission_failure_refreshes_idle_state_and_flushes_deferred_edits() {
     let mut harness = test_harness();
     configure(&mut harness);
-    harness.app.state.selected_model_options = options("high", false, None);
+    harness.app.state.models.selected_options = options("high", false, None);
     harness.app.submit_message("message".into());
     set_option(&mut harness, "effort", "low").unwrap();
     assert!(saves(&harness).is_empty());

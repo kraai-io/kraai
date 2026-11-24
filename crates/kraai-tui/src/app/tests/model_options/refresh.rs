@@ -4,7 +4,7 @@ fn refreshed_models(
     harness: &TestHarness,
     update: impl FnOnce(&mut kraai_runtime::Model),
 ) -> HashMap<String, Vec<kraai_runtime::Model>> {
-    let mut models = harness.app.state.models_by_provider.clone();
+    let mut models = harness.app.state.models.by_provider.clone();
     let model = models
         .get_mut("provider")
         .and_then(|models| models.first_mut())
@@ -22,17 +22,17 @@ fn metadata_reordering_keeps_the_highlight_on_the_same_setting() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models)));
-    assert_eq!(harness.app.state.sheet_index, 2);
+    assert_eq!(harness.app.state.sheet.index, 2);
     key(&mut harness, KeyCode::Left);
     assert_eq!(
-        harness.app.state.selected_model_options,
+        harness.app.state.models.selected_options,
         ModelOptionValues::from([
             ("effort".into(), ModelOptionValue::Choice("low".into())),
             ("thinking".into(), ModelOptionValue::Boolean(true)),
             ("budget".into(), ModelOptionValue::Integer(50)),
         ])
     );
-    assert!(harness.app.state.last_error.is_none());
+    assert!(harness.app.state.errors.last.is_none());
 }
 
 #[test]
@@ -73,17 +73,17 @@ fn disappearing_setting_keeps_the_remaining_settings_reachable() {
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models)));
-    assert_eq!(harness.app.state.sheet_index, 1);
+    assert_eq!(harness.app.state.sheet.index, 1);
     assert_eq!(value(&harness, "budget"), None);
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
         value(&harness, "thinking"),
         Some(&ModelOptionValue::Boolean(true))
     );
-    assert!(harness.app.state.sheet_notice.is_some());
+    assert!(harness.app.state.sheet.notice.is_some());
     key(&mut harness, KeyCode::Backspace);
     key(&mut harness, KeyCode::Up);
-    assert_eq!(harness.app.state.sheet_index, 0);
+    assert_eq!(harness.app.state.sheet.index, 0);
     key(&mut harness, KeyCode::Left);
     assert_eq!(
         value(&harness, "effort"),
@@ -107,7 +107,7 @@ fn losing_every_setting_leaves_an_empty_sheet_that_enter_closes() {
     }
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
-    assert!(harness.app.state.last_error.is_none());
+    assert!(harness.app.state.errors.last.is_none());
 }
 
 #[test]
@@ -126,13 +126,14 @@ fn a_session_switching_models_keeps_the_sheet_on_the_model_it_names() {
         harness
             .app
             .state
-            .models_by_provider
+            .models
+            .by_provider
             .entry(provider.into())
             .or_default()
             .push(model);
         harness.app.state.current_session_id = Some(SessionId::new("session"));
         let mut snapshot = session_snapshot(None);
-        let values = harness.app.state.selected_model_options.clone();
+        let values = harness.app.state.models.selected_options.clone();
         snapshot.session.selected_model = Some(kraai_types::ModelSelection {
             provider_id: kraai_types::ProviderId::new(provider),
             model_id: kraai_types::ModelId::new(model_id),
@@ -146,12 +147,12 @@ fn a_session_switching_models_keeps_the_sheet_on_the_model_it_names() {
                 result: Box::new(Ok(snapshot)),
             });
         assert_eq!(
-            harness.app.state.selected_model_id.as_deref(),
+            harness.app.state.models.selected_model_id.as_deref(),
             Some(model_id)
         );
         harness.drain_requests();
         key(&mut harness, KeyCode::Left);
-        assert_eq!(harness.app.state.selected_model_options, values);
+        assert_eq!(harness.app.state.models.selected_options, values);
         assert!(
             !harness
                 .drain_requests()
@@ -162,7 +163,8 @@ fn a_session_switching_models_keeps_the_sheet_on_the_model_it_names() {
             harness
                 .app
                 .state
-                .remembered_model_options
+                .models
+                .remembered_options
                 .get("provider")
                 .and_then(|models| models.get("model"))
                 .and_then(|values| values.get("effort")),

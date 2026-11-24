@@ -1,10 +1,11 @@
+use crate::app::types::UiMode;
 use kraai_types::ModelOptionKind;
 
+use super::super::AppState;
 use super::super::model_options::{
     active_options, chosen_choice, inline_option, model_option_choices, option_summary,
     option_value_label, summarize_options,
 };
-use super::super::{AppState, UiMode};
 use super::sheet::{Note, Sheet, SheetItem, SheetRow, Tone};
 
 mod agent;
@@ -45,13 +46,13 @@ pub(super) fn hints(state: &AppState) -> Option<String> {
             Some(hints.join(" · "))
         }
         UiMode::ModelSettings => {
-            let target = state.model_settings.as_ref()?;
+            let target = state.sheet.model_settings.as_ref()?;
             let types_a_number = state.model_settings_view().is_some_and(|(model, values)| {
                 active_options(model, &values)
-                    .nth(state.sheet_index)
+                    .nth(state.sheet.index)
                     .is_some_and(|option| matches!(option.kind, ModelOptionKind::Integer { .. }))
             });
-            let enter = if !state.sheet_query.as_str().trim().is_empty() {
+            let enter = if !state.sheet.query.as_str().trim().is_empty() {
                 "set"
             } else if state.is_current_model(&target.provider_id, &target.model_id) {
                 "done"
@@ -69,13 +70,13 @@ pub(super) fn hints(state: &AppState) -> Option<String> {
         }
         UiMode::Agent => Some(String::from("tab or ↑↓ select · enter use · esc close")),
         UiMode::Providers => Some(providers::hints(state)),
-        UiMode::Mcp if state.mcp_open.is_some() => Some(String::from(
+        UiMode::Mcp if state.mcp.open.is_some() => Some(String::from(
             "tab or ↑↓ select · enter run · ctrl+r refresh · esc back",
         )),
         UiMode::Mcp => Some(String::from(
             "tab or ↑↓ select · enter open · ctrl+r refresh · esc close",
         )),
-        UiMode::Sessions if state.sheet_armed => Some(String::from(
+        UiMode::Sessions if state.sheet.armed => Some(String::from(
             "del delete this session · any other key keeps it",
         )),
         UiMode::Sessions => Some(String::from(
@@ -103,7 +104,7 @@ fn commands(state: &AppState) -> Option<Sheet> {
                 })
             })
             .collect(),
-        selected: state.sheet_index,
+        selected: state.sheet.index,
         empty: String::new(),
         notes: Vec::new(),
         align_choices: true,
@@ -114,7 +115,7 @@ fn models(state: &AppState) -> Sheet {
     let models = state.filtered_models();
     let mut rows = Vec::with_capacity(models.len());
     let mut heading = None;
-    let highlighted = state.sheet_index.min(models.len().saturating_sub(1));
+    let highlighted = state.sheet.index.min(models.len().saturating_sub(1));
     for (index, (provider, model)) in models.iter().enumerate() {
         if heading != Some(*provider) {
             heading = Some(*provider);
@@ -151,8 +152,8 @@ fn models(state: &AppState) -> Sheet {
         count: plural(models.len(), "model"),
         rows,
         align_choices: false,
-        selected: state.sheet_index,
-        empty: if state.models_by_provider.values().all(Vec::is_empty) {
+        selected: state.sheet.index,
+        empty: if state.models.by_provider.values().all(Vec::is_empty) {
             String::from("No models yet. Connect a provider with /providers")
         } else {
             String::from("No models match")
@@ -165,6 +166,7 @@ fn model_settings(state: &AppState) -> Sheet {
     let Some((model, values)) = state.model_settings_view() else {
         return Sheet {
             caption: state
+                .sheet
                 .model_settings
                 .as_ref()
                 .map(|target| target.model_id.clone())
@@ -222,7 +224,7 @@ fn model_settings(state: &AppState) -> Sheet {
         caption: model.name.clone(),
         count: plural(options.len(), "setting"),
         rows,
-        selected: state.sheet_index,
+        selected: state.sheet.index,
         empty: format!("{} has no settings", model.name),
         notes: notice(state),
         align_choices: true,
@@ -231,12 +233,14 @@ fn model_settings(state: &AppState) -> Sheet {
 
 fn notice(state: &AppState) -> Vec<Note> {
     state
-        .sheet_feedback
+        .sheet
+        .feedback
         .iter()
         .map(|feedback| Note::new(feedback, Tone::Plain))
         .chain(
             state
-                .sheet_notice
+                .sheet
+                .notice
                 .iter()
                 .map(|notice| Note::new(notice, Tone::Danger)),
         )

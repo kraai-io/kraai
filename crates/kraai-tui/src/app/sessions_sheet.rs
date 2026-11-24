@@ -1,12 +1,16 @@
 use kraai_runtime::Session;
 
-use super::*;
+use super::types::{RuntimeRequest, UiMode};
+use super::{App, AppState};
+use kraai_types::SessionId;
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 impl AppState {
     pub(super) fn listed_sessions(&self) -> Vec<&Session> {
-        let query = self.sheet_query.as_str().to_lowercase();
+        let query = self.sheet.query.as_str().to_lowercase();
         let (here, elsewhere): (Vec<_>, Vec<_>) = self
             .sessions
+            .list
             .iter()
             .filter(|session| {
                 format!(
@@ -23,17 +27,19 @@ impl AppState {
     }
 
     pub(super) fn in_this_workspace(&self, session: &Session) -> bool {
-        !self.workspace_dir.is_empty() && session.workspace_dir == self.workspace_dir
+        !self.sessions.workspace_dir.is_empty()
+            && session.workspace_dir == self.sessions.workspace_dir
     }
 
     pub(super) fn offers_new_chat(&self) -> bool {
-        self.sheet_query.is_empty()
+        self.sheet.query.is_empty()
     }
 
     fn highlighted_session(&self) -> Option<SessionId> {
         let sessions = self.listed_sessions();
         let rows = sessions.len() + usize::from(self.offers_new_chat());
-        self.sheet_index
+        self.sheet
+            .index
             .min(rows.checked_sub(1)?)
             .checked_sub(usize::from(self.offers_new_chat()))
             .and_then(|index| sessions.get(index))
@@ -51,22 +57,22 @@ impl App {
         let highlighted = (self.state.mode == UiMode::Sessions)
             .then(|| self.state.highlighted_session())
             .flatten();
-        self.state.sessions = sessions;
+        self.state.sessions.list = sessions;
         if let Some(index) = highlighted.as_ref().and_then(|id| {
             self.state
                 .listed_sessions()
                 .iter()
                 .position(|session| session.id == *id)
         }) {
-            self.state.sheet_index = index + usize::from(self.state.offers_new_chat());
+            self.state.sheet.index = index + usize::from(self.state.offers_new_chat());
         }
         if self.state.highlighted_session() != highlighted {
-            self.state.sheet_armed = false;
+            self.state.sheet.armed = false;
         }
     }
 
     pub(super) fn handle_sessions_key_event(&mut self, key: KeyEvent) {
-        let armed = std::mem::take(&mut self.state.sheet_armed);
+        let armed = std::mem::take(&mut self.state.sheet.armed);
         let rows = self.state.listed_sessions().len() + usize::from(self.state.offers_new_chat());
         if self.filter_sheet(key, "/sessions") || self.walk_sheet(key, rows) {
             return;
@@ -78,7 +84,7 @@ impl App {
             (KeyCode::Delete, Some(session_id)) if armed => {
                 self.request(RuntimeRequest::DeleteSession { session_id });
             }
-            (KeyCode::Delete, Some(_)) => self.state.sheet_armed = true,
+            (KeyCode::Delete, Some(_)) => self.state.sheet.armed = true,
             _ => {}
         }
     }

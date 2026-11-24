@@ -1,3 +1,4 @@
+use super::types::UiMode;
 use std::io::Write;
 
 use base64::Engine;
@@ -10,7 +11,7 @@ use ratatui::{
 
 use crate::components::ChatHistory;
 
-use super::{AppState, UiMode};
+use super::AppState;
 
 mod error;
 mod script_approval;
@@ -24,14 +25,14 @@ pub(super) use status::{activity_text, format_token_count};
 pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
     let available = area.height.saturating_sub(footer_height(state, area));
     if state.mode == UiMode::Chat && state.has_local_script_approval() {
-        if state.approval_expanded {
+        if state.turn.approval_expanded {
             available
         } else {
             12.min(available)
         }
     } else {
         state
-            .composer()
+            .composer_input()
             .get_height(area.width)
             .min(10)
             .min((area.height / 3).max(3))
@@ -40,7 +41,7 @@ pub(super) fn bottom_panel_height(state: &AppState, area: Rect) -> u16 {
 }
 
 fn footer_height(state: &AppState, area: Rect) -> u16 {
-    (2 + u16::from(state.last_error.is_some())).min(area.height.saturating_sub(1))
+    (2 + u16::from(state.errors.last.is_some())).min(area.height.saturating_sub(1))
 }
 
 pub(super) fn chat_layout(state: &AppState, area: Rect) -> [Rect; 3] {
@@ -62,14 +63,14 @@ impl Widget for &AppState {
 
         self.refresh_chat_render_cache(chat_history_area.width);
         {
-            let cache = self.chat_render_cache.borrow();
+            let cache = self.chat.render_cache.borrow();
             ChatHistory::render_prebuilt_sections(
                 &cache.sections,
                 cache.total_lines,
                 chat_history_area,
                 buf,
-                self.scroll,
-                self.auto_scroll,
+                self.chat.scroll,
+                self.chat.auto_scroll,
             );
         }
         render_status(self, status_area, buf);
@@ -77,10 +78,10 @@ impl Widget for &AppState {
         if self.mode == UiMode::Chat && self.has_local_script_approval() {
             render_script_approval_panel(self, input_area, buf);
         } else {
-            self.composer().render(input_area, buf);
+            self.composer_input().render(input_area, buf);
         }
         if let Some(sheet) = sheets::active(self) {
-            sheet::render(&sheet, &self.sheet_scroll, chat_history_area, area, buf);
+            sheet::render(&sheet, &self.sheet.scroll, chat_history_area, area, buf);
         }
 
         error::render_error(self, area, buf);
