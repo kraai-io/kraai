@@ -202,3 +202,37 @@ async fn responses_stream_preserves_native_custom_call_identity_and_input() {
         Some(Ok(ProviderStreamEvent::Usage(_)))
     ));
 }
+
+#[tokio::test]
+async fn failed_responses_are_classified_by_error_code() {
+    for (code, transient, overflow) in [
+        ("server_error", true, false),
+        ("rate_limit_exceeded", true, false),
+        ("context_length_exceeded", false, true),
+        ("invalid_prompt", false, false),
+    ] {
+        let source = stream::iter(vec![Ok(SseEvent::Data(format!(
+            r#"{{"type":"response.failed","response":{{"error":{{"code":"{code}","message":"failed"}}}}}}"#,
+        )))])
+        .boxed();
+        let events = adapt_responses_stream(source).collect::<Vec<_>>().await;
+        let error = events.first().unwrap().as_ref().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .ends_with(&format!("OpenAI response stream failed: {code}: failed")),
+            "{error}"
+        );
+        assert_eq!(
+            kraai_provider_core::is_transient_error(error),
+            transient,
+            "{code}"
+        );
+        assert_eq!(
+            kraai_provider_core::is_context_overflow_error(error),
+            overflow,
+            "{code}"
+        );
+        assert_eq!(events.len(), 1);
+    }
+}
