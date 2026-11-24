@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::Result;
 use kraai_io::fs::{ScopedReadError, read_regular_text_file, read_scoped_text_file};
@@ -53,6 +53,7 @@ pub(crate) async fn refresh_context_state(
     history: &[kraai_types::Message],
     compacted: Option<&MessageId>,
     instructions: Vec<InstructionSection>,
+    workspace: &Path,
 ) -> Result<RefreshedContextState> {
     let document = store.load(session_id).await?;
     let events = document.events;
@@ -60,8 +61,10 @@ pub(crate) async fn refresh_context_state(
     let previous = document.snapshots;
     let previous_instructions = document.instructions;
     let anchor = latest.clone();
+    let workspace = workspace.to_path_buf();
     let (mut refreshed, removals) =
-        tokio::task::spawn_blocking(move || refresh_pinned_files(events, &anchor)).await?;
+        tokio::task::spawn_blocking(move || refresh_pinned_files(events, &anchor, &workspace))
+            .await?;
     let previous: HashMap<_, _> = previous
         .iter()
         .enumerate()
@@ -166,6 +169,7 @@ fn refresh_instructions(
 fn refresh_pinned_files(
     events: Vec<ContextStateEvent>,
     anchor: &MessageId,
+    workspace: &Path,
 ) -> (RefreshedContextState, Vec<ContextStateMutation>) {
     let mut state = ContextState::default();
     for event in events {
@@ -176,12 +180,12 @@ fn refresh_pinned_files(
     let mut refreshed = RefreshedContextState::default();
     let mut removals = Vec::new();
     for pinned in state.opened_files {
+        let shown = display_path(&pinned.path, workspace);
         let text = match read_pinned_file(&pinned) {
-            Ok(contents) => render_file(&pinned.path, &contents),
+            Ok(contents) => render_file(&shown, &contents),
             Err(PinnedReadFailure::Remove(reason)) => {
                 refreshed.notifications.push(format!(
-                    "{} was automatically unpinned because {reason}.",
-                    pinned.path.display()
+                    "{shown} was automatically unpinned because {reason}."
                 ));
                 removals.push(ContextStateMutation::UnpinFile {
                     path: pinned.path,
@@ -190,10 +194,7 @@ fn refresh_pinned_files(
                 continue;
             }
             Err(PinnedReadFailure::Unavailable(error)) => {
-                format!(
-                    "Opened file: {}\n[temporarily unavailable: {error}]",
-                    pinned.path.display()
-                )
+                format!("Opened file: {shown}\n[temporarily unavailable: {error}]")
             }
         };
         refreshed.snapshots.push(FileContextSnapshot {
@@ -206,11 +207,27 @@ fn refresh_pinned_files(
     (refreshed, removals)
 }
 
-fn render_file(path: &std::path::Path, contents: &str) -> String {
-    let mut text = format!(
-        "Opened file: {}\nFormat: <line>|<content>.\n```text\n",
-        path.display()
-    );
+fn display_path(path: &Path, workspace: &Path) -> String {
+    let path = without_verbatim_prefix(path);
+    match path.strip_prefix(without_verbatim_prefix(workspace)) {
+        Ok(relative) => relative.display().to_string(),
+        Err(_) => path.display().to_string(),
+    }
+}
+
+fn without_verbatim_prefix(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{share}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
+}
+
+fn render_file(path: &str, contents: &str) -> String {
+    let mut text = format!("Opened file: {path}\n```text\n");
     append_text_with_line_numbers(&mut text, contents);
     if !contents.is_empty() && !contents.ends_with('\n') {
         text.push('\n');

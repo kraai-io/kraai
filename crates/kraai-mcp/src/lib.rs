@@ -121,6 +121,10 @@ impl McpManager {
         Ok(overlay)
     }
 
+    pub fn has_servers(&self) -> bool {
+        !self.servers.is_empty()
+    }
+
     pub fn subscribe_auth(&self) -> tokio::sync::broadcast::Receiver<McpAuthStatus> {
         self.auth_events.subscribe()
     }

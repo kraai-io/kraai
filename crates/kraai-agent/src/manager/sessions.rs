@@ -554,11 +554,12 @@ impl AgentManager {
         let profile = state.active_turn_profile.as_ref().ok_or_else(|| {
             AgentError::conflict(format!("Session has no active turn: {session_id}"))
         })?;
-        let context = ScriptTurnContext {
+        let mut context = ScriptTurnContext {
             workspace_dir: state.active_workspace_dir.clone(),
             profile: profile.snapshot(),
         };
         drop(states);
+        context.profile.commands = self.available_commands(session_id, &context.profile.commands);
         Ok(context)
     }
 }

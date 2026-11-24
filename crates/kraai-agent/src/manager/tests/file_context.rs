@@ -53,6 +53,7 @@ async fn request(manager: &AgentManager, session: &SessionId) -> ProviderRequest
                 prefix: "instructions".into(),
                 instructions: Vec::new(),
                 discovery_warnings: vec![],
+                workspace_dir: PathBuf::new(),
             },
             None,
             None,

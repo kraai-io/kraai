@@ -170,3 +170,39 @@ fn instructions_stay_in_place_until_they_change_and_report_every_change() {
         ]
     );
 }
+
+#[test]
+fn snapshot_paths_are_workspace_relative_and_drop_verbatim_prefixes() {
+    let workspace = Path::new("workspace");
+    let inside = workspace.join("src").join("lib.rs");
+    assert_eq!(
+        display_path(&inside, workspace),
+        Path::new("src").join("lib.rs").display().to_string()
+    );
+    let outside = Path::new("elsewhere").join("notes.txt");
+    assert_eq!(
+        display_path(&outside, workspace),
+        outside.display().to_string()
+    );
+    for (verbatim, plain) in [
+        (r"\\?\C:\Users\notes.txt", r"C:\Users\notes.txt"),
+        (
+            r"\\?\UNC\server\share\notes.txt",
+            r"\\server\share\notes.txt",
+        ),
+        (r"\\?\Volume{1}\notes.txt", r"\\?\Volume{1}\notes.txt"),
+    ] {
+        assert_eq!(
+            without_verbatim_prefix(Path::new(verbatim)),
+            Path::new(plain)
+        );
+    }
+}
+
+#[test]
+fn rendered_snapshot_names_the_file_and_numbers_lines() {
+    assert_eq!(
+        render_file("src/lib.rs", "one\ntwo"),
+        "Opened file: src/lib.rs\n```text\n1|one\n2|two\n```\nNo newline at end of file."
+    );
+}
