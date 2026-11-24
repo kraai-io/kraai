@@ -47,36 +47,6 @@ impl AgentManager {
             true,
         )
         .await?;
-        let newly_claimed = !self.persistence.sessions().owns_turn(session_id).await?;
-        if newly_claimed {
-            self.persistence.sessions().claim_turn(session_id).await?;
-        }
-        let result = self
-            .prepare_claimed_messages_stream(
-                session_id,
-                messages,
-                selection,
-                consumed_queue_through,
-            )
-            .await;
-        if newly_claimed
-            && !matches!(result, Ok(Some(_)))
-            && !self.is_turn_active(session_id)
-            && !self.session_has_active_stream(session_id).await
-            && let Err(error) = self.persistence.sessions().release_turn(session_id).await
-        {
-            tracing::warn!(%session_id, %error, "Failed to release session after stream preparation");
-        }
-        result
-    }
-
-    async fn prepare_claimed_messages_stream(
-        &self,
-        session_id: &SessionId,
-        messages: Vec<kraai_types::MessageContent>,
-        selection: kraai_types::ModelSelection,
-        consumed_queue_through: Option<i64>,
-    ) -> AgentResult<Option<PendingStreamRequest>> {
         if self.session_has_active_stream(session_id).await {
             return Ok(None);
         }

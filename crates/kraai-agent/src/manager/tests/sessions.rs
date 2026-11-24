@@ -717,6 +717,12 @@ async fn loading_is_passive_and_owned_recovery_restores_interrupted_stream() {
     let (manager, data_dir) = test_manager().await;
 
     let session_id = manager.create_session().await.unwrap();
+    manager
+        .persistence
+        .sessions()
+        .claim_turn(&session_id)
+        .await
+        .unwrap();
     let request = manager
         .prepare_start_stream(
             &session_id,

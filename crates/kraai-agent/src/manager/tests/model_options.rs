@@ -149,6 +149,12 @@ async fn interrupted_stream_recovery_keeps_the_persisted_options() {
         Box::new(ConfigurableProvider),
     );
     let session = manager.create_session().await.unwrap();
+    manager
+        .persistence
+        .sessions()
+        .claim_turn(&session)
+        .await
+        .unwrap();
     let request = manager
         .prepare_start_stream(
             &session,

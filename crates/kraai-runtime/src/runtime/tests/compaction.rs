@@ -384,6 +384,12 @@ async fn drive_overflowing(
     );
     let harness = RuntimeTestHarness::new_with_parts(providers).await;
     let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
+    harness
+        .runtime
+        .session_store
+        .claim_turn(&session_id)
+        .await
+        .unwrap();
     let agent = &harness.runtime.agent_manager;
     let request = agent
         .prepare_start_stream(
