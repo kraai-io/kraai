@@ -173,6 +173,7 @@ impl AgentManager {
                 pending_deltas: Vec::new(),
                 first_pending_sequence: 0,
                 sealed_deltas: 0,
+                publish_failed: false,
                 subscription,
                 unpriced_attempts: 0,
                 reissued_attempts: 0,
@@ -508,35 +509,48 @@ impl AgentManager {
 }
 
 impl AgentManager {
-    pub async fn publish_streaming_snapshots(&self) -> AgentResult<()> {
+    pub async fn publish_streaming_snapshots(&self) -> Vec<(SessionId, AgentError)> {
         let _persistence = self.streaming_persistence.lock().await;
         let batches: Vec<_> = self
             .streaming_messages
             .write()
             .await
-            .values_mut()
-            .filter(|state| !state.pending_deltas.is_empty())
-            .map(|state| {
+            .iter_mut()
+            .filter(|(_, state)| !state.pending_deltas.is_empty())
+            .map(|(message_id, state)| {
                 state.sealed_deltas = state.pending_deltas.len();
                 (
-                    state.message.clone(),
+                    message_id.clone(),
                     state.first_pending_sequence,
                     state.pending_deltas.clone(),
                 )
             })
             .collect();
-        for (message, first_sequence, deltas) in batches {
-            self.message_store
-                .append_stream_deltas(&message, first_sequence, &deltas)
-                .await?;
+        let mut failures = Vec::new();
+        for (message_id, first_sequence, deltas) in batches {
+            let result = self
+                .message_store
+                .append_stream_deltas(&message_id, first_sequence, &deltas)
+                .await;
             let mut streaming = self.streaming_messages.write().await;
-            if let Some(state) = streaming.get_mut(&message.id) {
-                state.pending_deltas.drain(..deltas.len());
-                state.first_pending_sequence += deltas.len() as u64;
-                state.sealed_deltas = 0;
+            let Some(state) = streaming.get_mut(&message_id) else {
+                continue;
+            };
+            match result {
+                Ok(()) => {
+                    state.pending_deltas.drain(..deltas.len());
+                    state.first_pending_sequence += deltas.len() as u64;
+                    state.sealed_deltas = 0;
+                    state.publish_failed = false;
+                }
+                Err(error) => {
+                    if !std::mem::replace(&mut state.publish_failed, true) {
+                        failures.push((state.session_id.clone(), error.into()));
+                    }
+                }
             }
             drop(streaming);
         }
-        Ok(())
+        failures
     }
 }

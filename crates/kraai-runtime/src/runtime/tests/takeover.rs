@@ -61,12 +61,14 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
                 .any(|event| super::harness::streamed_text(event, &session).is_some())
         })
         .await;
-    old_owner
-        .runtime
-        .agent_manager
-        .publish_streaming_snapshots()
-        .await
-        .unwrap();
+    assert!(
+        old_owner
+            .runtime
+            .agent_manager
+            .publish_streaming_snapshots()
+            .await
+            .is_empty()
+    );
     let old_message = super::harness::started_stream(&old_owner.events.snapshot(), &session);
     let old_token = old_owner
         .runtime
@@ -148,12 +150,14 @@ async fn takeover_discards_stale_streaming_state_before_releasing_the_old_lease(
             })
         })
         .await;
-    old_owner
-        .runtime
-        .agent_manager
-        .publish_streaming_snapshots()
-        .await
-        .unwrap();
+    assert!(
+        old_owner
+            .runtime
+            .agent_manager
+            .publish_streaming_snapshots()
+            .await
+            .is_empty()
+    );
     assert!(
         new_owner
             .runtime

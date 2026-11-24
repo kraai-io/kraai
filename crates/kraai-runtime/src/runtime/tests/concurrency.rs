@@ -613,6 +613,16 @@ impl MessageStore for PausedMessageStore {
     async fn save(&self, message: &Message) -> Result<()> {
         self.inner.save(message).await
     }
+    async fn append_stream_deltas(
+        &self,
+        message_id: &MessageId,
+        first_sequence: u64,
+        deltas: &[kraai_persistence::StreamDelta],
+    ) -> Result<()> {
+        self.inner
+            .append_stream_deltas(message_id, first_sequence, deltas)
+            .await
+    }
     async fn delete(&self, id: &MessageId) -> Result<()> {
         self.inner.delete(id).await
     }

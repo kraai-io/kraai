@@ -167,6 +167,7 @@ struct StreamingMessageState {
     pending_deltas: Vec<kraai_persistence::StreamDelta>,
     first_pending_sequence: u64,
     sealed_deltas: usize,
+    publish_failed: bool,
     request_started_at: u64,
     unpriced_attempts: u32,
     reissued_attempts: u32,
