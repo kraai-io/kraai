@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use kraai_execution_types::{CommandInvocationId, ScriptExecutionId};
 
+use crate::MessageId;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum PinnedFileScope {
@@ -43,6 +45,8 @@ pub struct ContextStateEvent {
     pub id: String,
     pub source: ContextStateEventSource,
     pub mutations: Vec<ContextStateMutation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<MessageId>,
 }
 
 #[cfg(test)]

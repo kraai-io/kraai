@@ -1,6 +1,6 @@
 use super::super::*;
 use super::common::{cleanup_dir, open_persistence, test_manager};
-use kraai_persistence::{CompactionCheckpoint, SqliteCompactionStore};
+use kraai_persistence::{CompactionCheckpoint, ScriptExecutionStore, SqliteCompactionStore};
 use kraai_types::{ContextStateMutation, PinnedFileScope};
 
 async fn open(manager: &AgentManager, session: &SessionId, path: &Path) {
@@ -368,5 +368,86 @@ async fn refreshing_with_the_same_tip_appends_after_other_snapshots_and_keeps_th
         .unwrap();
     let next = request(&manager, &session).await;
     assert_eq!(&next.messages[..4], refreshed.messages.as_slice());
+    cleanup_dir(root).await;
+}
+
+async fn open_from_script(
+    manager: &AgentManager,
+    session: &SessionId,
+    source: &MessageId,
+    path: &Path,
+) {
+    let execution = kraai_execution_types::ScriptExecutionId::new(Ulid::generate());
+    manager
+        .persistence
+        .executions()
+        .create(kraai_persistence::NewScriptExecution {
+            id: execution.clone(),
+            session_id: session.clone(),
+            source_message_id: source.clone(),
+            call_id: ToolCallId::new("call"),
+            profile: manager
+                .resolve_selected_profile(&manager.require_session(session).await.unwrap())
+                .unwrap()
+                .snapshot(),
+            source: b"open".to_vec(),
+            rewrites: Default::default(),
+            requested_capabilities: Default::default(),
+            effective_capabilities: Default::default(),
+            timeout: None,
+        })
+        .await
+        .unwrap();
+    manager
+        .context_state_store
+        .append_command(
+            session,
+            &execution,
+            1,
+            &kraai_execution_types::CommandInvocationId::new(Ulid::generate()),
+            "kraai-open-files",
+            vec![ContextStateMutation::PinFile {
+                path: path.into(),
+                scope: PinnedFileScope::Host,
+            }],
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn undo_drops_files_opened_by_the_undone_turn() {
+    let (manager, root) = test_manager().await;
+    let session = manager.create_session().await.unwrap();
+    let kept = root.join("kept.txt");
+    let undone = root.join("undone.txt");
+    tokio::fs::write(&kept, "kept contents\n").await.unwrap();
+    tokio::fs::write(&undone, "undone contents\n")
+        .await
+        .unwrap();
+    manager
+        .add_message(&session, ChatRole::User, "first".into(), None)
+        .await
+        .unwrap();
+    let first_reply = manager
+        .add_message(&session, ChatRole::Assistant, "opening".into(), None)
+        .await
+        .unwrap();
+    open_from_script(&manager, &session, &first_reply, &kept).await;
+    manager
+        .add_message(&session, ChatRole::User, "second".into(), None)
+        .await
+        .unwrap();
+    let second_reply = manager
+        .add_message(&session, ChatRole::Assistant, "opening more".into(), None)
+        .await
+        .unwrap();
+    open_from_script(&manager, &session, &second_reply, &undone).await;
+    let before = texts(&request(&manager, &session).await).join("\n");
+    assert!(before.contains("undone contents"));
+    manager.undo_last_user_message(&session).await.unwrap();
+    let after = texts(&request(&manager, &session).await).join("\n");
+    assert!(after.contains("kept contents"));
+    assert!(!after.contains("undone contents"));
     cleanup_dir(root).await;
 }

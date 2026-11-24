@@ -47,37 +47,6 @@ fn numbered_contents_can_be_used_for_exact_edits_without_losing_line_endings() {
     }
 }
 
-#[test]
-fn state_folds_pin_reauthorization_and_unpin_in_order() {
-    let path = PathBuf::from("/workspace/file.rs");
-    let mut state = ContextState::default();
-    state.apply(
-        "opened",
-        ContextStateMutation::PinFile {
-            path: path.clone(),
-            scope: PinnedFileScope::Workspace {
-                root: PathBuf::from("/workspace"),
-            },
-        },
-    );
-    state.apply(
-        "opened",
-        ContextStateMutation::PinFile {
-            path: path.clone(),
-            scope: PinnedFileScope::Host,
-        },
-    );
-    assert_eq!(state.opened_files.len(), 1);
-    assert_eq!(
-        state.opened_files.first().map(|file| &file.scope),
-        Some(&PinnedFileScope::Host)
-    );
-    state.apply(
-        "opened",
-        ContextStateMutation::UnpinFile { path, reason: None },
-    );
-    assert!(state.opened_files.is_empty());
-}
 fn message(id: &str, content: kraai_types::ConversationItem) -> kraai_types::Message {
     kraai_types::Message {
         id: MessageId::new(id),

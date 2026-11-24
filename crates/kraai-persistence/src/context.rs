@@ -2,14 +2,20 @@ use crate::database::{Database, assert_owner, bump_revision, read_record, write_
 use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_execution_types::{CommandInvocationId, ScriptExecutionId};
 use kraai_types::{
-    ContextStateEvent, ContextStateEventSource, ContextStateMutation, MessageId, SessionId,
+    ContextStateEvent, ContextStateEventSource, ContextStateMutation, MessageId, PinnedFileScope,
+    SessionId,
 };
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use ulid::Ulid;
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ContextStateDocument {
+    #[serde(default)]
+    pub revision: Option<String>,
+    #[serde(default)]
+    pub pinned: Vec<PinnedFile>,
     pub events: Vec<ContextStateEvent>,
     #[serde(default)]
     pub snapshots: Vec<FileContextSnapshot>,
@@ -17,7 +23,24 @@ pub struct ContextStateDocument {
     pub instructions: Vec<InstructionSnapshot>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PinnedFile {
+    pub path: PathBuf,
+    pub scope: PinnedFileScope,
+    pub opened_event: String,
+}
+
 impl ContextStateDocument {
+    pub fn pinned_files(&self) -> Vec<PinnedFile> {
+        let mut pinned = self.pinned.clone();
+        for event in &self.events {
+            for mutation in &event.mutations {
+                apply(&mut pinned, &event.id, mutation);
+            }
+        }
+        pinned
+    }
+
     fn push_event(&mut self, event: ContextStateEvent) {
         let closed: HashSet<_> = event
             .mutations
@@ -29,7 +52,71 @@ impl ContextStateDocument {
             .collect();
         self.snapshots
             .retain(|snapshot| !closed.contains(&snapshot.path));
+        self.revision = Some(event.id.clone());
         self.events.push(event);
+    }
+
+    /// Only a prefix can fold: replaying a later event before an earlier one could change the
+    /// result.
+    fn fold(&mut self, revertible: &HashSet<MessageId>) -> bool {
+        let folded = self
+            .events
+            .iter()
+            .take_while(|event| {
+                event
+                    .message_id
+                    .as_ref()
+                    .is_none_or(|message| !revertible.contains(message))
+            })
+            .count();
+        for event in self.events.drain(..folded) {
+            for mutation in &event.mutations {
+                apply(&mut self.pinned, &event.id, mutation);
+            }
+        }
+        folded > 0
+    }
+
+    fn revert(&mut self, messages: &HashSet<MessageId>) -> bool {
+        let before = self.events.len();
+        self.events.retain(|event| {
+            event
+                .message_id
+                .as_ref()
+                .is_none_or(|message| !messages.contains(message))
+        });
+        if self.events.len() == before {
+            return false;
+        }
+        let pinned: HashSet<_> = self
+            .pinned_files()
+            .into_iter()
+            .map(|file| (file.path, file.opened_event))
+            .collect();
+        self.snapshots.retain(|snapshot| {
+            pinned.contains(&(snapshot.path.clone(), snapshot.opened_event.clone()))
+        });
+        self.revision = Some(Ulid::generate().to_string());
+        true
+    }
+}
+
+fn apply(pinned: &mut Vec<PinnedFile>, event_id: &str, mutation: &ContextStateMutation) {
+    match mutation {
+        ContextStateMutation::PinFile { path, scope } => {
+            if let Some(existing) = pinned.iter_mut().find(|existing| &existing.path == path) {
+                existing.scope = scope.clone();
+            } else {
+                pinned.push(PinnedFile {
+                    path: path.clone(),
+                    scope: scope.clone(),
+                    opened_event: event_id.into(),
+                });
+            }
+        }
+        ContextStateMutation::UnpinFile { path, .. } => {
+            pinned.retain(|existing| &existing.path != path);
+        }
     }
 }
 
@@ -81,9 +168,10 @@ pub trait ContextStateStore: Send + Sync {
     async fn save_snapshots(
         &self,
         session_id: &SessionId,
-        through_event: Option<&str>,
+        revision: Option<&str>,
         snapshots: Vec<FileContextSnapshot>,
         removals: Vec<ContextStateMutation>,
+        revertible: &HashSet<MessageId>,
     ) -> Result<()>;
 
     async fn save_instructions(
@@ -91,6 +179,8 @@ pub trait ContextStateStore: Send + Sync {
         session_id: &SessionId,
         instructions: Vec<InstructionSnapshot>,
     ) -> Result<()>;
+
+    async fn revert_messages(&self, session_id: &SessionId, messages: &[MessageId]) -> Result<()>;
 
     async fn delete(&self, session_id: &SessionId) -> Result<()>;
 }
@@ -127,12 +217,33 @@ impl SqliteContextStateStore {
                     if other_execution == execution_id && (other_sequence == sequence || other_invocation == invocation_id))),
                     "Context state effect {invocation_id} was already persisted for execution {execution_id}");
             }
-            let event = ContextStateEvent { id: Ulid::generate().to_string(), source, mutations };
+            let message_id = match &source {
+                ContextStateEventSource::Command { execution_id, .. } => execution_source(transaction, execution_id)?,
+                ContextStateEventSource::Runtime { .. } => None,
+            };
+            let event = ContextStateEvent { id: Ulid::generate().to_string(), source, mutations, message_id };
             document.push_event(event.clone());
             write_record(transaction, "context", session.as_str(), Some(&session), &document)?;
             Ok(event)
         }).await
     }
+}
+
+fn execution_source(
+    connection: &rusqlite::Connection,
+    execution_id: &ScriptExecutionId,
+) -> Result<Option<MessageId>> {
+    connection
+        .query_row(
+            "SELECT json_extract(data, '$.source_message_id') FROM records
+             WHERE kind = 'execution' AND id = ?1",
+            [execution_id.as_str()],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten()
+        .map(|id| MessageId::try_new(id).map_err(|error| eyre!(error)))
+        .transpose()
 }
 
 #[async_trait::async_trait]
@@ -187,12 +298,14 @@ impl ContextStateStore for SqliteContextStateStore {
     async fn save_snapshots(
         &self,
         session_id: &SessionId,
-        through_event: Option<&str>,
+        revision: Option<&str>,
         snapshots: Vec<FileContextSnapshot>,
         removals: Vec<ContextStateMutation>,
+        revertible: &HashSet<MessageId>,
     ) -> Result<()> {
         let session = session_id.clone();
-        let through_event = through_event.map(str::to_string);
+        let revision = revision.map(str::to_string);
+        let revertible = revertible.clone();
         self.database
             .transaction(move |transaction, leases| {
                 assert_owner(transaction, leases, &session)?;
@@ -200,10 +313,11 @@ impl ContextStateStore for SqliteContextStateStore {
                     read_record::<ContextStateDocument>(transaction, "context", session.as_str())?
                         .unwrap_or_default();
                 ensure!(
-                    document.events.last().map(|event| &event.id) == through_event.as_ref(),
+                    document.revision == revision,
                     "File context changed while snapshots were being refreshed"
                 );
-                if document.snapshots == snapshots && removals.is_empty() {
+                let folded = document.fold(&revertible);
+                if !folded && document.snapshots == snapshots && removals.is_empty() {
                     return Ok(());
                 }
                 for snapshot in &snapshots {
@@ -217,6 +331,7 @@ impl ContextStateStore for SqliteContextStateStore {
                             component: "file-context-refresh".into(),
                         },
                         mutations: removals,
+                        message_id: None,
                     });
                 }
                 write_record(
@@ -246,6 +361,31 @@ impl ContextStateStore for SqliteContextStateStore {
                     return Ok(());
                 }
                 document.instructions = instructions;
+                write_record(
+                    transaction,
+                    "context",
+                    session.as_str(),
+                    Some(&session),
+                    &document,
+                )
+            })
+            .await
+    }
+
+    async fn revert_messages(&self, session_id: &SessionId, messages: &[MessageId]) -> Result<()> {
+        let session = session_id.clone();
+        let messages: HashSet<_> = messages.iter().cloned().collect();
+        self.database
+            .transaction(move |transaction, leases| {
+                assert_owner(transaction, leases, &session)?;
+                let Some(mut document) =
+                    read_record::<ContextStateDocument>(transaction, "context", session.as_str())?
+                else {
+                    return Ok(());
+                };
+                if !document.revert(&messages) {
+                    return Ok(());
+                }
                 write_record(
                     transaction,
                     "context",

@@ -26,8 +26,9 @@ fn command_context_event_preserves_persisted_schema() {
                 reason: Some(String::from("gone")),
             },
         ],
+        message_id: Some(MessageId::new("message")),
     };
-    let expected = r#"{"id":"event","source":{"kind":"command","execution_id":"execution","sequence":3,"invocation_id":"invocation","command_id":"kraai-open-files"},"mutations":[{"kind":"pin-file","path":"file.rs","scope":{"kind":"workspace","root":"workspace"}},{"kind":"pin-file","path":"host.rs","scope":{"kind":"host"}},{"kind":"unpin-file","path":"removed.rs","reason":"gone"}]}"#;
+    let expected = r#"{"id":"event","source":{"kind":"command","execution_id":"execution","sequence":3,"invocation_id":"invocation","command_id":"kraai-open-files"},"mutations":[{"kind":"pin-file","path":"file.rs","scope":{"kind":"workspace","root":"workspace"}},{"kind":"pin-file","path":"host.rs","scope":{"kind":"host"}},{"kind":"unpin-file","path":"removed.rs","reason":"gone"}],"message_id":"message"}"#;
     assert_eq!(
         serde_json::to_string(&event).as_deref().ok(),
         Some(expected)
@@ -50,6 +51,7 @@ fn runtime_context_event_preserves_optional_reason_and_unknown_fields() {
             path: PathBuf::from("file.rs"),
             reason: None,
         }],
+        message_id: None,
     };
     assert_eq!(
         serde_json::from_str::<ContextStateEvent>(original).ok(),

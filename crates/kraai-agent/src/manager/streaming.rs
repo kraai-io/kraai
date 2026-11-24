@@ -497,6 +497,13 @@ impl AgentManager {
                     ));
                 }
                 self.history_removed(session_id, removed.clone());
+                if let Err(error) = self
+                    .context_state_store
+                    .revert_messages(session_id, &removed)
+                    .await
+                {
+                    tracing::warn!(%session_id, %error, "Failed to drop file context from undone messages");
+                }
                 for id in removed {
                     if let Err(error) = self
                         .session_store
