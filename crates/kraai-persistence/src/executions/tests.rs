@@ -235,3 +235,35 @@ async fn output_appends_leave_the_record_alone_and_require_a_running_execution()
     assert_eq!(store.read_output(&id).await.unwrap().stdout, b"out");
     fs::remove_dir_all(data_dir).await.unwrap();
 }
+
+#[tokio::test]
+async fn settled_executions_leave_the_recovery_list_without_changing_their_timing() {
+    let data_dir = test_dir("settled");
+    let store = SqliteScriptExecutionStore::new(&data_dir);
+    let settled = ScriptExecutionId::new(Ulid::generate());
+    let pending = ScriptExecutionId::new(Ulid::generate());
+    store.create(execution(&settled)).await.unwrap();
+    store.create(execution(&pending)).await.unwrap();
+    let created = store.get(&settled).await.unwrap().unwrap();
+    store.mark_settled(&settled).await.unwrap();
+    store.mark_settled(&settled).await.unwrap();
+    let unsettled = store
+        .list_unsettled_for_session(&SessionId::new("session"))
+        .await
+        .unwrap();
+    assert_eq!(
+        unsettled
+            .iter()
+            .map(|record| &record.id)
+            .collect::<Vec<_>>(),
+        vec![&pending]
+    );
+    let reopened = SqliteScriptExecutionStore::new(&data_dir)
+        .get(&settled)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reopened.settled);
+    assert_eq!(reopened.updated_at_millis, created.updated_at_millis);
+    fs::remove_dir_all(data_dir).await.unwrap();
+}

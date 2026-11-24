@@ -48,6 +48,8 @@ pub struct ScriptExecutionRecord {
     pub exit_code: Option<i32>,
     pub sandbox_denied: bool,
     pub error: Option<String>,
+    #[serde(default)]
+    pub settled: bool,
 }
 
 impl ScriptExecutionRecord {
@@ -90,6 +92,11 @@ pub trait ScriptExecutionStore: Send + Sync {
 
     async fn list_for_session(&self, session_id: &SessionId) -> Result<Vec<ScriptExecutionRecord>>;
 
+    async fn list_unsettled_for_session(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<ScriptExecutionRecord>>;
+
     async fn list_all(&self) -> Result<Vec<ScriptExecutionRecord>>;
 
     async fn read_source(&self, id: &ScriptExecutionId) -> Result<Vec<u8>>;
@@ -119,6 +126,8 @@ pub trait ScriptExecutionStore: Send + Sync {
         id: &ScriptExecutionId,
         completion: ScriptExecutionCompletion,
     ) -> Result<ScriptExecutionRecord>;
+
+    async fn mark_settled(&self, id: &ScriptExecutionId) -> Result<()>;
 }
 
 pub struct SqliteScriptExecutionStore {
@@ -229,6 +238,7 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
                     exit_code: None,
                     sandbox_denied: false,
                     error: None,
+                    settled: false,
                 };
                 transaction.execute(
                     "INSERT INTO execution_sources(execution_id, source) VALUES (?1, ?2)",
@@ -255,6 +265,23 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
         let session = session_id.clone();
         self.database
             .read(move |connection, _| list_records(connection, "execution", Some(&session)))
+            .await
+    }
+    async fn list_unsettled_for_session(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<ScriptExecutionRecord>> {
+        let session = session_id.clone();
+        self.database
+            .read(move |connection, _| {
+                let mut statement = connection.prepare_cached(
+                    "SELECT data FROM records WHERE kind = 'execution' AND session_id = ?1
+                     AND json_extract(data, '$.settled') IS NOT 1 ORDER BY id",
+                )?;
+                let rows =
+                    statement.query_map([session.as_str()], |row| row.get::<_, String>(0))?;
+                rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+            })
             .await
     }
     async fn list_all(&self) -> Result<Vec<ScriptExecutionRecord>> {
@@ -414,6 +441,28 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
             record.error = completion.error;
             Ok(())
         }).await
+    }
+    async fn mark_settled(&self, id: &ScriptExecutionId) -> Result<()> {
+        let id = id.to_string();
+        self.database
+            .transaction(move |transaction, leases| {
+                let mut record =
+                    read_record::<ScriptExecutionRecord>(transaction, "execution", &id)?
+                        .ok_or_else(|| eyre!("Execution not found: {id}"))?;
+                assert_owner(transaction, leases, &record.session_id)?;
+                if record.settled {
+                    return Ok(());
+                }
+                record.settled = true;
+                write_record(
+                    transaction,
+                    "execution",
+                    &id,
+                    Some(&record.session_id),
+                    &record,
+                )
+            })
+            .await
     }
 }
 fn require_phase(record: &ScriptExecutionRecord, expected: &[ScriptExecutionPhase]) -> Result<()> {

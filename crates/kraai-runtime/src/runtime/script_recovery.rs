@@ -1,9 +1,7 @@
-use std::collections::{HashMap, HashSet, hash_map::Entry};
-
 use color_eyre::eyre::Result;
 use kraai_execution_types::{ScriptExecutionPhase, ScriptExecutionStatus};
 use kraai_persistence::ScriptExecutionCompletion;
-use kraai_types::{MessageId, SessionId};
+use kraai_types::SessionId;
 
 use super::core::RuntimeCore;
 use super::script_execution::CompletedScriptExecution;
@@ -15,115 +13,117 @@ impl RuntimeCore {
                 "Session recovery requires turn ownership"
             ));
         }
-        let records = self.execution_store.list_for_session(session_id).await?;
-        if records.is_empty() {
+        let records = self
+            .execution_store
+            .list_unsettled_for_session(session_id)
+            .await?;
+        if records.is_empty()
+            || !self
+                .agent_manager
+                .list_session_ids()
+                .await?
+                .contains(session_id)
+        {
             return Ok(());
         }
-        let sessions = self.agent_manager.list_session_ids().await?;
-        let mut sources: HashMap<SessionId, HashSet<MessageId>> = HashMap::new();
-        for record in &records {
-            if sessions.contains(&record.session_id) {
-                sources
-                    .entry(record.session_id.clone())
-                    .or_default()
-                    .insert(record.source_message_id.clone());
-            }
-        }
-        let mut histories: HashMap<SessionId, HashSet<MessageId>> = HashMap::new();
+        let candidates = records
+            .iter()
+            .flat_map(|record| {
+                [
+                    record.source_message_id.clone(),
+                    record.result_message_id.clone(),
+                ]
+            })
+            .collect();
+        let reachable = self
+            .agent_manager
+            .reachable_message_ids(session_id, candidates)
+            .await?;
         for record in records {
-            if !sessions.contains(&record.session_id) {
-                continue;
+            let id = record.id.clone();
+            if reachable.contains(&record.source_message_id)
+                && !reachable.contains(&record.result_message_id)
+            {
+                self.deliver_recovered_result(record).await?;
             }
-            let history = match histories.entry(record.session_id.clone()) {
-                Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) => entry.insert(
-                    self.agent_manager
-                        .reachable_message_ids(
-                            &record.session_id,
-                            sources.remove(&record.session_id).unwrap_or_default(),
-                        )
-                        .await?,
-                ),
-            };
-            if !history.contains(&record.source_message_id) {
-                continue;
-            }
-            let stored = self
-                .agent_manager
-                .get_message(&record.result_message_id)
-                .await?
-                .and_then(|message| match message.content {
-                    kraai_types::ConversationItem::ScriptResult {
-                        output, outcome, ..
-                    } => Some((output, outcome)),
-                    kraai_types::ConversationItem::FileContext { .. }
-                    | kraai_types::ConversationItem::Compaction { .. }
-                    | kraai_types::ConversationItem::System { .. }
-                    | kraai_types::ConversationItem::User { .. }
-                    | kraai_types::ConversationItem::Assistant { .. } => None,
-                });
-            if let Some((output, outcome)) = stored {
-                let recorded = record.outcome().ok();
-                if recorded.as_ref() != Some(&outcome) {
-                    tracing::warn!(
-                        execution_id = ?record.id,
-                        message_id = ?record.result_message_id,
-                        ?recorded,
-                        delivered = ?outcome,
-                        "Delivered script result disagrees with its execution record"
-                    );
-                }
-                self.agent_manager
-                    .add_script_result_to_history(
-                        &record.session_id,
-                        record.result_message_id.clone(),
-                        record.profile.id.clone(),
-                        record.call_id.clone(),
-                        output,
-                        outcome,
-                    )
-                    .await?;
-                continue;
-            }
-            let completed = if record.phase == ScriptExecutionPhase::Finished {
-                CompletedScriptExecution {
-                    output: self.execution_store.read_output(&record.id).await?,
-                    record,
-                }
-            } else {
-                let output = self.execution_store.read_output(&record.id).await?;
-                let (status, error) = interrupted_execution_outcome(record.phase);
-                let record = self
-                    .execution_store
-                    .finish(
-                        &record.id,
-                        ScriptExecutionCompletion {
-                            status,
-                            exit_code: None,
-                            sandbox_denied: record.sandbox_denied,
-                            error: Some(error),
-                            stdout: output.stdout.clone(),
-                            stderr: output.stderr.clone(),
-                        },
-                    )
-                    .await?;
-                CompletedScriptExecution { record, output }
-            };
+            self.execution_store.mark_settled(&id).await?;
+        }
+        Ok(())
+    }
 
-            let result = self.render_script_result(&completed).await?;
-            let result_message_id = completed.record.result_message_id.clone();
-            let session_id = completed.record.session_id.clone();
+    async fn deliver_recovered_result(
+        &self,
+        record: kraai_persistence::ScriptExecutionRecord,
+    ) -> Result<()> {
+        let stored = self
+            .agent_manager
+            .get_message(&record.result_message_id)
+            .await?
+            .and_then(|message| match message.content {
+                kraai_types::ConversationItem::ScriptResult {
+                    output, outcome, ..
+                } => Some((output, outcome)),
+                kraai_types::ConversationItem::FileContext { .. }
+                | kraai_types::ConversationItem::Compaction { .. }
+                | kraai_types::ConversationItem::System { .. }
+                | kraai_types::ConversationItem::User { .. }
+                | kraai_types::ConversationItem::Assistant { .. } => None,
+            });
+        if let Some((output, outcome)) = stored {
+            let recorded = record.outcome().ok();
+            if recorded.as_ref() != Some(&outcome) {
+                tracing::warn!(
+                    execution_id = ?record.id,
+                    message_id = ?record.result_message_id,
+                    ?recorded,
+                    delivered = ?outcome,
+                    "Delivered script result disagrees with its execution record"
+                );
+            }
             self.agent_manager
                 .add_script_result_to_history(
-                    &session_id,
-                    result_message_id.clone(),
-                    completed.record.profile.id.clone(),
-                    completed.record.call_id.clone(),
-                    result,
-                    completed.record.outcome()?,
+                    &record.session_id,
+                    record.result_message_id.clone(),
+                    record.profile.id.clone(),
+                    record.call_id.clone(),
+                    output,
+                    outcome,
                 )
                 .await?;
+            return Ok(());
         }
+        let output = self.execution_store.read_output(&record.id).await?;
+        let completed = if record.phase == ScriptExecutionPhase::Finished {
+            CompletedScriptExecution { output, record }
+        } else {
+            let (status, error) = interrupted_execution_outcome(record.phase);
+            let record = self
+                .execution_store
+                .finish(
+                    &record.id,
+                    ScriptExecutionCompletion {
+                        status,
+                        exit_code: None,
+                        sandbox_denied: record.sandbox_denied,
+                        error: Some(error),
+                        stdout: output.stdout.clone(),
+                        stderr: output.stderr.clone(),
+                    },
+                )
+                .await?;
+            CompletedScriptExecution { record, output }
+        };
+        let result = self.render_script_result(&completed).await?;
+        self.agent_manager
+            .add_script_result_to_history(
+                &completed.record.session_id,
+                completed.record.result_message_id.clone(),
+                completed.record.profile.id.clone(),
+                completed.record.call_id.clone(),
+                result,
+                completed.record.outcome()?,
+            )
+            .await?;
         Ok(())
     }
 }

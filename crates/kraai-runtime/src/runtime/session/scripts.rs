@@ -279,6 +279,14 @@ impl SessionActor {
             .with_context(|| {
                 format!("Failed to persist result for script execution {execution_id}")
             })?;
+        if let Err(error) = self
+            .runtime
+            .execution_store
+            .mark_settled(&completed.record.id)
+            .await
+        {
+            tracing::warn!(%execution_id, error = %format!("{error:#}"), "Unable to mark a delivered script result as settled");
+        }
         self.runtime.send_event(Event::ScriptResultReady {
             session_id: self.session_id.clone(),
             execution_id,

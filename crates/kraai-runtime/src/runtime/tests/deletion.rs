@@ -219,8 +219,19 @@ impl ScriptExecutionStore for PausedExecutionStore {
         self.inner.list_for_session(session_id).await
     }
 
+    async fn list_unsettled_for_session(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<ScriptExecutionRecord>> {
+        self.inner.list_unsettled_for_session(session_id).await
+    }
+
     async fn list_all(&self) -> Result<Vec<ScriptExecutionRecord>> {
         self.inner.list_all().await
+    }
+
+    async fn mark_settled(&self, id: &ScriptExecutionId) -> Result<()> {
+        self.inner.mark_settled(id).await
     }
 
     async fn read_source(&self, id: &ScriptExecutionId) -> Result<Vec<u8>> {
