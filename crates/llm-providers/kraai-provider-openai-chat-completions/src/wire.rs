@@ -6,7 +6,8 @@ pub struct ChatCompletionRequest {
     pub messages: Vec<RequestMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<FunctionTool>>,
-    pub tool_choice: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_completion_tokens: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]

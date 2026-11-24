@@ -759,3 +759,10 @@ async fn disabled_cache_hints_leave_the_request_unmarked() {
     assert!(body.get("prompt_cache_key").is_none());
     assert!(!body.to_string().contains("cache_control"));
 }
+
+#[tokio::test]
+async fn requests_without_tools_omit_tool_choice() {
+    let body = cache_hint_request_body(false).await;
+    assert!(body.get("tools").is_none());
+    assert!(body.get("tool_choice").is_none());
+}
