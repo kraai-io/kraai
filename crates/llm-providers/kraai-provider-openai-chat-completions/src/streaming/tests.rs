@@ -213,10 +213,8 @@ async fn stop_finish_reason_with_a_call_runs_the_call() {
 #[tokio::test]
 async fn completed_call_survives_trailing_stream_failure() {
     for tail in [
-        vec![],
         vec![Err(eyre!("connection lost"))],
         vec![data(json!({"error":{"message":"failed"}}))],
-        vec![data(finish("tool_calls"))],
     ] {
         let mut source = vec![data(call(r#"{"input":"ls"}"#)), data(finish("tool_calls"))];
         source.extend(tail);
@@ -233,6 +231,47 @@ async fn completed_call_survives_trailing_stream_failure() {
         assert!(events.get(2).is_some_and(Result::is_err));
         assert_eq!(events.len(), 3);
     }
+}
+
+#[tokio::test]
+async fn eof_after_a_finish_reason_completes_the_response() {
+    let usage = json!({"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":3}});
+    for (mut source, stop_reason) in [
+        (
+            vec![data(call(r#"{"input":"ls"}"#)), data(finish("tool_calls"))],
+            StopReason::ToolCall,
+        ),
+        (
+            vec![
+                data(json!({"choices":[{"delta":{"content":"done"}}]})),
+                data(finish("stop")),
+                data(finish("stop")),
+            ],
+            StopReason::EndTurn,
+        ),
+    ] {
+        source.push(data(usage.clone()));
+        let events = collect(source, true)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        assert!(events.contains(&ProviderStreamEvent::Finished { stop_reason }));
+        assert!(
+            matches!(events.last(), Some(ProviderStreamEvent::Usage(usage)) if usage.total_tokens == 5)
+        );
+    }
+}
+
+#[tokio::test]
+async fn eof_before_a_finish_reason_is_an_interruption() {
+    let events = collect(
+        vec![data(json!({"choices":[{"delta":{"content":"partial"}}]}))],
+        true,
+    )
+    .await;
+    let error = events.last().unwrap().as_ref().unwrap_err();
+    assert!(kraai_provider_core::is_transient_error(error), "{error}");
 }
 
 #[tokio::test]

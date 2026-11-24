@@ -258,9 +258,9 @@ pub(super) fn adapt_chat_completion_stream(
     let mut completion = Completion::default();
     adapt_provider_stream(
         source,
-        "Chat completions stream ended before the [DONE] marker",
+        "Chat completions stream ended before a finish reason",
         move |event, pending| match event {
-            SseEvent::Data(payload) => {
+            Some(SseEvent::Data(payload)) => {
                 completion.ingest(
                     serde_json::from_str(&payload)?,
                     tool_name.as_deref(),
@@ -269,13 +269,15 @@ pub(super) fn adapt_chat_completion_stream(
                 )?;
                 Ok(StreamStatus::Continue)
             }
-            SseEvent::Done => {
+            Some(SseEvent::Done) => {
                 ensure!(
                     completion.finish_reason.is_some(),
                     "Chat completions stream omitted a finish reason"
                 );
                 Ok(StreamStatus::Complete)
             }
+            None if completion.finish_reason.is_some() => Ok(StreamStatus::Complete),
+            None => Ok(StreamStatus::Continue),
         },
     )
 }

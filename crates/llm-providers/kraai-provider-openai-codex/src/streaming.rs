@@ -17,6 +17,9 @@ pub(crate) fn adapt_responses_stream(
         source,
         "OpenAI response stream ended before response.completed",
         move |event, pending| {
+            let Some(event) = event else {
+                return Ok(StreamStatus::Continue);
+            };
             let SseEvent::Data(payload) = event else {
                 return Err(ProviderError::StreamInterrupted(
                     "OpenAI response stream ended before response.completed".into(),

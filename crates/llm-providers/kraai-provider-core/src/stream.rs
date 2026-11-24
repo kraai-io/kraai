@@ -11,14 +11,26 @@ pub enum StreamStatus {
     Complete,
 }
 
+/// `decode` gets `None` at EOF. Returning `Continue` there reports the stream as interrupted.
 pub fn adapt_provider_stream<F>(
     source: BoxStream<'static, Result<SseEvent>>,
     interrupted_message: &'static str,
-    decode: F,
+    mut decode: F,
 ) -> BoxStream<'static, Result<ProviderStreamEvent>>
 where
-    F: FnMut(SseEvent, &mut VecDeque<ProviderStreamEvent>) -> Result<StreamStatus> + Send + 'static,
+    F: FnMut(Option<SseEvent>, &mut VecDeque<ProviderStreamEvent>) -> Result<StreamStatus>
+        + Send
+        + 'static,
 {
+    let decode = move |event: Option<SseEvent>, pending: &mut VecDeque<ProviderStreamEvent>| {
+        let at_eof = event.is_none();
+        match decode(event, pending)? {
+            StreamStatus::Continue if at_eof => {
+                Err(ProviderError::StreamInterrupted(interrupted_message.into()).into())
+            }
+            status @ (StreamStatus::Continue | StreamStatus::Complete) => Ok(status),
+        }
+    };
     stream::unfold(
         (source, decode, VecDeque::new(), None, false),
         move |(mut source, mut decode, mut pending, mut failure, mut finished)| async move {
@@ -33,11 +45,9 @@ where
                     return None;
                 }
                 let result = match source.next().await {
-                    Some(Ok(event)) => decode(event, &mut pending),
+                    Some(Ok(event)) => decode(Some(event), &mut pending),
                     Some(Err(error)) => Err(error),
-                    None => {
-                        Err(ProviderError::StreamInterrupted(interrupted_message.into()).into())
-                    }
+                    None => decode(None, &mut pending),
                 };
                 match result {
                     Ok(StreamStatus::Continue) => {}
