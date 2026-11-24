@@ -146,8 +146,16 @@ impl SessionActor {
             Ok::<_, color_eyre::Report>(queued)
         }
         .await;
-        let Ok(queued) = prepared else {
-            return;
+        let queued = match prepared {
+            Ok(queued) => queued,
+            Err(error) => {
+                self.finish_turn().await;
+                self.runtime.send_event(Event::ContinuationFailed {
+                    session_id: self.session_id.clone(),
+                    error: format!("{error:#}"),
+                });
+                return;
+            }
         };
         let intercepted = !queued.is_empty();
         let request = match queued.last().map(|entry| entry.message.selection.clone()) {

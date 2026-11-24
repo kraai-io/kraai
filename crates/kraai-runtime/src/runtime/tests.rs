@@ -4,6 +4,7 @@ mod cancellation;
 mod client_sync;
 mod compaction;
 mod concurrency;
+mod continuation;
 mod deletion;
 mod denial;
 mod harness;
