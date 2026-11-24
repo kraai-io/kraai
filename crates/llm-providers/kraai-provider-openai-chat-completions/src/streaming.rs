@@ -154,6 +154,7 @@ impl Completion {
             }
             if let Some(reason) = choice.finish_reason {
                 let stop_reason = match reason.as_str() {
+                    "stop" if !self.calls.is_empty() => StopReason::ToolCall,
                     "stop" => StopReason::EndTurn,
                     "tool_calls" => StopReason::ToolCall,
                     "length" => StopReason::MaxOutputTokens,

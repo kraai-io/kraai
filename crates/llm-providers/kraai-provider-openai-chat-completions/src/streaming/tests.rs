@@ -165,7 +165,6 @@ async fn malformed_or_incomplete_calls_never_emit_a_script() {
         missing_id(r#"{"command":"ls"}"#),
         vec![data(call(good))],
         vec![data(call(good)), Ok(SseEvent::Done)],
-        vec![data(call(good)), data(finish("stop")), Ok(SseEvent::Done)],
         vec![
             data(call(good)),
             data(extra),
@@ -183,6 +182,32 @@ async fn malformed_or_incomplete_calls_never_emit_a_script() {
             "{events:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn stop_finish_reason_with_a_call_runs_the_call() {
+    let events = collect(
+        vec![
+            data(call(r#"{"input":"ls"}"#)),
+            data(finish("stop")),
+            Ok(SseEvent::Done),
+        ],
+        true,
+    )
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>>>()
+    .unwrap();
+    assert!(
+        matches!(events.first(), Some(ProviderStreamEvent::ScriptCall(ScriptCall { input, arguments_error: None, .. })) if input == "ls")
+    );
+    assert!(matches!(
+        events.get(1),
+        Some(ProviderStreamEvent::Finished {
+            stop_reason: StopReason::ToolCall
+        })
+    ));
+    assert_eq!(events.len(), 2);
 }
 
 #[tokio::test]
