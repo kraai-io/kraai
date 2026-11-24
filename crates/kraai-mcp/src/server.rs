@@ -190,8 +190,11 @@ impl Server {
         }
     }
 
-    pub(crate) async fn tools(&self) -> Result<Vec<Tool>, String> {
-        let peer = self.peer().await?;
+    pub(crate) async fn tools(&self) -> (Vec<Tool>, Option<String>) {
+        let peer = match self.peer().await {
+            Ok(peer) => peer,
+            Err(error) => return (self.state.lock().await.tools.clone(), Some(error)),
+        };
         let mut state = self.state.lock().await;
         let generation = self.generation.load(Ordering::Acquire);
         if generation == state.catalog_generation
@@ -199,12 +202,12 @@ impl Server {
                 .expires
                 .is_some_and(|expires| expires > Instant::now())
         {
-            return Ok(state.tools.clone());
+            return (state.tools.clone(), None);
         }
         if let Some((until, error)) = &state.catalog_failure
             && *until > Instant::now()
         {
-            return Err(error.clone());
+            return (state.tools.clone(), Some(error.clone()));
         }
         let result = tokio::time::timeout(
             Duration::from_secs(self.config.startup_timeout_secs),
@@ -218,7 +221,7 @@ impl Server {
                 state.catalog_generation = generation;
                 state.catalog_failure = None;
                 drop(state);
-                Ok(tools)
+                (tools, None)
             }
             result => {
                 let error = match result {
@@ -227,8 +230,7 @@ impl Server {
                 };
                 state.catalog_failure =
                     Some((Instant::now() + Duration::from_secs(10), error.clone()));
-                drop(state);
-                Err(error)
+                (state.tools.clone(), Some(error))
             }
         }
     }
