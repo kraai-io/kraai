@@ -175,6 +175,7 @@ impl AgentManager {
                 sealed_deltas: 0,
                 publish_failed: false,
                 subscription,
+                usage_order: Arc::default(),
                 unpriced_attempts: 0,
                 reissued_attempts: 0,
                 request_started_at: std::time::SystemTime::now()

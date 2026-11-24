@@ -172,6 +172,7 @@ struct StreamingMessageState {
     unpriced_attempts: u32,
     reissued_attempts: u32,
     subscription: bool,
+    usage_order: Arc<Mutex<()>>,
 }
 
 impl StreamingMessageState {

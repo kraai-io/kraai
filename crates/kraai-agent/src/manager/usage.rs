@@ -17,19 +17,34 @@ impl AgentManager {
         })
     }
 
+    async fn usage_order(
+        &self,
+        message_id: &MessageId,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        let order = self
+            .streaming_messages
+            .read()
+            .await
+            .get(message_id)?
+            .usage_order
+            .clone();
+        Some(order.lock_owned().await)
+    }
+
     pub async fn record_request_started(
         &self,
         message_id: &MessageId,
     ) -> AgentResult<Option<kraai_types::RequestUsage>> {
+        let missing = || eyre!("Missing streaming message");
+        let _order = self.usage_order(message_id).await.ok_or_else(missing)?;
         let streaming = self.streaming_messages.read().await;
-        let state = streaming
-            .get(message_id)
-            .ok_or_else(|| eyre!("Missing streaming message"))?;
+        let state = streaming.get(message_id).ok_or_else(missing)?;
+        let session_id = state.session_id.clone();
         let request = Self::request_usage(state, None);
-        if let Some(request) = &request {
-            self.usage_store.save(&state.session_id, request).await?;
-        }
         drop(streaming);
+        if let Some(request) = &request {
+            self.usage_store.save(&session_id, request).await?;
+        }
         Ok(request)
     }
 
@@ -38,18 +53,21 @@ impl AgentManager {
         message_id: &MessageId,
         unpriced_attempts: u32,
     ) -> AgentResult<Option<kraai_types::RequestUsage>> {
-        let mut streaming = self.streaming_messages.write().await;
-        let state = streaming
-            .get_mut(message_id)
-            .ok_or_else(|| eyre!("Missing streaming message"))?;
+        let missing = || eyre!("Missing streaming message");
+        let _order = self.usage_order(message_id).await.ok_or_else(missing)?;
+        let streaming = self.streaming_messages.read().await;
+        let state = streaming.get(message_id).ok_or_else(missing)?;
+        let session_id = state.session_id.clone();
         let unpriced_attempts = state.reissued_attempts.saturating_add(unpriced_attempts);
         let mut request = Self::request_usage(state, None);
+        drop(streaming);
         if let Some(request) = &mut request {
             request.unpriced_attempts = unpriced_attempts;
-            self.usage_store.save(&state.session_id, request).await?;
-            state.unpriced_attempts = unpriced_attempts;
+            self.usage_store.save(&session_id, request).await?;
+            if let Some(state) = self.streaming_messages.write().await.get_mut(message_id) {
+                state.unpriced_attempts = unpriced_attempts;
+            }
         }
-        drop(streaming);
         Ok(request)
     }
 
@@ -57,6 +75,9 @@ impl AgentManager {
         &self,
         message_id: &MessageId,
     ) -> AgentResult<Option<Option<kraai_types::RequestUsage>>> {
+        let Some(_order) = self.usage_order(message_id).await else {
+            return Ok(None);
+        };
         let mut streaming = self.streaming_messages.write().await;
         let Some(state) = streaming.get_mut(message_id) else {
             return Ok(None);
@@ -65,11 +86,12 @@ impl AgentManager {
         state.text_item_ids.clear();
         state.reissued_attempts = state.unpriced_attempts.saturating_add(1);
         state.unpriced_attempts = state.reissued_attempts;
+        let session_id = state.session_id.clone();
         let request = Self::request_usage(state, None);
-        if let Some(request) = &request {
-            self.usage_store.save(&state.session_id, request).await?;
-        }
         drop(streaming);
+        if let Some(request) = &request {
+            self.usage_store.save(&session_id, request).await?;
+        }
         Ok(Some(request))
     }
 
@@ -78,18 +100,23 @@ impl AgentManager {
         message_id: &MessageId,
         usage: TokenUsage,
     ) -> AgentResult<Option<kraai_types::RequestUsage>> {
-        let mut streaming = self.streaming_messages.write().await;
-        if let Some(state) = streaming.get_mut(message_id)
-            && let Some(request) = Self::request_usage(state, Some(usage.clone()))
-        {
-            self.usage_store.save(&state.session_id, &request).await?;
-            if state.message.generation.is_some() {
-                state.record(kraai_persistence::StreamDelta::Usage { usage })?;
-            }
-            drop(streaming);
-            return Ok(Some(request));
-        }
+        let Some(_order) = self.usage_order(message_id).await else {
+            return Ok(None);
+        };
+        let streaming = self.streaming_messages.read().await;
+        let Some(state) = streaming.get(message_id) else {
+            return Ok(None);
+        };
+        let session_id = state.session_id.clone();
+        let request = Self::request_usage(state, Some(usage.clone()));
         drop(streaming);
-        Ok(None)
+        let Some(request) = request else {
+            return Ok(None);
+        };
+        self.usage_store.save(&session_id, &request).await?;
+        if let Some(state) = self.streaming_messages.write().await.get_mut(message_id) {
+            state.record(kraai_persistence::StreamDelta::Usage { usage })?;
+        }
+        Ok(Some(request))
     }
 }
