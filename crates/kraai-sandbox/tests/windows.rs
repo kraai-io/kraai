@@ -501,3 +501,33 @@ async fn wait_for_output(
     .await
     .expect("host started")
 }
+
+#[tokio::test]
+async fn denied_paths_inside_a_grant_are_refused_and_grants_inside_them_run() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("state");
+    let output = state.join("script-output");
+    std::fs::create_dir_all(&output).expect("create output");
+    std::fs::write(output.join("stdout"), "output").expect("write output");
+    let mut plan = fixture.plan("target-readable", &[SandboxCapability::WorkspaceRead]);
+    plan.runtime_roots.push(output.clone());
+    plan.denied_paths = vec![state, fixture.0.join("secret")];
+    plan.environment.insert(
+        "KRAAI_WINDOWS_TARGET".into(),
+        output.join("stdout").into_os_string(),
+    );
+    successful(plan).await;
+
+    let mut plan = fixture.plan("metadata", &[SandboxCapability::WorkspaceWrite]);
+    plan.denied_paths.push(fixture.0.join("workspace/.git"));
+    let result = kraai_sandbox::run(plan, CancellationToken::new()).await;
+    assert!(
+        matches!(result, Err(SandboxError::SandboxUnavailable(_))),
+        "{result:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.0.join("workspace/.git/config"))
+            .expect("metadata remains unchanged"),
+        "metadata"
+    );
+}

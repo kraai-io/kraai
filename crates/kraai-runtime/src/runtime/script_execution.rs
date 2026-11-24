@@ -187,6 +187,7 @@ impl RuntimeCore {
         plan.host_arguments = host.arguments;
         plan.environment = request.environment;
         plan.runtime_roots = request.runtime_roots;
+        plan.denied_paths = self.config.script_denied_paths.clone();
         if !plan
             .runtime_roots
             .iter()

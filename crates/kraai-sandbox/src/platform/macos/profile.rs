@@ -48,26 +48,33 @@ pub(super) fn build_args(
     .collect::<Vec<_>>()
     .join(" ");
 
+    let workspace_read = format!("(allow file-read* file-map-executable {workspace_filter})");
     if plan.capabilities.contains(SandboxCapability::HostRead) {
         profile.push("(allow file-read* file-map-executable)");
     } else {
-        profile.push(&format!(
-            "(allow file-read* file-map-executable {workspace_filter})"
-        ));
+        profile.push(&workspace_read);
     }
-    profile.push(&format!(
-        "(allow file-read* file-map-executable file-write* {temp_filter})"
-    ));
+    let temp_rule = format!("(allow file-read* file-map-executable file-write* {temp_filter})");
+    profile.push(&temp_rule);
+    let mut grants = vec![
+        (workspace.clone(), workspace_read),
+        (private_temp.clone(), temp_rule),
+    ];
+    let workspace_write = format!("(allow file-write* {workspace_filter})");
     if plan.capabilities.contains(SandboxCapability::HostWrite) {
         profile.push("(allow file-write*)");
+        grants.push((workspace.clone(), workspace_write));
     } else if plan
         .capabilities
         .contains(SandboxCapability::WorkspaceWrite)
     {
-        profile.push(&format!("(allow file-write* {workspace_filter})"));
+        profile.push(&workspace_write);
+        grants.push((workspace.clone(), workspace_write));
     }
-    if let Some(git_filter) = &git_filter {
-        profile.push(&format!("(allow file-read* file-write* {git_filter})"));
+    if let (Some(git_dir), Some(git_filter)) = (&git_dir, &git_filter) {
+        let rule = format!("(allow file-read* file-write* {git_filter})");
+        profile.push(&rule);
+        grants.push((git_dir.clone(), rule));
     }
 
     let runtime_roots = plan
@@ -77,12 +84,34 @@ pub(super) fn build_args(
         .collect::<Result<BTreeSet<_>, _>>()?;
     for root in runtime_roots {
         let filter = profile.path_filter(&root, root.is_dir())?;
-        profile.push(&format!("(allow file-read* file-map-executable {filter})"));
+        let rule = format!("(allow file-read* file-map-executable {filter})");
+        profile.push(&rule);
         if !root.starts_with(&workspace) {
             profile.push(&format!(
                 "(deny file-write* (require-all {filter} {writable_exclusions}))"
             ));
             profile.protect_ancestors(&root)?;
+        }
+        grants.push((root, rule));
+    }
+
+    for denied in crate::platform::denied_paths(plan) {
+        let parameter = profile.parameter(&denied)?;
+        let filter = if denied.is_file() {
+            format!("(literal {parameter})")
+        } else {
+            format!("(require-any (literal {parameter}) (subpath {parameter}))")
+        };
+        profile.push(&format!("(deny file-read* file-write* {filter})"));
+        profile.protect_ancestors(&denied)?;
+        for (path, rule) in &grants {
+            if path != &denied && path.starts_with(&denied) {
+                let parameter = profile.parameter(path)?;
+                profile.push(&format!(
+                    "(allow file-read-metadata (path-ancestors {parameter}))"
+                ));
+                profile.push(rule);
+            }
         }
     }
 

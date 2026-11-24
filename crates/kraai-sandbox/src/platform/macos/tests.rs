@@ -310,3 +310,63 @@ fn each_run_gets_a_unique_mach_lookup_marker() {
         assert!(policy.contains("(deny job-creation lsopen appleevent-send)"));
     }
 }
+
+#[test]
+fn denied_paths_override_host_access_and_keep_grants_inside_them() {
+    let (root, mut plan, private_temp) = fixture(&[SandboxCapability::HostWrite]);
+    let storage = root.path().join("storage");
+    let output = storage.join("script-output/session");
+    std::fs::create_dir_all(&output).expect("create output");
+    let config = root.path().join("providers.toml");
+    std::fs::write(&config, "api_key = 'secret'").expect("write config");
+    let missing = root.path().join("missing/mcp.toml");
+    plan.runtime_roots.push(output.clone());
+    plan.denied_paths = vec![missing, config.clone(), storage.clone()];
+    let args = build_args(&plan, &private_temp).expect("build policy").args;
+    let policy = source(&args);
+    let canonical = |path: &Path| path.canonicalize().expect("canonical path");
+    let rule_at = |path: &Path, rule: &dyn Fn(&str) -> String| {
+        parameters_for(&args, path)
+            .iter()
+            .find_map(|parameter| policy.find(&rule(parameter)))
+    };
+
+    let storage_denied = rule_at(&canonical(&storage), &|parameter| {
+        format!("(deny file-read* file-write* (require-any (literal {parameter}) (subpath {parameter})))")
+    })
+    .expect("storage deny");
+    let output_allowed = parameters_for(&args, &canonical(&output))
+        .iter()
+        .filter_map(|parameter| {
+            policy.rfind(&format!(
+                "(allow file-read* file-map-executable (require-any (literal {parameter})"
+            ))
+        })
+        .max()
+        .expect("runtime root allow");
+    assert!(output_allowed > storage_denied);
+    assert!(
+        rule_at(&canonical(&config), &|parameter| format!(
+            "(deny file-read* file-write* (literal {parameter}))"
+        ))
+        .is_some()
+    );
+    let missing = canonical(root.path()).join("missing/mcp.toml");
+    assert!(
+        rule_at(&missing, &|parameter| format!(
+            "(deny file-read* file-write* (require-any (literal {parameter}) (subpath {parameter})))"
+        ))
+        .is_some()
+    );
+    let temp_grants = parameters_for(&args, &canonical(&private_temp))
+        .iter()
+        .map(|parameter| {
+            policy
+                .matches(&format!(
+                    "(allow file-read* file-map-executable file-write* (require-any (literal {parameter})"
+                ))
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(temp_grants, 1);
+}

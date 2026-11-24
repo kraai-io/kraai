@@ -103,6 +103,31 @@ fn validate_plan(plan: &LaunchPlan) -> Result<(), SandboxError> {
     Ok(())
 }
 
+/// Missing paths resolve through their nearest existing ancestor, so rules that match by
+/// path still cover them once something creates them. Shallower paths come first.
+pub(crate) fn denied_paths(plan: &LaunchPlan) -> Vec<std::path::PathBuf> {
+    let mut paths = plan
+        .denied_paths
+        .iter()
+        .filter_map(|path| {
+            let path = std::path::absolute(path).ok()?;
+            path.ancestors().find_map(|ancestor| {
+                let missing = path.strip_prefix(ancestor).ok()?;
+                let resolved = ancestor.canonicalize().ok()?;
+                Some(if missing.as_os_str().is_empty() {
+                    resolved
+                } else {
+                    resolved.join(missing)
+                })
+            })
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    paths.sort_by_key(|path| path.components().count());
+    paths
+}
+
 fn path_is_visible(
     executable: &std::path::Path,
     workspace: &std::path::Path,

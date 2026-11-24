@@ -47,6 +47,7 @@ pub(crate) struct RuntimeConfig {
     pub(crate) script_runtime_roots: Option<Vec<PathBuf>>,
     pub(crate) use_current_executable_as_nushell_host: bool,
     pub(crate) script_output_root: PathBuf,
+    pub(crate) script_denied_paths: Vec<PathBuf>,
 }
 
 impl RuntimeConfig {

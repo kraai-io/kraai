@@ -31,6 +31,7 @@ pub struct ScriptExecutionPlan {
     pub workspace_root: PathBuf,
     pub environment: BTreeMap<String, String>,
     pub runtime_roots: Vec<PathBuf>,
+    pub denied_paths: Vec<PathBuf>,
     pub capabilities: SandboxCapabilities,
     pub timeout: Duration,
     pub startup_timeout: Duration,
@@ -62,6 +63,7 @@ impl ScriptExecutionPlan {
             workspace_root,
             environment: BTreeMap::new(),
             runtime_roots: Vec::new(),
+            denied_paths: Vec::new(),
             capabilities,
             timeout,
             startup_timeout: Duration::from_secs(5),
@@ -139,6 +141,7 @@ pub async fn execute(
         .map(|(name, value)| (OsString::from(name), OsString::from(value)))
         .collect();
     launch.runtime_roots = plan.runtime_roots;
+    launch.denied_paths = plan.denied_paths;
     #[cfg(target_os = "linux")]
     {
         launch.restricts_host_ipc =

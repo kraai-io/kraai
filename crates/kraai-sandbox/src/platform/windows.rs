@@ -93,6 +93,20 @@ fn prepare_inner(
     if let Some(git_dir) = &git_dir {
         filesystem::check(git_dir)?;
     }
+    for denied in crate::platform::denied_paths(&plan) {
+        let grant = std::iter::once(plan.workspace_root.as_path())
+            .chain(runtime_roots.iter().map(PathBuf::as_path))
+            .chain(git_dir.as_deref())
+            .chain([temp_path.as_path()])
+            .find(|grant| denied.starts_with(grant));
+        if let Some(grant) = grant {
+            return Err(SandboxError::SandboxUnavailable(format!(
+                "the Windows sandbox cannot hide '{}' from scripts because it grants '{}'; use a workspace that does not contain it, or request no-sandbox",
+                denied.display(),
+                grant.display()
+            )));
+        }
+    }
     identity::sweep_stale_profiles_once();
     let identity = Identity::create()?;
     let mut capabilities = identity::capability("registryRead")?;
