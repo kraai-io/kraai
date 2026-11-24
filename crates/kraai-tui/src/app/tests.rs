@@ -103,7 +103,6 @@ fn test_harness() -> TestHarness {
             state: AppState::default(),
             last_statusline_animation_tick: None,
             last_runtime_event_sequence: 0,
-            last_session_event_sequences: HashMap::new(),
             refreshes: super::refreshes::Refreshes::default(),
             session_snapshot_sequences: HashMap::new(),
             event_lag_session_resync_pending: false,
@@ -309,35 +308,6 @@ fn snapshot_watermarks_only_suppress_covered_events_for_the_same_session() {
             event: retry_scheduled("session"),
         }));
     assert!(!harness.app.state.retry_waiting);
-}
-
-#[test]
-fn snapshot_is_rejected_only_when_a_newer_event_for_its_session_was_applied() {
-    let mut harness = test_harness();
-    harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness
-        .app
-        .handle_runtime_event_bridge_message(RuntimeEventBridgeMessage::Event(RuntimeEvent {
-            sequence: 11,
-            event: Event::ContextStateChanged {
-                session_id: SessionId::new("session"),
-                notifications: vec![String::from("newer session state")],
-            },
-        }));
-    harness
-        .app
-        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
-            model_save_id: 0,
-            session_id: SessionId::new("session"),
-            result: Box::new(Ok(session_snapshot_at(10, None))),
-        });
-
-    assert!(
-        !harness
-            .app
-            .session_snapshot_sequences
-            .contains_key(&SessionId::new("session"))
-    );
 }
 
 #[test]

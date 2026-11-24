@@ -1,6 +1,6 @@
 use super::{
     Event, RuntimeEvent, RuntimeEventBridgeMessage, RuntimeResponse, ScriptApprovalAction,
-    ScriptPhase, pending_script, test_harness,
+    ScriptPhase, pending_script, session_snapshot_at, test_harness,
 };
 use crossbeam_channel::unbounded;
 use kraai_types::SessionId;
@@ -193,6 +193,13 @@ fn delayed_decision_reply_preserves_a_newer_approval_prompt() {
         }
 
         assert!(matches!(harness.app.process_events(|| Ok(false)), Ok(true)));
+        harness
+            .app
+            .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+                model_save_id: 0,
+                session_id: SessionId::new("session"),
+                result: Box::new(Ok(session_snapshot_at(3, None))),
+            });
         assert_eq!(
             harness.app.state.script_phase,
             ScriptPhase::AwaitingApproval

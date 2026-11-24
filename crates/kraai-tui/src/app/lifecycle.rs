@@ -68,7 +68,6 @@ impl App {
             state,
             last_statusline_animation_tick: None,
             last_runtime_event_sequence: 0,
-            last_session_event_sequences: HashMap::new(),
             refreshes: refreshes::Refreshes::default(),
             session_snapshot_sequences: HashMap::new(),
             event_lag_session_resync_pending: false,
@@ -286,20 +285,7 @@ impl App {
                     return;
                 }
                 self.last_runtime_event_sequence = event.sequence;
-                let covered_by_snapshot = if let Some(session_id) = event.event.session_id() {
-                    self.last_session_event_sequences
-                        .insert(session_id.clone(), event.sequence);
-                    self.session_snapshot_sequences
-                        .get(session_id)
-                        .is_some_and(|snapshot_sequence| event.sequence <= *snapshot_sequence)
-                } else {
-                    false
-                };
-                if covered_by_snapshot {
-                    self.apply_runtime_event(event.event, false);
-                } else {
-                    self.handle_runtime_event(event.event);
-                }
+                self.route_runtime_event(event);
             }
             RuntimeEventBridgeMessage::Lagged => {
                 self.state.cost_recovery_list_pending = true;

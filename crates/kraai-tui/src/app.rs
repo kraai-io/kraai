@@ -108,7 +108,6 @@ pub struct App {
     state: AppState,
     last_statusline_animation_tick: Option<Instant>,
     last_runtime_event_sequence: u64,
-    last_session_event_sequences: HashMap<SessionId, u64>,
     refreshes: refreshes::Refreshes,
     session_snapshot_sequences: HashMap<SessionId, u64>,
     event_lag_session_resync_pending: bool,

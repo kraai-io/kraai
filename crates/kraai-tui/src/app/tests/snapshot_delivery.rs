@@ -316,3 +316,98 @@ fn observer_refreshes_model_when_saved_selection_changes() {
         }
     }
 }
+
+fn delta(text: &str) -> Event {
+    Event::ItemDelta {
+        session_id: SessionId::new("session"),
+        message_id: "answer".into(),
+        item_index: 0,
+        delta: text.into(),
+    }
+}
+
+fn answer_text(harness: &TestHarness) -> Option<String> {
+    let message = harness
+        .app
+        .state
+        .chat_history
+        .get(&MessageId::new("answer"))?;
+    match message.content.assistant_items()? {
+        [kraai_types::AssistantItem::Text { text, .. }] => Some(text.clone()),
+        _ => None,
+    }
+}
+
+fn snapshot_requests(requests: &[RuntimeRequest]) -> usize {
+    requests
+        .iter()
+        .filter(|request| matches!(request, RuntimeRequest::GetSessionSnapshot { .. }))
+        .count()
+}
+
+#[test]
+fn joining_mid_stream_sends_one_snapshot_and_replays_newer_deltas() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
+    for (sequence, text) in [(1, " lost"), (2, " covered"), (3, " newer"), (4, " newest")] {
+        harness
+            .app
+            .handle_runtime_event_bridge_message(stream_event(sequence, delta(text)));
+    }
+    assert_eq!(snapshot_requests(&harness.drain_requests()), 1);
+    assert_eq!(answer_text(&harness), None);
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
+            session_id: SessionId::new("session"),
+            result: Box::new(Ok(snapshot_with_message(2, false))),
+        });
+    assert_eq!(
+        answer_text(&harness).as_deref(),
+        Some("answer text newer newest")
+    );
+    assert!(harness.app.state.is_streaming);
+    assert_eq!(snapshot_requests(&harness.drain_requests()), 0);
+
+    harness
+        .app
+        .handle_runtime_event_bridge_message(stream_event(5, delta(" live")));
+    assert_eq!(
+        answer_text(&harness).as_deref(),
+        Some("answer text newer newest live")
+    );
+    assert_eq!(snapshot_requests(&harness.drain_requests()), 0);
+}
+
+#[test]
+fn a_failed_snapshot_replays_its_buffer_and_a_repeated_request_follows_it() {
+    let mut harness = test_harness();
+    harness.app.state.current_session_id = Some(SessionId::new("session"));
+    harness.app.state.chat_history = snapshot_with_message(1, false).history;
+    harness
+        .app
+        .request_sync_for_session(&SessionId::new("session"));
+    harness
+        .app
+        .request_sync_for_session(&SessionId::new("session"));
+    harness
+        .app
+        .handle_runtime_event_bridge_message(stream_event(2, delta(" buffered")));
+    assert_eq!(snapshot_requests(&harness.drain_requests()), 1);
+    assert_eq!(answer_text(&harness).as_deref(), Some("answer text"));
+
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::SessionSnapshot {
+            model_save_id: 0,
+            session_id: SessionId::new("session"),
+            result: Box::new(Err(kraai_runtime::RuntimeError::unavailable("offline"))),
+        });
+    assert_eq!(
+        answer_text(&harness).as_deref(),
+        Some("answer text buffered")
+    );
+    assert_eq!(snapshot_requests(&harness.drain_requests()), 1);
+}

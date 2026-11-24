@@ -1,3 +1,8 @@
+use std::collections::HashMap;
+
+use kraai_runtime::RuntimeEvent;
+use kraai_types::SessionId;
+
 use super::{RuntimeRequest, RuntimeResponse};
 
 #[derive(Default)]
@@ -23,14 +28,26 @@ impl Refresh {
 }
 
 #[derive(Default)]
+struct SnapshotSync {
+    dirty: bool,
+    buffered: Vec<RuntimeEvent>,
+}
+
+#[derive(Default)]
 pub(super) struct Refreshes {
     sessions: Refresh,
     input_history: Refresh,
+    snapshots: HashMap<SessionId, SnapshotSync>,
 }
 
 pub(super) enum FinishedRefresh {
     None,
     Repeat(RuntimeRequest),
+    Snapshot {
+        session_id: SessionId,
+        dirty: bool,
+        buffered: Vec<RuntimeEvent>,
+    },
 }
 
 impl Refreshes {
@@ -42,7 +59,29 @@ impl Refreshes {
         if matches!(request, RuntimeRequest::ListUserInputHistory { .. }) {
             return self.input_history.start();
         }
+        let RuntimeRequest::GetSessionSnapshot { session_id } = request else {
+            return true;
+        };
+        if let Some(sync) = self.snapshots.get_mut(session_id) {
+            sync.dirty = true;
+            return false;
+        }
+        self.snapshots
+            .insert(session_id.clone(), SnapshotSync::default());
         true
+    }
+
+    /// Hands back events while a snapshot of their session is in flight.
+    pub(super) fn buffer(&mut self, event: RuntimeEvent) -> Option<RuntimeEvent> {
+        let Some(sync) = event
+            .event
+            .session_id()
+            .and_then(|session_id| self.snapshots.get_mut(session_id))
+        else {
+            return Some(event);
+        };
+        sync.buffered.push(event);
+        None
     }
 
     pub(super) fn finish(&mut self, response: &RuntimeResponse) -> FinishedRefresh {
@@ -64,16 +103,53 @@ impl Refreshes {
                 },
             );
         }
-        FinishedRefresh::None
+        let RuntimeResponse::SessionSnapshot { session_id, .. } = response else {
+            return FinishedRefresh::None;
+        };
+        self.snapshots
+            .remove(session_id)
+            .map_or(FinishedRefresh::None, |sync| FinishedRefresh::Snapshot {
+                session_id: session_id.clone(),
+                dirty: sync.dirty,
+                buffered: sync.buffered,
+            })
     }
 }
 
 impl super::App {
+    pub(super) fn route_runtime_event(&mut self, event: RuntimeEvent) {
+        let Some(event) = self.refreshes.buffer(event) else {
+            return;
+        };
+        let covered_by_snapshot = event.event.session_id().is_some_and(|session_id| {
+            self.session_snapshot_sequences
+                .get(session_id)
+                .is_some_and(|snapshot_sequence| event.sequence <= *snapshot_sequence)
+        });
+        if covered_by_snapshot {
+            self.apply_runtime_event(event.event, false);
+        } else {
+            self.handle_runtime_event(event.event);
+        }
+    }
+
     pub(super) fn continue_refresh(&mut self, finished: FinishedRefresh) {
         match finished {
             FinishedRefresh::None => {}
             FinishedRefresh::Repeat(request) => {
                 self.request(request);
+            }
+            FinishedRefresh::Snapshot {
+                session_id,
+                dirty,
+                buffered,
+            } => {
+                for event in buffered {
+                    self.route_runtime_event(event);
+                }
+                if dirty {
+                    self.request(RuntimeRequest::GetSessionSnapshot { session_id });
+                }
             }
         }
     }

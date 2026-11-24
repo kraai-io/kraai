@@ -331,13 +331,6 @@ impl App {
             } => match *result {
                 Ok(snapshot) => {
                     self.observe_session_model_snapshot(&session_id, model_save_id, &snapshot);
-                    if self
-                        .last_session_event_sequences
-                        .get(&session_id)
-                        .is_some_and(|event_sequence| snapshot.event_sequence < *event_sequence)
-                    {
-                        return;
-                    }
                     self.session_snapshot_sequences
                         .insert(session_id.clone(), snapshot.event_sequence);
                     self.accumulate_exit_usage_from_history(&snapshot.history);
