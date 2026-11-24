@@ -93,12 +93,13 @@ impl App {
     ) -> Result<()> {
         self.state.palette.request();
         let mut needs_redraw = true;
+        let mut runtime_frames = frame_pacer::FramePacer::default();
         let mut cursor = cursor::CursorBlink::new(Instant::now());
         let input = self.input.receiver().clone();
         self.hangup = crate::terminal_loss::watch()?;
         self.input.start()?;
         while !self.state.exit {
-            needs_redraw |= self.process_events(|| Ok(!input.is_empty()))?;
+            runtime_frames.request(self.process_events(|| Ok(!input.is_empty()))?);
             let now = Instant::now();
             let event_timeout = if needs_redraw {
                 Some(Duration::ZERO)
@@ -114,10 +115,15 @@ impl App {
                 let blink = (self.state.composer_cursor_enabled()
                     && self.state.cursor_preferences.custom_blink())
                 .then(|| cursor.timeout(now));
-                [self.state.feedback.timeout(now, fading), animation, blink]
-                    .into_iter()
-                    .flatten()
-                    .min()
+                [
+                    self.state.feedback.timeout(now, fading),
+                    animation,
+                    blink,
+                    runtime_frames.timeout(now),
+                ]
+                .into_iter()
+                .flatten()
+                .min()
             };
             let prior_style = self.state.cursor_preferences.style;
             let prior_muted = self.state.palette.muted;
@@ -131,6 +137,9 @@ impl App {
                 && self.state.cursor_preferences.custom_blink();
             needs_redraw |= self.advance_statusline_animation(Instant::now());
             needs_redraw |= self.advance_script_clock(Instant::now());
+
+            let now = Instant::now();
+            needs_redraw |= runtime_frames.due(now);
 
             if !needs_redraw {
                 if blink_changed {
@@ -168,6 +177,7 @@ impl App {
                 }
             })?;
             needs_redraw = false;
+            runtime_frames.drawn(now);
         }
         if let Some(error) = self.runtime_bridge_error.take() {
             Err(color_eyre::eyre::eyre!(error))

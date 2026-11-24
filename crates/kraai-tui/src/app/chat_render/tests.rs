@@ -228,7 +228,7 @@ fn completed_call_projection_preserves_message_metadata_and_item_order() {
             ..TokenUsage::default()
         }),
     });
-    let completed = HashSet::from(["completed"]);
+    let completed = HashSet::from([String::from("completed")]);
     for status in [
         MessageStatus::Complete,
         MessageStatus::Streaming {
@@ -254,11 +254,15 @@ fn completed_call_projection_preserves_message_metadata_and_item_order() {
         assert_eq!(projected.agent_profile_id, expected.agent_profile_id);
         assert_eq!(projected.generation, expected.generation);
         assert_eq!(
-            message_fingerprint(&projected),
-            message_fingerprint(&expected)
+            message_fingerprint(&projected, &HashSet::new()),
+            message_fingerprint(&expected, &HashSet::new())
+        );
+        assert_eq!(
+            message_fingerprint(&original, &completed),
+            message_fingerprint(&expected, &HashSet::new())
         );
         assert!(matches!(
-            without_completed_calls(&original, &HashSet::from(["other"])),
+            without_completed_calls(&original, &HashSet::from([String::from("other")])),
             Cow::Borrowed(_)
         ));
     }
@@ -582,4 +586,87 @@ fn a_changed_card_rebuilds_only_the_messages_with_running_scripts() {
             .map(|section| section.len())
             .sum::<usize>()
     );
+}
+
+#[test]
+fn streamed_text_rerenders_only_its_own_section() {
+    let user = message(
+        "user",
+        None,
+        ConversationItem::User {
+            content: String::from("question").into(),
+        },
+    );
+    let mut assistant = message(
+        "assistant",
+        Some("user"),
+        ConversationItem::Assistant {
+            items: vec![text_item("first"), call_item("call", "cargo test")],
+        },
+    );
+    assistant.status = MessageStatus::Streaming {
+        stream_id: StreamId::new("stream"),
+    };
+    let mut next = message(
+        "next",
+        Some("assistant"),
+        ConversationItem::Assistant {
+            items: vec![text_item("")],
+        },
+    );
+    next.status = assistant.status.clone();
+    let mut state = AppState {
+        chat_history: [
+            (user.id.clone(), user),
+            (assistant.id.clone(), assistant),
+            (next.id.clone(), next),
+        ]
+        .into_iter()
+        .collect(),
+        current_tip_id: Some(String::from("next")),
+        ..AppState::default()
+    };
+    state.refresh_chat_render_cache(80);
+    let user_section = state.chat_render_cache.borrow().sections.first().cloned();
+    let set_text = |state: &mut AppState, id: &str, text: &str| {
+        if let Some(ConversationItem::Assistant { items }) = state
+            .chat_history
+            .get_mut(&MessageId::new(id))
+            .map(|message| &mut message.content)
+            && let Some(AssistantItem::Text { text: current, .. }) = items.first_mut()
+        {
+            *current = text.to_string();
+        }
+        state
+            .chat_render_cache
+            .get_mut()
+            .mark_streamed(MessageId::new(id));
+    };
+
+    set_text(&mut state, "assistant", "first second");
+    state.refresh_chat_render_cache(80);
+    {
+        let cache = state.chat_render_cache.borrow();
+        assert!(matches!(
+            (&user_section, cache.sections.first()),
+            (Some(before), Some(after)) if Arc::ptr_eq(before, after)
+        ));
+        assert_eq!(cache.sections.len(), 3);
+        assert_eq!(
+            cache.total_lines,
+            cache
+                .sections
+                .iter()
+                .map(|section| section.len())
+                .sum::<usize>()
+        );
+    }
+    let lines = rendered_lines(&state);
+    assert!(lines.iter().any(|line| line == " • first second"));
+    assert!(lines.iter().any(|line| line.contains("cargo test")));
+
+    set_text(&mut state, "next", "later");
+    state.refresh_chat_render_cache(80);
+    assert_eq!(state.chat_render_cache.borrow().sections.len(), 5);
+    assert!(rendered_lines(&state).iter().any(|line| line == " • later"));
 }

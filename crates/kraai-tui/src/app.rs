@@ -32,6 +32,7 @@ mod draft_images;
 mod error;
 mod executions;
 mod feedback;
+mod frame_pacer;
 mod images;
 mod input;
 mod lifecycle;
@@ -211,7 +212,7 @@ impl App {
             std::cmp::Ordering::Equal => items.push(item),
             std::cmp::Ordering::Greater => return false,
         }
-        self.invalidate_chat_cache();
+        self.mark_streamed(message_id);
         self.clamp_chat_scroll();
         true
     }
@@ -224,9 +225,16 @@ impl App {
             return false;
         };
         text.push_str(delta);
-        self.invalidate_chat_cache();
+        self.mark_streamed(message_id);
         self.clamp_chat_scroll();
         true
+    }
+
+    fn mark_streamed(&mut self, message_id: &str) {
+        self.state
+            .chat_render_cache
+            .get_mut()
+            .mark_streamed(MessageId::new(message_id));
     }
 
     fn streaming_items(&mut self, message_id: &str) -> Option<&mut Vec<AssistantItem>> {
