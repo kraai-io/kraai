@@ -471,8 +471,9 @@ impl Follower {
             acp::RequestPermissionOutcome::Cancelled => {
                 if let Some(own) = &self.own {
                     own.token.cancel();
+                    return Ok(());
                 }
-                return Ok(());
+                self.runtime.deny_script(session_id, execution_id).await
             }
             acp::RequestPermissionOutcome::Selected(_) | _ => {
                 return Err(error::invalid("Unknown permission option"));

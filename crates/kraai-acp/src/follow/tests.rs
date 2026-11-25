@@ -492,6 +492,64 @@ async fn approval_answered_elsewhere_resolves_the_editors_request() {
 }
 
 #[tokio::test]
+async fn dismissing_another_clients_approval_denies_only_that_script() {
+    let fixture = Fixture::new(vec![
+        Reply::Script("# timeout=10min permissions=no-sandbox\nprint 'must-not-run'"),
+        Reply::Text("after dismissal"),
+    ])
+    .await;
+    let mut follower = Follower::new(
+        fixture.runtime.clone(),
+        fixture.runtime.subscribe_session(&fixture.id),
+        Renderer::new(fixture.id.clone(), fixture.connection(), 0),
+        None,
+    );
+    fixture.send(&fixture.runtime, "other").await;
+    let pending = kraai_test_support::hang_guard(async {
+        loop {
+            if let Some(pending) = fixture
+                .runtime
+                .get_pending_script(fixture.id.clone())
+                .await
+                .unwrap()
+            {
+                return pending;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    follower.request(pending).unwrap();
+    follower
+        .answer(Ok(acp::RequestPermissionResponse::new(
+            acp::RequestPermissionOutcome::Cancelled,
+        )))
+        .await
+        .unwrap();
+    assert!(follower.permission.is_none());
+    fixture.idle(&fixture.runtime).await;
+    let snapshot = fixture
+        .runtime
+        .get_session_snapshot(fixture.id.clone())
+        .await
+        .unwrap();
+    assert!(snapshot.pending_script.is_none());
+    assert!(matches!(
+        snapshot.turn_outcome,
+        Some(TurnOutcome::Completed)
+    ));
+    let texts: Vec<_> = snapshot
+        .history
+        .values()
+        .map(|message| message.display_text().into_owned())
+        .collect();
+    assert!(texts.iter().any(|text| text.contains("after dismissal")));
+    assert!(texts.iter().any(|text| text.contains("status=\"denied\"")));
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), 2);
+    fixture.runtime.shutdown().await.unwrap();
+}
+#[tokio::test]
 async fn cancelling_a_prompt_keeps_other_clients_queued_messages() {
     let release = Arc::new(Notify::new());
     let fixture = Fixture::new(vec![
