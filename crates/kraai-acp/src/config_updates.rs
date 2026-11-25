@@ -5,7 +5,7 @@ use std::sync::{
 
 use agent_client_protocol::{Result, v1::schema as acp};
 use kraai_runtime::{Event, RuntimeEvent};
-use tokio::sync::{Notify, OwnedMutexGuard, broadcast};
+use tokio::sync::{Notify, OwnedMutexGuard, broadcast, oneshot};
 
 use crate::{Server, config, session::Session, transport::Connection};
 
@@ -47,12 +47,15 @@ pub(crate) async fn lock(session: &Session) -> Publication {
 pub(crate) struct PreparedSession<T> {
     pub response: T,
     pub session: Arc<Session>,
+    pub release: oneshot::Sender<()>,
+    pub _turn: OwnedMutexGuard<()>,
     pub _publication: Publication,
 }
 
 impl<T> PreparedSession<T> {
     pub fn respond(self, send: impl FnOnce(T) -> Result<()>) -> Result<()> {
         send(self.response)?;
+        let _ = self.release.send(());
         self.session.ready.store(true, Ordering::Release);
         Ok(())
     }

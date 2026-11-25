@@ -159,6 +159,7 @@ async fn deleting_during_script_preparation_cannot_leave_an_orphan_approval() {
         model_id: kraai_types::ModelId::new("mock-model"),
         provider_id: kraai_types::ProviderId::new("mock"),
         options: Default::default(),
+        queue: true,
         response,
     });
     sent.await.unwrap().unwrap();

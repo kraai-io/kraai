@@ -3,9 +3,11 @@ mod config;
 mod config_updates;
 mod content;
 mod error;
+mod follow;
 mod history;
 mod mcp;
 mod prompt;
+mod render;
 mod session;
 mod transport;
 
@@ -86,11 +88,16 @@ impl Server {
             .entry(id.clone())
             .or_insert_with(|| Arc::new(session::Session::new(self.config_updated.clone())))
             .clone();
-        let _turn = session
+        let turn = session
             .turn
-            .try_lock()
+            .clone()
+            .try_lock_owned()
             .map_err(|_busy| error::invalid("Session has an active prompt"))?;
         let mut publication = config_updates::lock(&session).await;
+        if let Some(follower) = session.take_follower() {
+            follower.stop().await;
+        }
+        let events = self.runtime.subscribe_session(&id);
         self.runtime
             .load_session(id.clone())
             .await
@@ -100,9 +107,6 @@ impl Server {
             .get_session_snapshot(id.clone())
             .await
             .map_err(error::runtime)?;
-        if snapshot.session.is_running {
-            return Err(error::invalid("Session is still running"));
-        }
         if !session.ready.load(Ordering::Acquire) {
             let saved = self
                 .runtime
@@ -116,17 +120,37 @@ impl Server {
                 .map_err(error::runtime)?;
         }
         let config = config::options(&self.runtime, &id).await?;
-        self.runtime
-            .set_session_mcp_servers(id.clone(), mcp)
-            .await
-            .map_err(error::runtime)?;
-        history::replay(&self.runtime, &snapshot, connection).await?;
+        if snapshot.session.is_running || snapshot.queued_messages > 0 {
+            session.defer_mcp(Some(mcp));
+        } else {
+            self.runtime
+                .set_session_mcp_servers(id.clone(), mcp)
+                .await
+                .map_err(error::runtime)?;
+            session.defer_mcp(None);
+        }
+        let messages = history::replay(&self.runtime, &snapshot, connection).await?;
+        let mut render = render::Renderer::new(id, connection.clone(), snapshot.event_sequence);
+        for message in &messages {
+            render.absorb(message);
+        }
         commands::advertise(connection, request.session_id).await?;
+        let (release, released) = tokio::sync::oneshot::channel();
+        session.install_follower(
+            follow::Follower::new(
+                self.runtime.clone(),
+                events,
+                render,
+                snapshot.pending_script,
+            )
+            .spawn(released)?,
+        );
         *publication.current = Some(config.clone());
-        drop(_turn);
         Ok(PreparedSession {
             response: acp::LoadSessionResponse::new().config_options(config),
             session,
+            release,
+            _turn: turn,
             _publication: publication,
         })
     }
@@ -200,10 +224,22 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                             server.config_updated.clone(),
                         )
                         .await?;
+                        let events = server.runtime.subscribe_session(&id);
+                        let turn = session.turn.clone().lock_owned().await;
                         let mut publication = config_updates::lock(&session).await;
                         let config = config::options(&server.runtime, &id).await?;
                         commands::advertise(&connection, acp::SessionId::new(id.to_string()))
                             .await?;
+                        let (release, released) = tokio::sync::oneshot::channel();
+                        session.install_follower(
+                            follow::Follower::new(
+                                server.runtime.clone(),
+                                events,
+                                render::Renderer::new(id.clone(), connection.clone(), 0),
+                                None,
+                            )
+                            .spawn(released)?,
+                        );
                         *publication.current = Some(config.clone());
                         server
                             .sessions
@@ -214,6 +250,8 @@ pub async fn serve(runtime: RuntimeHandle, options: Options, transport: Stdio) -
                             response: acp::NewSessionResponse::new(id.to_string())
                                 .config_options(config),
                             session,
+                            release,
+                            _turn: turn,
                             _publication: publication,
                         })
                     }

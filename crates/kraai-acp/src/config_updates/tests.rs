@@ -76,22 +76,29 @@ async fn session_becomes_ready_only_after_its_response_is_sent() {
     let updated = Arc::new(ConfigUpdates::default());
     let session = Arc::new(Session::new(updated.clone()));
     let sent = AtomicBool::new(false);
+    let (release, mut released) = oneshot::channel();
     let result = PreparedSession {
         response: "response",
         session: session.clone(),
+        release,
+        _turn: session.turn.clone().lock_owned().await,
         _publication: lock(&session).await,
     }
     .respond(|response| {
         assert_eq!(response, "response");
         assert!(!session.ready.load(Ordering::Acquire));
         assert!(session.configuration.try_lock().is_err());
+        assert!(session.turn.try_lock().is_err());
+        assert!(released.try_recv().is_err());
         sent.store(true, Ordering::Release);
         Ok(())
     });
     assert!(result.is_ok());
     assert!(sent.load(Ordering::Acquire));
+    assert!(released.try_recv().is_ok());
     assert!(session.ready.load(Ordering::Acquire));
     assert!(session.configuration.try_lock().is_ok());
+    assert!(session.turn.try_lock().is_ok());
     assert!(futures::poll!(Box::pin(updated.wake.notified())).is_ready());
 }
 
@@ -99,13 +106,17 @@ async fn session_becomes_ready_only_after_its_response_is_sent() {
 async fn failed_session_response_keeps_the_session_hidden_and_releases_publication() {
     let updated = Arc::new(ConfigUpdates::default());
     let session = Arc::new(Session::new(updated.clone()));
+    let (release, released) = oneshot::channel();
     let result = PreparedSession {
         response: (),
         session: session.clone(),
+        release,
+        _turn: session.turn.clone().lock_owned().await,
         _publication: lock(&session).await,
     }
     .respond(|()| Err(crate::error::internal("response failed")));
     assert!(result.is_err());
+    assert!(released.await.is_err());
     assert!(!session.ready.load(Ordering::Acquire));
     assert!(session.configuration.try_lock().is_ok());
     assert!(futures::poll!(Box::pin(updated.wake.notified())).is_ready());

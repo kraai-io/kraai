@@ -254,6 +254,38 @@ impl RuntimeHandle {
         provider_id: String,
         options: ModelOptionValues,
     ) -> RuntimeResult<SubmitMessageOutcome> {
+        self.submit(session_id, message, model_id, provider_id, options, true)
+            .await
+    }
+
+    pub async fn start_content(
+        &self,
+        session_id: SessionId,
+        message: kraai_types::MessageContent,
+        model_id: String,
+        provider_id: String,
+        options: ModelOptionValues,
+    ) -> RuntimeResult<String> {
+        match self
+            .submit(session_id, message, model_id, provider_id, options, false)
+            .await?
+        {
+            SubmitMessageOutcome::Started { message_id } => Ok(message_id),
+            SubmitMessageOutcome::Queued { .. } => Err(RuntimeError::internal(
+                "Session queued a message it was told to start",
+            )),
+        }
+    }
+
+    async fn submit(
+        &self,
+        session_id: SessionId,
+        message: kraai_types::MessageContent,
+        model_id: String,
+        provider_id: String,
+        options: ModelOptionValues,
+        queue: bool,
+    ) -> RuntimeResult<SubmitMessageOutcome> {
         let model_id = ModelId::try_new(model_id).map_err(|error| {
             RuntimeError::invalid_argument(format!("invalid model_id: {error}"))
         })?;
@@ -266,6 +298,7 @@ impl RuntimeHandle {
             model_id,
             provider_id,
             options,
+            queue,
             response,
         })
         .await
@@ -519,6 +552,7 @@ macro_rules! runtime_methods {
                 create_session() -> $crate::__types::SessionId;
                 create_session_with(request: $crate::CreateSessionRequest) -> $crate::__types::SessionId;
                 send_content(session_id: $crate::__types::SessionId, message: $crate::__types::MessageContent, model_id: String, provider_id: String, options: $crate::__types::ModelOptionValues) -> $crate::SubmitMessageOutcome;
+                start_content(session_id: $crate::__types::SessionId, message: $crate::__types::MessageContent, model_id: String, provider_id: String, options: $crate::__types::ModelOptionValues) -> String;
                 send_message(session_id: $crate::__types::SessionId, message: String, model_id: String, provider_id: String, options: $crate::__types::ModelOptionValues) -> $crate::SubmitMessageOutcome;
                 get_history_page(session_id: $crate::__types::SessionId, from: Option<$crate::MessageId>, limit: usize) -> $crate::HistoryPage;
                 get_session_snapshot(session_id: $crate::__types::SessionId) -> $crate::SessionSnapshot;

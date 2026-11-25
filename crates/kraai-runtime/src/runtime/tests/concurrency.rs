@@ -507,6 +507,7 @@ async fn session_commands_after_shutdown_cannot_start_a_new_stream() {
                 model_id: kraai_types::ModelId::new("mock-model"),
                 options: Default::default(),
             },
+            queue: true,
             response,
         },
     );

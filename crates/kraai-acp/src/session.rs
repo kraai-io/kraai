@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
 use agent_client_protocol::{Result, v1::schema as acp};
+use kraai_mcp::McpConfig;
 use kraai_runtime::{CreateSessionRequest, RuntimeHandle};
 use kraai_types::SessionId;
 use tokio::sync::Mutex;
@@ -38,6 +39,8 @@ pub(crate) struct Session {
     pub(crate) configuration: Arc<Mutex<crate::config_updates::PublishedConfig>>,
     pub(crate) config_generation: Arc<AtomicU64>,
     pub(crate) config_updated: Arc<crate::config_updates::ConfigUpdates>,
+    pub(crate) follower: std::sync::Mutex<Option<crate::follow::Handle>>,
+    pub(crate) mcp: std::sync::Mutex<Option<McpConfig>>,
 }
 
 impl Session {
@@ -49,7 +52,58 @@ impl Session {
             configuration: Arc::default(),
             config_generation: Arc::default(),
             config_updated,
+            follower: Default::default(),
+            mcp: Default::default(),
         }
+    }
+
+    pub(crate) fn follow(&self, start: crate::follow::Start) -> Result<()> {
+        self.follower
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .ok_or_else(|| error::invalid("Session is not loaded"))?
+            .start(start)
+    }
+
+    pub(crate) fn install_follower(&self, follower: crate::follow::Handle) {
+        *self
+            .follower
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(follower);
+    }
+
+    pub(crate) fn take_follower(&self) -> Option<crate::follow::Handle> {
+        self.follower
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+    }
+
+    pub(crate) fn defer_mcp(&self, config: Option<McpConfig>) {
+        *self.mcp.lock().unwrap_or_else(|error| error.into_inner()) = config;
+    }
+
+    pub(crate) async fn apply_mcp(&self, runtime: &RuntimeHandle, id: &SessionId) -> Result<()> {
+        let config = self
+            .mcp
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        let Some(config) = config else {
+            return Ok(());
+        };
+        if let Err(error) = runtime
+            .set_session_mcp_servers(id.clone(), config.clone())
+            .await
+        {
+            self.mcp
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get_or_insert(config);
+            return Err(error::runtime(error));
+        }
+        Ok(())
     }
 
     pub(crate) fn begin_turn(self: &Arc<Self>) -> Result<ActiveTurn> {

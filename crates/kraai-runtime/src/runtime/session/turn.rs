@@ -27,6 +27,7 @@ impl SessionActor {
         &mut self,
         message: MessageContent,
         selection: ModelSelection,
+        queue: bool,
         response: Responder<SubmitMessageOutcome>,
     ) {
         if self.stopping {
@@ -51,6 +52,12 @@ impl SessionActor {
                 return;
             }
         };
+        if (busy || queued) && !queue {
+            let _ = response.send(Err(RuntimeError::conflict(
+                "Session is running a turn or has queued messages",
+            )));
+            return;
+        }
         if busy || queued {
             let position = async {
                 self.ensure_lease().await?;

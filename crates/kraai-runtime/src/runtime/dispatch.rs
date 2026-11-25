@@ -79,6 +79,7 @@ impl RuntimeCore {
                 model_id,
                 provider_id,
                 options,
+                queue,
                 response,
             } => (
                 session_id,
@@ -89,6 +90,7 @@ impl RuntimeCore {
                         model_id,
                         options,
                     },
+                    queue,
                     response,
                 },
             ),
