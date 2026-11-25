@@ -3,10 +3,9 @@ use crate::{DiscoveredModelOptions, ModelOptionsProtocol};
 use kraai_types::{ModelOptionValue, ModelOptionValues};
 use serde_json::json;
 
-async fn proxy_catalog() -> ModelCatalog {
-    let catalog = ModelCatalog::default();
-    *catalog.snapshot.write().await = serde_json::from_value(json!({
-        "version": CACHE_VERSION, "fetched_at": 123,
+fn proxy_snapshot() -> Value {
+    json!({
+        "fetched_at": 123,
         "providers": {
             "openai": {"name":"OpenAI", "models": {
                 "gpt-6.1-sol": {
@@ -38,9 +37,11 @@ async fn proxy_catalog() -> ModelCatalog {
                 "reasoning_options":[{"type":"effort","values":["host-effort"]}]
             }}}
         }
-    }))
-    .unwrap();
-    catalog
+    })
+}
+
+async fn proxy_catalog() -> ModelCatalog {
+    catalog_from(proxy_snapshot()).await
 }
 
 #[tokio::test]
@@ -149,32 +150,23 @@ async fn advertised_owners_do_not_override_known_endpoints_or_configured_catalog
 #[tokio::test]
 async fn provider_display_names_require_unique_matches_and_survive_caching() {
     let catalog = proxy_catalog().await;
-    let encoded = serde_json::to_value(&*catalog.snapshot.read().await).unwrap();
-    assert_eq!(
-        encoded.pointer("/providers/opencode/name"),
-        Some(&json!("OpenCode Zen"))
-    );
-    let mut snapshot: Snapshot = serde_json::from_value(encoded).unwrap();
-    assert!(
-        snapshot
-            .owned_model(None, None, "space-bunny-free", Some("OpenCode Zen"))
-            .is_some()
-    );
-    snapshot.providers.insert(
-        "other".into(),
-        serde_json::from_value(json!({
-            "name":"OpenCode Zen", "models":{}
-        }))
-        .unwrap(),
-    );
-    assert!(
-        snapshot
-            .owned_model(None, None, "space-bunny-free", Some("OpenCode Zen"))
-            .is_none()
-    );
-    assert!(
-        snapshot
-            .owned_model(None, None, "space-bunny-free", Some("opencode"))
-            .is_some()
-    );
+    assert!(owns(&catalog, "OpenCode Zen").await);
+    let mut snapshot = proxy_snapshot();
+    snapshot["providers"]["other"] = json!({"name":"OpenCode Zen", "models":{}});
+    install(&catalog, snapshot).await;
+    assert!(!owns(&catalog, "OpenCode Zen").await);
+    assert!(owns(&catalog, "opencode").await);
+}
+
+async fn owns(catalog: &ModelCatalog, owner: &str) -> bool {
+    let view = catalog.view().await;
+    let owned = crate::model_catalog::resolution::owned_model(
+        view.state.reader.as_ref().unwrap(),
+        &crate::model_catalog::resolution::Serving::Unscoped,
+        "space-bunny-free",
+        Some(owner),
+    )
+    .unwrap();
+    drop(view);
+    owned.is_some()
 }

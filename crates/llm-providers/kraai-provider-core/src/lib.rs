@@ -58,4 +58,4 @@ pub use sse::{MAX_SSE_EVENT_BYTES, SseEvent, stream_sse_data};
 pub use stream::{ProviderStreamEvent, StopReason, StreamStatus, adapt_provider_stream};
 
 mod model_catalog;
-pub use model_catalog::{CatalogModelMetadata, ModelCatalog, ModelCatalogView};
+pub use model_catalog::{CatalogCost, CatalogModelMetadata, ModelCatalog, ModelCatalogView};

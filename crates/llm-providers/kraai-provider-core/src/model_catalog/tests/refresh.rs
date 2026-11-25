@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -17,11 +18,11 @@ struct NativeModel {
     config: ConfiguredModelMetadata,
 }
 
-fn snapshot(context: usize, efforts: &[&str]) -> Snapshot {
+fn snapshot(context: usize, efforts: &[&str]) -> Value {
     models_snapshot(&[("model", context, efforts)])
 }
 
-fn models_snapshot(models: &[(&str, usize, &[&str])]) -> Snapshot {
+fn models_snapshot(models: &[(&str, usize, &[&str])]) -> Value {
     let models = models
         .iter()
         .map(|(id, context, efforts)| {
@@ -34,11 +35,10 @@ fn models_snapshot(models: &[(&str, usize, &[&str])]) -> Snapshot {
             )
         })
         .collect::<serde_json::Map<_, _>>();
-    serde_json::from_value(json!({
-        "version": CACHE_VERSION, "fetched_at":123,
+    json!({
+        "fetched_at":123,
         "providers":{"openai":{"models":models}}
-    }))
-    .unwrap()
+    })
 }
 
 fn resolve(
@@ -126,7 +126,7 @@ fn check_effort(model: &Model, effort: &str) {
 
 #[tokio::test]
 async fn catalog_recovery_and_updates_refresh_cached_limits_and_options_without_rediscovery() {
-    let catalog = ModelCatalog::default();
+    let catalog = ModelCatalog::new(None);
     let cache = ModelMetadataCache::default();
     let mut updates = catalog.subscribe();
     cache
@@ -146,7 +146,7 @@ async fn catalog_recovery_and_updates_refresh_cached_limits_and_options_without_
         ModelOptionsProtocol::OpenAiChatCompletions
     ));
 
-    catalog.replace_snapshot(snapshot(4096, &["low"])).await;
+    install(&catalog, snapshot(4096, &["low"])).await;
     updates.changed().await.unwrap();
     assert_eq!(
         *updates.borrow_and_update(),
@@ -156,7 +156,7 @@ async fn catalog_recovery_and_updates_refresh_cached_limits_and_options_without_
     assert_eq!(recovered.max_context, Some(4096));
     check_effort(&recovered, "low");
 
-    catalog.replace_snapshot(snapshot(8192, &["high"])).await;
+    install(&catalog, snapshot(8192, &["high"])).await;
     let updated = cached_model(&cache, &catalog).await;
     assert_eq!(updated.max_context, Some(8192));
     check_effort(&updated, "high");
@@ -186,7 +186,7 @@ async fn catalog_recovery_and_updates_refresh_cached_limits_and_options_without_
             resolve,
         )
         .await;
-    catalog.replace_snapshot(snapshot(16384, &["future"])).await;
+    install(&catalog, snapshot(16384, &["future"])).await;
     let overridden = cached_model(&cache, &catalog).await;
     assert_eq!(overridden.max_context, Some(1024));
     check_effort(&overridden, "native");
@@ -194,7 +194,7 @@ async fn catalog_recovery_and_updates_refresh_cached_limits_and_options_without_
 
 #[tokio::test]
 async fn concurrent_readers_rebuild_each_revision_once() {
-    let catalog = Arc::new(ModelCatalog::default());
+    let catalog = Arc::new(ModelCatalog::new(None));
     let cache = Arc::new(ModelMetadataCache::default());
     cache
         .install(
@@ -206,7 +206,7 @@ async fn concurrent_readers_rebuild_each_revision_once() {
             resolve,
         )
         .await;
-    catalog.replace_snapshot(snapshot(4096, &["low"])).await;
+    install(&catalog, snapshot(4096, &["low"])).await;
     let resolutions = Arc::new(AtomicUsize::new(0));
     let mut readers = tokio::task::JoinSet::new();
     for _ in 0..16 {
@@ -229,7 +229,7 @@ async fn concurrent_readers_rebuild_each_revision_once() {
     }
     assert_eq!(resolutions.load(Ordering::SeqCst), 1);
 
-    catalog.replace_snapshot(snapshot(8192, &["high"])).await;
+    install(&catalog, snapshot(8192, &["high"])).await;
     let updated = cached_model(&cache, &catalog).await;
     assert_eq!(updated.max_context, Some(8192));
     check_effort(&updated, "high");
@@ -285,14 +285,13 @@ async fn discovery_filters_invalid_models_and_accepts_later_corrected_metadata()
 
 #[tokio::test]
 async fn invalid_catalog_updates_filter_only_invalid_models_and_recover_on_next_revision() {
-    let catalog = ModelCatalog::default();
+    let catalog = ModelCatalog::new(None);
     let cache = ModelMetadataCache::default();
-    catalog
-        .replace_snapshot(models_snapshot(&[
-            ("model", 4096, &["low"]),
-            ("healthy", 2048, &["low"]),
-        ]))
-        .await;
+    install(
+        &catalog,
+        models_snapshot(&[("model", 4096, &["low"]), ("healthy", 2048, &["low"])]),
+    )
+    .await;
     cache
         .install(
             Some(&catalog),
@@ -300,12 +299,14 @@ async fn invalid_catalog_updates_filter_only_invalid_models_and_recover_on_next_
             resolve_models,
         )
         .await;
-    catalog
-        .replace_snapshot(models_snapshot(&[
+    install(
+        &catalog,
+        models_snapshot(&[
             ("model", 8192, &["duplicate", "duplicate"]),
             ("healthy", 16384, &["high"]),
-        ]))
-        .await;
+        ]),
+    )
+    .await;
     let resolutions = AtomicUsize::new(0);
     for _ in 0..2 {
         let models = cache
@@ -324,7 +325,7 @@ async fn invalid_catalog_updates_filter_only_invalid_models_and_recover_on_next_
         drop(models);
     }
     assert_eq!(resolutions.load(Ordering::SeqCst), 1);
-    catalog.replace_snapshot(snapshot(16384, &["high"])).await;
+    install(&catalog, snapshot(16384, &["high"])).await;
     let models = cache.models(Some(&catalog), resolve_models).await;
     let recovered = models
         .get(&ModelId::new("model"))
@@ -336,12 +337,10 @@ async fn invalid_catalog_updates_filter_only_invalid_models_and_recover_on_next_
 
 #[tokio::test]
 async fn invalidation_reresolves_when_replacement_catalog_has_the_same_revision() {
-    let previous = ModelCatalog::default();
-    let replacement = ModelCatalog::default();
-    previous.replace_snapshot(snapshot(4096, &["low"])).await;
-    replacement
-        .replace_snapshot(snapshot(8192, &["high"]))
-        .await;
+    let previous = ModelCatalog::new(None);
+    let replacement = ModelCatalog::new(None);
+    install(&previous, snapshot(4096, &["low"])).await;
+    install(&replacement, snapshot(8192, &["high"])).await;
     assert_eq!(previous.revision(), replacement.revision());
     let mut cache = ModelMetadataCache::default();
     cache

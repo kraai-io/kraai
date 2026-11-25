@@ -1,5 +1,6 @@
 use std::fmt::Write;
 
+use kraai_types::TokenRates;
 use serde_json::json;
 
 use super::*;
@@ -49,12 +50,14 @@ fn providers() -> Value {
     providers
 }
 
-fn lookups() -> Vec<(
+type Lookup = (
     Option<&'static str>,
     Option<&'static str>,
     &'static str,
     Option<&'static str>,
-)> {
+);
+
+fn lookups() -> Vec<Lookup> {
     let mut lookups = vec![
         (Some("openai"), None, "gpt-5", None),
         (Some("openai"), Some(PROXY), "gpt-5.4", None),
@@ -208,7 +211,7 @@ fn usages() -> Vec<TokenUsage> {
 
 #[tokio::test]
 async fn sql_resolution_matches_the_in_memory_catalog_on_a_models_dev_fixture() {
-    let catalog = catalog_fixture(123, providers()).await;
+    let catalog = catalog_from(json!({"fetched_at": 123, "providers": providers()})).await;
     let usages = usages();
     let mut actual = String::new();
     for (provider, api, model, owner) in lookups() {
