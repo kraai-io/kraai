@@ -296,3 +296,14 @@ mod pricing;
 mod owner;
 
 mod refresh;
+
+mod equivalence;
+
+async fn catalog_fixture(fetched_at: u64, providers: Value) -> ModelCatalog {
+    let catalog = ModelCatalog::default();
+    *catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
+        "version": CACHE_VERSION, "fetched_at": fetched_at, "providers": providers
+    }))
+    .unwrap();
+    catalog
+}
