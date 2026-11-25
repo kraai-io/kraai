@@ -44,6 +44,7 @@ async fn host_failure_recovery_preserves_live_sessions_and_skips_deleted_session
                             status: ScriptExecutionStatus::HostUnavailable,
                             exit_code: None,
                             sandbox_denied: false,
+                            sandbox_hint: None,
                             error: Some(message.into()),
                             stdout: Vec::new(),
                             stderr: Vec::new(),

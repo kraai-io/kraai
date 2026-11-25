@@ -247,6 +247,7 @@ impl SessionActor {
                     status,
                     exit_code: None,
                     sandbox_denied: false,
+                    sandbox_hint: None,
                     error,
                     stdout: Vec::new(),
                     stderr: Vec::new(),

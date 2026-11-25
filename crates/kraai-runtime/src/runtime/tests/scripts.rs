@@ -937,6 +937,7 @@ async fn long_script_output_is_excerpted_and_saved_where_scripts_can_read_it() {
                             status: ScriptExecutionStatus::Completed,
                             exit_code: Some(0),
                             sandbox_denied: false,
+                            sandbox_hint: None,
                             error: None,
                             stdout: stdout.into_bytes(),
                             stderr: Vec::new(),

@@ -51,6 +51,7 @@ async fn unreadable_queue_after_a_script_ends_the_turn() {
                             status: ScriptExecutionStatus::Completed,
                             exit_code: Some(0),
                             sandbox_denied: false,
+                            sandbox_hint: None,
                             error: None,
                             stdout: b"hello\n".to_vec(),
                             stderr: Vec::new(),

@@ -105,6 +105,7 @@ impl RuntimeCore {
                         status,
                         exit_code: None,
                         sandbox_denied: record.sandbox_denied,
+                        sandbox_hint: record.sandbox_hint,
                         error: Some(error),
                         stdout: output.stdout.clone(),
                         stderr: output.stderr.clone(),

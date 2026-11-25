@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use kraai_execution_types::{
-    SandboxCapabilities, SandboxCapability, ScriptExecutionStatus, ScriptRewrites,
+    SandboxCapabilities, SandboxCapability, SandboxHint, ScriptExecutionStatus, ScriptRewrites,
 };
 
 const BINARY_OUTPUT_MESSAGE: &str = "Binary output was preserved by Kraai. Decode an existing output file if available. Rerun only if repeating the command's effects is safe, decoding its output with the appropriate encoding before returning text.";
@@ -24,6 +24,7 @@ pub struct ToolCallResultView<'a> {
     pub stdout_file: Option<&'a Path>,
     pub stderr_file: Option<&'a Path>,
     pub sandbox_blocked: Option<&'a SandboxCapabilities>,
+    pub sandbox_hint: Option<SandboxHint>,
     pub rewrites: &'a ScriptRewrites,
 }
 
@@ -41,6 +42,7 @@ pub fn render_tool_call_result(result: ToolCallResultView<'_>) -> String {
         || !result.stderr.is_empty()
         || result.diagnostic.is_some_and(|value| !value.is_empty())
         || result.sandbox_blocked.is_some()
+        || result.sandbox_hint.is_some()
         || !result.rewrites.is_empty();
     if has_body {
         rendered.push('\n');
@@ -54,7 +56,15 @@ pub fn render_tool_call_result(result: ToolCallResultView<'_>) -> String {
             rendered.push_str(diagnostic);
             rendered.push_str("</diagnostic>\n");
         }
-        if let Some(granted) = result.sandbox_blocked {
+        if let Some(hint) = result.sandbox_hint {
+            push_sandbox_hint(&mut rendered, hint);
+        }
+        if let Some(granted) = result.sandbox_blocked
+            && matches!(
+                result.sandbox_hint,
+                None | Some(SandboxHint::ProtectedEntryUndone)
+            )
+        {
             push_sandbox_notice(&mut rendered, granted);
         }
     }
@@ -142,6 +152,23 @@ fn push_sandbox_notice(rendered: &mut String, granted: &SandboxCapabilities) {
         "<sandbox>The sandbox likely blocked this script. It ran with: {}. If it needs more access, rerun it with only the capabilities it needs in its header, such as `# timeout=30sec permissions=<capability>`. Not granted: {not_granted}.</sandbox>\n",
         names(&mut granted.iter()),
     ));
+}
+
+fn push_sandbox_hint(rendered: &mut String, hint: SandboxHint) {
+    let text = match hint {
+        SandboxHint::ProtectedEntry => {
+            "Sandboxed scripts can't change the workspace's `.kraai/` or `AGENTS.md`; edit them with `permissions=no-sandbox`."
+        }
+        SandboxHint::ProtectedEntryUndone => {
+            "Kraai undid this script's changes to the workspace's `.kraai/` or `AGENTS.md`, which sandboxed scripts can't change; edit them with `permissions=no-sandbox`."
+        }
+        SandboxHint::HostSocket => {
+            "Sandboxed scripts can't connect to Unix sockets created outside the sandbox, even with `network`; rerun with `permissions=no-sandbox`."
+        }
+    };
+    rendered.push_str("<sandbox>");
+    rendered.push_str(text);
+    rendered.push_str("</sandbox>\n");
 }
 
 fn push_attribute(rendered: &mut String, name: &str, value: &str) {

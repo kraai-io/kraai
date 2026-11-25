@@ -103,6 +103,7 @@ pub(super) async fn completed_script_with_image(
                 status: ScriptExecutionStatus::Completed,
                 exit_code: Some(if include_image { 1 } else { 0 }),
                 sandbox_denied: false,
+                sandbox_hint: None,
                 error: None,
                 stdout: Vec::new(),
                 stderr: Vec::new(),

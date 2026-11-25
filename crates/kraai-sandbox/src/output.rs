@@ -23,4 +23,5 @@ pub struct ExecutionOutput {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub sandbox_denied: bool,
+    pub protected_entries_undone: bool,
 }

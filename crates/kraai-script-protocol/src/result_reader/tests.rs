@@ -22,6 +22,7 @@ fn view<'a>(stdout: &'a [u8], stderr: &'a [u8]) -> ToolCallResultView<'a> {
         stdout_file: None,
         stderr_file: None,
         sandbox_blocked: None,
+        sandbox_hint: None,
         rewrites: &NO_REWRITES,
     }
 }
@@ -36,6 +37,7 @@ fn every_rendered_part_reads_back_in_order() {
     let rendered = render_tool_call_result(ToolCallResultView {
         diagnostic: Some("timed out"),
         sandbox_blocked: Some(&granted),
+        sandbox_hint: None,
         rewrites: &rewrites,
         ..view(b"out\n", b"err")
     });

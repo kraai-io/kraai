@@ -9,6 +9,7 @@ mod process_spawn;
 mod temp_dir;
 
 pub use config::{LaunchPlan, PrivateTempConfig};
+pub use config_guard::protected_entry_names;
 pub use error::SandboxError;
 pub use output::{ExecutionOutput, OutputEvent, OutputStream, Termination};
 pub use output_capture::{MAX_CAPTURE_BYTES, OutputCapture};

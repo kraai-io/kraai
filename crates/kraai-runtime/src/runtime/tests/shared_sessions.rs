@@ -520,6 +520,7 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
                 status: ScriptExecutionStatus::Cancelled,
                 exit_code: None,
                 sandbox_denied: false,
+                sandbox_hint: None,
                 error: None,
                 stdout: Vec::new(),
                 stderr: Vec::new(),

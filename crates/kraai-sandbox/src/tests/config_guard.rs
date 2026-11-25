@@ -363,3 +363,26 @@ fn abandoned_runs_still_restore() {
         .expect("the undone file is kept beside the original path");
     assert_eq!(read(&aside.path()), "evil");
 }
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn undone_changes_are_reported() {
+    let workspace = Workspace::new("instructions-reported");
+    if !workspace.sandbox_available().await {
+        return;
+    }
+    let ordinary = run(
+        workspace.plan("printf ok > ordinary"),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("run sandbox");
+    assert!(!ordinary.protected_entries_undone);
+    let planted = run(
+        workspace.plan("printf evil > AGENTS.md"),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("run sandbox");
+    assert!(planted.protected_entries_undone);
+}

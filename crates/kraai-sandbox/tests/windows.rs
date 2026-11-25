@@ -108,6 +108,9 @@ fn probe() {
                 );
             }
         }
+        "instructions" => {
+            std::fs::write("AGENTS.md", "changed").expect("instructions write");
+        }
         "metadata" => {
             std::fs::write(".git/config", "authorized").expect("metadata write");
         }
@@ -255,6 +258,33 @@ async fn workspace_write_allows_repository_changes() {
             .expect("read repository config"),
         "authorized"
     );
+}
+
+#[tokio::test]
+async fn changed_instructions_are_restored_and_reported() {
+    let fixture = Fixture::new();
+    let instructions = fixture.0.join("workspace/AGENTS.md");
+    std::fs::write(&instructions, "original").expect("write instructions");
+    let output = kraai_sandbox::run(
+        fixture.plan("instructions", &[SandboxCapability::WorkspaceWrite]),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("Windows sandbox must launch");
+    assert_eq!(output.termination, Termination::Exited { code: Some(0) });
+    assert!(output.protected_entries_undone);
+    assert_eq!(
+        std::fs::read_to_string(&instructions).expect("read instructions"),
+        "original"
+    );
+
+    let output = kraai_sandbox::run(
+        fixture.plan("metadata", &[SandboxCapability::WorkspaceWrite]),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("Windows sandbox must launch");
+    assert!(!output.protected_entries_undone);
 }
 
 #[tokio::test]

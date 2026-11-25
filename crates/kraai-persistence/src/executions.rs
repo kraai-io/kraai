@@ -3,8 +3,8 @@ use crate::database::{
 };
 use color_eyre::eyre::{Result, ensure, eyre};
 use kraai_execution_types::{
-    SandboxCapabilities, ScriptExecutionId, ScriptExecutionPhase, ScriptExecutionStatus,
-    ScriptOutputStream, ScriptProfileSnapshot, ScriptRewrites,
+    SandboxCapabilities, SandboxHint, ScriptExecutionId, ScriptExecutionPhase,
+    ScriptExecutionStatus, ScriptOutputStream, ScriptProfileSnapshot, ScriptRewrites,
 };
 use kraai_types::{MessageId, SessionId, ToolCallId};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -47,6 +47,8 @@ pub struct ScriptExecutionRecord {
     pub updated_at_millis: u64,
     pub exit_code: Option<i32>,
     pub sandbox_denied: bool,
+    #[serde(default)]
+    pub sandbox_hint: Option<SandboxHint>,
     pub error: Option<String>,
     #[serde(default)]
     pub settled: bool,
@@ -73,6 +75,7 @@ pub struct ScriptExecutionCompletion {
     pub status: ScriptExecutionStatus,
     pub exit_code: Option<i32>,
     pub sandbox_denied: bool,
+    pub sandbox_hint: Option<SandboxHint>,
     pub error: Option<String>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -237,6 +240,7 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
                     updated_at_millis: timestamp,
                     exit_code: None,
                     sandbox_denied: false,
+                    sandbox_hint: None,
                     error: None,
                     settled: false,
                 };
@@ -438,6 +442,7 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
             record.status = Some(completion.status);
             record.exit_code = completion.exit_code;
             record.sandbox_denied = completion.sandbox_denied;
+            record.sandbox_hint = completion.sandbox_hint;
             record.error = completion.error;
             Ok(())
         }).await

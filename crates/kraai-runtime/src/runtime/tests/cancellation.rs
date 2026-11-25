@@ -44,6 +44,7 @@ async fn finished_execution() -> (RuntimeTestHarness, SessionId, CompletedScript
                 status: ScriptExecutionStatus::Completed,
                 exit_code: Some(0),
                 sandbox_denied: false,
+                sandbox_hint: None,
                 error: None,
                 stdout: Vec::new(),
                 stderr: Vec::new(),
