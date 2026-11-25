@@ -16,7 +16,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 
-use super::denied::{Denials, Deny};
+use super::denied::Denials;
 use super::identity::Sid;
 use crate::SandboxError;
 
@@ -28,20 +28,11 @@ pub(super) enum Access {
     Write,
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum Entry {
-    Allow(Access),
-    Deny(Deny),
-}
-
-/// Denied trees keep no handles open, so Kraai can still replace and delete its own files in
-/// them while a script runs.
 #[derive(Debug)]
 pub(super) struct Grants {
     sid: Sid,
     files: Vec<File>,
     roots: Vec<PathBuf>,
-    denials: Option<Denials>,
 }
 
 impl Grants {
@@ -50,7 +41,6 @@ impl Grants {
             sid,
             files: Vec::new(),
             roots: Vec::new(),
-            denials: None,
         }
     }
 
@@ -71,31 +61,11 @@ impl Grants {
                 return Err(entry_limit(path, limit));
             }
             handle::ensure_single_link(&file).map_err(|error| failure(path, &error.to_string()))?;
-            mutation::update(&file, &self.sid, Some(Entry::Allow(access)))
+            mutation::update(&file, &self.sid, Some(access))
                 .map_err(|error| failure(path, &error.to_string()))?;
             self.files.push(file);
             Ok(())
         })
-    }
-
-    pub(super) fn deny(&mut self, denials: Denials) -> Result<(), SandboxError> {
-        let _lock = super::mutation_lock::Lock::acquire()?;
-        let denials = &*self.denials.insert(denials);
-        for root in denials.roots() {
-            walk(
-                root,
-                MAX_ACL_ENTRIES,
-                |path| denials.prunes(path),
-                |path, file| {
-                    let Some(deny) = denials.entry(path) else {
-                        return Ok(());
-                    };
-                    mutation::update(&file, &self.sid, Some(Entry::Deny(deny)))
-                        .map_err(|error| failure(path, &error.to_string()))
-                },
-            )?;
-        }
-        Ok(())
     }
 }
 
@@ -116,33 +86,18 @@ impl Grants {
                 failure.get_or_insert(error);
             }
         }
-        if let Some(denials) = &self.denials {
-            for root in denials.roots() {
-                if root.exists()
-                    && let Err(error) = walk(
-                        root,
-                        MAX_ACL_ENTRIES,
-                        |path| denials.prunes(path),
-                        |_, file| mutation::update(&file, &self.sid, None),
-                    )
-                {
-                    failure.get_or_insert(error);
-                }
-            }
-        }
         if let Some(error) = failure {
             return Err(error);
         }
         self.files.clear();
         self.roots.clear();
-        self.denials = None;
         Ok(())
     }
 }
 
 impl Drop for Grants {
     fn drop(&mut self) {
-        if !self.files.is_empty() || !self.roots.is_empty() || self.denials.is_some() {
+        if !self.files.is_empty() || !self.roots.is_empty() {
             let _ = self.cleanup();
         }
     }
@@ -168,12 +123,47 @@ pub(super) fn grant_persistent(path: &Path, sid: &Sid, access: Access) -> Result
             walked_root = Some(file);
             return Ok(());
         }
-        mutation::update(&file, sid, Some(Entry::Allow(access)))
+        mutation::update(&file, sid, Some(access))
             .map_err(|error| failure(path, &error.to_string()))
     })?;
     let walked_root = walked_root.ok_or_else(|| failure(path, "sandbox root was not visited"))?;
-    mutation::update(&walked_root, sid, Some(Entry::Allow(access)))
+    mutation::update(&walked_root, sid, Some(access))
         .map_err(|error| failure(path, &error.to_string()))
+}
+
+/// Removes the allow entries of every SID in `token` from the denied trees, except the entries
+/// of the grants each object keeps. The removal is permanent: these paths are always denied,
+/// and files Kraai creates there later inherit from the stripped directories. No handles stay
+/// open, so Kraai can still replace and delete its own files there while a script runs.
+pub(super) fn strip(
+    denials: &Denials,
+    token: &[Sid],
+    grants: &[Vec<Sid>],
+) -> Result<(), SandboxError> {
+    let _lock = super::mutation_lock::Lock::acquire()?;
+    for root in denials.roots() {
+        walk(
+            root,
+            MAX_ACL_ENTRIES,
+            true,
+            |path| denials.prunes(path),
+            |path, file| {
+                let Some(kept) = denials.kept(path) else {
+                    return Ok(());
+                };
+                let stripped = token
+                    .iter()
+                    .filter(|sid| {
+                        !kept
+                            .iter()
+                            .any(|&index| grants.get(index).is_some_and(|sids| sids.contains(sid)))
+                    })
+                    .collect::<Vec<_>>();
+                mutation::strip(&file, &stripped).map_err(|error| failure(path, &error.to_string()))
+            },
+        )?;
+    }
+    Ok(())
 }
 
 fn visit_tree(
@@ -188,12 +178,13 @@ fn visit_tree_with_limit(
     limit: usize,
     mut visit: impl FnMut(File) -> Result<(), SandboxError>,
 ) -> Result<(), SandboxError> {
-    walk(root, limit, |_| false, |_, file| visit(file))
+    walk(root, limit, false, |_| false, |_, file| visit(file))
 }
 
 fn walk(
     root: &Path,
     limit: usize,
+    reparse_points: bool,
     prune: impl Fn(&Path) -> bool,
     mut visit: impl FnMut(&Path, File) -> Result<(), SandboxError>,
 ) -> Result<(), SandboxError> {
@@ -212,6 +203,11 @@ fn walk(
         if is_reparse(&pin)? {
             if is_root {
                 return Err(failure(&path, "reparse points cannot be sandbox roots"));
+            }
+            if reparse_points {
+                let file =
+                    handle::open_by_id(&pin).map_err(|error| failure(&path, &error.to_string()))?;
+                visit(&path, file)?;
             }
             continue;
         }

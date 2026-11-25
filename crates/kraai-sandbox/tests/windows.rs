@@ -125,6 +125,7 @@ fn probe() {
             assert!(std::fs::read(denied.join("secret")).is_err());
             assert!(std::fs::read(denied.join("nested/deep")).is_err());
             assert!(std::fs::read(denied.join("kraai.db")).is_err());
+            assert!(std::fs::read(denied.join("later")).is_err());
             assert!(std::fs::write(denied.join("secret"), "changed").is_err());
             assert!(std::fs::write(denied.join("created"), "created").is_err());
             assert!(std::fs::remove_file(denied.join("secret")).is_err());
@@ -574,7 +575,9 @@ async fn grants_inside_denied_paths_outside_every_grant_run() {
 }
 
 #[tokio::test]
-async fn denied_paths_inside_the_workspace_are_hidden_until_the_launch_ends() {
+async fn denied_paths_inside_the_workspace_are_hidden() {
+    use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
+
     let fixture = Fixture::new();
     let workspace = fixture.0.join("workspace");
     let state = workspace.join("state");
@@ -592,26 +595,32 @@ async fn denied_paths_inside_the_workspace_are_hidden_until_the_launch_ends() {
         .create_new(true)
         .open(state.join("kraai.db"))
         .expect("open database");
-    let mut plan = fixture.plan("denied", &[SandboxCapability::WorkspaceWrite]);
-    plan.runtime_roots.push(output.clone());
-    plan.denied_paths = vec![
-        state.clone(),
-        config.clone(),
-        workspace.join("missing/mcp.toml"),
-    ];
-    for (name, path) in [
-        ("KRAAI_WINDOWS_DENIED", state.clone()),
-        ("KRAAI_WINDOWS_CONFIG", config.clone()),
-        ("KRAAI_WINDOWS_TARGET", output.join("stdout")),
-    ] {
-        plan.environment.insert(name.into(), path.into_os_string());
-    }
-    successful(plan).await;
+    let plan = || {
+        let mut plan = fixture.plan("denied", &[SandboxCapability::WorkspaceWrite]);
+        plan.runtime_roots.push(output.clone());
+        plan.denied_paths = vec![
+            state.clone(),
+            config.clone(),
+            workspace.join("missing/mcp.toml"),
+        ];
+        for (name, path) in [
+            ("KRAAI_WINDOWS_DENIED", state.clone()),
+            ("KRAAI_WINDOWS_CONFIG", config.clone()),
+            ("KRAAI_WINDOWS_TARGET", output.join("stdout")),
+        ] {
+            plan.environment.insert(name.into(), path.into_os_string());
+        }
+        plan
+    };
+    successful(plan()).await;
+    std::fs::write(state.join("later"), "later secret").expect("write later secret");
+    successful(plan()).await;
     drop(database);
 
     for (path, contents) in [
         (state.join("secret"), "state secret"),
         (state.join("nested/deep"), "nested secret"),
+        (state.join("later"), "later secret"),
         (output.join("stdout"), "output"),
         (config.clone(), "api_key = 'secret'"),
         (workspace.join("created"), "workspace write"),
@@ -629,26 +638,39 @@ async fn denied_paths_inside_the_workspace_are_hidden_until_the_launch_ends() {
         state.join("nested"),
         state.join("nested/deep"),
         state.join("kraai.db"),
-        output.clone(),
-        output.join("stdout"),
+        state.join("later"),
+        state.join("script-output"),
         config,
     ] {
-        assert_eq!(deny_entries(&path), 0, "{}", path.display());
+        assert_eq!(
+            app_container_allows(&path),
+            Vec::<u32>::new(),
+            "{}",
+            path.display()
+        );
+    }
+    for path in [output.clone(), output.join("stdout")] {
+        let allows = app_container_allows(&path);
+        assert!(
+            !allows.is_empty() && allows.iter().all(|mask| mask & FILE_WRITE_DATA == 0),
+            "{}: {allows:x?}",
+            path.display()
+        );
     }
 }
 
 #[expect(
     unsafe_code,
-    reason = "the test reads the DACL that sandbox cleanup must restore"
+    reason = "the test reads the DACL entries the sandbox must strip"
 )]
-fn deny_entries(path: &std::path::Path) -> usize {
+fn app_container_allows(path: &std::path::Path) -> Vec<u32> {
     use std::os::windows::ffi::OsStrExt;
     use std::ptr::null_mut;
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
     use windows_sys::Win32::Security::{
         ACE_HEADER, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION, GetAce,
-        GetAclInformation,
+        GetAclInformation, GetSidIdentifierAuthority,
     };
 
     let name = path
@@ -685,13 +707,19 @@ fn deny_entries(path: &std::path::Path) -> usize {
         },
         0
     );
-    let denied = (0..info.AceCount)
-        .filter(|index| {
+    let allows = (0..info.AceCount)
+        .filter_map(|index| {
             let mut ace = null_mut();
-            assert_ne!(unsafe { GetAce(dacl, *index, &mut ace) }, 0);
-            unsafe { ace.cast::<ACE_HEADER>().read() }.AceType == 1
+            assert_ne!(unsafe { GetAce(dacl, index, &mut ace) }, 0);
+            if !matches!(unsafe { ace.cast::<ACE_HEADER>().read() }.AceType, 0 | 9) {
+                return None;
+            }
+            let mask = unsafe { ace.cast::<u8>().add(4).cast::<u32>().read_unaligned() };
+            let authority =
+                unsafe { GetSidIdentifierAuthority(ace.cast::<u8>().add(8).cast()).read() };
+            (authority.Value == [0, 0, 0, 0, 0, 15]).then_some(mask)
         })
-        .count();
+        .collect();
     unsafe { LocalFree(descriptor) };
-    denied
+    allows
 }

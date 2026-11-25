@@ -75,17 +75,25 @@ fn prepare_inner(
     }
     plan.workspace_root = local_path(&plan.workspace_root)?;
     plan.executable = local_path(&plan.executable)?;
-    let requested_roots = plan
+    let temp_path = local_path(private_temp.path())?;
+    let system_root = system_root()?;
+    let denied = crate::platform::denied_paths(&plan)
+        .into_iter()
+        .filter(|path| path.symlink_metadata().is_ok())
+        .collect::<Vec<_>>();
+    let runtime_roots = plan
         .runtime_roots
         .iter()
         .map(|path| local_path(path))
-        .collect::<Result<Vec<_>, _>>()?;
-    let temp_path = local_path(private_temp.path())?;
-    let system_root = system_root()?;
-    let runtime_roots = requested_roots
-        .iter()
-        .filter(|root| !root.starts_with(&plan.workspace_root) && !root.starts_with(&system_root))
-        .cloned()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|root| {
+            !root.starts_with(&system_root)
+                && (!root.starts_with(&plan.workspace_root)
+                    || denied
+                        .iter()
+                        .any(|denied| root != denied && root.starts_with(denied)))
+        })
         .collect::<Vec<_>>();
     filesystem::check_roots(&plan.workspace_root, &runtime_roots, &temp_path)?;
     let writable = plan
@@ -98,19 +106,6 @@ fn prepare_inner(
     if let Some(git_dir) = &git_dir {
         filesystem::check(git_dir)?;
     }
-    let denials = Denials::new(
-        crate::platform::denied_paths(&plan)
-            .into_iter()
-            .filter(|path| path.symlink_metadata().is_ok())
-            .collect(),
-        requested_roots
-            .into_iter()
-            .map(|root| (root, false))
-            .chain([(plan.workspace_root.clone(), writable)])
-            .chain(git_dir.clone().map(|git_dir| (git_dir, true)))
-            .chain([(temp_path.clone(), true)])
-            .collect(),
-    );
     identity::sweep_stale_profiles_once();
     let identity = Identity::create()?;
     let mut capabilities = identity::capability("registryRead")?;
@@ -138,15 +133,28 @@ fn prepare_inner(
                 .as_deref()
                 .map(|git_dir| ("git", git_dir, Access::Write)),
         );
+    let mut granted = Vec::new();
+    let mut granted_sids = Vec::new();
     for (kind, path, access) in persistent {
-        for sid in identity::path_capability(kind, path, access)? {
-            acl::grant_persistent(path, &sid, access)?;
-            capabilities.push(sid);
+        let sids = identity::path_capability(kind, path, access)?;
+        for sid in &sids {
+            acl::grant_persistent(path, sid, access)?;
         }
+        capabilities.extend(sids.iter().cloned());
+        granted.push((path.to_path_buf(), matches!(access, Access::Write)));
+        granted_sids.push(sids);
     }
     let mut grants = Grants::new(identity.sid.clone());
     grants.grant(&temp_path, Access::Write)?;
-    grants.deny(denials)?;
+    granted.push((temp_path, true));
+    granted_sids.push(vec![identity.sid.clone()]);
+    let token = capabilities
+        .iter()
+        .cloned()
+        .chain([identity.sid.clone()])
+        .chain(identity::all_packages()?)
+        .collect::<Vec<_>>();
+    acl::strip(&Denials::new(denied, granted), &token, &granted_sids)?;
     plan.environment
         .retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("LOCALAPPDATA"));
     plan.environment

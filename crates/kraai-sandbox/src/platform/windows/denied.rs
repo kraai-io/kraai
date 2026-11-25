@@ -1,15 +1,9 @@
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Deny {
-    All,
-    Write,
-}
-
 /// The AppContainer can only open what a grant reaches, so only denied paths inside a grant
-/// need deny entries. Inside a denied path the deepest denied path decides, and grants
-/// strictly inside it keep their own access: any writable one leaves the object alone,
-/// read-only ones only lose write access.
+/// need their entries stripped. Inside a denied path the deepest denied path decides, and
+/// grants strictly inside it keep their own access: any writable one leaves the object alone,
+/// read-only ones keep only their own entries.
 #[derive(Debug)]
 pub(super) struct Denials {
     denied: Vec<PathBuf>,
@@ -41,26 +35,28 @@ impl Denials {
         &self.roots
     }
 
-    pub(super) fn entry(&self, path: &Path) -> Option<Deny> {
+    /// The indices of the grants whose entries `path` keeps, or `None` when `path` is not
+    /// hidden.
+    pub(super) fn kept(&self, path: &Path) -> Option<Vec<usize>> {
         let denied = self
             .denied
             .iter()
             .filter(|denied| path.starts_with(denied))
             .max_by_key(|denied| denied.components().count())?;
-        let mut deny = Deny::All;
-        for (grant, writable) in &self.grants {
+        let mut kept = Vec::new();
+        for (index, (grant, writable)) in self.grants.iter().enumerate() {
             if grant != denied && grant.starts_with(denied) && path.starts_with(grant) {
                 if *writable {
                     return None;
                 }
-                deny = Deny::Write;
+                kept.push(index);
             }
         }
-        Some(deny)
+        Some(kept)
     }
 
     pub(super) fn prunes(&self, path: &Path) -> bool {
-        self.entry(path).is_none()
+        self.kept(path).is_none()
             && !self
                 .denied
                 .iter()
