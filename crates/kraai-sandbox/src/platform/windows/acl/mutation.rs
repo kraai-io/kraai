@@ -5,8 +5,8 @@ use std::ptr;
 use windows_sys::Wdk::Storage::FileSystem::NtSetSecurityObject;
 use windows_sys::Win32::Foundation::{LocalFree, RtlNtStatusToDosError};
 use windows_sys::Win32::Security::Authorization::{
-    EXPLICIT_ACCESS_W, GRANT_ACCESS, GetSecurityInfo, SE_FILE_OBJECT, SetEntriesInAclW,
-    TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    DENY_ACCESS, EXPLICIT_ACCESS_W, GRANT_ACCESS, GetSecurityInfo, SE_FILE_OBJECT,
+    SetEntriesInAclW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION,
@@ -16,11 +16,12 @@ use windows_sys::Win32::Security::{
     SetSecurityDescriptorDacl,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    DELETE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+    DELETE, FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
 };
 
+use super::super::denied::Deny;
 use super::super::identity::Sid;
-use super::Access;
+use super::{Access, Entry};
 
 use crate::SandboxError;
 
@@ -31,7 +32,7 @@ impl Drop for Allocation {
     }
 }
 
-pub(super) fn update(file: &File, sid: &Sid, access: Option<Access>) -> Result<(), SandboxError> {
+pub(super) fn update(file: &File, sid: &Sid, entry: Option<Entry>) -> Result<(), SandboxError> {
     let mut dacl = ptr::null_mut();
     let mut descriptor = ptr::null_mut();
     let result = unsafe {
@@ -58,10 +59,15 @@ pub(super) fn update(file: &File, sid: &Sid, access: Option<Access>) -> Result<(
     let (mut base, changed) = without_sid(dacl, sid)?;
     let mut edited = ptr::null_mut();
     let _edited;
-    let dacl = if let Some(access) = access {
+    let dacl = if let Some(entry) = entry {
+        let (mode, permissions) = match entry {
+            Entry::Allow(access) => (GRANT_ACCESS, mask(access)),
+            Entry::Deny(Deny::All) => (DENY_ACCESS, FILE_ALL_ACCESS),
+            Entry::Deny(Deny::Write) => (DENY_ACCESS, FILE_ALL_ACCESS & !mask(Access::Read)),
+        };
         let entry = EXPLICIT_ACCESS_W {
-            grfAccessPermissions: mask(access),
-            grfAccessMode: GRANT_ACCESS,
+            grfAccessPermissions: permissions,
+            grfAccessMode: mode,
             grfInheritance: 3,
             Trustee: TRUSTEE_W {
                 pMultipleTrustee: ptr::null_mut(),

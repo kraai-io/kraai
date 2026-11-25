@@ -10,11 +10,13 @@ use std::fs::{File, OpenOptions};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
+use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ,
+    FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 
+use super::denied::{Denials, Deny};
 use super::identity::Sid;
 use crate::SandboxError;
 
@@ -26,11 +28,20 @@ pub(super) enum Access {
     Write,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum Entry {
+    Allow(Access),
+    Deny(Deny),
+}
+
+/// Denied trees keep no handles open, so Kraai can still replace and delete its own files in
+/// them while a script runs.
 #[derive(Debug)]
 pub(super) struct Grants {
     sid: Sid,
     files: Vec<File>,
     roots: Vec<PathBuf>,
+    denials: Option<Denials>,
 }
 
 impl Grants {
@@ -39,6 +50,7 @@ impl Grants {
             sid,
             files: Vec::new(),
             roots: Vec::new(),
+            denials: None,
         }
     }
 
@@ -59,11 +71,31 @@ impl Grants {
                 return Err(entry_limit(path, limit));
             }
             handle::ensure_single_link(&file).map_err(|error| failure(path, &error.to_string()))?;
-            mutation::update(&file, &self.sid, Some(access))
+            mutation::update(&file, &self.sid, Some(Entry::Allow(access)))
                 .map_err(|error| failure(path, &error.to_string()))?;
             self.files.push(file);
             Ok(())
         })
+    }
+
+    pub(super) fn deny(&mut self, denials: Denials) -> Result<(), SandboxError> {
+        let _lock = super::mutation_lock::Lock::acquire()?;
+        let denials = &*self.denials.insert(denials);
+        for root in denials.roots() {
+            walk(
+                root,
+                MAX_ACL_ENTRIES,
+                |path| denials.prunes(path),
+                |path, file| {
+                    let Some(deny) = denials.entry(path) else {
+                        return Ok(());
+                    };
+                    mutation::update(&file, &self.sid, Some(Entry::Deny(deny)))
+                        .map_err(|error| failure(path, &error.to_string()))
+                },
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -84,18 +116,33 @@ impl Grants {
                 failure.get_or_insert(error);
             }
         }
+        if let Some(denials) = &self.denials {
+            for root in denials.roots() {
+                if root.exists()
+                    && let Err(error) = walk(
+                        root,
+                        MAX_ACL_ENTRIES,
+                        |path| denials.prunes(path),
+                        |_, file| mutation::update(&file, &self.sid, None),
+                    )
+                {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
         if let Some(error) = failure {
             return Err(error);
         }
         self.files.clear();
         self.roots.clear();
+        self.denials = None;
         Ok(())
     }
 }
 
 impl Drop for Grants {
     fn drop(&mut self) {
-        if !self.files.is_empty() || !self.roots.is_empty() {
+        if !self.files.is_empty() || !self.roots.is_empty() || self.denials.is_some() {
             let _ = self.cleanup();
         }
     }
@@ -121,11 +168,11 @@ pub(super) fn grant_persistent(path: &Path, sid: &Sid, access: Access) -> Result
             walked_root = Some(file);
             return Ok(());
         }
-        mutation::update(&file, sid, Some(access))
+        mutation::update(&file, sid, Some(Entry::Allow(access)))
             .map_err(|error| failure(path, &error.to_string()))
     })?;
     let walked_root = walked_root.ok_or_else(|| failure(path, "sandbox root was not visited"))?;
-    mutation::update(&walked_root, sid, Some(access))
+    mutation::update(&walked_root, sid, Some(Entry::Allow(access)))
         .map_err(|error| failure(path, &error.to_string()))
 }
 
@@ -141,10 +188,22 @@ fn visit_tree_with_limit(
     limit: usize,
     mut visit: impl FnMut(File) -> Result<(), SandboxError>,
 ) -> Result<(), SandboxError> {
+    walk(root, limit, |_| false, |_, file| visit(file))
+}
+
+fn walk(
+    root: &Path,
+    limit: usize,
+    prune: impl Fn(&Path) -> bool,
+    mut visit: impl FnMut(&Path, File) -> Result<(), SandboxError>,
+) -> Result<(), SandboxError> {
     let mut pins = pin_ancestors(root)?;
     let mut pending = vec![(root.to_path_buf(), true)];
     let mut entries = 0;
     while let Some((path, is_root)) = pending.pop() {
+        if !is_root && prune(&path) {
+            continue;
+        }
         if entries >= limit {
             return Err(entry_limit(root, limit));
         }
@@ -161,7 +220,7 @@ fn visit_tree_with_limit(
             .map_err(|error| failure(&path, &error.to_string()))?
             .is_dir();
         let file = handle::open_by_id(&pin).map_err(|error| failure(&path, &error.to_string()))?;
-        visit(file)?;
+        visit(&path, file)?;
         if directory {
             pins.push(pin);
             for entry in
@@ -197,14 +256,17 @@ fn pin_ancestors(path: &Path) -> Result<Vec<File>, SandboxError> {
 fn open(path: &Path) -> Result<File, SandboxError> {
     let mut options = OpenOptions::new();
     options
-        .share_mode(FILE_SHARE_READ)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
     match options
         .access_mode(FILE_READ_ATTRIBUTES | FILE_READ_DATA)
         .open(path)
     {
         Ok(file) => Ok(file),
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+        Err(error)
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                || error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) =>
+        {
             let file = options
                 .access_mode(FILE_READ_ATTRIBUTES)
                 .open(path)

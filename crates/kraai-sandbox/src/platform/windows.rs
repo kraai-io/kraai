@@ -1,4 +1,5 @@
 mod acl;
+mod denied;
 mod filesystem;
 mod identity;
 mod mutation_lock;
@@ -17,6 +18,7 @@ use crate::platform::git_worktree::linked_worktree_common_dir;
 use crate::temp_dir::PrivateTempDir;
 
 use acl::{Access, Grants};
+use denied::Denials;
 use identity::{Identity, Sid};
 
 #[derive(Debug)]
@@ -73,15 +75,18 @@ fn prepare_inner(
     }
     plan.workspace_root = local_path(&plan.workspace_root)?;
     plan.executable = local_path(&plan.executable)?;
-    let mut runtime_roots = plan
+    let requested_roots = plan
         .runtime_roots
         .iter()
         .map(|path| local_path(path))
         .collect::<Result<Vec<_>, _>>()?;
     let temp_path = local_path(private_temp.path())?;
     let system_root = system_root()?;
-    runtime_roots
-        .retain(|root| !root.starts_with(&plan.workspace_root) && !root.starts_with(&system_root));
+    let runtime_roots = requested_roots
+        .iter()
+        .filter(|root| !root.starts_with(&plan.workspace_root) && !root.starts_with(&system_root))
+        .cloned()
+        .collect::<Vec<_>>();
     filesystem::check_roots(&plan.workspace_root, &runtime_roots, &temp_path)?;
     let writable = plan
         .capabilities
@@ -93,20 +98,19 @@ fn prepare_inner(
     if let Some(git_dir) = &git_dir {
         filesystem::check(git_dir)?;
     }
-    for denied in crate::platform::denied_paths(&plan) {
-        let grant = std::iter::once(plan.workspace_root.as_path())
-            .chain(runtime_roots.iter().map(PathBuf::as_path))
-            .chain(git_dir.as_deref())
-            .chain([temp_path.as_path()])
-            .find(|grant| denied.starts_with(grant));
-        if let Some(grant) = grant {
-            return Err(SandboxError::SandboxUnavailable(format!(
-                "the Windows sandbox cannot hide '{}' from scripts because it grants '{}'; use a workspace that does not contain it, or request no-sandbox",
-                denied.display(),
-                grant.display()
-            )));
-        }
-    }
+    let denials = Denials::new(
+        crate::platform::denied_paths(&plan)
+            .into_iter()
+            .filter(|path| path.symlink_metadata().is_ok())
+            .collect(),
+        requested_roots
+            .into_iter()
+            .map(|root| (root, false))
+            .chain([(plan.workspace_root.clone(), writable)])
+            .chain(git_dir.clone().map(|git_dir| (git_dir, true)))
+            .chain([(temp_path.clone(), true)])
+            .collect(),
+    );
     identity::sweep_stale_profiles_once();
     let identity = Identity::create()?;
     let mut capabilities = identity::capability("registryRead")?;
@@ -142,6 +146,7 @@ fn prepare_inner(
     }
     let mut grants = Grants::new(identity.sid.clone());
     grants.grant(&temp_path, Access::Write)?;
+    grants.deny(denials)?;
     plan.environment
         .retain(|name, _| !name.to_string_lossy().eq_ignore_ascii_case("LOCALAPPDATA"));
     plan.environment

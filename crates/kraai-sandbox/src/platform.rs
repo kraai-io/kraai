@@ -15,6 +15,11 @@ pub(crate) mod windows;
 #[path = "platform/windows/filesystem.rs"]
 mod windows_filesystem;
 
+#[cfg(test)]
+#[cfg(not(windows))]
+#[path = "platform/windows/denied.rs"]
+mod windows_denied;
+
 #[cfg(any(target_os = "macos", all(test, unix)))]
 pub(crate) mod macos;
 
