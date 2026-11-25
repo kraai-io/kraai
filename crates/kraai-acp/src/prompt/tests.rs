@@ -402,7 +402,7 @@ async fn check_lag(fixture: &Fixture, requests: Arc<AtomicUsize>) {
         .history
         .get(&MessageId::new(partial_id.clone()))
         .expect("cancelled partial response was not persisted");
-    assert_eq!(partial.status, MessageStatus::Complete);
+    assert_eq!(partial.status, MessageStatus::Cancelled);
     assert_eq!(partial.display_text(), "partial");
     let mut cancelled = false;
     while let Ok(event) = actual_events.try_recv() {

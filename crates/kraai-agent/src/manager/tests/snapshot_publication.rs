@@ -124,7 +124,12 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() {
             assert!(saved.is_none());
         } else {
             let saved = saved.expect("terminal message");
-            assert_eq!(saved.status, MessageStatus::Complete);
+            let expected = if terminal == "complete" {
+                MessageStatus::Complete
+            } else {
+                MessageStatus::Cancelled
+            };
+            assert_eq!(saved.status, expected);
             assert_eq!(saved.display_text(), "new chunk");
         }
         cleanup_dir(data_dir).await;

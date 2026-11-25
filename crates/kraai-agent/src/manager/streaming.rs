@@ -351,7 +351,7 @@ impl AgentManager {
         &self,
         message_id: &MessageId,
     ) -> AgentResult<Option<CancelledStreamResult>> {
-        self.keep_streamed_text(message_id, MessageStatus::Complete)
+        self.keep_streamed_text(message_id, MessageStatus::Cancelled)
             .await
     }
 
@@ -359,7 +359,7 @@ impl AgentManager {
         &self,
         message_id: &MessageId,
     ) -> AgentResult<Option<CancelledStreamResult>> {
-        self.keep_streamed_text(message_id, MessageStatus::Cancelled)
+        self.keep_streamed_text(message_id, MessageStatus::Failed)
             .await
     }
 

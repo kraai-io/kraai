@@ -32,7 +32,7 @@ async fn native_assistant_text_preserves_literal_tool_envelopes() {
 }
 
 #[tokio::test]
-async fn a_failed_stream_keeps_its_streamed_text_as_cancelled() {
+async fn a_failed_stream_keeps_its_streamed_text_as_failed() {
     let harness = RuntimeTestHarness::new(vec![vec![
         ScriptedChunk::plain("partial answer"),
         ScriptedChunk::error("provider rejected the stream"),
@@ -66,7 +66,7 @@ async fn a_failed_stream_keeps_its_streamed_text_as_cancelled() {
         .history
         .get(&failed)
         .expect("failed message is kept");
-    assert_eq!(message.status, kraai_types::MessageStatus::Cancelled);
+    assert_eq!(message.status, kraai_types::MessageStatus::Failed);
     assert_eq!(message.display_text(), "partial answer");
     assert!(!snapshot.session.is_running);
     harness.shutdown().await;

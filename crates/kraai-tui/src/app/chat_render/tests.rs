@@ -248,6 +248,7 @@ fn completed_call_projection_preserves_message_metadata_and_item_order() {
             stream_id: StreamId::new("stream"),
         },
         MessageStatus::Cancelled,
+        MessageStatus::Failed,
     ] {
         original.status = status;
         let projected = without_completed_calls(&original, &completed);
@@ -704,4 +705,61 @@ fn streamed_text_rerenders_only_its_own_section() {
     state.refresh_chat_render_cache(80);
     assert_eq!(state.chat.render_cache.borrow().sections.len(), 5);
     assert!(rendered_lines(&state).iter().any(|line| line == " • later"));
+}
+
+#[test]
+fn a_settled_stream_redraws_with_its_interruption_marker() {
+    let user = message(
+        "user",
+        None,
+        ConversationItem::User {
+            content: String::from("question").into(),
+        },
+    );
+    let mut assistant = message(
+        "assistant",
+        Some("user"),
+        ConversationItem::Assistant {
+            items: vec![text_item("partial")],
+        },
+    );
+    assistant.status = MessageStatus::Streaming {
+        stream_id: StreamId::new("stream"),
+    };
+    let id = assistant.id.clone();
+    let mut state = AppState {
+        chat: ChatView {
+            history: [(user.id.clone(), user), (id.clone(), assistant)]
+                .into_iter()
+                .collect(),
+            tip_id: Some(String::from("assistant")),
+            ..ChatView::default()
+        },
+        ..AppState::default()
+    };
+    state.refresh_chat_render_cache(80);
+    let user_section = state.chat.render_cache.borrow().sections.first().cloned();
+    assert!(
+        !rendered_lines(&state)
+            .iter()
+            .any(|line| line.contains("Cancelled"))
+    );
+
+    for (status, marker) in [
+        (MessageStatus::Cancelled, "   Cancelled"),
+        (MessageStatus::Failed, "   Interrupted by an error"),
+    ] {
+        if let Some(message) = state.chat.history.get_mut(&id) {
+            message.status = status;
+        }
+        state.chat.invalidate();
+        state.refresh_chat_render_cache(80);
+        let lines = rendered_lines(&state);
+        assert_eq!(lines.last().map(String::as_str), Some(marker));
+        let cache = state.chat.render_cache.borrow();
+        assert!(matches!(
+            (&user_section, cache.sections.first()),
+            (Some(before), Some(after)) if Arc::ptr_eq(before, after)
+        ));
+    }
 }

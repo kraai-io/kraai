@@ -478,6 +478,7 @@ fn message_fingerprint(msg: &Message, completed: &HashSet<String>) -> u64 {
             stream_id.as_str().hash(&mut hasher);
         }
         MessageStatus::Cancelled => 2u8.hash(&mut hasher),
+        MessageStatus::Failed => 3u8.hash(&mut hasher),
     }
     match &msg.content {
         ConversationItem::Assistant { items } => {

@@ -553,6 +553,7 @@ async fn cancelling_after_a_failed_completion_drops_the_unrun_call() {
         .await
         .unwrap()
         .expect("cancelled message");
+    assert_eq!(saved.status, MessageStatus::Cancelled);
     assert_eq!(
         saved.content.assistant_items(),
         Some(
@@ -614,7 +615,7 @@ async fn failed_streams_keep_text_without_script_calls() {
         .await
         .unwrap()
         .expect("kept message");
-    assert_eq!(saved.status, MessageStatus::Cancelled);
+    assert_eq!(saved.status, MessageStatus::Failed);
     assert_eq!(
         saved.content,
         ConversationItem::Assistant {

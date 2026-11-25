@@ -208,7 +208,7 @@ impl App {
     }
 
     pub(super) fn upsert_message(&mut self, message: kraai_types::Message) {
-        let completed = message.status == MessageStatus::Complete;
+        let completed = !matches!(message.status, MessageStatus::Streaming { .. });
         let mut history = std::collections::BTreeMap::new();
         history.insert(message.id.clone(), message);
         if completed {

@@ -1,7 +1,5 @@
 use super::*;
-use kraai_types::{
-    AssistantItem, AssistantPhase, ConversationItem, MessageId, MessageStatus, ToolCallId,
-};
+use kraai_types::{AssistantItem, AssistantPhase, ConversationItem, MessageId, ToolCallId};
 
 fn message(id: &str, role: ChatRole, content: &str) -> Message {
     let content = match role {
@@ -365,4 +363,36 @@ fn skips_whitespace_only_tail_after_assistant_script_call() {
         rendered,
         vec![" · not started", "   kraai-open-files /tmp/a.txt"]
     );
+}
+
+#[test]
+fn marks_cancelled_and_failed_assistant_messages_with_a_dim_line() {
+    for (status, marker) in [
+        (MessageStatus::Cancelled, Some("   Cancelled")),
+        (MessageStatus::Failed, Some("   Interrupted by an error")),
+        (MessageStatus::Complete, None),
+        (
+            MessageStatus::Streaming {
+                stream_id: kraai_types::StreamId::new("stream"),
+            },
+            None,
+        ),
+    ] {
+        let mut assistant = message("1", ChatRole::Assistant, "partial");
+        assistant.status = status;
+        let lines = ChatHistory::build_message_lines(&assistant, 40, &|_| ScriptCard::Waiting);
+        let texts: Vec<String> = lines.iter().map(ChatHistory::line_text).collect();
+        match marker {
+            Some(marker) => {
+                assert_eq!(texts, [" • partial", marker]);
+                let last = lines.last().unwrap();
+                assert!(
+                    last.spans
+                        .iter()
+                        .all(|span| span.style.fg == Some(Color::DarkGray))
+                );
+            }
+            None => assert_eq!(texts, [" • partial"]),
+        }
+    }
 }
