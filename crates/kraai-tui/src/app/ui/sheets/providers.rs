@@ -1,10 +1,12 @@
+use super::super::super::AppState;
 use super::super::super::providers_sheet::{CONNECT_LABEL, ProviderAction};
-use super::super::super::{AppState, ProviderAuthState, ProviderAuthStatus, ProvidersView};
 use super::super::sheet::{Note, Sheet, SheetItem, SheetRow, Tone};
 use super::{age, notice, plural, provider_config};
+use crate::app::auth::{ProviderAuthState, ProviderAuthStatus};
+use crate::app::types::ProvidersView;
 
 pub(super) fn providers(state: &AppState) -> Sheet {
-    match state.providers_view {
+    match state.providers.view {
         ProvidersView::List => list(state),
         ProvidersView::Connect => connect(state),
         ProvidersView::Provider => provider(state),
@@ -13,7 +15,7 @@ pub(super) fn providers(state: &AppState) -> Sheet {
 }
 
 pub(super) fn hints(state: &AppState) -> String {
-    match (state.providers_view, state.sheet_armed) {
+    match (state.providers.view, state.sheet.armed) {
         (ProvidersView::List, true) => {
             String::from("del remove this provider · any other key keeps it")
         }
@@ -38,7 +40,8 @@ fn display_name<'a>(state: &'a AppState, type_id: &'a str) -> &'a str {
 fn model_count(state: &AppState, provider_id: &str) -> String {
     plural(
         state
-            .models_by_provider
+            .models
+            .by_provider
             .get(provider_id)
             .map_or(0, Vec::len),
         "model",
@@ -62,16 +65,17 @@ fn auth_words(auth: &ProviderAuthStatus) -> (String, Tone) {
 fn list(state: &AppState) -> Sheet {
     let providers = state.listed_providers();
     let total = providers.len() + usize::from(state.offers_connect());
-    let highlighted = state.sheet_index.min(total.saturating_sub(1));
+    let highlighted = state.sheet.index.min(total.saturating_sub(1));
     let mut rows: Vec<_> = providers
         .iter()
         .enumerate()
         .map(|(row, (_, provider))| {
-            let (tag, tone) = if state.sheet_armed && row == highlighted {
+            let (tag, tone) = if state.sheet.armed && row == highlighted {
                 (String::from("del again to remove"), Tone::Danger)
             } else {
                 state
-                    .provider_auth
+                    .providers
+                    .auth
                     .get(&provider.type_id)
                     .map(auth_words)
                     .unwrap_or_default()
@@ -96,8 +100,8 @@ fn list(state: &AppState) -> Sheet {
         caption: String::from("providers"),
         count: plural(providers.len(), "provider"),
         rows,
-        selected: state.sheet_index,
-        empty: String::from(if state.settings_draft.is_none() {
+        selected: state.sheet.index,
+        empty: String::from(if state.providers.settings_draft.is_none() {
             "Loading providers"
         } else {
             "No providers match"
@@ -109,7 +113,7 @@ fn list(state: &AppState) -> Sheet {
 
 fn connect(state: &AppState) -> Sheet {
     let definitions = state.listed_provider_definitions();
-    let highlighted = definitions.get(state.sheet_index.min(definitions.len().saturating_sub(1)));
+    let highlighted = definitions.get(state.sheet.index.min(definitions.len().saturating_sub(1)));
     let mut notes = Vec::new();
     if let Some(definition) = highlighted {
         notes.push(Note::default());
@@ -128,8 +132,8 @@ fn connect(state: &AppState) -> Sheet {
                 })
             })
             .collect(),
-        selected: state.sheet_index,
-        empty: String::from(if state.provider_definitions.is_empty() {
+        selected: state.sheet.index,
+        empty: String::from(if state.providers.definitions.is_empty() {
             "Loading the kinds of provider"
         } else {
             "No kind of provider matches"
@@ -154,7 +158,7 @@ fn provider(state: &AppState) -> Sheet {
     let auth = state.open_provider_auth();
     let auth_state = auth.map(|auth| auth.state);
     let actions = state.listed_provider_actions();
-    let highlighted = state.sheet_index.min(actions.len().saturating_sub(1));
+    let highlighted = state.sheet.index.min(actions.len().saturating_sub(1));
 
     let mut summary = vec![display_name(state, &provider.type_id).to_owned()];
     summary.extend(auth.map(|auth| auth_words(auth).0));
@@ -178,7 +182,7 @@ fn provider(state: &AppState) -> Sheet {
         rows.push(SheetRow::Heading(String::from("No actions match")));
     }
     rows.extend(actions.iter().enumerate().map(|(row, action)| {
-        let armed = state.sheet_armed && row == highlighted && *action == ProviderAction::Remove;
+        let armed = state.sheet.armed && row == highlighted && *action == ProviderAction::Remove;
         SheetRow::Item(SheetItem {
             label: action.label(auth_state).to_owned(),
             tag: if armed {
@@ -231,7 +235,7 @@ fn provider(state: &AppState) -> Sheet {
         caption: provider.id.clone(),
         count: String::new(),
         rows,
-        selected: state.sheet_index,
+        selected: state.sheet.index,
         empty: String::new(),
         notes,
         align_choices: true,

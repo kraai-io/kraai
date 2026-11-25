@@ -168,17 +168,18 @@ pub(crate) fn build_bwrap_args(
         "--die-with-parent".into(),
         "--unshare-all".into(),
     ];
+    let mut grants = Vec::new();
     if network_enabled {
         args.push("--share-net".into());
     }
 
     if capabilities.contains(SandboxCapability::HostWrite) {
-        push_bind(&mut args, "--bind", Path::new("/"));
+        push_grant(&mut args, &mut grants, "--bind", Path::new("/"));
     } else if capabilities.contains(SandboxCapability::HostRead) {
-        push_bind(&mut args, "--ro-bind", Path::new("/"));
+        push_grant(&mut args, &mut grants, "--ro-bind", Path::new("/"));
     } else {
         for path in SYSTEM_PATHS {
-            push_bind(&mut args, "--ro-bind-try", Path::new(path));
+            push_grant(&mut args, &mut grants, "--ro-bind-try", Path::new(path));
         }
     }
     args.extend([
@@ -191,6 +192,7 @@ pub(crate) fn build_bwrap_args(
     let resolved_workspace = plan.workspace_root.canonicalize().map_err(|error| {
         SandboxError::SandboxUnavailable(format!("unable to resolve workspace: {error}"))
     })?;
+    let denied = crate::platform::denied_paths(plan);
     for root in deduplicated_roots(&plan.runtime_roots) {
         let root = if capabilities.contains(SandboxCapability::HostRead) {
             root.canonicalize().map_err(|error| {
@@ -204,15 +206,16 @@ pub(crate) fn build_bwrap_args(
         };
         // The workspace mount already exposes these paths. A separate recursive
         // read-only bind would override workspace-write even after rebinding its parent.
-        // Keep mounts for symlinks that resolve outside the workspace.
-        if root
-            .canonicalize()
-            .is_ok_and(|resolved| resolved.starts_with(&resolved_workspace))
-        {
+        // Keep mounts for symlinks that resolve outside the workspace, and for roots that
+        // must be bound again inside a denied path.
+        if root.canonicalize().is_ok_and(|resolved| {
+            resolved.starts_with(&resolved_workspace)
+                && !denied.iter().any(|path| resolved.starts_with(path))
+        }) {
             continue;
         }
         push_parent_dirs(&mut args, &root);
-        push_bind(&mut args, "--ro-bind", &root);
+        push_grant(&mut args, &mut grants, "--ro-bind", &root);
     }
 
     // Workspace permissions take precedence over overlapping runtime roots, such as
@@ -223,14 +226,14 @@ pub(crate) fn build_bwrap_args(
         "--ro-bind"
     };
     push_parent_dirs(&mut args, &resolved_workspace);
-    push_bind(&mut args, workspace_flag, &resolved_workspace);
+    push_grant(&mut args, &mut grants, workspace_flag, &resolved_workspace);
     let git_dir = capabilities
         .contains(SandboxCapability::WorkspaceWrite)
         .then(|| linked_worktree_common_dir(&resolved_workspace))
         .flatten();
     if let Some(git_dir) = &git_dir {
         push_parent_dirs(&mut args, git_dir);
-        push_bind(&mut args, "--bind", git_dir);
+        push_grant(&mut args, &mut grants, "--bind", git_dir);
     }
     if ConfigGuard::applies_to(capabilities) {
         let host_root = Path::new("/");
@@ -263,10 +266,10 @@ pub(crate) fn build_bwrap_args(
             })
             .collect::<BTreeSet<_>>();
         for directory in pinned {
-            push_bind(&mut args, "--bind", directory);
+            push_grant(&mut args, &mut grants, "--bind", directory);
         }
         for (path, _root) in protected {
-            push_bind(&mut args, "--ro-bind", path);
+            push_grant(&mut args, &mut grants, "--ro-bind", path);
         }
     }
 
@@ -285,12 +288,13 @@ pub(crate) fn build_bwrap_args(
             "/etc/pki/tls/cert.pem",
             "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
         ] {
-            push_bind(&mut args, "--ro-bind-try", Path::new(path));
+            push_grant(&mut args, &mut grants, "--ro-bind-try", Path::new(path));
         }
     }
 
     push_parent_dirs(&mut args, private_temp);
-    push_bind(&mut args, "--bind", private_temp);
+    push_grant(&mut args, &mut grants, "--bind", private_temp);
+    push_denied_paths(&mut args, &grants, &denied);
 
     if !network_enabled {
         args.push("--seccomp".into());
@@ -331,6 +335,75 @@ fn push_parent_dirs(args: &mut Vec<OsString>, path: &Path) {
     {
         args.push("--dir".into());
         args.push(parent.as_os_str().to_os_string());
+    }
+}
+
+fn push_grant(
+    args: &mut Vec<OsString>,
+    grants: &mut Vec<(&'static str, PathBuf)>,
+    flag: &'static str,
+    path: &Path,
+) {
+    push_bind(args, flag, path);
+    grants.push((flag, path.to_path_buf()));
+}
+
+/// A grant shows a denied path at `grant/<path below the grant's target>`. Each place
+/// where the denied path is still visible gets a read-only empty tmpfs, or an unopenable
+/// device for files, and grants strictly inside it are bound again. Visibility follows
+/// mount order: the last grant or hidden path covering a location decides what it shows.
+fn push_denied_paths(
+    args: &mut Vec<OsString>,
+    grants: &[(&'static str, PathBuf)],
+    denied: &[PathBuf],
+) {
+    let mut hidden = denied
+        .iter()
+        .filter(|path| path.symlink_metadata().is_ok())
+        .flat_map(|path| {
+            grants
+                .iter()
+                .enumerate()
+                .filter_map(move |(index, (_, grant))| {
+                    let target = grant.canonicalize().unwrap_or_else(|_| grant.clone());
+                    let below = path.strip_prefix(target).ok()?;
+                    Some((grant.join(below), index, path.is_dir()))
+                })
+        })
+        .collect::<Vec<_>>();
+    hidden.sort_by_key(|(location, ..)| location.components().count());
+    let mut mounts = grants
+        .iter()
+        .enumerate()
+        .map(|(index, (_, grant))| (grant.clone(), Some(index)))
+        .collect::<Vec<_>>();
+    for (location, source, directory) in hidden {
+        let shown = mounts
+            .iter()
+            .rev()
+            .find(|(mount, _)| location.starts_with(mount))
+            .and_then(|(_, grant)| *grant);
+        if shown != Some(source) {
+            continue;
+        }
+        if !directory {
+            args.extend([
+                "--ro-bind".into(),
+                "/dev/null".into(),
+                location.clone().into(),
+            ]);
+            mounts.push((location, None));
+            continue;
+        }
+        args.extend(["--tmpfs".into(), location.clone().into()]);
+        mounts.push((location.clone(), None));
+        for (index, (flag, grant)) in grants.iter().enumerate() {
+            if grant != &location && grant.starts_with(&location) {
+                push_bind(args, flag, grant);
+                mounts.push((grant.clone(), Some(index)));
+            }
+        }
+        args.extend(["--remount-ro".into(), location.into()]);
     }
 }
 

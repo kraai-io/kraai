@@ -1,4 +1,13 @@
-use super::*;
+use super::App;
+use super::commands::active_command_prefix;
+use super::types::{ProvidersView, RuntimeRequest, ScriptPhase, UiMode};
+use super::{palette, terminal_reply};
+use color_eyre::eyre::Result;
+use ratatui::crossterm::event::{
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
+    MouseEventKind,
+};
+use std::time::{Duration, Instant};
 
 const WHEEL_SCROLL_LINES: i16 = 3;
 const TERMINAL_EVENT_BATCH_BUDGET: Duration = Duration::from_millis(1);
@@ -89,11 +98,13 @@ impl App {
     }
 
     pub(super) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
-        if self.state.error_open && self.state.last_error.is_some() {
-            let offset = self.state.error_scroll.get();
+        if self.state.errors.open && self.state.errors.last.is_some() {
+            let offset = self.state.errors.scroll.get();
             match mouse_event.kind {
-                MouseEventKind::ScrollUp => self.state.error_scroll.set(offset.saturating_sub(3)),
-                MouseEventKind::ScrollDown => self.state.error_scroll.set(offset.saturating_add(3)),
+                MouseEventKind::ScrollUp => self.state.errors.scroll.set(offset.saturating_sub(3)),
+                MouseEventKind::ScrollDown => {
+                    self.state.errors.scroll.set(offset.saturating_add(3))
+                }
                 MouseEventKind::Down(_)
                 | MouseEventKind::Up(_)
                 | MouseEventKind::Drag(_)
@@ -111,12 +122,14 @@ impl App {
             match mouse_event.kind {
                 MouseEventKind::ScrollUp => self
                     .state
+                    .turn
                     .approval_scroll
-                    .set(self.state.approval_scroll.get().saturating_sub(3)),
+                    .set(self.state.turn.approval_scroll.get().saturating_sub(3)),
                 MouseEventKind::ScrollDown => self
                     .state
+                    .turn
                     .approval_scroll
-                    .set(self.state.approval_scroll.get().saturating_add(3)),
+                    .set(self.state.turn.approval_scroll.get().saturating_add(3)),
                 MouseEventKind::Down(_)
                 | MouseEventKind::Up(_)
                 | MouseEventKind::Drag(_)
@@ -156,14 +169,14 @@ impl App {
 
         if matches!(key_event.code, KeyCode::Esc) {
             if self.state.mode == UiMode::Chat && self.command_popup_visible() {
-                self.state.command_popup_dismissed = true;
+                self.state.composer.command_popup_dismissed = true;
                 self.reset_command_selection();
                 return;
             }
             if self.state.mode == UiMode::Chat
-                && (self.state.is_streaming
-                    || self.state.retry_waiting
-                    || self.state.script_phase == ScriptPhase::Executing)
+                && (self.state.turn.is_streaming
+                    || self.state.turn.retry_waiting
+                    || self.state.turn.script_phase == ScriptPhase::Executing)
             {
                 if let Some(session_id) = &self.state.current_session_id {
                     self.request(RuntimeRequest::CancelStream {
@@ -205,8 +218,8 @@ impl App {
             return;
         }
         if key_event.code == KeyCode::Char('o') && key_event.modifiers == KeyModifiers::CONTROL {
-            self.state.scripts_expanded = !self.state.scripts_expanded;
-            self.invalidate_chat_cache();
+            self.state.chat.scripts_expanded = !self.state.chat.scripts_expanded;
+            self.state.chat.invalidate();
             return;
         }
         if self.handle_command_list_key(key_event) {
@@ -232,16 +245,16 @@ impl App {
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
                 self.insert_input_char(c);
-                if active_command_prefix(&self.state.input).is_none() {
-                    self.state.command_popup_dismissed = false;
+                if active_command_prefix(&self.state.composer.text).is_none() {
+                    self.state.composer.command_popup_dismissed = false;
                 }
                 self.reset_command_selection();
             }
             KeyCode::Delete => self.delete_input_char(),
             KeyCode::Backspace => {
                 self.backspace_input_char();
-                if active_command_prefix(&self.state.input).is_none() {
-                    self.state.command_popup_dismissed = false;
+                if active_command_prefix(&self.state.composer.text).is_none() {
+                    self.state.composer.command_popup_dismissed = false;
                 }
                 self.reset_command_selection();
             }
@@ -270,27 +283,27 @@ impl App {
     }
 
     pub(super) fn handle_paste(&mut self, text: String) {
-        if self.state.error_open && self.state.last_error.is_some() {
+        if self.state.errors.open && self.state.errors.last.is_some() {
             return;
         }
-        self.state.sheet_armed = false;
+        self.state.sheet.armed = false;
         match self.state.mode {
             UiMode::Agent | UiMode::Mcp | UiMode::Model | UiMode::Sessions => {
                 self.paste_into_sheet_query(&text);
-                self.state.reset_sheet_selection();
+                self.state.sheet.reset_selection();
                 return;
             }
             UiMode::ModelSettings => {
                 self.paste_into_sheet_query(&text);
                 return;
             }
-            UiMode::Providers if self.state.providers_view == ProvidersView::Config => {
+            UiMode::Providers if self.state.providers.view == ProvidersView::Config => {
                 self.paste_into_provider_config(&text);
                 return;
             }
             UiMode::Providers => {
                 self.paste_into_sheet_query(&text);
-                self.state.reset_sheet_selection();
+                self.state.sheet.reset_selection();
                 return;
             }
             UiMode::Chat => {}
@@ -301,8 +314,8 @@ impl App {
 
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         self.insert_input_text(&text);
-        if active_command_prefix(&self.state.input).is_none() {
-            self.state.command_popup_dismissed = false;
+        if active_command_prefix(&self.state.composer.text).is_none() {
+            self.state.composer.command_popup_dismissed = false;
         }
         self.reset_command_selection();
     }
@@ -319,7 +332,7 @@ impl App {
 
     pub(super) fn clear_chat_transient_state(&mut self) {
         self.clear_message_draft();
-        self.state.command_popup_dismissed = false;
+        self.state.composer.command_popup_dismissed = false;
         self.reset_command_selection();
     }
 
@@ -334,23 +347,29 @@ impl App {
             KeyCode::Enter => self.confirm_current_script_action(),
             KeyCode::Up => self
                 .state
+                .turn
                 .approval_scroll
-                .set(self.state.approval_scroll.get().saturating_sub(1)),
+                .set(self.state.turn.approval_scroll.get().saturating_sub(1)),
             KeyCode::Down => self
                 .state
+                .turn
                 .approval_scroll
-                .set(self.state.approval_scroll.get().saturating_add(1)),
+                .set(self.state.turn.approval_scroll.get().saturating_add(1)),
             KeyCode::PageUp => self
                 .state
+                .turn
                 .approval_scroll
-                .set(self.state.approval_scroll.get().saturating_sub(10)),
+                .set(self.state.turn.approval_scroll.get().saturating_sub(10)),
             KeyCode::PageDown => self
                 .state
+                .turn
                 .approval_scroll
-                .set(self.state.approval_scroll.get().saturating_add(10)),
-            KeyCode::Home => self.state.approval_scroll.set(0),
-            KeyCode::End => self.state.approval_scroll.set(usize::MAX),
-            KeyCode::Char('f') => self.state.approval_expanded = !self.state.approval_expanded,
+                .set(self.state.turn.approval_scroll.get().saturating_add(10)),
+            KeyCode::Home => self.state.turn.approval_scroll.set(0),
+            KeyCode::End => self.state.turn.approval_scroll.set(usize::MAX),
+            KeyCode::Char('f') => {
+                self.state.turn.approval_expanded = !self.state.turn.approval_expanded
+            }
             _ => {}
         }
     }

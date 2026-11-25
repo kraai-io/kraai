@@ -4,11 +4,11 @@ fn switch_to_other_session(harness: &mut TestHarness) {
     harness
         .app
         .reset_chat_session(Some(SessionId::new("other")));
-    harness.app.state.selected_model_options.clear();
+    harness.app.state.models.selected_options.clear();
 }
 
 fn remove_effort(harness: &mut TestHarness) {
-    let mut models = harness.app.state.models_by_provider.clone();
+    let mut models = harness.app.state.models.by_provider.clone();
     for model in models.values_mut().flatten() {
         model.options.retain(|option| option.id != "effort");
     }
@@ -32,7 +32,7 @@ fn metadata_refresh_reconciles_deferred_saves_before_the_turn_finishes() {
     set_option(&mut harness, "effort", "high").unwrap();
     assert!(saves(&harness).is_empty());
     remove_effort(&mut harness);
-    assert!(harness.app.state.selected_model_options.is_empty());
+    assert!(harness.app.state.models.selected_options.is_empty());
     assert!(saves(&harness).is_empty());
     snapshot(
         &mut harness,
@@ -48,7 +48,7 @@ fn metadata_refresh_reconciles_deferred_saves_before_the_turn_finishes() {
 fn unchanged_catalog_metadata_does_not_write_session_selection() {
     let mut harness = test_harness();
     configure(&mut harness);
-    let models = harness.app.state.models_by_provider.clone();
+    let models = harness.app.state.models.by_provider.clone();
     harness
         .app
         .handle_runtime_response(RuntimeResponse::Models(Ok(models)));
@@ -63,7 +63,7 @@ fn metadata_refresh_reconciles_background_saves_before_the_turn_finishes() {
     active.session.is_running = true;
     active.activity = SessionActivity::Streaming;
     snapshot(&mut harness, &SessionId::new("session"), 0, active);
-    harness.app.state.selected_model_options = options("high", false, None);
+    harness.app.state.models.selected_options = options("high", false, None);
     harness.app.save_model_selection();
     assert!(saves(&harness).is_empty());
     switch_to_other_session(&mut harness);
@@ -82,7 +82,7 @@ fn metadata_refresh_reconciles_background_saves_before_the_turn_finishes() {
             && selection.model_id.as_str() == "model"
             && selection.options == remaining_options())
     );
-    assert!(harness.app.state.selected_model_options.is_empty());
+    assert!(harness.app.state.models.selected_options.is_empty());
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn stale_background_save_results_preserve_reconciled_pending_options() {
     ] {
         let mut harness = test_harness();
         configure(&mut harness);
-        harness.app.state.selected_model_options = options("high", false, None);
+        harness.app.state.models.selected_options = options("high", false, None);
         harness.app.save_model_selection();
         let (_, initial_id, initial) = saves(&harness)
             .into_iter()
@@ -126,7 +126,7 @@ fn stale_background_save_results_preserve_reconciled_pending_options() {
         assert!(saves(&harness).is_empty());
         acknowledge(&mut harness, &SessionId::new("session"), corrected_id);
         assert!(saves(&harness).is_empty());
-        assert!(harness.app.state.selected_model_options.is_empty());
+        assert!(harness.app.state.models.selected_options.is_empty());
         assert_eq!(
             harness.app.state.current_session_id.as_ref(),
             Some(&SessionId::new("other"))
@@ -138,7 +138,7 @@ fn stale_background_save_results_preserve_reconciled_pending_options() {
 fn metadata_refresh_retries_background_saves_rejected_before_refresh() {
     let mut harness = test_harness();
     configure(&mut harness);
-    harness.app.state.selected_model_options = options("high", false, None);
+    harness.app.state.models.selected_options = options("high", false, None);
     harness.app.save_model_selection();
     let (_, save_id, _) = saves(&harness)
         .into_iter()
@@ -167,5 +167,5 @@ fn metadata_refresh_retries_background_saves_rejected_before_refresh() {
         if session.as_str() == "session" && *corrected_id > save_id
             && selection.options == remaining_options())
     );
-    assert!(harness.app.state.selected_model_options.is_empty());
+    assert!(harness.app.state.models.selected_options.is_empty());
 }

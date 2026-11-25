@@ -44,18 +44,22 @@ pub async fn run(
     };
     #[cfg(windows)]
     let cleanup = command.cleanup().await;
-    if let Some(config_guard) = config_guard {
-        tokio::task::spawn_blocking(move || config_guard.restore())
+    let undone = match config_guard {
+        Some(config_guard) => tokio::task::spawn_blocking(move || config_guard.restore())
             .await
             .map_err(|error| {
                 SandboxError::Wait(format!("configuration guard failed: {error}"))
-            })??;
-    }
+            })??,
+        None => false,
+    };
     #[cfg(target_os = "macos")]
     terminated?;
     #[cfg(windows)]
     cleanup?;
-    output
+    output.map(|mut output| {
+        output.protected_entries_undone = undone;
+        output
+    })
 }
 
 async fn spawn_and_wait(
@@ -168,6 +172,7 @@ async fn spawn_and_wait(
         stdout,
         stderr,
         sandbox_denied,
+        protected_entries_undone: false,
     })
 }
 

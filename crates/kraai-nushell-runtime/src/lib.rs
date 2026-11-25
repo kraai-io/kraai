@@ -6,6 +6,7 @@ mod host_calls;
 mod images;
 mod rendering;
 pub mod request;
+mod sandbox_hints;
 mod startup_files;
 mod transport;
 mod wire;

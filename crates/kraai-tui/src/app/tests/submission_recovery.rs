@@ -39,14 +39,16 @@ fn failed_send_is_recovered_only_in_its_session() {
             session_id: SessionId::new("old"),
             result: Err(kraai_runtime::RuntimeError::unavailable("failed")),
         });
-    assert_eq!(harness.app.state.input, "new draft");
-    assert_eq!(harness.app.state.draft_images.len(), 0);
+    assert_eq!(harness.app.state.composer.text, "new draft");
+    assert_eq!(harness.app.state.composer.images.len(), 0);
     harness.app.reset_chat_session(Some(SessionId::new("old")));
     assert_eq!(
-        harness.app.compose_message(&harness.app.state.input),
+        harness
+            .app
+            .compose_message(&harness.app.state.composer.text),
         message
     );
-    assert!(harness.app.state.failed_messages.is_empty());
+    assert!(harness.app.state.sessions.failed_messages.is_empty());
 }
 
 #[test]
@@ -70,14 +72,15 @@ fn background_failure_preserves_foreground_pending_send_and_stream() {
             session_id: SessionId::new("old"),
             result: Err(kraai_runtime::RuntimeError::unavailable("failed")),
         });
-    assert_eq!(harness.app.state.input, "next draft");
-    assert!(harness.app.state.is_streaming);
-    assert_eq!(harness.app.state.optimistic_messages.len(), 1);
-    assert_eq!(harness.app.state.pending_messages.len(), 1);
+    assert_eq!(harness.app.state.composer.text, "next draft");
+    assert!(harness.app.state.turn.is_streaming);
+    assert_eq!(harness.app.state.chat.optimistic_messages.len(), 1);
+    assert_eq!(harness.app.state.sessions.pending_messages.len(), 1);
     assert!(
         harness
             .app
             .state
+            .sessions
             .pending_messages
             .front()
             .is_some_and(|pending| pending.session_id == SessionId::new("new"))
@@ -90,8 +93,8 @@ fn background_failure_preserves_foreground_pending_send_and_stream() {
                 message_id: "new-message".into(),
             }),
         });
-    assert!(harness.app.state.pending_messages.is_empty());
-    assert_eq!(harness.app.state.input, "next draft");
+    assert!(harness.app.state.sessions.pending_messages.is_empty());
+    assert_eq!(harness.app.state.composer.text, "next draft");
 }
 
 #[test]
@@ -103,7 +106,7 @@ fn disconnected_background_submissions_recover_in_submission_order() {
     harness.app.reset_chat_session(Some(SessionId::new("new")));
     harness.app.set_input_text("new draft".into());
     harness.app.handle_runtime_bridge_disconnect();
-    assert_eq!(harness.app.state.input, "new draft");
+    assert_eq!(harness.app.state.composer.text, "new draft");
     harness.app.reset_chat_session(Some(SessionId::new("old")));
     let mut expected = first.0;
     expected.push(ContentPart::Text {
@@ -116,7 +119,9 @@ fn disconnected_background_submissions_recover_in_submission_order() {
             .filter(|part| matches!(part, ContentPart::Image { .. })),
     );
     assert_eq!(
-        harness.app.compose_message(&harness.app.state.input),
+        harness
+            .app
+            .compose_message(&harness.app.state.composer.text),
         MessageContent(expected)
     );
 }

@@ -33,7 +33,6 @@ fn trims_new_tool_output_without_removing_call_or_encrypted_history() {
             },
         ],
         script_tool: None,
-        cacheable_messages: None,
         options: Default::default(),
     };
     trim_tool_outputs(&mut request, Some(1000));
@@ -72,7 +71,6 @@ fn truncated_images_remain_reopenable_without_resolving_the_blobs() {
             output,
         }],
         script_tool: None,
-        cacheable_messages: None,
         options: Default::default(),
     };
     trim_tool_outputs(&mut request, Some(1000));

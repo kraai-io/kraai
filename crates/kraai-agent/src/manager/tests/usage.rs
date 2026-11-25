@@ -37,7 +37,7 @@ impl RequestUsageStore for ControlledUsageStore {
 async fn rejected_usage_writes_leave_stream_state_unchanged_and_can_be_retried() {
     let (mut manager, data_dir) = test_manager().await;
     let store = Arc::new(ControlledUsageStore {
-        inner: manager.request_usage_store(),
+        inner: manager.usage_store.clone(),
         reject_writes: AtomicBool::new(true),
     });
     manager.usage_store = store.clone();
@@ -237,5 +237,90 @@ async fn aborted_request_without_usage_remains_unknown() {
             .get(&pending.message_id)
             .is_some_and(|request| request.usage.is_none())
     );
+    cleanup_dir(data_dir).await;
+}
+
+struct BlockedUsageStore {
+    inner: Arc<dyn RequestUsageStore>,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl RequestUsageStore for BlockedUsageStore {
+    async fn save(
+        &self,
+        session_id: &SessionId,
+        request: &kraai_types::RequestUsage,
+    ) -> Result<()> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        self.inner.save(session_id, request).await
+    }
+
+    async fn delete(&self, session_id: &SessionId) -> Result<()> {
+        self.inner.delete(session_id).await
+    }
+
+    async fn load(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<BTreeMap<MessageId, kraai_types::RequestUsage>> {
+        self.inner.load(session_id).await
+    }
+}
+
+#[tokio::test]
+async fn slow_usage_writes_do_not_hold_up_streamed_text() {
+    let (mut manager, data_dir) = test_manager().await;
+    let store = Arc::new(BlockedUsageStore {
+        inner: manager.usage_store.clone(),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    manager.usage_store = store.clone();
+    let mut messages = Vec::new();
+    for _ in 0..2 {
+        let session_id = manager.create_session().await.unwrap();
+        let pending = manager
+            .prepare_start_stream(
+                &session_id,
+                "hello".into(),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        messages.push(pending.message_id);
+    }
+    let [slow, other] = messages.as_slice() else {
+        unreachable!();
+    };
+    let usage = manager.record_request_started(slow);
+    tokio::pin!(usage);
+    tokio::select! {
+        _ = &mut usage => panic!("usage write was not blocked"),
+        () = store.entered.notified() => {}
+    }
+    for message in [slow, other] {
+        kraai_test_support::hang_guard(manager.append_text_chunk(
+            message,
+            "text",
+            AssistantPhase::FinalAnswer,
+            "chunk",
+        ))
+        .await
+        .unwrap()
+        .expect("chunk recorded");
+    }
+    assert!(
+        kraai_test_support::hang_guard(manager.publish_streaming_snapshots())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    store.release.notify_one();
+    assert!(usage.await.unwrap().is_some());
     cleanup_dir(data_dir).await;
 }

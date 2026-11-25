@@ -1,7 +1,9 @@
 use super::*;
 use crate::app::model_options::active_options;
-use crate::app::{KeyCode, UiMode};
+use crate::app::types::UiMode;
+use color_eyre::eyre::Result;
 use kraai_types::{ModelOptionDefinition, ModelOptionKind, ModelOptionValue, ModelOptionValues};
+use ratatui::crossterm::event::KeyCode;
 
 mod errors;
 mod refresh;
@@ -12,7 +14,7 @@ pub(super) fn configure(harness: &mut TestHarness) {
         {"id":"thinking","label":"Thinking","type":"boolean","required":true},
         {"id":"budget","label":"Budget","type":"integer","min":10,"max":100,"required":true,"binding":{"type":"body","path":"/budget"},"active_when":{"option":"thinking","value":true}}
     ])).unwrap();
-    harness.app.state.models_by_provider.insert(
+    harness.app.state.models.by_provider.insert(
         "provider".into(),
         vec![kraai_runtime::Model {
             id: "model".into(),
@@ -22,9 +24,9 @@ pub(super) fn configure(harness: &mut TestHarness) {
         }],
     );
     harness.app.state.config_loaded = true;
-    harness.app.state.selected_provider_id = Some("provider".into());
-    harness.app.state.selected_model_id = Some("model".into());
-    harness.app.state.selected_profile_id = Some("coding".into());
+    harness.app.state.models.selected_provider_id = Some("provider".into());
+    harness.app.state.models.selected_model_id = Some("model".into());
+    harness.app.state.agents.selected_profile_id = Some("coding".into());
 }
 
 pub(super) fn configure_optional(harness: &mut TestHarness) {
@@ -32,14 +34,15 @@ pub(super) fn configure_optional(harness: &mut TestHarness) {
     let model = harness
         .app
         .state
-        .models_by_provider
+        .models
+        .by_provider
         .get_mut("provider")
         .and_then(|models| models.first_mut())
         .expect("missing model");
     for option in &mut model.options {
         option.required = false;
     }
-    harness.app.state.selected_model_options = ModelOptionValues::from([
+    harness.app.state.models.selected_options = ModelOptionValues::from([
         ("effort".into(), ModelOptionValue::Choice("high".into())),
         ("thinking".into(), ModelOptionValue::Boolean(true)),
         ("budget".into(), ModelOptionValue::Integer(50)),
@@ -52,7 +55,7 @@ fn active_ids(harness: &TestHarness) -> Vec<String> {
         .state
         .selected_model()
         .into_iter()
-        .flat_map(|model| active_options(model, &harness.app.state.selected_model_options))
+        .flat_map(|model| active_options(model, &harness.app.state.models.selected_options))
         .map(|option| option.id.clone())
         .collect()
 }
@@ -61,7 +64,8 @@ fn model_mut(harness: &mut TestHarness) -> &mut kraai_runtime::Model {
     harness
         .app
         .state
-        .models_by_provider
+        .models
+        .by_provider
         .get_mut("provider")
         .and_then(|models| models.first_mut())
         .expect("missing model")
@@ -71,15 +75,15 @@ fn open_settings(harness: &mut TestHarness, id: &str) {
     harness.app.handle_command("model");
     ctrl(harness, 's');
     assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
-    harness.app.state.sheet_index = active_ids(harness)
+    harness.app.state.sheet.index = active_ids(harness)
         .iter()
         .position(|option| option == id)
         .unwrap_or_else(|| panic!("missing active option {id}"));
 }
 
 pub(super) fn set(harness: &mut TestHarness, id: &str, input: &str) -> Result<(), String> {
-    let provider = harness.app.state.selected_provider_id.clone();
-    let model = harness.app.state.selected_model_id.clone();
+    let provider = harness.app.state.models.selected_provider_id.clone();
+    let model = harness.app.state.models.selected_model_id.clone();
     harness.app.set_model_option(
         provider.as_deref().unwrap_or_default(),
         model.as_deref().unwrap_or_default(),
@@ -89,7 +93,7 @@ pub(super) fn set(harness: &mut TestHarness, id: &str, input: &str) -> Result<()
 }
 
 fn value<'a>(harness: &'a TestHarness, id: &str) -> Option<&'a ModelOptionValue> {
-    harness.app.state.selected_model_options.get(id)
+    harness.app.state.models.selected_options.get(id)
 }
 
 #[test]
@@ -123,7 +127,7 @@ fn arrows_step_through_unset_and_every_choice_and_apply_at_once() {
     assert_eq!(active_ids(&harness), ["effort", "thinking"]);
     key(&mut harness, KeyCode::Left);
     assert_eq!(value(&harness, "thinking"), None);
-    assert_eq!(harness.app.state.sheet_index, 1);
+    assert_eq!(harness.app.state.sheet.index, 1);
 }
 
 #[test]
@@ -152,7 +156,7 @@ fn typed_text_sets_the_highlighted_setting() {
         assert!(screen(&harness.app.state, 100, 30).contains(&format!("/model › Model › {typed}")));
         key(&mut harness, KeyCode::Enter);
         assert_eq!(value(&harness, id), Some(&expected));
-        assert!(harness.app.state.sheet_query.is_empty());
+        assert!(harness.app.state.sheet.query.is_empty());
         assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
     }
     key(&mut harness, KeyCode::Enter);
@@ -166,7 +170,7 @@ fn required_settings_reject_unset_and_never_offer_it() {
     for option in &mut model_mut(&mut harness).options {
         option.required = true;
     }
-    let values = harness.app.state.selected_model_options.clone();
+    let values = harness.app.state.models.selected_options.clone();
     for id in ["effort", "thinking", "budget"] {
         open_settings(&mut harness, id);
         key(&mut harness, KeyCode::Delete);
@@ -174,14 +178,15 @@ fn required_settings_reject_unset_and_never_offer_it() {
             harness
                 .app
                 .state
-                .sheet_notice
+                .sheet
+                .notice
                 .as_ref()
                 .is_some_and(|notice| notice.contains("cannot be cleared")),
             "{:?}",
-            harness.app.state.sheet_notice
+            harness.app.state.sheet.notice
         );
         assert!(screen(&harness.app.state, 100, 30).contains("cannot be cleared"));
-        assert_eq!(harness.app.state.selected_model_options, values);
+        assert_eq!(harness.app.state.models.selected_options, values);
     }
     for id in ["effort", "thinking"] {
         open_settings(&mut harness, id);
@@ -275,12 +280,12 @@ fn backspace_and_escape_step_back_through_the_model_list() {
     assert_eq!(harness.app.state.mode, UiMode::Model);
     key(&mut harness, KeyCode::Esc);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
-    assert!(harness.app.state.input.is_empty());
+    assert!(harness.app.state.composer.text.is_empty());
 
     harness.app.handle_command("model");
     key(&mut harness, KeyCode::Backspace);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
-    assert_eq!(harness.app.state.input, "/model");
+    assert_eq!(harness.app.state.composer.text, "/model");
 }
 
 #[test]
@@ -294,7 +299,8 @@ fn enter_uses_the_model_and_ctrl_s_opens_its_settings() {
     harness
         .app
         .state
-        .models_by_provider
+        .models
+        .by_provider
         .entry("provider".into())
         .or_default()
         .push(plain);
@@ -307,11 +313,11 @@ fn enter_uses_the_model_and_ctrl_s_opens_its_settings() {
     assert_eq!(harness.app.state.mode, UiMode::Model);
     assert!(screen(&harness.app.state, 100, 30).contains("Plain has no other settings"));
     key(&mut harness, KeyCode::Right);
-    assert!(harness.app.state.sheet_notice.is_none());
+    assert!(harness.app.state.sheet.notice.is_none());
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
+        harness.app.state.models.selected_model_id.as_deref(),
         Some("plain")
     );
 
@@ -322,7 +328,7 @@ fn enter_uses_the_model_and_ctrl_s_opens_its_settings() {
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
+        harness.app.state.models.selected_model_id.as_deref(),
         Some("model")
     );
     assert_eq!(
@@ -342,7 +348,8 @@ fn add_effort_model(harness: &mut TestHarness, extra: bool) {
     harness
         .app
         .state
-        .models_by_provider
+        .models
+        .by_provider
         .entry("provider".into())
         .or_default()
         .push(kraai_runtime::Model {
@@ -357,7 +364,8 @@ fn remembered<'a>(harness: &'a TestHarness, model: &str, id: &str) -> Option<&'a
     harness
         .app
         .state
-        .remembered_model_options
+        .models
+        .remembered_options
         .get("provider")?
         .get(model)?
         .get(id)
@@ -368,14 +376,14 @@ fn arrows_change_reasoning_effort_on_the_highlighted_model_only() {
     let mut harness = test_harness();
     configure_optional(&mut harness);
     add_effort_model(&mut harness, false);
-    let before = harness.app.state.selected_model_options.clone();
+    let before = harness.app.state.models.selected_options.clone();
 
     harness.app.handle_command("model");
     let rendered = screen(&harness.app.state, 100, 30);
     assert!(!rendered.contains("low  medium  high"));
     assert!(!rendered.contains("←→ effort"));
     key(&mut harness, KeyCode::Left);
-    assert_eq!(harness.app.state.selected_model_options, before);
+    assert_eq!(harness.app.state.models.selected_options, before);
 
     key(&mut harness, KeyCode::Down);
     let rendered = screen(&harness.app.state, 100, 30);
@@ -396,12 +404,12 @@ fn arrows_change_reasoning_effort_on_the_highlighted_model_only() {
         Some(&ModelOptionValue::Choice("high".into()))
     );
     assert_eq!(harness.app.state.mode, UiMode::Model);
-    assert_eq!(harness.app.state.sheet_index, 1);
+    assert_eq!(harness.app.state.sheet.index, 1);
     assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
+        harness.app.state.models.selected_model_id.as_deref(),
         Some("model")
     );
-    assert_eq!(harness.app.state.selected_model_options, before);
+    assert_eq!(harness.app.state.models.selected_options, before);
 
     key(&mut harness, KeyCode::Up);
     let rendered = screen(&harness.app.state, 100, 30);
@@ -416,7 +424,7 @@ fn arrows_change_reasoning_effort_on_the_highlighted_model_only() {
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
+        harness.app.state.models.selected_model_id.as_deref(),
         Some("reasoner")
     );
     assert_eq!(
@@ -433,7 +441,7 @@ fn arrows_change_reasoning_effort_on_the_highlighted_model_only() {
     ctrl(&mut harness, 's');
     assert_eq!(harness.app.state.mode, UiMode::Model);
     assert_eq!(
-        harness.app.state.sheet_notice.as_deref(),
+        harness.app.state.sheet.notice.as_deref(),
         Some("Reasoner has no other settings")
     );
 }
@@ -476,7 +484,8 @@ fn a_highlighted_model_starts_on_medium_and_models_never_highlighted_stay_unset(
     let models = harness
         .app
         .state
-        .models_by_provider
+        .models
+        .by_provider
         .entry("provider".into())
         .or_default();
     let mut fresh = models.last().cloned().expect("missing model");
@@ -498,14 +507,14 @@ fn a_highlighted_model_starts_on_medium_and_models_never_highlighted_stay_unset(
     key(&mut harness, KeyCode::Down);
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
+        harness.app.state.models.selected_model_id.as_deref(),
         Some("reasoner")
     );
     let medium = ModelOptionValues::from([(
         "reasoning_effort".into(),
         ModelOptionValue::Choice("medium".into()),
     )]);
-    assert_eq!(harness.app.state.selected_model_options, medium);
+    assert_eq!(harness.app.state.models.selected_options, medium);
 
     harness.app.handle_command("model");
     key(&mut harness, KeyCode::Right);
@@ -515,7 +524,7 @@ fn a_highlighted_model_starts_on_medium_and_models_never_highlighted_stay_unset(
     key(&mut harness, KeyCode::Right);
     key(&mut harness, KeyCode::Esc);
     assert_eq!(
-        harness.app.state.selected_model_options,
+        harness.app.state.models.selected_options,
         ModelOptionValues::from([
             (
                 "reasoning_effort".into(),
@@ -538,10 +547,10 @@ fn a_highlighted_model_starts_on_medium_and_models_never_highlighted_stay_unset(
     assert_eq!(row(&harness, "Fresh"), "▌ Fresh     low  medium  high");
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
+        harness.app.state.models.selected_model_id.as_deref(),
         Some("fresh")
     );
-    assert_eq!(harness.app.state.selected_model_options, medium);
+    assert_eq!(harness.app.state.models.selected_options, medium);
     assert_eq!(
         remembered(&harness, "reasoner", "reasoning_effort"),
         Some(&ModelOptionValue::Choice("high".into()))
@@ -555,7 +564,7 @@ fn an_effort_that_a_toggle_switches_on_starts_in_the_middle_of_its_list() {
     harness
         .app
         .state
-        .models_by_provider
+        .models.by_provider
         .entry("provider".into())
         .or_default()
         .push(kraai_runtime::Model {
@@ -599,7 +608,8 @@ fn tab_and_shift_tab_walk_the_model_list_and_the_settings() {
     harness
         .app
         .state
-        .models_by_provider
+        .models
+        .by_provider
         .entry("provider".into())
         .or_default()
         .push(second);
@@ -611,7 +621,7 @@ fn tab_and_shift_tab_walk_the_model_list_and_the_settings() {
         (KeyCode::BackTab, 0),
     ] {
         key(&mut harness, code);
-        assert_eq!(harness.app.state.sheet_index, expected);
+        assert_eq!(harness.app.state.sheet.index, expected);
         assert_eq!(harness.app.state.mode, UiMode::Model);
     }
     ctrl(&mut harness, 's');
@@ -621,7 +631,7 @@ fn tab_and_shift_tab_walk_the_model_list_and_the_settings() {
         (KeyCode::BackTab, 2),
     ] {
         key(&mut harness, code);
-        assert_eq!(harness.app.state.sheet_index, expected);
+        assert_eq!(harness.app.state.sheet.index, expected);
         assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
     }
 }
@@ -636,7 +646,8 @@ fn each_model_remembers_its_own_settings() {
     harness
         .app
         .state
-        .models_by_provider
+        .models
+        .by_provider
         .entry("provider".into())
         .or_default()
         .push(second);
@@ -651,13 +662,13 @@ fn each_model_remembers_its_own_settings() {
         Some(&ModelOptionValue::Choice("high".into()))
     );
     assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
+        harness.app.state.models.selected_model_id.as_deref(),
         Some("model")
     );
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
+        harness.app.state.models.selected_model_id.as_deref(),
         Some("second")
     );
     assert_eq!(
@@ -670,7 +681,7 @@ fn each_model_remembers_its_own_settings() {
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Chat);
     assert_eq!(
-        harness.app.state.selected_model_id.as_deref(),
+        harness.app.state.models.selected_model_id.as_deref(),
         Some("model")
     );
     assert_eq!(
@@ -685,8 +696,8 @@ fn missing_options_block_submission_without_selecting_defaults() {
     configure(&mut harness);
     harness.app.submit_message("Hello".into());
     assert!(harness.drain_requests().is_empty());
-    assert!(harness.app.state.selected_model_options.is_empty());
-    let error = harness.app.state.last_error.clone().unwrap_or_default();
+    assert!(harness.app.state.models.selected_options.is_empty());
+    let error = harness.app.state.errors.last.clone().unwrap_or_default();
     assert!(error.contains("effort"));
     assert!(error.contains("thinking"));
 }
@@ -700,7 +711,7 @@ fn typed_options_validate_and_hide_inactive_budget() {
     assert!(set(&mut harness, "budget", "101").is_err());
     assert!(set(&mut harness, "budget", "50").is_ok());
     assert_eq!(
-        harness.app.state.selected_model_options.get("budget"),
+        harness.app.state.models.selected_options.get("budget"),
         Some(&ModelOptionValue::Integer(50))
     );
     assert!(set(&mut harness, "thinking", "false").is_ok());
@@ -708,7 +719,8 @@ fn typed_options_validate_and_hide_inactive_budget() {
         !harness
             .app
             .state
-            .selected_model_options
+            .models
+            .selected_options
             .contains_key("budget")
     );
     assert!(set(&mut harness, "budget", "50").is_err());

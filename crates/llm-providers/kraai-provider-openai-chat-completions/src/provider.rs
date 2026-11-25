@@ -222,8 +222,10 @@ where
             .or_else(|| has_tool_history.then(ScriptToolDefinition::nushell))
             .map(|tool| vec![tool.into()]);
         let request = ChatCompletionRequest {
+            tool_choice: tools
+                .as_ref()
+                .map(|_| if tool_name.is_some() { "auto" } else { "none" }),
             tools,
-            tool_choice: if tool_name.is_some() { "auto" } else { "none" },
             max_completion_tokens,
             parallel_tool_calls: tool_name.as_ref().map(|_| false),
             model: model_id.to_string(),

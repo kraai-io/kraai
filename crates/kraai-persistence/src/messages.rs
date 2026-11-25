@@ -56,12 +56,10 @@ pub trait MessageStore: Send + Sync {
     /// no-op.
     async fn append_stream_deltas(
         &self,
-        message: &Message,
-        _first_sequence: u64,
-        _deltas: &[crate::StreamDelta],
-    ) -> Result<()> {
-        self.save(message).await
-    }
+        message_id: &MessageId,
+        first_sequence: u64,
+        deltas: &[crate::StreamDelta],
+    ) -> Result<()>;
 
     /// `None` means this store cannot link atomically, so the caller saves the messages
     /// individually.
@@ -144,11 +142,11 @@ impl MessageStore for SqliteMessageStore {
 
     async fn append_stream_deltas(
         &self,
-        message: &Message,
+        message_id: &MessageId,
         first_sequence: u64,
         deltas: &[crate::StreamDelta],
     ) -> Result<()> {
-        let (message_id, deltas) = (message.id.clone(), deltas.to_vec());
+        let (message_id, deltas) = (message_id.clone(), deltas.to_vec());
         self.database
             .transaction(move |transaction, leases| {
                 crate::stream_deltas::append_stream_deltas(

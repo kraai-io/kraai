@@ -1,6 +1,6 @@
-use super::CrosstermEvent;
 use super::terminal_reply::{FilteredEvent, TerminalReply};
 use crate::terminal_cursor::CursorStyle;
+use ratatui::crossterm::event::Event as CrosstermEvent;
 
 #[derive(Default)]
 pub(super) struct CursorPreferences {

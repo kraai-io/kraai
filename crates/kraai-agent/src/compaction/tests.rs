@@ -330,7 +330,6 @@ async fn native_compaction_preserves_encrypted_input_and_persists_replayable_out
         &Default::default(),
     );
     assert!(replay.messages.get(1..3) == Some(saved.replacement.as_slice()));
-    assert!(outcome.request.cacheable_messages.is_none());
     assert!(
         matches!(outcome.request.messages.last(), Some(ConversationItem::FileContext { text }) if text == "pinned files")
     );
@@ -749,7 +748,6 @@ fn image_request_budget_keeps_recent_images_and_reopenable_references() {
             })
             .collect(),
         script_tool: None,
-        cacheable_messages: None,
     };
     limit_request_images(&mut request);
     let count = request

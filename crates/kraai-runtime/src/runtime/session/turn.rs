@@ -27,6 +27,7 @@ impl SessionActor {
         &mut self,
         message: MessageContent,
         selection: ModelSelection,
+        queue: bool,
         response: Responder<SubmitMessageOutcome>,
     ) {
         if self.stopping {
@@ -51,6 +52,12 @@ impl SessionActor {
                 return;
             }
         };
+        if (busy || queued) && !queue {
+            let _ = response.send(Err(RuntimeError::conflict(
+                "Session is running a turn or has queued messages",
+            )));
+            return;
+        }
         if busy || queued {
             let position = async {
                 self.ensure_lease().await?;
@@ -146,8 +153,16 @@ impl SessionActor {
             Ok::<_, color_eyre::Report>(queued)
         }
         .await;
-        let Ok(queued) = prepared else {
-            return;
+        let queued = match prepared {
+            Ok(queued) => queued,
+            Err(error) => {
+                self.finish_turn().await;
+                self.runtime.send_event(Event::ContinuationFailed {
+                    session_id: self.session_id.clone(),
+                    error: format!("{error:#}"),
+                });
+                return;
+            }
         };
         let intercepted = !queued.is_empty();
         let request = match queued.last().map(|entry| entry.message.selection.clone()) {
@@ -196,6 +211,11 @@ impl SessionActor {
         let Some(selection) = queued.last().map(|entry| entry.message.selection.clone()) else {
             return;
         };
+        if let Err(error) = self.ensure_lease().await {
+            self.runtime
+                .send_session_report_error(&self.session_id, error);
+            return;
+        }
         self.begin_preparation(
             StreamKind::Initial,
             PreparationOrigin::Queue,
@@ -328,12 +348,7 @@ impl SessionActor {
                 }
             }
             Ok(None) => {
-                match &origin {
-                    PreparationOrigin::Send(_) | PreparationOrigin::Continue => {
-                        self.finish_turn().await
-                    }
-                    PreparationOrigin::Queue => {}
-                }
+                self.finish_turn().await;
                 origin.nothing_started();
                 if let Some(cancel) = cancel {
                     let discarded = cancel.discarded;

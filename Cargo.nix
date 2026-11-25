@@ -11193,6 +11193,10 @@ rec {
             packageId = "futures";
           }
           {
+            name = "http";
+            packageId = "http";
+          }
+          {
             name = "httpdate";
             packageId = "httpdate";
           }

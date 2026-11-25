@@ -103,32 +103,40 @@ impl ConfigGuard {
         })
     }
 
-    /// Runs after every process of the script has exited.
-    pub(crate) fn restore(mut self) -> Result<(), SandboxError> {
+    /// Runs after every process of the script has exited. Returns whether a change was undone.
+    pub(crate) fn restore(mut self) -> Result<bool, SandboxError> {
         self.restored = true;
         restore_entries(&self.entries)
     }
 }
 
 /// Attempts every entry, so one failure cannot leave another entry changed.
-fn restore_entries(entries: &[GuardedEntry]) -> Result<(), SandboxError> {
+fn restore_entries(entries: &[GuardedEntry]) -> Result<bool, SandboxError> {
     // Seatbelt denies every change to the entries, so anything different was changed outside
     // the sandbox.
     if cfg!(target_os = "macos") {
-        return Ok(());
+        return Ok(false);
     }
     let mut failure = None;
+    let mut undone = false;
     for entry in entries {
-        if let Err(error) = entry.restore() {
-            failure.get_or_insert_with(|| {
-                SandboxError::SandboxUnavailable(format!(
-                    "unable to undo a sandboxed change to '{}': {error}",
-                    entry.path.display()
-                ))
-            });
+        match entry.restore() {
+            Ok(changed) => undone |= changed,
+            Err(error) => {
+                failure.get_or_insert_with(|| {
+                    SandboxError::SandboxUnavailable(format!(
+                        "unable to undo a sandboxed change to '{}': {error}",
+                        entry.path.display()
+                    ))
+                });
+            }
         }
     }
-    failure.map_or(Ok(()), Err)
+    failure.map_or(Ok(undone), Err)
+}
+
+pub fn protected_entry_names() -> impl Iterator<Item = &'static str> {
+    PROTECTED.iter().map(|protected| protected.name)
 }
 
 impl Drop for ConfigGuard {
@@ -223,13 +231,13 @@ impl GuardedEntry {
         })
     }
 
-    fn restore(&self) -> io::Result<()> {
-        restore_state(&self.path, &self.state, self.directory)?;
+    fn restore(&self) -> io::Result<bool> {
+        let undone = restore_state(&self.path, &self.state, self.directory)?;
         #[cfg(windows)]
         if let Some(file) = &self.file {
-            file.restore()?;
+            return Ok(file.restore()? || undone);
         }
-        Ok(())
+        Ok(undone)
     }
 }
 
@@ -252,13 +260,13 @@ impl FileSnapshot {
         })
     }
 
-    fn restore(&self) -> io::Result<()> {
+    fn restore(&self) -> io::Result<bool> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        restore_state(&self.path, &self.state, false)?;
+        let undone = restore_state(&self.path, &self.state, false)?;
         let Some(contents) = &self.contents else {
-            return Ok(());
+            return Ok(undone);
         };
         let location = location(&self.path)?;
         if location != self.location {
@@ -269,14 +277,17 @@ impl FileSnapshot {
             )));
         }
         match read_optional(&self.path)? {
-            Some(current) if current == *contents => {}
+            Some(current) if current == *contents => Ok(undone),
             Some(_) => {
                 move_aside(&self.path)?;
                 std::fs::write(&self.path, contents)?;
+                Ok(true)
             }
-            None => std::fs::write(&self.path, contents)?,
+            None => {
+                std::fs::write(&self.path, contents)?;
+                Ok(true)
+            }
         }
-        Ok(())
     }
 }
 
@@ -373,11 +384,12 @@ fn reject_hard_links(file: &Path) -> Result<(), SandboxError> {
     Ok(())
 }
 
-fn restore_state(path: &Path, state: &EntryState, link_to_directory: bool) -> io::Result<()> {
+fn restore_state(path: &Path, state: &EntryState, link_to_directory: bool) -> io::Result<bool> {
     match state {
         EntryState::Absent => {
             if std::fs::symlink_metadata(path).is_ok() {
                 move_aside(path)?;
+                return Ok(true);
             }
         }
         EntryState::Symlink(target) => {
@@ -386,6 +398,7 @@ fn restore_state(path: &Path, state: &EntryState, link_to_directory: bool) -> io
                     move_aside(path)?;
                 }
                 symlink(target, path, link_to_directory)?;
+                return Ok(true);
             }
         }
         EntryState::Present { directory } => {
@@ -394,10 +407,11 @@ fn restore_state(path: &Path, state: &EntryState, link_to_directory: bool) -> io
                 && (metadata.file_type().is_symlink() || metadata.is_dir() != *directory)
             {
                 move_aside(path)?;
+                return Ok(true);
             }
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 #[cfg(unix)]

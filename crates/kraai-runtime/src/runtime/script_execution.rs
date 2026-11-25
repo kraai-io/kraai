@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use color_eyre::eyre::{Context, Result, eyre};
 use kraai_execution_types::{
-    SandboxCapabilities, SandboxCapability, ScriptExecutionId, ScriptExecutionStatus,
+    SandboxCapabilities, SandboxCapability, SandboxHint, ScriptExecutionId, ScriptExecutionStatus,
     ScriptOutputStream, ScriptProfileSnapshot, ScriptRewrites,
 };
 use kraai_nushell_runtime::{RuntimeError, ScriptExecutionPlan};
@@ -75,6 +75,7 @@ impl CompletedScriptExecution {
                 .record
                 .sandbox_denied
                 .then_some(&self.record.effective_capabilities),
+            sandbox_hint: self.record.sandbox_hint,
             rewrites: &self.record.rewrites,
         });
         let mut content = kraai_types::MessageContent::from(text);
@@ -144,6 +145,7 @@ impl RuntimeCore {
                             status: ScriptExecutionStatus::HostUnavailable,
                             exit_code: None,
                             sandbox_denied: false,
+                            sandbox_hint: None,
                             error: Some(error.to_string()),
                             stdout: Vec::new(),
                             stderr: Vec::new(),
@@ -187,6 +189,7 @@ impl RuntimeCore {
         plan.host_arguments = host.arguments;
         plan.environment = request.environment;
         plan.runtime_roots = request.runtime_roots;
+        plan.denied_paths = self.config.script_denied_paths.clone();
         if !plan
             .runtime_roots
             .iter()
@@ -223,7 +226,9 @@ impl RuntimeCore {
             .err();
 
         let completion = match execution {
-            Ok(result) => completion_from_output(result.output, output_persistence_error),
+            Ok(result) => {
+                completion_from_output(result.output, result.sandbox_hint, output_persistence_error)
+            }
             Err(error) => {
                 let error = match error {
                     RuntimeError::Transport(message) => RuntimeError::Transport(format!(
@@ -357,6 +362,7 @@ async fn save_output_channel(
 
 fn completion_from_output(
     output: kraai_sandbox::ExecutionOutput,
+    sandbox_hint: Option<SandboxHint>,
     output_persistence_error: Option<String>,
 ) -> ScriptExecutionCompletion {
     let status = if output_persistence_error.is_some() {
@@ -376,6 +382,7 @@ fn completion_from_output(
         status,
         exit_code,
         sandbox_denied: output.sandbox_denied,
+        sandbox_hint,
         error: output_persistence_error
             .map(|error| format!("Failed to persist live script output: {error}")),
         stdout: output.stdout,
@@ -419,6 +426,7 @@ fn completion_from_runtime_error(
         status,
         exit_code: None,
         sandbox_denied: false,
+        sandbox_hint: None,
         error: Some(diagnostic),
         stdout: output.stdout,
         stderr: output.stderr,

@@ -2,7 +2,7 @@ use crate::CommandMetadata;
 
 pub const METADATA: CommandMetadata = command_metadata! {
     id: "kraai-open-files";
-    description: "Read text files into context as line-numbered snapshots. Contents stay available and refresh automatically when changed; no reread needed.";
+    description: "Read text files into context as snapshots with `<line>|<content>` lines. Contents stay available and refresh automatically when changed; no reread needed.";
     signature_help: "kraai-open-files <path>... -> record<success: bool, paths: list<string>>";
     services: [StateEffects];
     examples: [];

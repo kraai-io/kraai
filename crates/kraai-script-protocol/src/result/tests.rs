@@ -1,5 +1,5 @@
 use super::{ToolCallResultView, render_tool_call_result};
-use kraai_execution_types::{ScriptExecutionStatus, ScriptRewrites};
+use kraai_execution_types::{SandboxHint, ScriptExecutionStatus, ScriptRewrites};
 
 #[test]
 fn preserves_text_channels_exactly_even_when_they_resemble_protocol() {
@@ -13,6 +13,7 @@ fn preserves_text_channels_exactly_even_when_they_resemble_protocol() {
         stdout_file: None,
         stderr_file: None,
         sandbox_blocked: None,
+        sandbox_hint: None,
         rewrites: &ScriptRewrites::default(),
     });
     assert_eq!(
@@ -44,6 +45,7 @@ fn rewrites_are_announced_before_the_output() {
         stdout_file: None,
         stderr_file: None,
         sandbox_blocked: None,
+        sandbox_hint: None,
         rewrites: &rewrites,
     });
     assert_eq!(
@@ -66,6 +68,7 @@ fn invalid_utf8_is_marked_without_lossy_decoding_or_base64() {
         stdout_file: None,
         stderr_file: None,
         sandbox_blocked: None,
+        sandbox_hint: None,
         rewrites: &ScriptRewrites::default(),
     });
     assert!(rendered.contains("encoding=\"binary\" byte_count=\"3\""));
@@ -86,6 +89,7 @@ fn empty_results_have_an_empty_body_and_stable_status() {
             stdout_file: None,
             stderr_file: None,
             sandbox_blocked: None,
+            sandbox_hint: None,
             rewrites: &ScriptRewrites::default(),
         }),
         "<tool_call_result status=\"denied\"></tool_call_result>"
@@ -105,6 +109,7 @@ fn a_likely_sandbox_block_names_the_header_that_asks_for_more() {
             stdout_file: None,
             stderr_file: None,
             sandbox_blocked: Some(&granted),
+            sandbox_hint: None,
             rewrites: &ScriptRewrites::default(),
         })
     };
@@ -125,6 +130,38 @@ fn a_likely_sandbox_block_names_the_header_that_asks_for_more() {
 }
 
 #[test]
+fn a_sandbox_hint_replaces_the_capability_notice_unless_it_reports_an_undo() {
+    let granted = kraai_execution_types::SandboxCapabilities::new([
+        kraai_execution_types::SandboxCapability::WorkspaceWrite,
+    ]);
+    let render = |hint| {
+        render_tool_call_result(ToolCallResultView {
+            status: ScriptExecutionStatus::Completed,
+            exit_code: Some(1),
+            elapsed_millis: None,
+            stdout: &[],
+            stderr: &[],
+            diagnostic: None,
+            stdout_file: None,
+            stderr_file: None,
+            sandbox_blocked: Some(&granted),
+            sandbox_hint: Some(hint),
+            rewrites: &ScriptRewrites::default(),
+        })
+    };
+    assert_eq!(
+        render(SandboxHint::ProtectedEntry),
+        "<tool_call_result status=\"completed\" exit_code=\"1\">\n\
+<sandbox>Sandboxed scripts can't change the workspace's `.kraai/` or `AGENTS.md`; edit them with `permissions=no-sandbox`.</sandbox>\n\
+</tool_call_result>"
+    );
+    assert!(!render(SandboxHint::HostSocket).contains("likely blocked"));
+    let undone = render(SandboxHint::ProtectedEntryUndone);
+    assert!(undone.contains("Kraai undid"));
+    assert!(undone.contains("likely blocked"));
+}
+
+#[test]
 fn long_text_keeps_its_ends_and_points_at_the_full_output() {
     let stdout: String = (0..4000).map(|line| format!("line {line}\n")).collect();
     let rendered = render_tool_call_result(ToolCallResultView {
@@ -137,6 +174,7 @@ fn long_text_keeps_its_ends_and_points_at_the_full_output() {
         stdout_file: Some(std::path::Path::new("/out/a \"b\".stdout")),
         stderr_file: None,
         sandbox_blocked: None,
+        sandbox_hint: None,
         rewrites: &ScriptRewrites::default(),
     });
     assert!(rendered.len() < super::CHANNEL_DISPLAY_LIMIT + 512);

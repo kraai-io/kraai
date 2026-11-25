@@ -47,37 +47,6 @@ fn numbered_contents_can_be_used_for_exact_edits_without_losing_line_endings() {
     }
 }
 
-#[test]
-fn state_folds_pin_reauthorization_and_unpin_in_order() {
-    let path = PathBuf::from("/workspace/file.rs");
-    let mut state = ContextState::default();
-    state.apply(
-        "opened",
-        ContextStateMutation::PinFile {
-            path: path.clone(),
-            scope: PinnedFileScope::Workspace {
-                root: PathBuf::from("/workspace"),
-            },
-        },
-    );
-    state.apply(
-        "opened",
-        ContextStateMutation::PinFile {
-            path: path.clone(),
-            scope: PinnedFileScope::Host,
-        },
-    );
-    assert_eq!(state.opened_files.len(), 1);
-    assert_eq!(
-        state.opened_files.first().map(|file| &file.scope),
-        Some(&PinnedFileScope::Host)
-    );
-    state.apply(
-        "opened",
-        ContextStateMutation::UnpinFile { path, reason: None },
-    );
-    assert!(state.opened_files.is_empty());
-}
 fn message(id: &str, content: kraai_types::ConversationItem) -> kraai_types::Message {
     kraai_types::Message {
         id: MessageId::new(id),
@@ -168,5 +137,41 @@ fn instructions_stay_in_place_until_they_change_and_report_every_change() {
             "changed label changed; the version below replaces the earlier one.",
             "added label was added.",
         ]
+    );
+}
+
+#[test]
+fn snapshot_paths_are_workspace_relative_and_drop_verbatim_prefixes() {
+    let workspace = Path::new("workspace");
+    let inside = workspace.join("src").join("lib.rs");
+    assert_eq!(
+        display_path(&inside, workspace),
+        Path::new("src").join("lib.rs").display().to_string()
+    );
+    let outside = Path::new("elsewhere").join("notes.txt");
+    assert_eq!(
+        display_path(&outside, workspace),
+        outside.display().to_string()
+    );
+    for (verbatim, plain) in [
+        (r"\\?\C:\Users\notes.txt", r"C:\Users\notes.txt"),
+        (
+            r"\\?\UNC\server\share\notes.txt",
+            r"\\server\share\notes.txt",
+        ),
+        (r"\\?\Volume{1}\notes.txt", r"\\?\Volume{1}\notes.txt"),
+    ] {
+        assert_eq!(
+            without_verbatim_prefix(Path::new(verbatim)),
+            Path::new(plain)
+        );
+    }
+}
+
+#[test]
+fn rendered_snapshot_names_the_file_and_numbers_lines() {
+    assert_eq!(
+        render_file("src/lib.rs", "one\ntwo"),
+        "Opened file: src/lib.rs\n```text\n1|one\n2|two\n```\nNo newline at end of file."
     );
 }

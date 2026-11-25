@@ -507,6 +507,7 @@ async fn session_commands_after_shutdown_cannot_start_a_new_stream() {
                 model_id: kraai_types::ModelId::new("mock-model"),
                 options: Default::default(),
             },
+            queue: true,
             response,
         },
     );
@@ -612,6 +613,16 @@ impl MessageStore for PausedMessageStore {
     }
     async fn save(&self, message: &Message) -> Result<()> {
         self.inner.save(message).await
+    }
+    async fn append_stream_deltas(
+        &self,
+        message_id: &MessageId,
+        first_sequence: u64,
+        deltas: &[kraai_persistence::StreamDelta],
+    ) -> Result<()> {
+        self.inner
+            .append_stream_deltas(message_id, first_sequence, deltas)
+            .await
     }
     async fn delete(&self, id: &MessageId) -> Result<()> {
         self.inner.delete(id).await

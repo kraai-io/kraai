@@ -1,5 +1,4 @@
 use super::*;
-use kraai_types::PinnedFileScope;
 use tokio::fs;
 
 #[tokio::test]
@@ -47,6 +46,7 @@ async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() {
                 Some(&event.id),
                 snapshots.clone(),
                 vec![],
+                &HashSet::new(),
             )
             .await
             .unwrap();
@@ -81,6 +81,7 @@ async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() {
                         Some(&event.id),
                         snapshots.clone(),
                         mutations,
+                        &HashSet::new(),
                     )
                     .await
                     .unwrap();
@@ -89,14 +90,21 @@ async fn unpin_commits_remove_only_closed_snapshots_without_a_refresh() {
         let restarted = SqliteContextStateStore::new(&root);
         let saved = restarted.load(&SessionId::new("session")).await.unwrap();
         assert!(saved.snapshots == snapshots.get(1..).unwrap_or_default());
-        assert!(saved.events.len() == 2);
+        assert!(
+            saved
+                .pinned_files()
+                .iter()
+                .map(|file| &file.path)
+                .eq(snapshots.get(1).map(|snapshot| &snapshot.path))
+        );
         assert!(
             store
                 .save_snapshots(
                     &SessionId::new("session"),
                     Some(&event.id),
                     snapshots.clone(),
-                    vec![]
+                    vec![],
+                    &HashSet::new()
                 )
                 .await
                 .is_err()
@@ -146,6 +154,7 @@ async fn snapshot_commit_checks_event_revision_and_atomically_applies_removals()
             Some(&event.id),
             vec![snapshot.clone()],
             vec![],
+            &HashSet::new(),
         )
         .await
         .unwrap();
@@ -178,19 +187,21 @@ async fn snapshot_commit_checks_event_revision_and_atomically_applies_removals()
                 &SessionId::new("session"),
                 Some(&event.id),
                 vec![],
-                removals.clone()
+                removals.clone(),
+                &HashSet::new()
             )
             .await
             .is_err()
     );
     assert!(store.snapshots(&SessionId::new("session")).await.unwrap() == vec![snapshot.clone()]);
-    assert!(store.list(&SessionId::new("session")).await.unwrap().len() == 2);
+    assert!(store.list(&SessionId::new("session")).await.unwrap().len() == 1);
     store
         .save_snapshots(
             &SessionId::new("session"),
             Some(&later.id),
             vec![],
             removals.clone(),
+            &HashSet::new(),
         )
         .await
         .unwrap();
@@ -223,4 +234,150 @@ async fn snapshot_commit_checks_event_revision_and_atomically_applies_removals()
             .is_empty()
     );
     fs::remove_dir_all(root).await.unwrap();
+}
+
+fn event(id: &str, message: Option<&str>, mutation: ContextStateMutation) -> ContextStateEvent {
+    ContextStateEvent {
+        id: id.into(),
+        source: ContextStateEventSource::Runtime {
+            component: "test".into(),
+        },
+        mutations: vec![mutation],
+        message_id: message.map(MessageId::new),
+    }
+}
+
+fn pin(path: &str, scope: PinnedFileScope) -> ContextStateMutation {
+    ContextStateMutation::PinFile {
+        path: path.into(),
+        scope,
+    }
+}
+
+fn unpin(path: &str) -> ContextStateMutation {
+    ContextStateMutation::UnpinFile {
+        path: path.into(),
+        reason: None,
+    }
+}
+
+fn pinned(document: &ContextStateDocument) -> Vec<(String, PinnedFileScope, String)> {
+    document
+        .pinned_files()
+        .into_iter()
+        .map(|file| {
+            (
+                file.path.display().to_string(),
+                file.scope,
+                file.opened_event,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn pins_keep_their_first_event_take_the_latest_scope_and_unpin_in_order() {
+    let mut document = ContextStateDocument::default();
+    let workspace = PinnedFileScope::Workspace {
+        root: PathBuf::from("/workspace"),
+    };
+    document.push_event(event("e1", None, pin("a", workspace)));
+    document.push_event(event("e2", None, pin("a", PinnedFileScope::Host)));
+    document.push_event(event("e3", None, pin("b", PinnedFileScope::Host)));
+    assert_eq!(
+        pinned(&document),
+        vec![
+            ("a".into(), PinnedFileScope::Host, "e1".into()),
+            ("b".into(), PinnedFileScope::Host, "e3".into()),
+        ]
+    );
+    document.push_event(event("e4", None, unpin("a")));
+    assert_eq!(
+        pinned(&document),
+        vec![("b".into(), PinnedFileScope::Host, "e3".into())]
+    );
+}
+
+#[test]
+fn folding_keeps_the_state_and_the_revertible_tail() {
+    let mut document = ContextStateDocument::default();
+    document.push_event(event("e1", Some("old"), pin("a", PinnedFileScope::Host)));
+    document.push_event(event("e2", Some("recent"), pin("b", PinnedFileScope::Host)));
+    document.push_event(event("e3", None, unpin("a")));
+    document.push_event(event("e4", Some("recent"), unpin("b")));
+    let state = pinned(&document);
+    let recent = HashSet::from([MessageId::new("recent")]);
+    assert!(document.fold(&recent));
+    assert!(!document.fold(&recent));
+    assert_eq!(pinned(&document), state);
+    assert_eq!(
+        document
+            .events
+            .iter()
+            .map(|event| event.id.as_str())
+            .collect::<Vec<_>>(),
+        ["e2", "e3", "e4"]
+    );
+    assert!(document.fold(&HashSet::new()));
+    assert!(document.events.is_empty());
+    assert_eq!(pinned(&document), state);
+}
+
+#[test]
+fn reverting_messages_restores_earlier_pins_and_keeps_only_their_snapshots() {
+    let mut document = ContextStateDocument::default();
+    document.push_event(event("e1", Some("first"), pin("a", PinnedFileScope::Host)));
+    document.push_event(event("e2", Some("second"), unpin("a")));
+    document.push_event(event("e3", Some("second"), pin("b", PinnedFileScope::Host)));
+    document.snapshots = ["a", "b"]
+        .into_iter()
+        .zip(["e1", "e3"])
+        .map(|(path, opened)| FileContextSnapshot {
+            path: path.into(),
+            opened_event: opened.into(),
+            anchor: MessageId::new("second"),
+            text: String::new(),
+        })
+        .collect();
+    let revision = document.revision.clone();
+    assert!(!document.revert(&HashSet::from([MessageId::new("other")])));
+    assert!(document.revert(&HashSet::from([MessageId::new("second")])));
+    assert_ne!(document.revision, revision);
+    assert_eq!(
+        pinned(&document),
+        vec![("a".into(), PinnedFileScope::Host, "e1".into())]
+    );
+    assert!(
+        document
+            .snapshots
+            .iter()
+            .map(|snapshot| snapshot.path.as_path())
+            .eq([Path::new("a")])
+    );
+}
+
+#[test]
+fn reverting_messages_drops_folded_pins_they_opened() {
+    let mut document = ContextStateDocument::default();
+    document.push_event(event("e1", Some("first"), pin("a", PinnedFileScope::Host)));
+    document.push_event(event("e2", None, pin("b", PinnedFileScope::Host)));
+    document.push_event(event("e3", Some("second"), pin("c", PinnedFileScope::Host)));
+    assert!(document.fold(&HashSet::new()));
+    assert!(document.events.is_empty());
+    let revision = document.revision.clone();
+    assert!(document.revert(&HashSet::from([MessageId::new("second")])));
+    assert_ne!(document.revision, revision);
+    assert_eq!(
+        pinned(&document),
+        vec![
+            ("a".into(), PinnedFileScope::Host, "e1".into()),
+            ("b".into(), PinnedFileScope::Host, "e2".into()),
+        ]
+    );
+    assert!(document.revert(&HashSet::from([MessageId::new("first")])));
+    assert_eq!(
+        pinned(&document),
+        vec![("b".into(), PinnedFileScope::Host, "e2".into())]
+    );
+    assert!(!document.revert(&HashSet::from([MessageId::new("first")])));
 }

@@ -1,4 +1,4 @@
-use kraai_types::{ChatRole, Message, ScriptCall};
+use kraai_types::{ChatRole, Message, MessageStatus, ScriptCall};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -384,7 +384,19 @@ impl<'a> ChatHistory<'a> {
                 let kraai_types::ConversationItem::Assistant { items } = &msg.content else {
                     return Vec::new();
                 };
-                Self::render_assistant_message(items, width, card)
+                let mut lines = Self::render_assistant_message(items, width, card);
+                let label = match msg.status {
+                    MessageStatus::Cancelled => Some("Cancelled"),
+                    MessageStatus::Failed => Some("Interrupted by an error"),
+                    MessageStatus::Complete | MessageStatus::Streaming { .. } => None,
+                };
+                if let Some(label) = label {
+                    lines.push(Self::single_span_line(
+                        Self::fit_to_width(&format!("{}{label}", Self::gutter_prefix(None)), width),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                lines
             }
             ChatRole::ToolCallResult => Self::add_message_gutter(
                 markdown::render_message(

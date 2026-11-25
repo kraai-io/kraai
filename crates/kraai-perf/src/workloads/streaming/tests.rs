@@ -28,19 +28,28 @@ impl MessageStore for ObservedSnapshots {
     }
 
     async fn save(&self, message: &Message) -> Result<()> {
-        self.inner.save(message).await?;
-        if !matches!(message.status, MessageStatus::Streaming { .. })
-            || message.content.display_text().is_empty()
-        {
-            return Ok(());
-        }
+        self.inner.save(message).await
+    }
+
+    async fn append_stream_deltas(
+        &self,
+        message_id: &MessageId,
+        first_sequence: u64,
+        deltas: &[kraai_persistence::StreamDelta],
+    ) -> Result<()> {
+        self.inner
+            .append_stream_deltas(message_id, first_sequence, deltas)
+            .await?;
         let saved = self
             .inner
-            .get(&message.id)
+            .get(message_id)
             .await?
             .ok_or_eyre("Published snapshot was not persisted")?;
+        if saved.content.display_text().is_empty() {
+            return Ok(());
+        }
         let mut counts = self.counts.lock().await;
-        let count = counts.get(&message.id).copied().unwrap_or_default() + 1;
+        let count = counts.get(message_id).copied().unwrap_or_default() + 1;
         let expected = self
             .expected
             .get(..count * SNAPSHOT_INTERVAL * provider::CHUNK_BYTES)
@@ -53,7 +62,7 @@ impl MessageStore for ObservedSnapshots {
             matches!(saved.status, MessageStatus::Streaming { .. }),
             "Snapshot was checked after response completion"
         );
-        counts.insert(message.id.clone(), count);
+        counts.insert(message_id.clone(), count);
         drop(counts);
         Ok(())
     }

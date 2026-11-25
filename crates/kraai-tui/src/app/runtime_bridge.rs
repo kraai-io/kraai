@@ -2,6 +2,7 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use kraai_runtime::{CreateSessionRequest, RuntimeError, RuntimeEvent, RuntimeHandle};
 use kraai_types::SessionId;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::broadcast;
 
 use super::auth::map_provider_auth_status;
@@ -122,36 +123,66 @@ pub(super) fn spawn_runtime_bridge(
     runtime: RuntimeHandle,
 ) -> (Sender<RuntimeRequest>, Receiver<RuntimeResponse>) {
     let (runtime_tx, req_rx) = unbounded();
-    let (ordered_tx, ordered_rx) = unbounded();
     let (res_tx, runtime_rx) = unbounded();
     let clipboard =
         super::clipboard_worker::ClipboardWorker::spawn(runtime.clone(), res_tx.clone());
+    let model_save_ids = ModelSaveIds::default();
+    let lanes = Lanes {
+        queries: spawn_lane(runtime.clone(), res_tx.clone(), Arc::clone(&model_save_ids)),
+        model_lists: spawn_lane(runtime.clone(), res_tx.clone(), Arc::clone(&model_save_ids)),
+        commands: spawn_lane(runtime, res_tx, model_save_ids),
+    };
+    std::thread::spawn(move || route_requests(req_rx, &lanes, |id| clipboard.submit(id)));
+    (runtime_tx, runtime_rx)
+}
+
+type ModelSaveIds = Arc<Mutex<HashMap<SessionId, u64>>>;
+
+pub(super) struct Lanes {
+    pub(super) queries: Sender<RuntimeRequest>,
+    pub(super) model_lists: Sender<RuntimeRequest>,
+    pub(super) commands: Sender<RuntimeRequest>,
+}
+
+fn spawn_lane(
+    runtime: RuntimeHandle,
+    responses: Sender<RuntimeResponse>,
+    model_save_ids: ModelSaveIds,
+) -> Sender<RuntimeRequest> {
+    let (lane, requests) = unbounded();
     std::thread::spawn(move || {
-        let mut bridge = RequestBridge::new(runtime);
-        while let Ok(request) = ordered_rx.recv() {
-            let _ = res_tx.send(bridge.dispatch(request));
+        let mut bridge = RequestBridge::new(runtime, model_save_ids);
+        while let Ok(request) = requests.recv() {
+            let _ = responses.send(bridge.dispatch(request));
         }
     });
-    std::thread::spawn(move || route_requests(req_rx, ordered_tx, |id| clipboard.submit(id)));
-    (runtime_tx, runtime_rx)
+    lane
 }
 
 pub(super) fn route_requests(
     requests: Receiver<RuntimeRequest>,
-    ordered: Sender<RuntimeRequest>,
+    lanes: &Lanes,
     mut paste_image: impl FnMut(u64),
 ) {
     while let Ok(request) = requests.recv() {
-        match request {
-            RuntimeRequest::PasteImage { request_id } => paste_image(request_id),
-            request @ (RuntimeRequest::FinishStartupSync
+        let lane = match request {
+            RuntimeRequest::PasteImage { request_id } => {
+                paste_image(request_id);
+                continue;
+            }
+            RuntimeRequest::RefreshModelLists | RuntimeRequest::RefetchModelList { .. } => {
+                &lanes.model_lists
+            }
+            RuntimeRequest::FinishStartupSync
             | RuntimeRequest::ListModels
-            | RuntimeRequest::RefreshModelLists
-            | RuntimeRequest::RefetchModelList { .. }
             | RuntimeRequest::GetAgentProfileCatalog
             | RuntimeRequest::ListProviderDefinitions
             | RuntimeRequest::GetSettings
-            | RuntimeRequest::GetProviderAuthStatuses
+            | RuntimeRequest::GetHistoryPage { .. }
+            | RuntimeRequest::GetSessionSnapshot { .. }
+            | RuntimeRequest::ListSessions
+            | RuntimeRequest::ListUserInputHistory { .. } => &lanes.queries,
+            RuntimeRequest::GetProviderAuthStatuses
             | RuntimeRequest::GetMcpAuthStatuses
             | RuntimeRequest::StartMcpLogin { .. }
             | RuntimeRequest::CancelMcpLogin { .. }
@@ -164,20 +195,15 @@ pub(super) fn route_requests(
             | RuntimeRequest::SetSessionModel { .. }
             | RuntimeRequest::SendMessage { .. }
             | RuntimeRequest::SaveSettings { .. }
-            | RuntimeRequest::GetHistoryPage { .. }
-            | RuntimeRequest::GetSessionSnapshot { .. }
             | RuntimeRequest::UndoLastUserMessage { .. }
             | RuntimeRequest::LoadSession { .. }
-            | RuntimeRequest::ListSessions
-            | RuntimeRequest::ListUserInputHistory { .. }
             | RuntimeRequest::DeleteSession { .. }
             | RuntimeRequest::ApproveScript { .. }
             | RuntimeRequest::DenyScript { .. }
-            | RuntimeRequest::CancelStream { .. }) => {
-                if ordered.send(request).is_err() {
-                    return;
-                }
-            }
+            | RuntimeRequest::CancelStream { .. } => &lanes.commands,
+        };
+        if lane.send(request).is_err() {
+            return;
         }
     }
 }
@@ -185,11 +211,11 @@ pub(super) fn route_requests(
 struct RequestBridge {
     executor: kraai_runtime::RuntimeResult<tokio::runtime::Runtime>,
     runtime: RuntimeHandle,
-    model_save_ids: HashMap<SessionId, u64>,
+    model_save_ids: ModelSaveIds,
 }
 
 impl RequestBridge {
-    fn new(runtime: RuntimeHandle) -> Self {
+    fn new(runtime: RuntimeHandle, model_save_ids: ModelSaveIds) -> Self {
         let executor = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -199,7 +225,7 @@ impl RequestBridge {
         Self {
             runtime,
             executor,
-            model_save_ids: HashMap::new(),
+            model_save_ids,
         }
     }
 
@@ -305,7 +331,7 @@ impl RequestBridge {
                 let result = self
                     .execute(|runtime| runtime.set_session_model(session_id.clone(), selection));
                 if result.is_ok() {
-                    self.model_save_ids.insert(session_id.clone(), save_id);
+                    lock(&self.model_save_ids).insert(session_id.clone(), save_id);
                 }
                 RuntimeResponse::SetSessionModel {
                     session_id,
@@ -363,10 +389,14 @@ impl RequestBridge {
                 RuntimeResponse::HistoryPage { session_id, result }
             }
             RuntimeRequest::GetSessionSnapshot { session_id } => {
+                let model_save_id = lock(&self.model_save_ids)
+                    .get(&session_id)
+                    .copied()
+                    .unwrap_or(0);
                 let result =
                     self.execute(|runtime| runtime.get_session_snapshot(session_id.clone()));
                 RuntimeResponse::SessionSnapshot {
-                    model_save_id: self.model_save_ids.get(&session_id).copied().unwrap_or(0),
+                    model_save_id,
                     session_id,
                     result: Box::new(result),
                 }
@@ -431,6 +461,11 @@ impl RequestBridge {
             }
         }
     }
+}
+
+fn lock(ids: &Mutex<HashMap<SessionId, u64>>) -> MutexGuard<'_, HashMap<SessionId, u64>> {
+    ids.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]

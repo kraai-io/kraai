@@ -4,35 +4,42 @@ use reqwest::RequestBuilder;
 
 #[derive(Clone)]
 pub struct ApiKeyAuth {
-    api_key: String,
+    api_key: Option<String>,
 }
 
 impl ApiKeyAuth {
     pub fn resolve(config: &DynamicConfig) -> Result<Self> {
-        let inline_key = config
-            .get("api_key")
-            .and_then(DynamicValue::as_str)
-            .map(ToString::to_string)
-            .filter(|value| !value.trim().is_empty());
-        let env_var_name = config
-            .get("env_var_api_key")
-            .and_then(DynamicValue::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-
-        let api_key = inline_key
-            .or_else(|| {
-                env_var_name
-                    .as_ref()
-                    .and_then(|name| std::env::var(name).ok())
-            })
-            .ok_or_else(|| eyre!("API key not found. Provide 'api_key' or 'env_var_api_key'"))?;
-
+        let setting = |key: &str| {
+            config
+                .get(key)
+                .and_then(DynamicValue::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        };
+        let api_key = match (setting("api_key"), setting("env_var_api_key")) {
+            (Some(key), _) => Some(key.to_owned()),
+            (None, Some(name)) => Some(
+                std::env::var(name)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        eyre!(
+                            "API key environment variable {name} is not set. Set it, or clear the Env Var field if the server needs no auth"
+                        )
+                    })?,
+            ),
+            (None, None) => None,
+        };
         Ok(Self { api_key })
     }
 
     pub fn apply(&self, request: RequestBuilder) -> RequestBuilder {
-        request.bearer_auth(&self.api_key)
+        match &self.api_key {
+            Some(api_key) => request.bearer_auth(api_key),
+            None => request,
+        }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -13,25 +13,26 @@ fn rejected_values_show_the_error_in_the_sheet_and_keep_the_text() {
         type_text(&mut harness, typed);
         key(&mut harness, KeyCode::Enter);
         assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
-        assert_eq!(harness.app.state.sheet_query.as_str(), typed);
+        assert_eq!(harness.app.state.sheet.query.as_str(), typed);
         assert!(harness.drain_requests().is_empty());
-        assert!(harness.app.state.selected_model_options.is_empty());
+        assert!(harness.app.state.models.selected_options.is_empty());
         assert!(
             harness
                 .app
                 .state
-                .sheet_notice
+                .sheet
+                .notice
                 .as_ref()
                 .is_some_and(|notice| notice.contains(expected)),
             "{:?}",
-            harness.app.state.sheet_notice
+            harness.app.state.sheet.notice
         );
-        assert!(harness.app.state.last_error.is_none());
+        assert!(harness.app.state.errors.last.is_none());
         let rendered = screen(&harness.app.state, 80, 20);
         assert!(rendered.contains(expected));
         assert!(rendered.contains(&format!("/model › Model › {typed}")));
         key(&mut harness, KeyCode::Backspace);
-        assert!(harness.app.state.sheet_notice.is_none());
+        assert!(harness.app.state.sheet.notice.is_none());
     }
 }
 
@@ -50,10 +51,10 @@ fn typed_text_must_name_a_listed_choice_even_when_the_option_is_bound_to_the_req
     type_text(&mut harness, "7");
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
-        harness.app.state.sheet_notice.as_deref(),
+        harness.app.state.sheet.notice.as_deref(),
         Some("Effort has no choice named 7")
     );
-    assert_eq!(harness.app.state.sheet_query.as_str(), "7");
+    assert_eq!(harness.app.state.sheet.query.as_str(), "7");
     assert_eq!(value(&harness, "effort"), None);
     key(&mut harness, KeyCode::Backspace);
     type_text(&mut harness, "HIGH");
@@ -72,13 +73,13 @@ fn out_of_range_number_shows_the_bounds_in_the_sheet_and_keeps_the_text() {
     type_text(&mut harness, "101");
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
-    assert_eq!(harness.app.state.sheet_query.as_str(), "101");
+    assert_eq!(harness.app.state.sheet.query.as_str(), "101");
     assert_eq!(
         value(&harness, "budget"),
         Some(&ModelOptionValue::Integer(50))
     );
     assert_eq!(
-        harness.app.state.sheet_notice.as_deref(),
+        harness.app.state.sheet.notice.as_deref(),
         Some("budget: Budget is outside its supported bounds")
     );
     for (width, height) in [(80, 20), (40, 12), (30, 10)] {
@@ -86,14 +87,14 @@ fn out_of_range_number_shows_the_bounds_in_the_sheet_and_keeps_the_text() {
     }
     harness.app.set_error("Unrelated runtime error".into());
     key(&mut harness, KeyCode::Backspace);
-    assert!(harness.app.state.sheet_notice.is_none());
+    assert!(harness.app.state.sheet.notice.is_none());
     key(&mut harness, KeyCode::Enter);
     assert_eq!(
         value(&harness, "budget"),
         Some(&ModelOptionValue::Integer(10))
     );
     assert_eq!(
-        harness.app.state.last_error.as_deref(),
+        harness.app.state.errors.last.as_deref(),
         Some("Unrelated runtime error")
     );
 }
@@ -105,15 +106,15 @@ fn reopening_the_sheet_clears_the_previous_notice_and_text() {
     open_settings(&mut harness, "budget");
     type_text(&mut harness, "-");
     key(&mut harness, KeyCode::Enter);
-    assert!(harness.app.state.sheet_notice.is_some());
+    assert!(harness.app.state.sheet.notice.is_some());
     key(&mut harness, KeyCode::Esc);
     assert_eq!(harness.app.state.mode, UiMode::Model);
-    assert!(harness.app.state.sheet_notice.is_none());
-    assert!(harness.app.state.sheet_query.is_empty());
+    assert!(harness.app.state.sheet.notice.is_none());
+    assert!(harness.app.state.sheet.query.is_empty());
     ctrl(&mut harness, 's');
     assert_eq!(harness.app.state.mode, UiMode::ModelSettings);
-    assert!(harness.app.state.sheet_notice.is_none());
-    assert!(harness.app.state.sheet_query.is_empty());
+    assert!(harness.app.state.sheet.notice.is_none());
+    assert!(harness.app.state.sheet.query.is_empty());
 }
 
 #[test]
@@ -123,12 +124,12 @@ fn missing_required_options_block_sending_with_visible_feedback() {
     harness.app.set_input_text("Hello".into());
     harness.app.handle_submit();
     assert!(harness.drain_requests().is_empty());
-    assert_eq!(harness.app.state.input, "Hello");
+    assert_eq!(harness.app.state.composer.text, "Hello");
     assert!(!harness.app.state.exit);
     assert!(screen(&harness.app.state, 80, 20).contains("Choose model options in /model"));
     harness.app.open_error();
     let rendered = screen(&harness.app.state, 80, 20);
     assert!(rendered.contains("effort"));
     assert!(rendered.contains("Choose Thinking"));
-    assert!(harness.app.state.error_open);
+    assert!(harness.app.state.errors.open);
 }

@@ -54,13 +54,22 @@ impl ContextStateStore for PausedContextStore {
     async fn save_snapshots(
         &self,
         session_id: &SessionId,
-        through_event: Option<&str>,
+        revision: Option<&str>,
         snapshots: Vec<FileContextSnapshot>,
         removals: Vec<ContextStateMutation>,
+        revertible: &std::collections::HashSet<kraai_types::MessageId>,
     ) -> Result<()> {
         self.inner
-            .save_snapshots(session_id, through_event, snapshots, removals)
+            .save_snapshots(session_id, revision, snapshots, removals, revertible)
             .await
+    }
+
+    async fn revert_messages(
+        &self,
+        session_id: &SessionId,
+        messages: &[kraai_types::MessageId],
+    ) -> Result<()> {
+        self.inner.revert_messages(session_id, messages).await
     }
 
     async fn save_instructions(

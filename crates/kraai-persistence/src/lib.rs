@@ -38,7 +38,7 @@ pub use stream_deltas::StreamDelta;
 pub use usage::{RequestUsageStore, SqliteRequestUsageStore};
 
 pub use context::{
-    ContextStateDocument, ContextStateStore, FileContextSnapshot, InstructionSnapshot,
+    ContextStateDocument, ContextStateStore, FileContextSnapshot, InstructionSnapshot, PinnedFile,
     SqliteContextStateStore,
 };
 pub use executions::{

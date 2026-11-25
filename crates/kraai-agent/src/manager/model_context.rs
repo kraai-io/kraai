@@ -114,6 +114,7 @@ impl AgentManager {
                 .as_ref()
                 .map(|checkpoint| &checkpoint.covered_through),
             prompt.instructions.clone(),
+            &prompt.workspace_dir,
         )
         .await?;
         let superseded_usage: HashSet<_> = previous

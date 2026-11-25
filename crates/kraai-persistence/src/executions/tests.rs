@@ -66,6 +66,7 @@ async fn execution_timing_starts_at_running_and_survives_reopen() {
                     },
                     exit_code: run.then_some(0),
                     sandbox_denied: false,
+                    sandbox_hint: None,
                     error: None,
                     stdout: Vec::new(),
                     stderr: Vec::new(),
@@ -124,6 +125,7 @@ async fn image_results_survive_failure_and_reopen_with_idempotent_sequences() {
                 status: ScriptExecutionStatus::Completed,
                 exit_code: Some(1),
                 sandbox_denied: false,
+                sandbox_hint: None,
                 error: Some("failed after viewing image".into()),
                 stdout: b"later output".to_vec(),
                 stderr: Vec::new(),
@@ -197,5 +199,100 @@ async fn records_from_before_merged_calls_keep_their_bash_rewrites() {
     let old: ScriptExecutionRecord = serde_json::from_value(json).unwrap();
     assert_eq!(old.rewrites.bash, [String::from("`find` → `^find`")]);
     assert_eq!(old.rewrites.merged_calls, 0);
+    fs::remove_dir_all(data_dir).await.unwrap();
+}
+
+#[tokio::test]
+async fn output_appends_leave_the_record_alone_and_require_a_running_execution() {
+    let data_dir = test_dir("output-record");
+    let id = ScriptExecutionId::new(Ulid::generate());
+    let store = SqliteScriptExecutionStore::new(&data_dir);
+    store.create(execution(&id)).await.unwrap();
+    let chunk = || vec![(ScriptOutputStream::Stdout, b"out".to_vec())];
+    assert!(store.append_output(&id, chunk()).await.is_err());
+    let running = store.mark_running(&id).await.unwrap();
+    store.append_output(&id, chunk()).await.unwrap();
+    assert_eq!(store.get(&id).await.unwrap(), Some(running));
+    assert!(
+        store
+            .append_output(&ScriptExecutionId::new(Ulid::generate()), chunk())
+            .await
+            .is_err()
+    );
+    store
+        .finish(
+            &id,
+            ScriptExecutionCompletion {
+                status: ScriptExecutionStatus::Completed,
+                exit_code: Some(0),
+                sandbox_denied: false,
+                sandbox_hint: None,
+                error: None,
+                stdout: b"out".to_vec(),
+                stderr: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(store.append_output(&id, chunk()).await.is_err());
+    assert_eq!(store.read_output(&id).await.unwrap().stdout, b"out");
+    fs::remove_dir_all(data_dir).await.unwrap();
+}
+
+#[tokio::test]
+async fn settled_executions_leave_the_recovery_list_without_changing_their_timing() {
+    let data_dir = test_dir("settled");
+    let store = SqliteScriptExecutionStore::new(&data_dir);
+    let settled = ScriptExecutionId::new(Ulid::generate());
+    let pending = ScriptExecutionId::new(Ulid::generate());
+    store.create(execution(&settled)).await.unwrap();
+    store.create(execution(&pending)).await.unwrap();
+    let created = store.get(&settled).await.unwrap().unwrap();
+    store.mark_settled(&settled).await.unwrap();
+    store.mark_settled(&settled).await.unwrap();
+    let unsettled = store
+        .list_unsettled_for_session(&SessionId::new("session"))
+        .await
+        .unwrap();
+    assert_eq!(
+        unsettled
+            .iter()
+            .map(|record| &record.id)
+            .collect::<Vec<_>>(),
+        vec![&pending]
+    );
+    let reopened = SqliteScriptExecutionStore::new(&data_dir)
+        .get(&settled)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reopened.settled);
+    assert_eq!(reopened.updated_at_millis, created.updated_at_millis);
+    fs::remove_dir_all(data_dir).await.unwrap();
+}
+
+#[tokio::test]
+async fn recovery_finds_unsettled_executions_through_their_index() {
+    let data_dir = test_dir("unsettled-index");
+    let store = SqliteScriptExecutionStore::new(&data_dir);
+    store
+        .create(execution(&ScriptExecutionId::new(Ulid::generate())))
+        .await
+        .unwrap();
+    let connection = rusqlite::Connection::open(data_dir.join("kraai.sqlite3")).unwrap();
+    let mut statement = connection
+        .prepare(&format!("EXPLAIN QUERY PLAN {UNSETTLED_FOR_SESSION}"))
+        .unwrap();
+    let plan = statement
+        .query_map(["session"], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        plan,
+        ["SEARCH records USING INDEX records_unsettled_executions (session_id=?)"]
+    );
+    drop(statement);
+    drop(connection);
     fs::remove_dir_all(data_dir).await.unwrap();
 }

@@ -17,6 +17,9 @@ pub(crate) fn adapt_responses_stream(
         source,
         "OpenAI response stream ended before response.completed",
         move |event, pending| {
+            let Some(event) = event else {
+                return Ok(StreamStatus::Continue);
+            };
             let SseEvent::Data(payload) = event else {
                 return Err(ProviderError::StreamInterrupted(
                     "OpenAI response stream ended before response.completed".into(),
@@ -185,11 +188,20 @@ impl Completion {
                 return Ok(StreamStatus::Complete);
             }
             "response.failed" | "response.incomplete" => {
+                let code = event
+                    .response
+                    .as_ref()
+                    .and_then(|response| response.error.as_ref())
+                    .and_then(|error| error.code.clone());
                 let detail = event
                     .response
                     .map(format_response_failure)
                     .unwrap_or_else(|| String::from("no failure details were provided"));
-                return Err(eyre!("OpenAI response stream failed: {detail}"));
+                return Err(ProviderError::from_stream_error(
+                    code.as_deref(),
+                    format!("OpenAI response stream failed: {detail}"),
+                )
+                .into());
             }
             _ => {}
         }

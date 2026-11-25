@@ -76,3 +76,77 @@ async fn stdio_negotiates_legacy_and_reuses_the_process() {
     );
     manager.shutdown().await;
 }
+
+const ONE_SHOT_FIXTURE: &str = r#"
+[ -e "$MCP_RECORD" ] && exit 1
+printf 'started\n' >> "$MCP_RECORD"
+while IFS= read -r line; do
+    id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+    case "$line" in
+        *server/discover*) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"legacy"}}\n' "$id" ;;
+        *initialize\"*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1.0.0"}}}\n' "$id" ;;
+        *tools/list*) printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","description":"Fixture echo","inputSchema":{"type":"object"}}]}}\n' "$id"; exit 0 ;;
+    esac
+done
+"#;
+
+#[tokio::test]
+async fn failed_rediscovery_keeps_the_last_tool_list() {
+    let directory = tempfile::tempdir().unwrap();
+    let record = directory.path().join("starts");
+    let config = McpConfig {
+        servers: [(
+            "local".into(),
+            ServerConfig {
+                enabled: true,
+                description: "Local fixture".into(),
+                startup_timeout_secs: kraai_test_support::HANG_TIMEOUT.as_secs(),
+                call_timeout_secs: kraai_test_support::HANG_TIMEOUT.as_secs(),
+                transport: TransportConfig::Stdio {
+                    command: "sh".into(),
+                    args: vec!["-c".into(), ONE_SHOT_FIXTURE.into()],
+                    env: [("MCP_RECORD".into(), record.to_string_lossy().into_owned())].into(),
+                    cwd: Some(directory.path().into()),
+                },
+            },
+        )]
+        .into(),
+        ..Default::default()
+    };
+    let manager = McpManager::new(config).unwrap();
+    let discovered = manager.prompt().await;
+    assert!(discovered.warnings.is_empty(), "{:?}", discovered.warnings);
+    assert!(
+        discovered
+            .text
+            .as_deref()
+            .is_some_and(|text| text.contains("echo")),
+        "{:?}",
+        discovered.text
+    );
+    let failed = kraai_test_support::hang_guard(async {
+        loop {
+            let prompt = manager.prompt().await;
+            assert_eq!(prompt.text, discovered.text);
+            if !prompt.warnings.is_empty() {
+                break prompt;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        failed.warnings[0].starts_with("MCP server local: "),
+        "{:?}",
+        failed.warnings
+    );
+    let tools = manager
+        .execute(McpRequest::Tools {
+            server: "local".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(tools[0]["name"], "echo");
+    manager.shutdown().await;
+}

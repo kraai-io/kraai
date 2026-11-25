@@ -300,6 +300,11 @@ impl RuntimeBuilder {
         )
         .map_err(|error| eyre!(error))?;
         agent_manager.set_mcp(Arc::new(mcp));
+        let script_denied_paths = vec![
+            storage_root.clone(),
+            provider_config_path.clone(),
+            mcp_config_path,
+        ];
 
         let runtime = RuntimeCore {
             observed_sessions: Arc::default(),
@@ -323,6 +328,7 @@ impl RuntimeBuilder {
                 use_current_executable_as_nushell_host: host_options
                     .use_current_executable_as_nushell_host,
                 script_output_root: storage_root.join("script-output"),
+                script_denied_paths,
             }),
             startup_tx,
             model_catalog_tx,

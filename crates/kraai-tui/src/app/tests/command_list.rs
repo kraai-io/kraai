@@ -1,5 +1,4 @@
 use super::*;
-use crate::app::{KeyCode, UiMode};
 
 fn listed(harness: &TestHarness) -> Vec<&'static str> {
     harness
@@ -24,9 +23,9 @@ fn tab_writes_the_highlighted_command_then_walks_every_match() {
         (KeyCode::BackTab, "/model", 0),
     ] {
         key(&mut harness, code);
-        assert_eq!(harness.app.state.input, input);
-        assert_eq!(harness.app.state.input_cursor, input.len());
-        assert_eq!(harness.app.state.sheet_index, index);
+        assert_eq!(harness.app.state.composer.text, input);
+        assert_eq!(harness.app.state.composer.cursor, input.len());
+        assert_eq!(harness.app.state.sheet.index, index);
         assert_eq!(listed(&harness), ["model", "mcp"]);
     }
 }
@@ -44,7 +43,7 @@ fn arrows_walk_the_list_and_write_the_command() {
         (KeyCode::Tab, "/model"),
     ] {
         key(&mut harness, code);
-        assert_eq!(harness.app.state.input, input);
+        assert_eq!(harness.app.state.composer.text, input);
         assert_eq!(listed(&harness), all);
     }
 }
@@ -55,17 +54,17 @@ fn editing_after_a_walk_filters_by_the_composer_again() {
     type_text(&mut harness, "/m");
     key(&mut harness, KeyCode::Tab);
     key(&mut harness, KeyCode::Tab);
-    assert_eq!(harness.app.state.input, "/mcp");
+    assert_eq!(harness.app.state.composer.text, "/mcp");
     key(&mut harness, KeyCode::Backspace);
-    assert_eq!(harness.app.state.input, "/mc");
+    assert_eq!(harness.app.state.composer.text, "/mc");
     assert_eq!(listed(&harness), ["mcp"]);
-    assert_eq!(harness.app.state.sheet_index, 0);
+    assert_eq!(harness.app.state.sheet.index, 0);
 
     key(&mut harness, KeyCode::Backspace);
     key(&mut harness, KeyCode::Tab);
-    assert_eq!(harness.app.state.input, "/model");
+    assert_eq!(harness.app.state.composer.text, "/model");
     type_text(&mut harness, "s");
-    assert_eq!(harness.app.state.input, "/models");
+    assert_eq!(harness.app.state.composer.text, "/models");
     assert!(listed(&harness).is_empty());
 }
 
@@ -75,18 +74,18 @@ fn enter_runs_the_highlighted_command() {
     type_text(&mut harness, "/mo");
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Model);
-    assert!(harness.app.state.input.is_empty());
+    assert!(harness.app.state.composer.text.is_empty());
 
     let mut harness = test_harness();
     type_text(&mut harness, "/s");
     assert_eq!(listed(&harness), ["sessions", "providers"]);
     key(&mut harness, KeyCode::Tab);
     key(&mut harness, KeyCode::Tab);
-    assert_eq!(harness.app.state.input, "/providers");
+    assert_eq!(harness.app.state.composer.text, "/providers");
     key(&mut harness, KeyCode::Enter);
     assert_eq!(harness.app.state.mode, UiMode::Providers);
-    assert!(harness.app.state.input.is_empty());
-    assert!(harness.app.state.command_filter.is_none());
+    assert!(harness.app.state.composer.text.is_empty());
+    assert!(harness.app.state.composer.command_filter.is_none());
 }
 
 #[test]
@@ -94,12 +93,12 @@ fn space_runs_a_written_command_that_opens_a_list() {
     let mut harness = test_harness();
     type_text(&mut harness, "/model ");
     assert_eq!(harness.app.state.mode, UiMode::Model);
-    assert!(harness.app.state.input.is_empty());
+    assert!(harness.app.state.composer.text.is_empty());
 
     let mut harness = test_harness();
     type_text(&mut harness, "/mo ");
     assert_eq!(harness.app.state.mode, UiMode::Chat);
-    assert_eq!(harness.app.state.input, "/mo ");
+    assert_eq!(harness.app.state.composer.text, "/mo ");
 }
 
 #[test]
@@ -110,7 +109,7 @@ fn space_after_a_command_that_opens_no_list_types_a_space() {
         key(&mut harness, KeyCode::Tab);
         key(&mut harness, KeyCode::Char(' '));
         assert_eq!(harness.app.state.mode, UiMode::Chat);
-        assert_eq!(harness.app.state.input, format!("{command} "));
+        assert_eq!(harness.app.state.composer.text, format!("{command} "));
         assert!(!harness.app.state.exit);
         assert!(harness.drain_requests().is_empty());
     }
@@ -123,10 +122,10 @@ fn escape_dismisses_the_list_and_keeps_the_written_command() {
     key(&mut harness, KeyCode::Tab);
     key(&mut harness, KeyCode::Esc);
     assert!(listed(&harness).is_empty());
-    assert_eq!(harness.app.state.input, "/model");
-    assert!(harness.app.state.command_filter.is_none());
+    assert_eq!(harness.app.state.composer.text, "/model");
+    assert!(harness.app.state.composer.command_filter.is_none());
     key(&mut harness, KeyCode::Tab);
-    assert_eq!(harness.app.state.input, "/model");
+    assert_eq!(harness.app.state.composer.text, "/model");
 }
 
 #[test]
@@ -136,16 +135,16 @@ fn error_is_listed_and_opens_only_while_an_error_waits() {
     assert!(listed(&harness).is_empty());
     type_text(&mut harness, "or");
     key(&mut harness, KeyCode::Enter);
-    assert!(!harness.app.state.error_open);
-    assert!(harness.app.state.input.is_empty());
+    assert!(!harness.app.state.errors.open);
+    assert!(harness.app.state.composer.text.is_empty());
 
     harness.app.set_error(String::from("Stream error: offline"));
     type_text(&mut harness, "/err");
     assert_eq!(listed(&harness), ["error"]);
     key(&mut harness, KeyCode::Enter);
-    assert!(harness.app.state.error_open);
-    assert!(harness.app.state.input.is_empty());
+    assert!(harness.app.state.errors.open);
+    assert!(harness.app.state.composer.text.is_empty());
     key(&mut harness, KeyCode::Esc);
-    assert!(!harness.app.state.error_open);
-    assert!(harness.app.state.last_error.is_some());
+    assert!(!harness.app.state.errors.open);
+    assert!(harness.app.state.errors.last.is_some());
 }

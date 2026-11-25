@@ -126,8 +126,10 @@ impl Benchmark for Case {
                     kraai_agent::StreamedItem::Started { .. } => false,
                 };
                 chunks += 1;
-                if chunks % SNAPSHOT_INTERVAL == 0 {
-                    manager.publish_streaming_snapshots().await?;
+                if chunks % SNAPSHOT_INTERVAL == 0
+                    && let Some((_, error)) = manager.publish_streaming_snapshots().await.pop()
+                {
+                    return Err(error.into());
                 }
             }
             let completed_session = manager.complete_message(&message_id).await?;

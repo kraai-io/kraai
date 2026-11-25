@@ -70,7 +70,9 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
                     value_kind: FieldValueKind::String,
                     required: false,
                     secret: false,
-                    help_text: Some(String::from("Environment variable that stores the API key")),
+                    help_text: Some(String::from(
+                        "Environment variable that stores the API key. Clear it for servers that need no auth",
+                    )),
                     default_value: Some(DynamicValue::from("OPENAI_API_KEY")),
                 },
                 FieldDefinition {
@@ -135,24 +137,6 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
             errors.push(ValidationError {
                 field: String::from("base_url"),
                 message: String::from("Base URL is required"),
-            });
-        }
-
-        let inline_key = config
-            .get("api_key")
-            .and_then(DynamicValue::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let env_var = config
-            .get("env_var_api_key")
-            .and_then(DynamicValue::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-
-        if inline_key.is_none() && env_var.is_none() {
-            errors.push(ValidationError {
-                field: String::from("credentials"),
-                message: String::from("Provide either an API key or an environment variable name"),
             });
         }
 

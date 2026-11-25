@@ -1,5 +1,13 @@
 use super::providers_sheet::ProviderAction;
-use super::*;
+use super::settings::{
+    clear_field_value, default_values, field_value_display, is_boolean_field, merge_values,
+    parse_field_input, set_field_value,
+};
+use super::ui::{next_wrapping, previous_wrapping};
+use super::{App, AppState};
+use color_eyre::eyre::Result;
+use kraai_runtime::{FieldDefinition, ModelSettings, SettingsValue};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ConfigRow {
@@ -40,7 +48,8 @@ pub(super) fn masked(secret: &str) -> String {
 
 impl AppState {
     pub(super) fn config_rows(&self) -> Vec<ConfigRow> {
-        let (Some(provider), Some(draft)) = (self.open_provider(), self.settings_draft.as_ref())
+        let (Some(provider), Some(draft)) =
+            (self.open_provider(), self.providers.settings_draft.as_ref())
         else {
             return Vec::new();
         };
@@ -70,7 +79,7 @@ impl AppState {
 
     pub(super) fn highlighted_config_row(&self) -> Option<ConfigRow> {
         let mut rows = self.config_rows();
-        let index = self.sheet_index.min(rows.len().checked_sub(1)?);
+        let index = self.sheet.index.min(rows.len().checked_sub(1)?);
         Some(rows.swap_remove(index))
     }
 
@@ -116,7 +125,7 @@ impl AppState {
     }
 
     pub(super) fn config_value(&self, row: &ConfigRow) -> String {
-        let model = |index: &usize| self.settings_draft.as_ref()?.models.get(*index);
+        let model = |index: &usize| self.providers.settings_draft.as_ref()?.models.get(*index);
         match row {
             ConfigRow::ProviderId => self.open_provider().map(|provider| provider.id.clone()),
             ConfigRow::ProviderType => self
@@ -140,12 +149,12 @@ impl AppState {
 
     pub(super) fn edit_clears_secret(&self, row: &ConfigRow) -> bool {
         self.config_secret(row)
-            && self.sheet_query.as_str().trim().is_empty()
+            && self.sheet.query.as_str().trim().is_empty()
             && !self.config_value(row).is_empty()
     }
 
     pub(super) fn config_error(&self, row: &ConfigRow) -> Option<&str> {
-        let provider = self.settings_provider_index;
+        let provider = self.providers.settings_provider_index;
         let key = match row {
             ConfigRow::ProviderId => format!("providers[{provider}].id"),
             ConfigRow::ProviderType => format!("providers[{provider}].type_id"),
@@ -154,18 +163,18 @@ impl AppState {
             ConfigRow::ModelValue(model, key) => format!("models[{model}].{key}"),
             ConfigRow::AddModel => return None,
         };
-        self.settings_errors.get(&key).map(String::as_str)
+        self.providers.settings_errors.get(&key).map(String::as_str)
     }
 }
 
 impl App {
     pub(super) fn handle_provider_config_key(&mut self, key: KeyEvent) {
-        let armed = std::mem::take(&mut self.state.sheet_armed);
-        if let Some(row) = self.state.config_editing.clone() {
+        let armed = std::mem::take(&mut self.state.sheet.armed);
+        if let Some(row) = self.state.providers.config_editing.clone() {
             if key.code != KeyCode::Enter {
                 self.edit_sheet_query(key);
             } else if self.state.edit_clears_secret(&row) && !armed {
-                self.state.sheet_armed = true;
+                self.state.sheet.armed = true;
             } else {
                 self.commit_config_edit(&row);
             }
@@ -188,16 +197,16 @@ impl App {
         match (key.code, self.state.config_kind(&row)) {
             (KeyCode::Delete, _) => match row.model() {
                 Some(model) if armed => self.remove_config_model(model),
-                Some(_) => self.state.sheet_armed = true,
+                Some(_) => self.state.sheet.armed = true,
                 None => {}
             },
             (KeyCode::Enter, ConfigKind::Text) => {
-                self.state.sheet_query.set(self.state.config_value(&row));
-                self.state.config_editing = Some(row);
+                self.state.sheet.query.set(self.state.config_value(&row));
+                self.state.providers.config_editing = Some(row);
             }
             (KeyCode::Char(ch), ConfigKind::Text) if typed => {
-                self.state.sheet_query.set(ch.to_string());
-                self.state.config_editing = Some(row);
+                self.state.sheet.query.set(ch.to_string());
+                self.state.providers.config_editing = Some(row);
             }
             (
                 KeyCode::Enter | KeyCode::Left | KeyCode::Right | KeyCode::Char(' '),
@@ -211,7 +220,7 @@ impl App {
     }
 
     pub(super) fn paste_into_provider_config(&mut self, text: &str) {
-        if self.state.config_editing.is_none() {
+        if self.state.providers.config_editing.is_none() {
             let Some(row) = self
                 .state
                 .highlighted_config_row()
@@ -219,8 +228,8 @@ impl App {
             else {
                 return;
             };
-            self.state.sheet_query.clear();
-            self.state.config_editing = Some(row);
+            self.state.sheet.query.clear();
+            self.state.providers.config_editing = Some(row);
         }
         self.paste_into_sheet_query(text);
     }
@@ -248,19 +257,19 @@ impl App {
     }
 
     fn commit_config_edit(&mut self, row: &ConfigRow) {
-        let text = self.state.sheet_query.as_str().trim().to_owned();
+        let text = self.state.sheet.query.as_str().trim().to_owned();
         let value = match self.state.config_field(row) {
             Some(field) => match Self::typed_field_value(field, &text) {
                 Ok(value) => value,
                 Err(reason) => {
-                    self.state.sheet_notice = Some(reason);
+                    self.state.sheet.notice = Some(reason);
                     return;
                 }
             },
             None => None,
         };
-        let provider_index = self.state.settings_provider_index;
-        let Some(draft) = self.state.settings_draft.as_mut() else {
+        let provider_index = self.state.providers.settings_provider_index;
+        let Some(draft) = self.state.providers.settings_draft.as_mut() else {
             return;
         };
         let store = |values: &mut Vec<kraai_runtime::FieldValueEntry>, key: &str| match value {
@@ -275,7 +284,7 @@ impl App {
                     .enumerate()
                     .any(|(index, provider)| index != provider_index && provider.id == text)
                 {
-                    self.state.sheet_notice = Some(format!("A provider is already named {text}"));
+                    self.state.sheet.notice = Some(format!("A provider is already named {text}"));
                     return;
                 }
                 let Some(provider) = draft.providers.get_mut(provider_index) else {
@@ -305,15 +314,15 @@ impl App {
             }
             ConfigRow::ProviderType | ConfigRow::AddModel => {}
         }
-        self.state.config_editing = None;
-        self.state.sheet_query.clear();
+        self.state.providers.config_editing = None;
+        self.state.sheet.query.clear();
         self.save_settings_draft();
     }
 
     fn toggle_config_field(&mut self, row: &ConfigRow) {
         let enabled = self.state.config_value(row) == "yes";
-        let provider_index = self.state.settings_provider_index;
-        let Some(draft) = self.state.settings_draft.as_mut() else {
+        let provider_index = self.state.providers.settings_provider_index;
+        let Some(draft) = self.state.providers.settings_draft.as_mut() else {
             return;
         };
         let values = match row {
@@ -338,10 +347,11 @@ impl App {
     }
 
     fn cycle_provider_type(&mut self, forward: bool) {
-        let provider_index = self.state.settings_provider_index;
-        let len = self.state.provider_definitions.len();
+        let provider_index = self.state.providers.settings_provider_index;
+        let len = self.state.providers.definitions.len();
         let Some(provider) = self
             .state
+            .providers
             .settings_draft
             .as_mut()
             .and_then(|draft| draft.providers.get_mut(provider_index))
@@ -350,7 +360,8 @@ impl App {
         };
         let current = self
             .state
-            .provider_definitions
+            .providers
+            .definitions
             .iter()
             .position(|definition| definition.type_id == provider.type_id)
             .unwrap_or(0);
@@ -359,7 +370,7 @@ impl App {
         } else {
             previous_wrapping(current, len)
         };
-        if let Some(definition) = self.state.provider_definitions.get(next) {
+        if let Some(definition) = self.state.providers.definitions.get(next) {
             provider.type_id.clone_from(&definition.type_id);
             provider.values = merge_values(&definition.provider_fields, &provider.values);
             self.save_settings_draft();
@@ -378,7 +389,7 @@ impl App {
         }) else {
             return;
         };
-        let Some(draft) = self.state.settings_draft.as_mut() else {
+        let Some(draft) = self.state.providers.settings_draft.as_mut() else {
             return;
         };
         let Some(id) = (1..).map(|number| format!("model-{number}")).find(|id| {
@@ -403,13 +414,13 @@ impl App {
             .iter()
             .position(|row| *row == added)
         {
-            self.state.sheet_index = index;
+            self.state.sheet.index = index;
         }
         self.save_settings_draft();
     }
 
     fn remove_config_model(&mut self, model: usize) {
-        let Some(draft) = self.state.settings_draft.as_mut() else {
+        let Some(draft) = self.state.providers.settings_draft.as_mut() else {
             return;
         };
         if model >= draft.models.len() {

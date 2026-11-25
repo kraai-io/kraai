@@ -217,6 +217,15 @@ impl RuntimeEventSender {
             .subscribe()
     }
 
+    pub(crate) fn has_session_subscribers(&self, session_id: &SessionId) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .sessions
+            .get(session_id)
+            .is_some_and(|sender| sender.receiver_count() > 0)
+    }
+
     pub(crate) fn subscribe_session(
         &self,
         session_id: &SessionId,

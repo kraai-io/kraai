@@ -33,11 +33,37 @@ fn initial_config_and_lag_share_one_startup_batch_then_reloads_sync_again() {
     assert_startup_batch(&harness.drain_requests());
     assert_eq!(harness.app.startup_sync, StartupSync::Synchronizing);
     harness.app.handle_runtime_event(Event::ConfigLoaded);
-    assert_eq!(harness.drain_requests().len(), 5);
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [
+            RuntimeRequest::GetMcpAuthStatuses,
+            RuntimeRequest::ListModels,
+            RuntimeRequest::GetAgentProfileCatalog,
+        ]
+    ));
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Sessions(Ok(Vec::new())));
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::UserInputHistory(Ok(Vec::new())));
+    assert!(matches!(
+        harness.drain_requests().as_slice(),
+        [
+            RuntimeRequest::ListSessions,
+            RuntimeRequest::ListUserInputHistory { .. },
+        ]
+    ));
     harness
         .app
         .handle_runtime_response(RuntimeResponse::StartupSyncComplete);
     assert_eq!(harness.app.startup_sync, StartupSync::Complete);
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::Sessions(Ok(Vec::new())));
+    harness
+        .app
+        .handle_runtime_response(RuntimeResponse::UserInputHistory(Ok(Vec::new())));
     harness.app.handle_runtime_event(Event::ConfigLoaded);
     assert_eq!(harness.drain_requests().len(), 5);
 }
@@ -97,17 +123,17 @@ fn startup_message_waits_for_all_selections_and_is_submitted_once() {
         assert_eq!(harness.app.startup_options.message.as_ref(), Some(&message));
         match selection {
             0 => harness.app.state.config_loaded = true,
-            1 => harness.app.state.selected_provider_id = Some(String::from("provider")),
-            2 => harness.app.state.selected_model_id = Some(String::from("model")),
-            _ => harness.app.state.selected_profile_id = Some(String::from("coding")),
+            1 => harness.app.state.models.selected_provider_id = Some(String::from("provider")),
+            2 => harness.app.state.models.selected_model_id = Some(String::from("model")),
+            _ => harness.app.state.agents.selected_profile_id = Some(String::from("coding")),
         }
     }
 
-    harness.app.state.is_streaming = true;
+    harness.app.state.turn.is_streaming = true;
     harness.app.maybe_send_startup_message();
     assert!(harness.drain_requests().is_empty());
     assert!(!harness.app.startup_message_sent);
-    harness.app.state.is_streaming = false;
+    harness.app.state.turn.is_streaming = false;
 
     harness.app.maybe_send_startup_message();
     assert!(matches!(
@@ -119,6 +145,7 @@ fn startup_message_waits_for_all_selections_and_is_submitted_once() {
         harness
             .app
             .state
+            .sessions
             .pending_submit
             .as_ref()
             .and_then(|submit| submit.message.as_text()),

@@ -21,7 +21,6 @@ impl ContextCompaction {
     ) -> Result<ConversationItem> {
         // Matching the pending request lets the provider reuse its prompt cache.
         let mut request = original.clone();
-        request.cacheable_messages = None;
         if !native {
             request.messages.push(ConversationItem::User {
                 content: SUMMARY_PROMPT.into(),

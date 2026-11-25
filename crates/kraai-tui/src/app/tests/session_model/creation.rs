@@ -7,7 +7,7 @@ fn submit_first(harness: &mut TestHarness) -> (u64, ModelSelection) {
         model_id: kraai_types::ModelId::new("model"),
         options: options("low", false, None),
     };
-    harness.app.state.selected_model_options = submitted.options.clone();
+    harness.app.state.models.selected_options = submitted.options.clone();
     harness.app.submit_message("first message".into());
     let creation_id = harness
         .drain_requests()
@@ -68,10 +68,11 @@ fn edits_during_creation_survive_initial_snapshots_and_save_after_the_turn() {
             harness
                 .app
                 .state
-                .models_by_provider
+                .models
+                .by_provider
                 .insert("other-provider".into(), vec![model]);
-            harness.app.state.selected_provider_id = Some("other-provider".into());
-            harness.app.state.selected_model_id = Some("other-model".into());
+            harness.app.state.models.selected_provider_id = Some("other-provider".into());
+            harness.app.state.models.selected_model_id = Some("other-model".into());
         }
         set_option(&mut harness, "effort", "high").unwrap();
         let desired = ModelSelection {
@@ -97,13 +98,13 @@ fn edits_during_creation_survive_initial_snapshots_and_save_after_the_turn() {
         active.session.is_running = true;
         active.session.selected_model = Some(submitted.clone());
         snapshot(&mut harness, &SessionId::new("created-session"), 0, active);
-        assert_eq!(harness.app.state.selected_model_options, desired.options);
+        assert_eq!(harness.app.state.models.selected_options, desired.options);
         assert_eq!(
-            harness.app.state.selected_provider_id.as_deref(),
+            harness.app.state.models.selected_provider_id.as_deref(),
             Some(desired.provider_id.as_str())
         );
         assert_eq!(
-            harness.app.state.selected_model_id.as_deref(),
+            harness.app.state.models.selected_model_id.as_deref(),
             Some(desired.model_id.as_str())
         );
         assert!(saves(&harness).is_empty());
@@ -139,7 +140,7 @@ fn creation_edits_save_after_initial_admission_fails() {
         matches!(saves(&harness).as_slice(), [(session, _, selection)]
         if session.as_str() == "created-session" && selection.options == options("high", false, None))
     );
-    assert_eq!(harness.app.state.input, "first message");
+    assert_eq!(harness.app.state.composer.text, "first message");
 }
 
 #[test]

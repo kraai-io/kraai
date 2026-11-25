@@ -145,6 +145,7 @@ async fn native_custom_call_preserves_phase_call_identity_and_usage() {
         .unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].call_id.as_str(), "openai-call-1");
+    assert!(records[0].settled);
 
     let history = harness.handle.get_chat_history(session_id).await;
     assert!(history.values().any(|message| {
@@ -936,6 +937,7 @@ async fn long_script_output_is_excerpted_and_saved_where_scripts_can_read_it() {
                             status: ScriptExecutionStatus::Completed,
                             exit_code: Some(0),
                             sandbox_denied: false,
+                            sandbox_hint: None,
                             error: None,
                             stdout: stdout.into_bytes(),
                             stderr: Vec::new(),

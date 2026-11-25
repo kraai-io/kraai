@@ -121,6 +121,10 @@ impl McpManager {
         Ok(overlay)
     }
 
+    pub fn has_servers(&self) -> bool {
+        !self.servers.is_empty()
+    }
+
     pub fn subscribe_auth(&self) -> tokio::sync::broadcast::Receiver<McpAuthStatus> {
         self.auth_events.subscribe()
     }
@@ -180,16 +184,28 @@ impl McpManager {
             .await;
         let mut definitions = Vec::new();
         let mut warnings = Vec::new();
-        for (name, result) in results {
-            match result {
-                Ok(tools) => definitions.extend(tools.into_iter().map(|tool| ToolDefinition {
-                    server: name.clone(),
-                    tool,
-                })),
-                Err(error) => warnings.push(format!("MCP server {name}: {error}")),
+        for (name, (tools, warning)) in results {
+            if let Some(error) = warning {
+                warnings.push(format!("MCP server {name}: {error}"));
             }
+            definitions.extend(tools.into_iter().map(|tool| ToolDefinition {
+                server: name.clone(),
+                tool,
+            }));
         }
         (definitions, warnings)
+    }
+
+    async fn server_tools(&self, name: &str) -> Result<Vec<rmcp::model::Tool>, String> {
+        match self
+            .server(name)
+            .map_err(|error| error.to_string())?
+            .tools()
+            .await
+        {
+            (tools, Some(error)) if tools.is_empty() => Err(error),
+            (tools, _) => Ok(tools),
+        }
     }
 
     pub async fn prompt(&self) -> McpPrompt {
@@ -216,13 +232,11 @@ impl McpHost for McpManager {
         let result = match request {
             McpRequest::Servers => self.server_list(),
             McpRequest::Tools { server } => {
-                json!(self.server(&server).map_err(|error| error.to_string())?.tools().await?.into_iter().map(|tool| json!({"server": server, "name": tool.name, "description": tool.description})).collect::<Vec<_>>())
+                json!(self.server_tools(&server).await?.into_iter().map(|tool| json!({"server": server, "name": tool.name, "description": tool.description})).collect::<Vec<_>>())
             }
             McpRequest::Describe { server, tool } => {
                 let definition = self
-                    .server(&server)
-                    .map_err(|error| error.to_string())?
-                    .tools()
+                    .server_tools(&server)
                     .await?
                     .into_iter()
                     .find(|candidate| candidate.name == tool)

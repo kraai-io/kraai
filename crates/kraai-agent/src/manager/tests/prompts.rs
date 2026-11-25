@@ -273,10 +273,11 @@ async fn prepare_start_stream_injects_latest_pinned_file() {
         .unwrap();
 
     let system_prompt = request_file_context(&request);
-    assert!(system_prompt.contains("Opened file:"));
-    assert!(system_prompt.contains(file_path_str.as_str()));
-    assert!(system_prompt.contains("1|new contents"));
-    assert!(system_prompt.contains("2|second line"));
+    assert!(
+        system_prompt
+            .contains("Opened file: notes.txt\n```text\n1|new contents\n2|second line\n```")
+    );
+    assert!(!system_prompt.contains(file_path_str.as_str()));
     assert!(!system_prompt.contains("# Kraai Commands"));
     assert!(request_prefix(&request).contains("# Kraai Commands"));
     assert!(!request_prefix(&request).contains("1|new contents"));
@@ -338,6 +339,7 @@ async fn missing_pinned_file_is_durably_unpinned_and_reported_once() {
         &[],
         None,
         Vec::new(),
+        &workspace_dir,
     )
     .await
     .unwrap();
@@ -419,6 +421,59 @@ async fn script_examples_use_the_shared_tool_prompt() {
     for block in prompt.prefix.split("```nu\n").skip(1) {
         let (script, _) = block.split_once("\n```").expect("unclosed Nushell example");
         kraai_script_protocol::parse_script_input(script).unwrap();
+    }
+    assert_eq!(prompt.prefix.contains("host-read"), !cfg!(windows));
+    assert_eq!(prompt.prefix.contains("except localhost"), cfg!(windows));
+    cleanup_dir(data_dir).await;
+}
+
+#[tokio::test]
+async fn mcp_command_is_offered_only_with_configured_servers() {
+    let (manager, data_dir) = test_manager().await;
+    let session_id = manager.create_session().await.unwrap();
+    manager
+        .set_session_profile(&session_id, String::from("coding"))
+        .await
+        .unwrap();
+    let session = manager.require_session(&session_id).await.unwrap();
+    let profile = manager.resolve_selected_profile(&session).unwrap();
+    let mcp = kraai_commands::mcp::METADATA;
+    assert!(profile.commands.iter().any(|id| id == mcp.id));
+    for configured in [false, true] {
+        if configured {
+            let server = kraai_mcp::ServerConfig {
+                enabled: true,
+                description: String::new(),
+                startup_timeout_secs: 1,
+                call_timeout_secs: 1,
+                transport: kraai_mcp::TransportConfig::Stdio {
+                    command: String::from("/unused-until-discovery"),
+                    args: Vec::new(),
+                    env: Default::default(),
+                    cwd: None,
+                },
+            };
+            let config = kraai_mcp::McpConfig {
+                servers: [(String::from("docs"), server)].into(),
+                ..Default::default()
+            };
+            manager
+                .replace_session_mcp_servers(&session_id, config)
+                .await
+                .unwrap();
+        }
+        let prompt = manager
+            .build_turn_system_prompt(&session_id, &profile, &session.workspace_dir)
+            .await
+            .unwrap();
+        assert_eq!(prompt.prefix.contains(mcp.description), configured);
+        assert_eq!(
+            manager
+                .available_commands(&session_id, &profile.commands)
+                .iter()
+                .any(|id| id == mcp.id),
+            configured
+        );
     }
     cleanup_dir(data_dir).await;
 }
@@ -804,8 +859,18 @@ async fn user_agents_md_is_layered_and_refreshed_on_continuation() {
         prompt.find("Global working agreements").unwrap()
             < prompt.find("Project agreements").unwrap()
     );
-    assert!(prompt.contains("workspace AGENTS.md overrides global AGENTS.md"));
-    assert!(prompt.contains("Explicit user requests override AGENTS.md"));
+    assert_eq!(
+        prompt
+            .matches("the workspace AGENTS.md overrides the user AGENTS.md")
+            .count(),
+        1
+    );
+    assert_eq!(
+        prompt
+            .matches("Explicit user requests override AGENTS.md")
+            .count(),
+        1
+    );
     manager.complete_message(&request.message_id).await.unwrap();
 
     for contents in [

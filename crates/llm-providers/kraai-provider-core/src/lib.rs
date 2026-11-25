@@ -3,8 +3,6 @@ pub use auth::{
     LoginMethod, PendingBrowserLogin, PendingDeviceCodeLogin, ProviderAuth, ProviderAuthStatus,
     ProviderLoginState, ProviderSet, ProviderSetup,
 };
-mod cache_warming;
-pub use cache_warming::{CacheWarmingPolicy, CacheWarmup};
 
 mod config;
 mod definition;
@@ -26,6 +24,7 @@ mod model_options;
 mod pricing;
 pub use pricing::{PriceQuote, Pricing, ProviderPricingCatalog, ProviderPricingPolicy};
 mod provider;
+mod rate_limit;
 mod registry;
 mod request_context;
 mod sse;
@@ -41,8 +40,7 @@ pub use error::{
 };
 
 pub use http_retry::{
-    DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, ProviderCooldown, parse_retry_after,
-    send_with_retry,
+    DEFAULT_HTTP_RETRY_POLICY, HttpRetryPolicy, ProviderCooldown, send_with_retry,
 };
 pub use manager::ProviderManager;
 pub use model_discovery::DiscoveredModelOptions;

@@ -12,7 +12,8 @@ pub(super) fn sessions(state: &AppState) -> Sheet {
         .as_secs();
     let offset = usize::from(state.offers_new_chat());
     let highlighted = state
-        .sheet_index
+        .sheet
+        .index
         .min((sessions.len() + offset).saturating_sub(1));
     let mut rows = Vec::with_capacity(sessions.len() + 3);
     if state.offers_new_chat() {
@@ -28,13 +29,13 @@ pub(super) fn sessions(state: &AppState) -> Sheet {
     for (index, session) in sessions.iter().enumerate() {
         if index == 0 && local > 0 {
             rows.push(SheetRow::Heading(short_path(
-                &state.workspace_dir,
-                &state.home_dir,
+                &state.sessions.workspace_dir,
+                &state.sessions.home_dir,
             )));
         } else if index == local && local > 0 {
             rows.push(SheetRow::Heading(String::from("elsewhere")));
         }
-        let armed = state.sheet_armed && index + offset == highlighted;
+        let armed = state.sheet.armed && index + offset == highlighted;
         rows.push(SheetRow::Item(row(
             state,
             session,
@@ -47,7 +48,7 @@ pub(super) fn sessions(state: &AppState) -> Sheet {
         caption: String::from("sessions"),
         count: plural(sessions.len(), "session"),
         rows,
-        selected: state.sheet_index,
+        selected: state.sheet.index,
         empty: String::from("No sessions match"),
         notes: notice(state),
         align_choices: true,
@@ -76,7 +77,7 @@ fn row(state: &AppState, session: &Session, local: bool, armed: bool, now: u64) 
         detail: if local {
             String::new()
         } else {
-            short_path(&session.workspace_dir, &state.home_dir)
+            short_path(&session.workspace_dir, &state.sessions.home_dir)
         },
         meta: age(now.saturating_sub(session.updated_at)),
         tag: tag.to_owned(),

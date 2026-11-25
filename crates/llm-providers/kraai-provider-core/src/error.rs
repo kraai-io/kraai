@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use kraai_types::ProviderId;
 use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
 use thiserror::Error;
+
+use crate::rate_limit::RateLimit;
 
 #[derive(Debug, Error)]
 pub enum ProviderError {
@@ -16,6 +19,8 @@ pub enum ProviderError {
         message: String,
         retry_after: Option<Duration>,
     },
+    #[error("Usage quota is exhausted and the provider gave no reset time: {0}")]
+    QuotaExhausted(String),
     #[error("{message}")]
     Unavailable {
         status: Option<u16>,
@@ -52,7 +57,7 @@ pub enum ProviderError {
 
 fn retry_after_hint(retry_after: Option<Duration>) -> String {
     retry_after
-        .map(|delay| format!(" (retry after {} s)", delay.as_secs()))
+        .map(|delay| format!(" (resets in {})", crate::rate_limit::describe(delay)))
         .unwrap_or_default()
 }
 
@@ -77,25 +82,33 @@ impl ProviderError {
         response: reqwest::Response,
     ) -> Self {
         let status = response.status();
-        let retry_after = crate::http_retry::parse_retry_after(&response);
+        let headers = response.headers().clone();
         let url = response.url().to_string();
         let body = crate::read_error_body(response).await;
         Self::from_body(
             status,
-            retry_after,
+            &headers,
             &body,
             format!("{provider} {operation} failed with status {status} at {url}: {body}"),
         )
     }
 
-    pub fn from_body(
-        status: StatusCode,
-        retry_after: Option<Duration>,
-        body: &str,
-        message: String,
-    ) -> Self {
-        Self::from_api_error(body)
-            .unwrap_or_else(|| Self::from_status(status, retry_after, message))
+    pub fn from_body(status: StatusCode, headers: &HeaderMap, body: &str, message: String) -> Self {
+        if let Some(error) = Self::from_api_error(body) {
+            return error;
+        }
+        match crate::rate_limit::classify(headers, body) {
+            RateLimit::Exhausted => Self::QuotaExhausted(message),
+            RateLimit::ResetsIn(delay) if status == StatusCode::TOO_MANY_REQUESTS => {
+                Self::RateLimited {
+                    message,
+                    retry_after: Some(delay),
+                }
+            }
+            RateLimit::ResetsIn(_) | RateLimit::Unknown => {
+                Self::from_status(status, crate::rate_limit::retry_after(headers), message)
+            }
+        }
     }
 
     pub fn from_status(status: StatusCode, retry_after: Option<Duration>, message: String) -> Self {
@@ -127,6 +140,9 @@ impl ProviderError {
         match code {
             Some("context_length_exceeded" | "context_window_exceeded") => {
                 Self::ContextWindowExceeded(message)
+            }
+            Some(code) if crate::rate_limit::EXHAUSTED_ERRORS.contains(&code) => {
+                Self::QuotaExhausted(message)
             }
             Some("rate_limit_exceeded") => Self::RateLimited {
                 message,

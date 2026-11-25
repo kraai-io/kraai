@@ -69,6 +69,7 @@ pub(crate) enum Command {
         model_id: ModelId,
         provider_id: ProviderId,
         options: ModelOptionValues,
+        queue: bool,
         response: oneshot::Sender<RuntimeResult<SubmitMessageOutcome>>,
     },
     ImportImage {

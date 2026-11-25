@@ -401,3 +401,39 @@ async fn sandbox_process_groups_stop_on_every_completion_path() {
         super::process::assert_process_group_stops(mode, SandboxCapability::WorkspaceWrite).await;
     }
 }
+
+#[tokio::test]
+async fn denied_paths_stay_hidden_with_host_write() {
+    let fixture = Fixture::new("macos-denied-paths");
+    let storage = fixture.0.join("storage");
+    let output = storage.join("script-output/session");
+    let missing = fixture.0.join("mcp.toml");
+    std::fs::create_dir_all(&output).expect("create output");
+    std::fs::write(storage.join("providers.toml"), "secret\n").expect("write providers");
+    std::fs::write(output.join("stdout"), "output\n").expect("write output");
+    let mut plan = shell_plan(
+        &fixture.workspace(),
+        r#"
+            if (read -r value < "$STORAGE/providers.toml"); then exit 1; fi
+            if (printf bad > "$STORAGE/providers.toml"); then exit 2; fi
+            if (/bin/mkdir "$STORAGE/data"); then exit 3; fi
+            if (printf bad > "$MISSING"); then exit 4; fi
+            read -r value < "$STORAGE/script-output/session/stdout" && test "$value" = output || exit 5
+            exit 0
+        "#,
+        [SandboxCapability::HostWrite],
+    );
+    plan.environment
+        .insert("STORAGE".into(), storage.clone().into_os_string());
+    plan.environment
+        .insert("MISSING".into(), missing.clone().into_os_string());
+    plan.runtime_roots.push(output);
+    plan.denied_paths = vec![storage.clone(), missing.clone()];
+    successful_run(plan).await;
+    assert_eq!(
+        std::fs::read_to_string(storage.join("providers.toml")).expect("read providers"),
+        "secret\n"
+    );
+    assert!(!storage.join("data").exists());
+    assert!(!missing.exists());
+}

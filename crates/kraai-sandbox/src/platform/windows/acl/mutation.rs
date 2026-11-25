@@ -32,69 +32,57 @@ impl Drop for Allocation {
 }
 
 pub(super) fn update(file: &File, sid: &Sid, access: Option<Access>) -> Result<(), SandboxError> {
-    let mut dacl = ptr::null_mut();
-    let mut descriptor = ptr::null_mut();
-    let result = unsafe {
-        GetSecurityInfo(
-            file.as_raw_handle(),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            &mut dacl,
-            ptr::null_mut(),
-            &mut descriptor,
-        )
-    };
-    if result != 0 {
-        return Err(code_error("read DACL (GetSecurityInfo)", result));
-    }
-    let _descriptor = Allocation(descriptor);
-    if dacl.is_null() || unsafe { IsValidAcl(dacl) } == 0 {
-        return Err(SandboxError::SandboxUnavailable(String::from(
-            "sandbox roots must have a valid explicit DACL",
-        )));
-    }
-    let (mut base, changed) = without_sid(dacl, sid)?;
-    let mut edited = ptr::null_mut();
-    let _edited;
-    let dacl = if let Some(access) = access {
-        let entry = EXPLICIT_ACCESS_W {
-            grfAccessPermissions: mask(access),
-            grfAccessMode: GRANT_ACCESS,
-            grfInheritance: 3,
-            Trustee: TRUSTEE_W {
-                pMultipleTrustee: ptr::null_mut(),
-                MultipleTrusteeOperation: 0,
-                TrusteeForm: TRUSTEE_IS_SID,
-                TrusteeType: TRUSTEE_IS_UNKNOWN,
-                ptstrName: sid.as_ptr().cast(),
-            },
-        };
-        let entries = [entry];
-        let result = unsafe {
-            SetEntriesInAclW(
-                entries.len() as u32,
-                entries.as_ptr(),
-                base.as_mut_ptr().cast(),
-                &mut edited,
-            )
-        };
-        if result != 0 {
-            return Err(code_error("add sandbox DACL entry", result));
-        }
-        _edited = Allocation(edited.cast());
-        if edited.is_null() || unsafe { IsValidAcl(edited) } == 0 {
-            return Err(error("validate edited DACL"));
-        }
-        edited
-    } else {
-        let copy = base.as_mut_ptr().cast::<ACL>();
+    let (descriptor, dacl) = explicit_dacl(file)?;
+    let (mut base, changed) = without(dacl, &[sid])?;
+    let Some(access) = access else {
         if !changed {
             return Ok(());
         }
-        copy
+        return apply(file, &descriptor, base.as_mut_ptr().cast());
     };
+    let entry = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: mask(access),
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: 3,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: ptr::null_mut(),
+            MultipleTrusteeOperation: 0,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_UNKNOWN,
+            ptstrName: sid.as_ptr().cast(),
+        },
+    };
+    let entries = [entry];
+    let mut edited = ptr::null_mut();
+    let result = unsafe {
+        SetEntriesInAclW(
+            entries.len() as u32,
+            entries.as_ptr(),
+            base.as_mut_ptr().cast(),
+            &mut edited,
+        )
+    };
+    if result != 0 {
+        return Err(code_error("add sandbox DACL entry", result));
+    }
+    let _edited = Allocation(edited.cast());
+    if edited.is_null() || unsafe { IsValidAcl(edited) } == 0 {
+        return Err(error("validate edited DACL"));
+    }
+    apply(file, &descriptor, edited)
+}
+
+/// Removes every allow entry for `sids` from this object, inherited ones included.
+pub(super) fn strip(file: &File, sids: &[&Sid]) -> Result<(), SandboxError> {
+    let (descriptor, dacl) = explicit_dacl(file)?;
+    let (mut base, changed) = without(dacl, sids)?;
+    if !changed {
+        return Ok(());
+    }
+    apply(file, &descriptor, base.as_mut_ptr().cast())
+}
+
+fn apply(file: &File, descriptor: &Allocation, dacl: *mut ACL) -> Result<(), SandboxError> {
     let mut security = SECURITY_DESCRIPTOR::default();
     if unsafe {
         InitializeSecurityDescriptor((&mut security as *mut SECURITY_DESCRIPTOR).cast(), 1)
@@ -115,7 +103,7 @@ pub(super) fn update(file: &File, sid: &Sid, access: Option<Access>) -> Result<(
     }
     let mut control = 0;
     let mut revision = 0;
-    if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0 {
+    if unsafe { GetSecurityDescriptorControl(descriptor.0, &mut control, &mut revision) } == 0 {
         return Err(error("inspect DACL inheritance"));
     }
     let inherited = SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED;
@@ -154,24 +142,7 @@ fn mask(access: Access) -> u32 {
 }
 
 pub(super) fn grants(file: &File, sid: &Sid, access: Access) -> Result<bool, SandboxError> {
-    let mut dacl = ptr::null_mut();
-    let mut descriptor = ptr::null_mut();
-    let result = unsafe {
-        GetSecurityInfo(
-            file.as_raw_handle(),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            &mut dacl,
-            ptr::null_mut(),
-            &mut descriptor,
-        )
-    };
-    if result != 0 {
-        return Err(code_error("read DACL (GetSecurityInfo)", result));
-    }
-    let _descriptor = Allocation(descriptor);
+    let (_descriptor, dacl) = read_dacl(file)?;
     if dacl.is_null() || unsafe { IsValidAcl(dacl) } == 0 {
         return Ok(false);
     }
@@ -220,7 +191,38 @@ pub(super) fn grants(file: &File, sid: &Sid, access: Access) -> Result<bool, San
     Ok(false)
 }
 
-fn without_sid(dacl: *mut ACL, sid: &Sid) -> Result<(Vec<u32>, bool), SandboxError> {
+fn read_dacl(file: &File) -> Result<(Allocation, *mut ACL), SandboxError> {
+    let mut dacl = ptr::null_mut();
+    let mut descriptor = ptr::null_mut();
+    let result = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut dacl,
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if result != 0 {
+        return Err(code_error("read DACL (GetSecurityInfo)", result));
+    }
+    Ok((Allocation(descriptor), dacl))
+}
+
+fn explicit_dacl(file: &File) -> Result<(Allocation, *mut ACL), SandboxError> {
+    let (descriptor, dacl) = read_dacl(file)?;
+    if dacl.is_null() || unsafe { IsValidAcl(dacl) } == 0 {
+        return Err(SandboxError::SandboxUnavailable(String::from(
+            "sandbox roots must have a valid explicit DACL",
+        )));
+    }
+    Ok((descriptor, dacl))
+}
+
+fn without(dacl: *mut ACL, sids: &[&Sid]) -> Result<(Vec<u32>, bool), SandboxError> {
     let mut info = ACL_SIZE_INFORMATION::default();
     if unsafe {
         GetAclInformation(
@@ -249,14 +251,18 @@ fn without_sid(dacl: *mut ACL, sid: &Sid) -> Result<(Vec<u32>, bool), SandboxErr
         let header = std::ptr::NonNull::new(ace.cast::<ACE_HEADER>())
             .ok_or_else(|| error("validate DACL entry"))?;
         let header = unsafe { header.as_ref() };
-        if matches!(header.AceType, 0 | 1)
+        // Plain and conditional access-allowed entries share this layout.
+        if matches!(header.AceType, 0 | 9)
             && header.AceSize as usize >= size_of::<ACE_HEADER>() + size_of::<u32>() + 8
         {
             let ace_sid = unsafe { ace.cast::<u8>().add(8) }.cast();
             if unsafe { IsValidSid(ace_sid) } == 0 {
                 return Err(error("validate DACL entry SID"));
             }
-            if unsafe { EqualSid(ace_sid, sid.as_ptr()) } != 0 {
+            if sids
+                .iter()
+                .any(|sid| unsafe { EqualSid(ace_sid, sid.as_ptr()) } != 0)
+            {
                 if unsafe { DeleteAce(copy, index) } == 0 {
                     return Err(error("remove sandbox DACL entry"));
                 }

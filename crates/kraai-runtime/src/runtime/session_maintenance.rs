@@ -133,8 +133,8 @@ impl RuntimeCore {
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
-                if let Err(error) = runtime.agent_manager.publish_streaming_snapshots().await {
-                    runtime.send_service_error(error);
+                for (session, error) in runtime.agent_manager.publish_streaming_snapshots().await {
+                    runtime.send_session_report_error(&session, error);
                 }
                 let watched: Vec<_> = runtime
                     .observed_sessions

@@ -14,6 +14,7 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, GetLastError,
     LocalFree,
 };
+use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile,
 };
@@ -35,7 +36,7 @@ const LAUNCH_PREFIX: &str = "kraai.l.";
 const RETIRED_PREFIXES: &[&str] = &["kraai.w."];
 const MAPPINGS: &str = r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Sid(Vec<u32>);
 
 impl Sid {
@@ -320,6 +321,24 @@ pub(super) fn capability(name: &str) -> Result<Vec<Sid>, SandboxError> {
         free_sid_array(capabilities, capability_count);
     }
     copied
+}
+
+/// ALL APPLICATION PACKAGES and ALL RESTRICTED APPLICATION PACKAGES, which every AppContainer
+/// matches without carrying them as capabilities.
+pub(super) fn all_packages() -> Result<Vec<Sid>, SandboxError> {
+    ["S-1-15-2-1", "S-1-15-2-2"]
+        .into_iter()
+        .map(|name| {
+            let name = wide(name);
+            let mut sid = ptr::null_mut();
+            if unsafe { ConvertStringSidToSidW(name.as_ptr(), &mut sid) } == 0 {
+                return Err(super::unavailable("resolve application package SID"));
+            }
+            let copied = unsafe { Sid::copy(sid) };
+            unsafe { LocalFree(sid) };
+            copied
+        })
+        .collect()
 }
 
 unsafe fn free_sid_array(array: *mut PSID, count: u32) {

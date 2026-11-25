@@ -15,6 +15,9 @@ pub struct LaunchPlan {
     pub workspace_root: PathBuf,
     pub environment: BTreeMap<OsString, OsString>,
     pub runtime_roots: Vec<PathBuf>,
+    /// Hidden from sandboxed processes even where host or workspace access covers them.
+    /// Grants that lie strictly inside a denied path stay visible.
+    pub denied_paths: Vec<PathBuf>,
     pub capabilities: SandboxCapabilities,
     pub timeout: Duration,
     pub output_events: Option<Sender<OutputEvent>>,
@@ -47,6 +50,7 @@ impl LaunchPlan {
             workspace_root,
             environment: BTreeMap::new(),
             runtime_roots: Vec::new(),
+            denied_paths: Vec::new(),
             capabilities,
             timeout,
             output_events: None,

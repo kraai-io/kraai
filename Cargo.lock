@@ -3391,6 +3391,7 @@ dependencies = [
  "color-eyre",
  "directories",
  "futures",
+ "http",
  "httpdate",
  "kraai-execution-types",
  "kraai-io",

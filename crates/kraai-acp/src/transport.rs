@@ -79,6 +79,7 @@ impl Budget {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Connection {
     inner: ConnectionTo<Client>,
     budget: Budget,

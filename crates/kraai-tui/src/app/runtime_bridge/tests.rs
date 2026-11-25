@@ -304,3 +304,67 @@ async fn failed_executor_preserves_response_ids_and_startup_marker() {
     ));
     runtime.shutdown().await.unwrap();
 }
+
+#[test]
+fn turn_controls_and_model_fetches_do_not_queue_behind_refreshes() {
+    let (requests, receiver) = unbounded();
+    let (queries, queued) = unbounded();
+    let (model_lists, fetches) = unbounded();
+    let (commands, controls) = unbounded();
+    let session_id = || SessionId::new("session");
+    for request in [
+        RuntimeRequest::ListSessions,
+        RuntimeRequest::GetSessionSnapshot {
+            session_id: session_id(),
+        },
+        RuntimeRequest::RefetchModelList {
+            provider_id: String::from("provider"),
+        },
+        RuntimeRequest::CancelStream {
+            session_id: session_id(),
+        },
+        RuntimeRequest::ListUserInputHistory { limit: 1 },
+        RuntimeRequest::ApproveScript {
+            session_id: session_id(),
+            execution_id: String::from("execution"),
+        },
+        RuntimeRequest::DenyScript {
+            session_id: session_id(),
+            execution_id: String::from("execution"),
+        },
+        RuntimeRequest::FinishStartupSync,
+    ] {
+        assert!(requests.send(request).is_ok());
+    }
+    drop(requests);
+    route_requests(
+        receiver,
+        &Lanes {
+            queries,
+            model_lists,
+            commands,
+        },
+        |_| {},
+    );
+    assert!(matches!(
+        queued.try_iter().collect::<Vec<_>>().as_slice(),
+        [
+            RuntimeRequest::ListSessions,
+            RuntimeRequest::GetSessionSnapshot { .. },
+            RuntimeRequest::ListUserInputHistory { .. },
+            RuntimeRequest::FinishStartupSync,
+        ]
+    ));
+    assert!(matches!(
+        fetches.try_iter().collect::<Vec<_>>().as_slice(),
+        [RuntimeRequest::RefetchModelList { .. }]
+    ));
+    assert!(matches!(
+        controls.try_iter().collect::<Vec<_>>().as_slice(),
+        [
+            RuntimeRequest::CancelStream { .. },
+            RuntimeRequest::ApproveScript { .. },
+            RuntimeRequest::DenyScript { .. },
+        ]
+    ));
+}

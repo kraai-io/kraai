@@ -1,4 +1,9 @@
-use super::*;
+use super::auth::{map_provider_auth_status, pending_auth_target};
+use super::types::{ProvidersView, RunningScript, RuntimeRequest, ScriptPhase, UiMode};
+use super::{App, INPUT_HISTORY_LIMIT, StartupSync};
+use kraai_runtime::Event;
+use kraai_types::MessageId;
+use std::time::{Duration, Instant};
 
 impl App {
     pub(super) fn handle_runtime_event(&mut self, event: Event) {
@@ -40,7 +45,7 @@ impl App {
             } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     let started = Instant::now();
-                    self.state.running_scripts.insert(
+                    self.state.turn.running_scripts.insert(
                         call_id,
                         RunningScript {
                             started,
@@ -48,8 +53,8 @@ impl App {
                             tail: Vec::new(),
                         },
                     );
-                    self.state.script_clock = Some(started);
-                    self.invalidate_script_cards();
+                    self.state.turn.script_clock = Some(started);
+                    self.state.chat.invalidate_cards();
                 }
             }
             Event::ScriptOutputTail {
@@ -58,10 +63,10 @@ impl App {
                 lines,
             } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id)
-                    && let Some(script) = self.state.running_scripts.get_mut(&call_id)
+                    && let Some(script) = self.state.turn.running_scripts.get_mut(&call_id)
                 {
                     script.tail = lines;
-                    self.invalidate_script_cards();
+                    self.state.chat.invalidate_cards();
                 }
             }
             Event::RequestUsageUpdated {
@@ -78,13 +83,13 @@ impl App {
                     let now = Instant::now();
                     if timer.elapsed(now).is_some() {
                         self.state.feedback.completion_until = None;
-                        self.state.turn_cancelled = false;
-                    } else if self.state.turn_timer.elapsed(now).is_some()
+                        self.state.turn.cancelled = false;
+                    } else if self.state.turn.timer.elapsed(now).is_some()
                         && timer.last_duration().is_some()
                     {
                         self.state.feedback.completion_until = Some(now + Duration::from_secs(1));
                     }
-                    self.state.turn_timer = timer;
+                    self.state.turn.timer = timer;
                 }
             }
             Event::ModelsUpdated => {
@@ -118,11 +123,11 @@ impl App {
                 if !apply_state {
                     return;
                 }
-                self.state.is_streaming = true;
-                self.state.retry_waiting = false;
-                self.state.profile_locked = true;
-                self.state.script_phase = ScriptPhase::Idle;
-                self.state.profile_lock_stale_after_terminal_event = false;
+                self.state.turn.is_streaming = true;
+                self.state.turn.retry_waiting = false;
+                self.state.turn.profile_locked = true;
+                self.state.turn.script_phase = ScriptPhase::Idle;
+                self.state.turn.profile_lock_stale_after_terminal_event = false;
                 self.last_statusline_animation_tick = None;
             }
             Event::ItemStarted {
@@ -156,6 +161,11 @@ impl App {
                 session_id,
                 message,
             } => {
+                if matches!(message.content, kraai_types::ConversationItem::User { .. }) {
+                    self.request(RuntimeRequest::ListUserInputHistory {
+                        limit: INPUT_HISTORY_LIMIT,
+                    });
+                }
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.upsert_message(*message);
                 }
@@ -175,8 +185,9 @@ impl App {
             } => {
                 self.request(RuntimeRequest::ListSessions);
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
-                    self.state.is_streaming = activity == kraai_runtime::SessionActivity::Streaming;
-                    self.state.script_phase = match activity {
+                    self.state.turn.is_streaming =
+                        activity == kraai_runtime::SessionActivity::Streaming;
+                    self.state.turn.script_phase = match activity {
                         kraai_runtime::SessionActivity::AwaitingApproval => {
                             ScriptPhase::AwaitingApproval
                         }
@@ -191,14 +202,11 @@ impl App {
                 message_id,
             } => {
                 let message_id = MessageId::new(message_id);
-                self.mark_exit_usage_message_completed(message_id);
-                self.request(RuntimeRequest::ListUserInputHistory {
-                    limit: INPUT_HISTORY_LIMIT,
-                });
+                self.state.usage.mark_completed(message_id);
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     if apply_state {
-                        self.state.is_streaming = false;
-                        self.state.retry_waiting = false;
+                        self.state.turn.is_streaming = false;
+                        self.state.turn.retry_waiting = false;
                         self.last_statusline_animation_tick = None;
                     }
                     self.request_sync_for_session(&session_id);
@@ -213,11 +221,11 @@ impl App {
             } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     if apply_state {
-                        self.state.is_streaming = false;
-                        self.state.retry_waiting = false;
+                        self.state.turn.is_streaming = false;
+                        self.state.turn.retry_waiting = false;
                         self.last_statusline_animation_tick = None;
-                        self.state.profile_lock_stale_after_terminal_event =
-                            self.state.profile_locked;
+                        self.state.turn.profile_lock_stale_after_terminal_event =
+                            self.state.turn.profile_locked;
                     }
                     self.set_error(format!("Stream error: {error}"));
                     self.request_sync_for_session(&session_id);
@@ -229,12 +237,13 @@ impl App {
             }
             Event::StreamCancelled { session_id, .. } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
-                    self.state.is_streaming = false;
-                    self.state.retry_waiting = false;
+                    self.state.turn.is_streaming = false;
+                    self.state.turn.retry_waiting = false;
                     self.last_statusline_animation_tick = None;
-                    self.state.profile_lock_stale_after_terminal_event = self.state.profile_locked;
+                    self.state.turn.profile_lock_stale_after_terminal_event =
+                        self.state.turn.profile_locked;
                     self.state.feedback.completion_until = None;
-                    self.state.turn_cancelled = true;
+                    self.state.turn.cancelled = true;
                     self.request_sync_for_session(&session_id);
                 }
                 if self.state.current_session_id.as_ref() != Some(&session_id) {
@@ -256,19 +265,19 @@ impl App {
             }
             Event::ProviderRetryScheduled { session_id, .. } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
-                    self.state.retry_waiting = true;
-                    self.state.profile_lock_stale_after_terminal_event = false;
+                    self.state.turn.retry_waiting = true;
+                    self.state.turn.profile_lock_stale_after_terminal_event = false;
                 }
             }
             Event::ContextStateChanged { .. } => {}
             Event::ContinuationFailed { session_id, error } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     if apply_state {
-                        self.state.is_streaming = false;
-                        self.state.retry_waiting = false;
+                        self.state.turn.is_streaming = false;
+                        self.state.turn.retry_waiting = false;
                         self.last_statusline_animation_tick = None;
-                        self.state.profile_lock_stale_after_terminal_event =
-                            self.state.profile_locked;
+                        self.state.turn.profile_lock_stale_after_terminal_event =
+                            self.state.turn.profile_locked;
                     }
                     self.set_error(format!("Continuation failed: {error}"));
                     self.request_sync_for_session(&session_id);
@@ -292,7 +301,7 @@ impl App {
                 let settled = pending_auth_target(&status).is_none();
                 if self.apply_provider_auth_status(status)
                     && self.state.mode == UiMode::Providers
-                    && self.state.providers_view == ProvidersView::Provider
+                    && self.state.providers.view == ProvidersView::Provider
                     && settled
                 {
                     self.provider_feedback("Sign-in updated");
@@ -309,7 +318,7 @@ impl App {
                 if !apply_state {
                     return;
                 }
-                self.state.pending_script = Some(script);
+                self.state.turn.pending_script = Some(script);
                 self.enter_script_decision_phase();
             }
             Event::ScriptResultReady {
@@ -318,12 +327,12 @@ impl App {
                 ..
             } => {
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
-                    if self.state.running_scripts.remove(&call_id).is_some() {
-                        self.invalidate_script_cards();
+                    if self.state.turn.running_scripts.remove(&call_id).is_some() {
+                        self.state.chat.invalidate_cards();
                     }
-                    self.state.pending_script = None;
-                    self.state.script_phase = ScriptPhase::Idle;
-                    self.state.profile_lock_stale_after_terminal_event = false;
+                    self.state.turn.pending_script = None;
+                    self.state.turn.script_phase = ScriptPhase::Idle;
+                    self.state.turn.profile_lock_stale_after_terminal_event = false;
                 } else {
                     self.request(RuntimeRequest::ListSessions);
                 }

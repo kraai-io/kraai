@@ -23,6 +23,10 @@ entries are inheritable and kept, so only the first launch that uses a path walk
 its files. A launch only carries the capabilities for the paths its own policy
 grants, so entries left on other paths give it nothing. Files moved in later with
 their own explicit permissions are not covered.
+When a granted path contains Kraai's storage directory or config files, Kraai
+removes every entry an AppContainer could use from them before the launch, and
+leaves them removed. Runtime roots inside them, such as the session's script
+output, get read access of their own.
 Kraai deletes AppContainer profiles left behind by launches that crashed the next
 time it starts a sandbox.
 `no-sandbox` disables sandbox enforcement; Kraai never selects it automatically

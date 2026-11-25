@@ -1,7 +1,9 @@
 use kraai_runtime::{RuntimeErrorKind, RuntimeResult, SessionSnapshot};
 use kraai_types::{ModelId, ModelSelection, ProviderId};
 
-use super::*;
+use super::types::{PendingSubmit, RuntimeRequest, ScriptPhase};
+use super::{App, RuntimeRequestDelivery};
+use kraai_types::SessionId;
 
 #[derive(Default)]
 pub(super) struct SessionModelSave {
@@ -36,13 +38,13 @@ impl App {
     }
 
     fn current_model_selection(&mut self) -> Option<ModelSelection> {
-        let provider = self.state.selected_provider_id.clone()?;
-        let model = self.state.selected_model_id.clone()?;
+        let provider = self.state.models.selected_provider_id.clone()?;
+        let model = self.state.models.selected_model_id.clone()?;
         match (ProviderId::try_new(provider), ModelId::try_new(model)) {
             (Ok(provider_id), Ok(model_id)) => Some(ModelSelection {
                 provider_id,
                 model_id,
-                options: self.state.selected_model_options.clone(),
+                options: self.state.models.selected_options.clone(),
             }),
             _ => {
                 self.set_error(String::from("Cannot save an invalid model selection"));
@@ -58,7 +60,8 @@ impl App {
     ) -> bool {
         let save = self
             .state
-            .session_model_saves
+            .models
+            .session_saves
             .entry(session_id.clone())
             .or_default();
         save.desired = Some(selection);
@@ -82,10 +85,10 @@ impl App {
     }
 
     pub(super) fn reconcile_pending_session_model_options(&mut self) {
-        let mut sessions: Vec<_> = self.state.session_model_saves.keys().cloned().collect();
+        let mut sessions: Vec<_> = self.state.models.session_saves.keys().cloned().collect();
         sessions.sort_unstable();
         for session_id in sessions {
-            let Some(save) = self.state.session_model_saves.get_mut(&session_id) else {
+            let Some(save) = self.state.models.session_saves.get_mut(&session_id) else {
                 continue;
             };
             let Some(selection) = save.desired.as_mut() else {
@@ -93,7 +96,8 @@ impl App {
             };
             let Some(model) = self
                 .state
-                .models_by_provider
+                .models
+                .by_provider
                 .get(selection.provider_id.as_str())
                 .and_then(|models| {
                     models
@@ -115,22 +119,24 @@ impl App {
     pub(super) fn flush_session_model_save(&mut self, session_id: &SessionId) {
         if self
             .state
+            .sessions
             .pending_messages
             .iter()
             .any(|message| message.session_id == *session_id)
             || self
                 .state
+                .sessions
                 .pending_submit
                 .as_ref()
                 .is_some_and(|pending| pending.session_id.as_ref() == Some(session_id))
             || (self.state.current_session_id.as_ref() == Some(session_id)
                 && (self.state.runtime_is_active()
-                    || self.state.pending_script.is_some()
-                    || self.state.script_phase != ScriptPhase::Idle))
+                    || self.state.turn.pending_script.is_some()
+                    || self.state.turn.script_phase != ScriptPhase::Idle))
         {
             return;
         }
-        let Some(save) = self.state.session_model_saves.get_mut(session_id) else {
+        let Some(save) = self.state.models.session_saves.get_mut(session_id) else {
             return;
         };
         if save.in_flight.is_some() || save.failed || save.is_running != Some(false) {
@@ -139,8 +145,8 @@ impl App {
         let Some(selection) = save.desired.clone() else {
             return;
         };
-        self.state.next_model_save_id = self.state.next_model_save_id.saturating_add(1);
-        let save_id = self.state.next_model_save_id;
+        self.state.models.next_save_id = self.state.models.next_save_id.saturating_add(1);
+        let save_id = self.state.models.next_save_id;
         save.in_flight = Some(ModelSaveAttempt {
             id: save_id,
             selection: selection.clone(),
@@ -150,7 +156,7 @@ impl App {
             save_id,
             selection,
         }) == RuntimeRequestDelivery::Disconnected
-            && let Some(save) = self.state.session_model_saves.get_mut(session_id)
+            && let Some(save) = self.state.models.session_saves.get_mut(session_id)
         {
             save.in_flight = None;
         }
@@ -162,7 +168,7 @@ impl App {
         save_id: u64,
         result: RuntimeResult<()>,
     ) {
-        let Some(save) = self.state.session_model_saves.get_mut(session_id) else {
+        let Some(save) = self.state.models.session_saves.get_mut(session_id) else {
             return;
         };
         if !save
@@ -183,7 +189,7 @@ impl App {
                     save.desired = None;
                 }
                 if is_foreground {
-                    self.state.last_session_model = Some(attempt.selection);
+                    self.state.models.last_session_model = Some(attempt.selection);
                 }
                 self.flush_session_model_save(session_id);
                 self.request(RuntimeRequest::GetSessionSnapshot {
@@ -223,7 +229,8 @@ impl App {
         snapshot: &SessionSnapshot,
     ) {
         self.state
-            .session_model_saves
+            .models
+            .session_saves
             .entry(session_id.clone())
             .or_default()
             .is_running = Some(
@@ -241,31 +248,33 @@ impl App {
     ) {
         let save = self
             .state
-            .session_model_saves
+            .models
+            .session_saves
             .entry(session_id.clone())
             .or_default();
         if self.state.current_session_id.as_ref() != Some(session_id)
             || model_save_id < save.last_saved_id
-            || self.state.last_session_model == snapshot.session.selected_model
+            || self.state.models.last_session_model == snapshot.session.selected_model
         {
             return;
         }
-        self.state.last_session_model = snapshot.session.selected_model.clone();
+        self.state.models.last_session_model = snapshot.session.selected_model.clone();
         if save.desired.is_some() || save.in_flight.is_some() {
             return;
         }
         if let Some(selection) = &snapshot.session.selected_model {
             self.remember_model_options();
-            self.state.selected_provider_id = Some(selection.provider_id.to_string());
-            self.state.selected_model_id = Some(selection.model_id.to_string());
-            self.state.selected_model_options = selection.options.clone();
+            self.state.models.selected_provider_id = Some(selection.provider_id.to_string());
+            self.state.models.selected_model_id = Some(selection.model_id.to_string());
+            self.state.models.selected_options = selection.options.clone();
             self.reconcile_model_options();
         }
     }
 
     pub(super) fn mark_session_model_active(&mut self, session_id: &SessionId) {
         self.state
-            .session_model_saves
+            .models
+            .session_saves
             .entry(session_id.clone())
             .or_default()
             .is_running = Some(true);
@@ -275,13 +284,15 @@ impl App {
         let sessions = self
             .state
             .sessions
+            .list
             .iter()
             .filter(|session| {
                 !session.is_running && !session.is_streaming && !session.waiting_for_approval
             })
             .filter(|session| {
                 self.state
-                    .session_model_saves
+                    .models
+                    .session_saves
                     .get(&session.id)
                     .is_some_and(|save| {
                         save.desired.is_some() && save.in_flight.is_none() && !save.failed
@@ -299,13 +310,13 @@ impl App {
             .state
             .current_session_id
             .as_ref()
-            .and_then(|session| self.state.session_model_saves.get(session))
+            .and_then(|session| self.state.models.session_saves.get(session))
             .and_then(|save| save.desired.clone())
         else {
             return;
         };
-        self.state.selected_provider_id = Some(selection.provider_id.to_string());
-        self.state.selected_model_id = Some(selection.model_id.to_string());
-        self.state.selected_model_options = selection.options;
+        self.state.models.selected_provider_id = Some(selection.provider_id.to_string());
+        self.state.models.selected_model_id = Some(selection.model_id.to_string());
+        self.state.models.selected_options = selection.options;
     }
 }

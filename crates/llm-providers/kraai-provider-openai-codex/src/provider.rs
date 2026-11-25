@@ -233,13 +233,6 @@ impl Provider for OpenAiCodexProvider {
         Ok(())
     }
 
-    fn cache_warming_policy(
-        &self,
-        _model_id: &ModelId,
-    ) -> Option<kraai_provider_core::CacheWarmingPolicy> {
-        Some(kraai_provider_core::CacheWarmingPolicy::default())
-    }
-
     fn supports_native_compaction(&self, _model_id: &ModelId) -> bool {
         true
     }
@@ -542,7 +535,7 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
     }
 
     let url = response.url().to_string();
-    let retry_after = kraai_provider_core::parse_retry_after(&response);
+    let headers = response.headers().clone();
     let body = kraai_provider_core::read_error_body(response).await;
     error!(
         operation,
@@ -563,7 +556,7 @@ async fn ensure_success_response(operation: &str, response: Response) -> Result<
     }
     Err(kraai_provider_core::ProviderError::from_body(
         status,
-        retry_after,
+        &headers,
         &body,
         format!("OpenAI Codex {operation} failed with status {status} at {url}: {body}"),
     )

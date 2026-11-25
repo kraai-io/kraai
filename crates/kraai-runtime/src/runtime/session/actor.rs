@@ -25,6 +25,7 @@ pub(crate) enum SessionMessage {
     Send {
         message: MessageContent,
         selection: ModelSelection,
+        queue: bool,
         response: Responder<SubmitMessageOutcome>,
     },
     Cancel {
@@ -260,8 +261,9 @@ impl SessionActor {
             SessionMessage::Send {
                 message,
                 selection,
+                queue,
                 response,
-            } => self.send(message, selection, response).await,
+            } => self.send(message, selection, queue, response).await,
             SessionMessage::Cancel {
                 discard_queue,
                 expected_lease,

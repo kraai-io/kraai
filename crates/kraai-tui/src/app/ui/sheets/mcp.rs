@@ -5,7 +5,7 @@ use super::super::sheet::{Note, Sheet, SheetItem, SheetRow, Tone};
 use super::{notice, plural};
 
 pub(super) fn mcp(state: &AppState) -> Sheet {
-    match &state.mcp_open {
+    match &state.mcp.open {
         Some(server) => server_sheet(state, server),
         None => servers(state),
     }
@@ -20,10 +20,10 @@ fn servers(state: &AppState) -> Sheet {
             .iter()
             .map(|status| SheetRow::Item(server_row(status)))
             .collect(),
-        selected: state.sheet_index,
-        empty: String::from(if !state.mcp_loaded {
+        selected: state.sheet.index,
+        empty: String::from(if !state.mcp.loaded {
             "Loading MCP servers"
-        } else if state.mcp_auth.is_empty() {
+        } else if state.mcp.auth.is_empty() {
             "No MCP servers configured. Add servers to mcp.toml and restart Kraai"
         } else {
             "No servers match"
@@ -59,7 +59,7 @@ fn server_row(status: &McpAuthStatus) -> SheetItem {
 }
 
 fn server_sheet(state: &AppState, server: &str) -> Sheet {
-    let status = state.mcp_auth.get(server);
+    let status = state.mcp.auth.get(server);
     let actions = state.listed_mcp_actions();
     let mut notes = Vec::new();
     if let Some(status) = status {
@@ -71,7 +71,7 @@ fn server_sheet(state: &AppState, server: &str) -> Sheet {
             notes.push(Note::new(error, Tone::Danger));
         }
     }
-    if let Some(message) = state.mcp_feedback.get(server) {
+    if let Some(message) = state.mcp.feedback.get(server) {
         notes.push(Note::new(message, Tone::Plain));
     }
     notes.extend(closing_notes(state));
@@ -87,7 +87,7 @@ fn server_sheet(state: &AppState, server: &str) -> Sheet {
                 })
             })
             .collect(),
-        selected: state.sheet_index,
+        selected: state.sheet.index,
         empty: match status {
             None => format!("No MCP server named {server}"),
             Some(status) if matches!(status.state, McpAuthState::Unavailable) => {
@@ -102,7 +102,8 @@ fn server_sheet(state: &AppState, server: &str) -> Sheet {
 
 fn closing_notes(state: &AppState) -> Vec<Note> {
     state
-        .mcp_error
+        .mcp
+        .error
         .iter()
         .map(|error| Note::new(error, Tone::Danger))
         .chain(notice(state))

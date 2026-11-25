@@ -104,6 +104,20 @@ async fn denial_failure_cleans_up(fail_history: bool) {
             })
         })
         .await;
+    assert!(matches!(
+        harness
+            .handle
+            .send_message(
+                session_id.clone(),
+                "retry".into(),
+                "mock-model".into(),
+                "mock".into(),
+                Default::default(),
+            )
+            .await
+            .unwrap(),
+        SubmitMessageOutcome::Queued { .. }
+    ));
     harness
         .events
         .wait_for("queued response", |events| {

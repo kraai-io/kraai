@@ -90,3 +90,21 @@ async fn transport_failure_and_eof_are_reported_once() {
         }));
     }
 }
+
+#[tokio::test]
+async fn decoder_can_complete_at_eof() {
+    let events = kraai_test_support::hang_guard(
+        adapt_provider_stream(stream::empty().boxed(), "interrupted", |event, pending| {
+            assert!(event.is_none());
+            pending.push_back(text_event());
+            Ok(StreamStatus::Complete)
+        })
+        .collect::<Vec<_>>(),
+    )
+    .await
+    .unwrap()
+    .into_iter()
+    .collect::<Result<Vec<_>>>()
+    .unwrap();
+    assert!(events == vec![text_event()]);
+}

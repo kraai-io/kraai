@@ -1,6 +1,6 @@
-use super::CrosstermEvent;
 pub(super) use super::terminal_reply::FilteredEvent as PaletteEvent;
 use super::terminal_reply::TerminalReply;
+use ratatui::crossterm::event::Event as CrosstermEvent;
 use ratatui::style::Color;
 
 #[derive(Default)]

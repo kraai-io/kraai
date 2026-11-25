@@ -1,22 +1,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use color_eyre::eyre::Result;
 use crossbeam_channel::{Receiver, Sender};
-use kraai_execution_types::ImageAttachment;
-use kraai_runtime::{
-    AgentProfilesState, Event, FieldDefinition, Model, ModelSettings, ProviderDefinition,
-    ProviderSettings, RuntimeHandle, SettingsValue,
-};
-use kraai_types::{
-    AssistantItem, ChatRole, ConversationItem, MessageContent, MessageId, MessageStatus, SessionId,
-};
-use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
-    MouseEventKind,
-};
-
-use crate::components::{TextInput, running_dot};
+use kraai_types::{AssistantItem, ConversationItem, MessageId, MessageStatus, SessionId};
 
 mod agent_sheet;
 mod auth;
@@ -32,6 +18,7 @@ mod draft_images;
 mod error;
 mod executions;
 mod feedback;
+mod frame_pacer;
 mod images;
 mod input;
 mod lifecycle;
@@ -42,6 +29,7 @@ mod model_sheet;
 mod palette;
 mod provider_config;
 mod providers_sheet;
+mod refreshes;
 mod runtime_bridge;
 mod runtime_events;
 mod runtime_responses;
@@ -56,27 +44,10 @@ mod terminal_reply;
 mod types;
 mod ui;
 mod workspace_preferences;
-use self::auth::{
-    ProviderAuthState, ProviderAuthStatus, map_provider_auth_status, open_external_target,
-    pending_auth_target,
-};
-use self::chat_render::build_tip_chain;
-use self::commands::{active_command_prefix, is_known_slash_command};
-use self::runtime_bridge::{RuntimeEventBridgeMessage, spawn_event_bridge, spawn_runtime_bridge};
-use self::settings::{
-    clear_field_value, default_values, field_value_display, is_boolean_field, merge_values,
-    next_provider_id, parse_field_input, provider_definition_rank, set_field_value,
-};
+use self::runtime_bridge::RuntimeEventBridgeMessage;
 use self::state::AppState;
 pub use self::types::StartupOptions;
-use self::types::{
-    OptimisticMessage, PendingSubmit, ProvidersView, RunningScript, RuntimeRequest,
-    RuntimeResponse, ScriptApprovalAction, ScriptPhase, UiMode, UsageModelKey,
-};
-use self::ui::{
-    activity_text, copy_via_osc52, format_token_count, next_wrapping, previous_wrapping,
-};
-use self::workspace_preferences::WorkspacePreferences;
+use self::types::{RuntimeRequest, RuntimeResponse};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeRequestDelivery {
@@ -106,7 +77,7 @@ pub struct App {
     state: AppState,
     last_statusline_animation_tick: Option<Instant>,
     last_runtime_event_sequence: u64,
-    last_session_event_sequences: HashMap<SessionId, u64>,
+    refreshes: refreshes::Refreshes,
     session_snapshot_sequences: HashMap<SessionId, u64>,
     event_lag_session_resync_pending: bool,
     event_lag_script_resync_pending: bool,
@@ -122,73 +93,12 @@ const INPUT_HISTORY_LIMIT: usize = 100;
 mod tests;
 
 impl App {
-    pub(super) fn mark_exit_usage_message_completed(&mut self, message_id: MessageId) {
-        self.state
-            .exit_usage_totals
-            .completed_message_ids
-            .insert(message_id);
-    }
-
-    pub(super) fn accumulate_exit_usage_from_history(
-        &mut self,
-        history: &std::collections::BTreeMap<MessageId, kraai_types::Message>,
-    ) {
-        for message in history.values() {
-            if !self
-                .state
-                .exit_usage_totals
-                .completed_message_ids
-                .contains(&message.id)
-            {
-                continue;
-            }
-            let Some(generation) = message.generation.as_ref() else {
-                continue;
-            };
-            let Some(usage) = generation.usage.as_ref() else {
-                continue;
-            };
-            if !self
-                .state
-                .exit_usage_totals
-                .counted_message_ids
-                .insert(message.id.clone())
-            {
-                continue;
-            }
-
-            let model_usage = self
-                .state
-                .exit_usage_totals
-                .usage_by_model
-                .entry(UsageModelKey {
-                    provider_id: generation.provider_id.to_string(),
-                    model_id: generation.model_id.to_string(),
-                })
-                .or_default();
-            model_usage.total_tokens = model_usage.total_tokens.saturating_add(usage.total_tokens);
-            model_usage.input_tokens = model_usage.input_tokens.saturating_add(usage.input_tokens);
-            model_usage.output_tokens = model_usage
-                .output_tokens
-                .saturating_add(usage.output_tokens);
-            model_usage.reasoning_tokens = model_usage
-                .reasoning_tokens
-                .saturating_add(usage.reasoning_tokens);
-            model_usage.cache_write_tokens = model_usage
-                .cache_write_tokens
-                .saturating_add(usage.cache_write_tokens);
-            model_usage.cache_read_tokens = model_usage
-                .cache_read_tokens
-                .saturating_add(usage.cache_read_tokens);
-        }
-    }
-
     pub(super) fn discard_streamed_content(&mut self, message_id: &str) {
-        if let Some(message) = self.state.chat_history.get_mut(&MessageId::new(message_id))
+        if let Some(message) = self.state.chat.history.get_mut(&MessageId::new(message_id))
             && matches!(message.status, MessageStatus::Streaming { .. })
         {
             message.content = ConversationItem::Assistant { items: Vec::new() };
-            self.invalidate_chat_cache();
+            self.state.chat.invalidate();
             self.clamp_chat_scroll();
         }
     }
@@ -211,7 +121,7 @@ impl App {
             std::cmp::Ordering::Equal => items.push(item),
             std::cmp::Ordering::Greater => return false,
         }
-        self.invalidate_chat_cache();
+        self.mark_streamed(message_id);
         self.clamp_chat_scroll();
         true
     }
@@ -224,15 +134,24 @@ impl App {
             return false;
         };
         text.push_str(delta);
-        self.invalidate_chat_cache();
+        self.mark_streamed(message_id);
         self.clamp_chat_scroll();
         true
+    }
+
+    fn mark_streamed(&mut self, message_id: &str) {
+        self.state
+            .chat
+            .render_cache
+            .get_mut()
+            .mark_streamed(MessageId::new(message_id));
     }
 
     fn streaming_items(&mut self, message_id: &str) -> Option<&mut Vec<AssistantItem>> {
         let message = self
             .state
-            .chat_history
+            .chat
+            .history
             .get_mut(&MessageId::new(message_id))?;
         if !matches!(message.status, MessageStatus::Streaming { .. }) {
             return None;
@@ -250,13 +169,13 @@ impl App {
         older: Option<MessageId>,
     ) {
         match older {
-            None => self.state.chat_history = latest,
+            None => self.state.chat.history = latest,
             Some(older) => {
                 if let Some(oldest) = latest.keys().next() {
-                    self.state.chat_history.retain(|id, _| id < oldest);
+                    self.state.chat.history.retain(|id, _| id < oldest);
                 }
-                self.state.chat_history.extend(latest);
-                if !self.state.chat_history.contains_key(&older) {
+                self.state.chat.history.extend(latest);
+                if !self.state.chat.history.contains_key(&older) {
                     self.request(RuntimeRequest::GetHistoryPage {
                         session_id: session_id.clone(),
                         from: older,
@@ -271,41 +190,41 @@ impl App {
         session_id: &SessionId,
         page: kraai_runtime::HistoryPage,
     ) {
-        self.accumulate_exit_usage_from_history(&page.messages);
+        self.state.usage.accumulate_completed(&page.messages);
         for (id, message) in page.messages {
-            self.state.chat_history.entry(id).or_insert(message);
+            self.state.chat.history.entry(id).or_insert(message);
         }
         if let Some(older) = page.older_history
-            && !self.state.chat_history.contains_key(&older)
+            && !self.state.chat.history.contains_key(&older)
         {
             self.request(RuntimeRequest::GetHistoryPage {
                 session_id: session_id.clone(),
                 from: older,
             });
         }
-        self.invalidate_chat_cache();
+        self.state.chat.invalidate();
         self.reconcile_optimistic_messages();
         self.clamp_chat_scroll();
     }
 
     pub(super) fn upsert_message(&mut self, message: kraai_types::Message) {
-        let completed = message.status == MessageStatus::Complete;
+        let completed = !matches!(message.status, MessageStatus::Streaming { .. });
         let mut history = std::collections::BTreeMap::new();
         history.insert(message.id.clone(), message);
         if completed {
-            self.accumulate_exit_usage_from_history(&history);
+            self.state.usage.accumulate_completed(&history);
         }
-        self.state.chat_history.extend(history);
-        self.invalidate_chat_cache();
+        self.state.chat.history.extend(history);
+        self.state.chat.invalidate();
         self.reconcile_optimistic_messages();
         self.clamp_chat_scroll();
     }
 
     pub(super) fn remove_messages(&mut self, message_ids: &[MessageId]) {
         for id in message_ids {
-            self.state.chat_history.remove(id);
+            self.state.chat.history.remove(id);
         }
-        self.invalidate_chat_cache();
+        self.state.chat.invalidate();
         self.clamp_chat_scroll();
     }
 }

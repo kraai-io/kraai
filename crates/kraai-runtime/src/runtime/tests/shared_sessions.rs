@@ -520,6 +520,7 @@ async fn heartbeat_renews_during_approval_and_running_scripts_without_the_manage
                 status: ScriptExecutionStatus::Cancelled,
                 exit_code: None,
                 sandbox_denied: false,
+                sandbox_hint: None,
                 error: None,
                 stdout: Vec::new(),
                 stderr: Vec::new(),
@@ -591,6 +592,66 @@ async fn observers_follow_the_owners_turn_timer() {
         .turn_timer;
     assert!(finished.elapsed(std::time::Instant::now()).is_none());
     assert!(finished.last_duration().is_some());
+    observer.shutdown().await;
+    owner.shutdown().await;
+}
+
+#[tokio::test]
+async fn loading_a_session_keeps_watching_sessions_that_have_subscribers() {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let mut providers = ProviderManager::new();
+    providers.register_provider(
+        ProviderId::new("mock"),
+        Box::new(ControlledProvider {
+            events: Mutex::new(VecDeque::from([receiver])),
+        }),
+    );
+    let owner = RuntimeTestHarness::new_with_parts(providers).await;
+    let observer = RuntimeTestHarness::new_shared(Vec::new(), owner.data_dir.clone()).await;
+    let followed = create_session_with_profile(&owner.handle, "test-profile").await;
+    let unfollowed = create_session_with_profile(&owner.handle, "test-profile").await;
+    let latest = create_session_with_profile(&owner.handle, "test-profile").await;
+    let _subscription = observer.handle.subscribe_session(&followed);
+    assert!(
+        observer
+            .handle
+            .load_session(followed.clone())
+            .await
+            .unwrap()
+    );
+    assert!(
+        observer
+            .handle
+            .load_session(unfollowed.clone())
+            .await
+            .unwrap()
+    );
+    assert!(observer.handle.load_session(latest.clone()).await.unwrap());
+    let watched = observer.runtime.observed_sessions.lock().await.clone();
+    assert!(watched.contains_key(&followed));
+    assert!(!watched.contains_key(&unfollowed));
+    assert!(watched.contains_key(&latest));
+
+    owner
+        .handle
+        .send_message(
+            followed.clone(),
+            "first".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    observer
+        .events
+        .wait_for("followed session update", |events| {
+            events.iter().any(|event| {
+                matches!(event, Event::HistoryUpdated { session_id } if session_id == &followed)
+            })
+        })
+        .await;
+    drop(sender);
     observer.shutdown().await;
     owner.shutdown().await;
 }

@@ -91,7 +91,6 @@ pub(crate) fn assemble(
     let mut request = ProviderRequest {
         messages,
         script_tool: tool,
-        cacheable_messages: None,
         options: options.clone(),
     };
     limit_request_images(&mut request);

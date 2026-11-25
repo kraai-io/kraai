@@ -8,6 +8,19 @@ impl AgentManager {
             .unwrap_or_else(|| self.mcp())
     }
 
+    pub(super) fn available_commands(
+        &self,
+        session_id: &SessionId,
+        commands: &[String],
+    ) -> Vec<String> {
+        let mcp = self.session_mcp(session_id).has_servers();
+        commands
+            .iter()
+            .filter(|id| mcp || *id != kraai_commands::mcp::METADATA.id)
+            .cloned()
+            .collect()
+    }
+
     pub async fn replace_session_mcp_servers(
         &self,
         session_id: &SessionId,

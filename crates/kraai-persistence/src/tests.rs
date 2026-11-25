@@ -414,6 +414,7 @@ async fn execution_sources_output_and_terminal_outcomes_survive_reopen() {
                 status: ScriptExecutionStatus::Completed,
                 exit_code: Some(0),
                 sandbox_denied: false,
+                sandbox_hint: None,
                 error: None,
                 stdout: b"complete\0binary".to_vec(),
                 stderr: Vec::new(),

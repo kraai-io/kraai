@@ -162,6 +162,60 @@ async fn messages_arriving_during_preparation_stay_queued() {
     harness.shutdown().await;
 }
 
+async fn refused_start(harness: &RuntimeTestHarness, session_id: &kraai_types::SessionId) {
+    let error = harness
+        .handle
+        .start_content(
+            session_id.clone(),
+            "refused".into(),
+            "mock-model".into(),
+            "mock".into(),
+            Default::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, crate::RuntimeErrorKind::Conflict);
+}
+
+#[tokio::test]
+async fn start_refuses_a_running_session_without_queueing() {
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
+    super::harness::hold_preparation(&harness.runtime, &session_id).await;
+    refused_start(&harness, &session_id).await;
+    assert!(
+        super::harness::queue(&harness.runtime, &session_id)
+            .await
+            .is_empty()
+    );
+    super::harness::release_preparation(&harness.runtime, &session_id).await;
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn start_refuses_a_session_with_queued_messages() {
+    let harness = RuntimeTestHarness::new(Vec::new()).await;
+    let session_id = create_session_with_profile(&harness.handle, "test-profile").await;
+    super::harness::enqueue(
+        &harness.runtime,
+        &session_id,
+        [super::harness::queued(
+            "queued elsewhere".into(),
+            kraai_types::ModelId::new("mock-model"),
+            kraai_types::ProviderId::new("mock"),
+        )],
+    )
+    .await;
+    refused_start(&harness, &session_id).await;
+    assert_eq!(
+        super::harness::queue(&harness.runtime, &session_id)
+            .await
+            .len(),
+        1
+    );
+    harness.shutdown().await;
+}
+
 #[tokio::test]
 async fn queued_messages_survive_restart_and_drain_on_the_next_send() {
     let previous = RuntimeTestHarness::new(Vec::new()).await;

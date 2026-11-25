@@ -1,11 +1,12 @@
+use crate::app::types::ScriptPhase;
 use std::time::{Duration, Instant};
 
 use crate::duration::format_duration;
 
 use ratatui::{buffer::Buffer, layout::Rect, style::Style};
 
+use super::super::AppState;
 use super::super::model_options::option_summary;
-use super::super::{AppState, ScriptPhase};
 use crate::components::{display_width, fitting_prefix, normalize_terminal_text};
 use crate::theme;
 
@@ -33,13 +34,13 @@ pub(super) fn render_status(state: &AppState, area: Rect, buf: &mut Buffer) {
     let mut rows = (area.y..area.bottom())
         .rev()
         .map(|y| Rect::new(area.x, y, area.width, 1));
-    if (state.last_error.is_none() || area.height > 1)
+    if (state.errors.last.is_none() || area.height > 1)
         && let Some(row) = rows.next()
     {
         render_row(facts(state), None, row, buf);
     }
     let danger = Style::default().fg(theme::DANGER);
-    if let Some(error) = &state.last_error
+    if let Some(error) = &state.errors.last
         && let Some(row) = rows.next()
     {
         render_row(
@@ -141,22 +142,22 @@ pub(in crate::app) fn activity_text(state: &AppState, now: Instant) -> (String, 
     if state.script_decision_pending() {
         return (String::from("Submitting decision"), accent);
     }
-    if state.script_phase == ScriptPhase::AwaitingApproval {
+    if state.turn.script_phase == ScriptPhase::AwaitingApproval {
         return (String::from("Needs approval"), waiting);
     }
     if state.runtime_is_active() {
-        let activity = if state.retry_waiting {
+        let activity = if state.turn.retry_waiting {
             "Retrying"
-        } else if state.script_phase == ScriptPhase::Executing {
+        } else if state.turn.script_phase == ScriptPhase::Executing {
             "Running"
         } else {
             "Working"
         };
-        let text = match state.turn_timer.elapsed(now) {
+        let text = match state.turn.timer.elapsed(now) {
             Some(elapsed) => format!("{activity} {}", whole_seconds(elapsed)),
             None => activity.to_owned(),
         };
-        let colour = if state.retry_waiting {
+        let colour = if state.turn.retry_waiting {
             theme::WAITING
         } else {
             theme::ACCENT
@@ -168,16 +169,16 @@ pub(in crate::app) fn activity_text(state: &AppState, now: Instant) -> (String, 
             .unwrap_or(colour);
         return (text, Style::default().fg(colour));
     }
-    let Some(took) = state.turn_timer.last_duration().map(whole_seconds) else {
-        return if state.turn_cancelled {
+    let Some(took) = state.turn.timer.last_duration().map(whole_seconds) else {
+        return if state.turn.cancelled {
             (String::from("Cancelled"), waiting)
         } else {
             (String::new(), muted)
         };
     };
-    if state.turn_cancelled {
+    if state.turn.cancelled {
         (format!("Cancelled after {took}"), waiting)
-    } else if state.last_error.is_some() {
+    } else if state.errors.last.is_some() {
         (format!("Stopped after {took}"), muted)
     } else {
         let colour = if state.feedback.completion_until.is_some() {
@@ -196,19 +197,19 @@ fn whole_seconds(duration: Duration) -> String {
 fn facts(state: &AppState) -> Vec<Fact> {
     let (model, options) = model_facts(state);
     let (tokens, percent) = context_facts(state);
-    let images = match state.draft_images.len() {
+    let images = match state.composer.images.len() {
         0 => String::new(),
         1 => String::from("1 image"),
         count => format!("{count} images"),
     };
-    let incomplete = state.cost_recovery_list_pending
+    let incomplete = state.usage.cost_recovery_list_pending
         || state
             .current_session_id
             .as_ref()
-            .is_some_and(|id| state.cost_recovery_sessions.contains(id));
+            .is_some_and(|id| state.usage.cost_recovery_sessions.contains(id));
     let cost = format!(
         "{}{}",
-        state.session_cost,
+        state.usage.session_cost,
         if incomplete { " (incomplete)" } else { "" }
     );
     vec![
@@ -225,8 +226,8 @@ fn facts(state: &AppState) -> Vec<Fact> {
 
 fn model_facts(state: &AppState) -> (Fact, String) {
     let (Some(provider_id), Some(model_id)) = (
-        state.selected_provider_id.as_deref(),
-        state.selected_model_id.as_deref(),
+        state.models.selected_provider_id.as_deref(),
+        state.models.selected_model_id.as_deref(),
     ) else {
         return (
             Fact {
@@ -240,7 +241,7 @@ fn model_facts(state: &AppState) -> (Fact, String) {
     let (name, options) = match state.find_model(provider_id, model_id) {
         Some(model) => (
             model.name.clone(),
-            option_summary(model, &state.selected_model_options),
+            option_summary(model, &state.models.selected_options),
         ),
         None => (model_id.to_owned(), String::new()),
     };
@@ -248,11 +249,12 @@ fn model_facts(state: &AppState) -> (Fact, String) {
 }
 
 fn agent_label(state: &AppState) -> String {
-    let Some(profile_id) = state.selected_profile_id.as_deref() else {
+    let Some(profile_id) = state.agents.selected_profile_id.as_deref() else {
         return String::new();
     };
     state
-        .agent_profiles
+        .agents
+        .profiles
         .iter()
         .find(|profile| profile.id == profile_id)
         .map(|profile| profile.display_name.clone())
@@ -263,16 +265,18 @@ fn context_facts(state: &AppState) -> (String, Option<String>) {
     let max_context = match state.selected_model() {
         Some(model) => model.max_context,
         None => state
+            .turn
             .context_usage
             .as_ref()
             .filter(|usage| {
-                state.selected_provider_id.as_deref() == Some(usage.provider_id.as_str())
-                    && state.selected_model_id.as_deref() == Some(usage.model_id.as_str())
+                state.models.selected_provider_id.as_deref() == Some(usage.provider_id.as_str())
+                    && state.models.selected_model_id.as_deref() == Some(usage.model_id.as_str())
             })
             .and_then(|usage| usage.max_context),
     };
     format_context(
         state
+            .turn
             .context_usage
             .as_ref()
             .map(|usage| usage.used_context_tokens()),

@@ -1,7 +1,15 @@
-use super::*;
+use super::types;
+use super::types::{RuntimeRequest, RuntimeResponse, ScriptPhase, UiMode};
+use super::{App, StartupSync};
 
 impl App {
     pub(super) fn handle_runtime_response(&mut self, response: RuntimeResponse) {
+        let finished = self.refreshes.finish(&response);
+        self.apply_runtime_response(response);
+        self.continue_refresh(finished);
+    }
+
+    fn apply_runtime_response(&mut self, response: RuntimeResponse) {
         if let RuntimeResponse::ApproveScript {
             session_id,
             execution_id,
@@ -12,11 +20,18 @@ impl App {
             execution_id,
             ..
         } = &response
-            && let Some(executions) = self.state.submitted_script_decisions.get_mut(session_id)
+            && let Some(executions) = self
+                .state
+                .turn
+                .submitted_script_decisions
+                .get_mut(session_id)
         {
             executions.remove(execution_id);
             if executions.is_empty() {
-                self.state.submitted_script_decisions.remove(session_id);
+                self.state
+                    .turn
+                    .submitted_script_decisions
+                    .remove(session_id);
             }
         }
         match response {
@@ -29,24 +44,24 @@ impl App {
                     .then(|| {
                         self.state
                             .filtered_models()
-                            .get(self.state.sheet_index)
+                            .get(self.state.sheet.index)
                             .map(|(provider, model)| ((*provider).to_owned(), model.id.clone()))
                     })
                     .flatten();
                 let setting = self.state.highlighted_model_setting();
-                self.state.models_by_provider = models;
+                self.state.models.by_provider = models;
                 if let Some(id) = setting {
                     self.state.highlight_model_setting(&id);
                 }
                 if self.state.mode == UiMode::Model {
                     let filtered = self.state.filtered_models();
-                    let index = highlighted.map_or(self.state.sheet_index, |(provider, id)| {
+                    let index = highlighted.map_or(self.state.sheet.index, |(provider, id)| {
                         filtered
                             .iter()
                             .position(|(candidate, model)| *candidate == provider && model.id == id)
                             .unwrap_or(0)
                     });
-                    self.state.sheet_index = index.min(filtered.len().saturating_sub(1));
+                    self.state.sheet.index = index.min(filtered.len().saturating_sub(1));
                 }
                 self.ensure_selected_model();
                 self.reconcile_model_options();
@@ -63,20 +78,22 @@ impl App {
             }
             RuntimeResponse::AgentProfileCatalog(result) => match result {
                 Ok(catalog) => {
-                    self.state.agent_profiles = catalog.profiles;
-                    self.state.agent_profile_warnings = catalog.warnings;
+                    self.state.agents.profiles = catalog.profiles;
+                    self.state.agents.warnings = catalog.warnings;
                     let selected_is_available = self
                         .state
+                        .agents
                         .selected_profile_id
                         .as_ref()
                         .is_some_and(|selected| {
                             self.state
-                                .agent_profiles
+                                .agents
+                                .profiles
                                 .iter()
                                 .any(|profile| &profile.id == selected)
                         });
                     if !selected_is_available {
-                        self.state.selected_profile_id = Some(catalog.default_profile_id);
+                        self.state.agents.selected_profile_id = Some(catalog.default_profile_id);
                     }
                     self.state.highlight_selected_agent();
                     self.maybe_send_startup_message();
@@ -86,14 +103,14 @@ impl App {
                 }
             },
             RuntimeResponse::ProviderDefinitions(Ok(definitions)) => {
-                self.state.provider_definitions = definitions;
+                self.state.providers.definitions = definitions;
             }
             RuntimeResponse::ProviderDefinitions(Err(err)) => {
                 self.set_error(format!("Failed loading provider definitions: {err}"));
             }
             RuntimeResponse::Settings(Ok(settings)) => {
-                self.state.settings_draft = Some(settings);
-                self.state.settings_errors.clear();
+                self.state.providers.settings_draft = Some(settings);
+                self.state.providers.settings_errors.clear();
             }
             RuntimeResponse::Settings(Err(err)) => {
                 self.set_error(format!("Failed loading settings: {err}"));
@@ -114,13 +131,13 @@ impl App {
             },
             RuntimeResponse::McpAuthStatuses(result) => match result {
                 Ok(statuses) => {
-                    self.state.mcp_error = None;
+                    self.state.mcp.error = None;
                     for status in statuses {
                         self.apply_mcp_auth_status(status);
                     }
-                    self.state.mcp_loaded = true;
+                    self.state.mcp.loaded = true;
                 }
-                Err(error) => self.state.mcp_error = Some(format!("MCP auth failed: {error}")),
+                Err(error) => self.state.mcp.error = Some(format!("MCP auth failed: {error}")),
             },
             RuntimeResponse::StartMcpLogin {
                 server,
@@ -134,20 +151,22 @@ impl App {
                 Err(error) => {
                     if self
                         .state
-                        .mcp_browser_intent
+                        .mcp
+                        .browser_intent
                         .get(&server)
                         .is_some_and(|intent| intent.request_id == request_id)
                     {
-                        self.state.mcp_browser_intent.remove(&server);
+                        self.state.mcp.browser_intent.remove(&server);
                         self.state
-                            .mcp_feedback
+                            .mcp
+                            .feedback
                             .insert(server.clone(), format!("MCP login failed: {error}"));
                     }
                 }
             },
             RuntimeResponse::McpAuthStatus(result) => match result {
                 Ok(status) => self.apply_mcp_auth_status(status),
-                Err(error) => self.state.mcp_error = Some(format!("MCP auth failed: {error}")),
+                Err(error) => self.state.mcp.error = Some(format!("MCP auth failed: {error}")),
             },
             RuntimeResponse::CreateSession {
                 creation_id,
@@ -155,26 +174,32 @@ impl App {
             } => {
                 if self
                     .state
+                    .sessions
                     .pending_submit
                     .as_ref()
                     .is_none_or(|pending| pending.creation_id != creation_id)
                 {
                     return;
                 }
-                let draft_profile_id = self.state.selected_profile_id.clone();
-                let pending_submit = self.state.pending_submit.take().map(|mut pending_submit| {
-                    pending_submit.session_id = Some(session_id.clone());
-                    pending_submit
-                });
+                let draft_profile_id = self.state.agents.selected_profile_id.clone();
+                let pending_submit =
+                    self.state
+                        .sessions
+                        .pending_submit
+                        .take()
+                        .map(|mut pending_submit| {
+                            pending_submit.session_id = Some(session_id.clone());
+                            pending_submit
+                        });
                 if let Some(pending) = &pending_submit {
                     self.preserve_model_selection_after_creation(pending);
                 }
                 self.reset_session_state(Some(session_id.clone()));
-                self.state.pending_submit = pending_submit;
-                self.state.selected_profile_id = draft_profile_id;
+                self.state.sessions.pending_submit = pending_submit;
+                self.state.agents.selected_profile_id = draft_profile_id;
                 self.request_sync_for_session(&session_id);
 
-                if let Some(pending_submit) = self.state.pending_submit.take() {
+                if let Some(pending_submit) = self.state.sessions.pending_submit.take() {
                     self.dispatch_send_message(
                         session_id,
                         pending_submit.message,
@@ -191,13 +216,14 @@ impl App {
             } => {
                 if self
                     .state
+                    .sessions
                     .pending_submit
                     .as_ref()
                     .is_none_or(|pending| pending.creation_id != creation_id)
                 {
                     return;
                 }
-                if let Some(pending) = self.state.pending_submit.take() {
+                if let Some(pending) = self.state.sessions.pending_submit.take() {
                     self.recover_session_message(pending.session_id, pending.message);
                 }
                 self.set_error(format!("Failed creating session: {err}"));
@@ -210,7 +236,7 @@ impl App {
                 let is_foreground = self.state.current_session_id.as_ref() == Some(&session_id);
                 self.request(RuntimeRequest::ListSessions);
                 if is_foreground {
-                    self.state.selected_profile_id = Some(profile_id);
+                    self.state.agents.selected_profile_id = Some(profile_id);
                     self.save_workspace_preferences();
                     self.request(RuntimeRequest::GetSessionSnapshot {
                         session_id: session_id.clone(),
@@ -222,11 +248,12 @@ impl App {
 
                 if self
                     .state
+                    .sessions
                     .pending_submit
                     .as_ref()
                     .and_then(|pending| pending.session_id.as_ref())
                     == Some(&session_id)
-                    && let Some(pending_submit) = self.state.pending_submit.take()
+                    && let Some(pending_submit) = self.state.sessions.pending_submit.take()
                 {
                     self.dispatch_send_message(
                         session_id,
@@ -252,16 +279,17 @@ impl App {
             } => {
                 if self
                     .state
+                    .sessions
                     .pending_submit
                     .as_ref()
                     .and_then(|pending| pending.session_id.as_ref())
                     == Some(&session_id)
-                    && let Some(pending) = self.state.pending_submit.take()
+                    && let Some(pending) = self.state.sessions.pending_submit.take()
                 {
                     self.recover_session_message(pending.session_id, pending.message);
                 }
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
-                    self.state.profile_lock_stale_after_terminal_event = false;
+                    self.state.turn.profile_lock_stale_after_terminal_event = false;
                     self.set_error(format!("Failed changing agent: {err}"));
                 }
             }
@@ -271,13 +299,14 @@ impl App {
             RuntimeResponse::SendMessage { session_id, result } => {
                 let Some(index) = self
                     .state
+                    .sessions
                     .pending_messages
                     .iter()
                     .position(|pending| pending.session_id == session_id)
                 else {
                     return;
                 };
-                let Some(pending) = self.state.pending_messages.remove(index) else {
+                let Some(pending) = self.state.sessions.pending_messages.remove(index) else {
                     return;
                 };
                 if let Err(err) = result {
@@ -289,20 +318,21 @@ impl App {
                         return;
                     }
                     self.state
+                        .chat
                         .optimistic_messages
                         .retain(|message| Some(&message.local_id) != pending.local_id.as_ref());
-                    self.invalidate_chat_cache();
-                    self.state.is_streaming = false;
-                    self.state.profile_lock_stale_after_terminal_event = false;
+                    self.state.chat.invalidate();
+                    self.state.turn.is_streaming = false;
+                    self.state.turn.profile_lock_stale_after_terminal_event = false;
                     self.set_error(format!("Send failed: {err}"));
                 }
             }
             RuntimeResponse::SaveSettings(Ok(())) => {
-                self.state.settings_errors.clear();
+                self.state.providers.settings_errors.clear();
                 self.request(RuntimeRequest::ListModels);
             }
             RuntimeResponse::SaveSettings(Err(err)) => {
-                self.state.settings_errors = err
+                self.state.providers.settings_errors = err
                     .violations
                     .iter()
                     .map(|violation| (violation.field.clone(), violation.message.clone()))
@@ -325,30 +355,24 @@ impl App {
             } => match *result {
                 Ok(snapshot) => {
                     self.observe_session_model_snapshot(&session_id, model_save_id, &snapshot);
-                    if self
-                        .last_session_event_sequences
-                        .get(&session_id)
-                        .is_some_and(|event_sequence| snapshot.event_sequence < *event_sequence)
-                    {
-                        return;
-                    }
                     self.session_snapshot_sequences
                         .insert(session_id.clone(), snapshot.event_sequence);
-                    self.accumulate_exit_usage_from_history(&snapshot.history);
+                    self.state.usage.accumulate_completed(&snapshot.history);
                     self.observe_session_activity_snapshot(&session_id, &snapshot);
                     self.update_costs(&session_id, snapshot.requests);
-                    self.state.cost_recovery_sessions.remove(&session_id);
+                    self.state.usage.cost_recovery_sessions.remove(&session_id);
                     if self.state.current_session_id.as_ref() == Some(&session_id) {
-                        self.state.turn_timer = snapshot.turn_timer;
-                        self.state.current_tip_id = snapshot.session.tip_id.clone();
+                        self.state.turn.timer = snapshot.turn_timer;
+                        self.state.chat.tip_id = snapshot.session.tip_id.clone();
                         self.install_latest_history(
                             &session_id,
                             snapshot.history,
                             snapshot.older_history,
                         );
-                        self.state.context_usage = snapshot.context_usage;
+                        self.state.turn.context_usage = snapshot.context_usage;
                         if self
                             .state
+                            .turn
                             .pending_script
                             .as_ref()
                             .map(|script| &script.execution_id)
@@ -357,12 +381,12 @@ impl App {
                                 .as_ref()
                                 .map(|script| &script.execution_id)
                         {
-                            self.state.approval_scroll.set(0);
-                            self.state.approval_expanded = false;
+                            self.state.turn.approval_scroll.set(0);
+                            self.state.turn.approval_expanded = false;
                         }
-                        self.state.pending_script = snapshot.pending_script;
+                        self.state.turn.pending_script = snapshot.pending_script;
                         self.apply_agent_profiles_state(snapshot.profiles);
-                        self.state.is_streaming =
+                        self.state.turn.is_streaming =
                             matches!(snapshot.activity, kraai_runtime::SessionActivity::Streaming);
                         if !matches!(
                             snapshot.activity,
@@ -370,7 +394,7 @@ impl App {
                         ) {
                             self.clear_running_scripts();
                         }
-                        self.state.script_phase = match snapshot.activity {
+                        self.state.turn.script_phase = match snapshot.activity {
                             kraai_runtime::SessionActivity::AwaitingApproval => {
                                 ScriptPhase::AwaitingApproval
                             }
@@ -380,16 +404,17 @@ impl App {
                             kraai_runtime::SessionActivity::Idle
                             | kraai_runtime::SessionActivity::Streaming => ScriptPhase::Idle,
                         };
-                        self.state.profile_locked = snapshot.session.profile_locked;
+                        self.state.turn.profile_locked = snapshot.session.profile_locked;
                         if let Some(existing) = self
                             .state
                             .sessions
+                            .list
                             .iter_mut()
                             .find(|session| session.id == snapshot.session.id)
                         {
                             *existing = snapshot.session;
                         }
-                        self.invalidate_chat_cache();
+                        self.state.chat.invalidate();
                         self.reconcile_optimistic_messages();
                         self.clamp_chat_scroll();
                     }
@@ -422,10 +447,10 @@ impl App {
                 session_id,
                 result,
             } => {
-                if self.state.pending_session_load_id != Some(load_id) {
+                if self.state.sessions.pending_load_id != Some(load_id) {
                     return;
                 }
-                self.state.pending_session_load_id = None;
+                self.state.sessions.pending_load_id = None;
                 match result {
                     Ok(true) => {
                         self.reset_chat_session(Some(session_id));
@@ -445,15 +470,16 @@ impl App {
                     self.sync_current_session_streaming_from_sessions();
                     self.event_lag_session_resync_pending = false;
                 }
-                if self.state.cost_recovery_list_pending {
-                    self.state.cost_recovery_list_pending = false;
-                    self.state.cost_recovery_sessions = self
+                if self.state.usage.cost_recovery_list_pending {
+                    self.state.usage.cost_recovery_list_pending = false;
+                    self.state.usage.cost_recovery_sessions = self
                         .state
                         .sessions
+                        .list
                         .iter()
                         .map(|session| session.id.clone())
                         .collect();
-                    for session_id in self.state.cost_recovery_sessions.clone() {
+                    for session_id in self.state.usage.cost_recovery_sessions.clone() {
                         self.request_sync_for_session(&session_id);
                     }
                 }
@@ -462,7 +488,7 @@ impl App {
                 self.set_error(format!("Failed loading sessions: {err}"));
             }
             RuntimeResponse::UserInputHistory(Ok(history)) => {
-                self.state.input_history = history;
+                self.state.composer.history = history;
                 self.reset_input_history_navigation();
             }
             RuntimeResponse::UserInputHistory(Err(err)) => {
@@ -472,9 +498,12 @@ impl App {
                 session_id,
                 result: Ok(()),
             } => {
-                self.state.sessions.retain(|s| s.id != session_id);
-                self.state.failed_messages.remove(&Some(session_id.clone()));
-                self.state.session_model_saves.remove(&session_id);
+                self.state.sessions.list.retain(|s| s.id != session_id);
+                self.state
+                    .sessions
+                    .failed_messages
+                    .remove(&Some(session_id.clone()));
+                self.state.models.session_saves.remove(&session_id);
                 if self.state.current_session_id.as_ref() == Some(&session_id) {
                     self.reset_chat_session(None);
                 }
@@ -494,13 +523,14 @@ impl App {
                 }
                 if self
                     .state
+                    .turn
                     .pending_script
                     .as_ref()
                     .is_some_and(|script| script.execution_id == execution_id)
                 {
-                    self.state.pending_script = None;
-                    self.state.script_phase = ScriptPhase::Executing;
-                    self.state.profile_lock_stale_after_terminal_event = false;
+                    self.state.turn.pending_script = None;
+                    self.state.turn.script_phase = ScriptPhase::Executing;
+                    self.state.turn.profile_lock_stale_after_terminal_event = false;
                 }
             }
             RuntimeResponse::ApproveScript {
@@ -522,12 +552,13 @@ impl App {
                 }
                 if self
                     .state
+                    .turn
                     .pending_script
                     .as_ref()
                     .is_some_and(|script| script.execution_id == execution_id)
                 {
-                    self.state.pending_script = None;
-                    self.state.script_phase = ScriptPhase::Executing;
+                    self.state.turn.pending_script = None;
+                    self.state.turn.script_phase = ScriptPhase::Executing;
                 }
             }
             RuntimeResponse::DenyScript {

@@ -472,11 +472,11 @@ async fn stream_deltas_replay_idempotently_until_a_full_save() {
     }
     let messages = persistence.messages();
     messages
-        .append_stream_deltas(&message, 0, &deltas)
+        .append_stream_deltas(&message.id, 0, &deltas)
         .await
         .unwrap();
     messages
-        .append_stream_deltas(&message, 0, &deltas)
+        .append_stream_deltas(&message.id, 0, &deltas)
         .await
         .unwrap();
     let reopened = open_persistence(directory.path()).await.unwrap();

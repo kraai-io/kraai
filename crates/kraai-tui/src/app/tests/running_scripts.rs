@@ -1,3 +1,5 @@
+use crate::app::types::ScriptPhase;
+use kraai_runtime::Event;
 use std::time::{Duration, Instant};
 
 use kraai_execution_types::{ScriptExecutionOutcome, ScriptExecutionStatus, ScriptOutputStream};
@@ -5,7 +7,7 @@ use kraai_runtime::ScriptOutputLine;
 use kraai_types::SessionId;
 use ratatui::style::Color;
 
-use super::{Event, ScriptPhase, TestHarness, pending_script, test_harness};
+use super::{TestHarness, pending_script, test_harness};
 use crate::components::{RunningCard, ScriptCard, running_dot};
 
 fn started(harness: &mut TestHarness, session: &str, call: &str) {
@@ -48,10 +50,10 @@ fn clocked_harness() -> (TestHarness, Instant) {
     let mut harness = session_harness();
     started(&mut harness, "session", "call");
     let start = Instant::now();
-    if let Some(script) = harness.app.state.running_scripts.get_mut("call") {
+    if let Some(script) = harness.app.state.turn.running_scripts.get_mut("call") {
         script.started = start;
     }
-    harness.app.state.script_clock = Some(start);
+    harness.app.state.turn.script_clock = Some(start);
     harness.app.state.breath_origin = start;
     (harness, start)
 }
@@ -75,11 +77,11 @@ fn a_started_script_runs_with_its_timeout_and_its_latest_tail() {
     );
 
     started(&mut harness, "other", "call");
-    assert!(harness.app.state.running_scripts.is_empty());
+    assert!(harness.app.state.turn.running_scripts.is_empty());
 
-    let epoch = harness.app.state.cards_epoch;
+    let epoch = harness.app.state.chat.cards_epoch;
     started(&mut harness, "session", "call");
-    assert_ne!(harness.app.state.cards_epoch, epoch);
+    assert_ne!(harness.app.state.chat.cards_epoch, epoch);
     assert_eq!(
         harness.app.state.script_card("call", true),
         running(Duration::ZERO, &[])
@@ -103,8 +105,8 @@ fn the_card_waits_for_approval_only_for_the_call_that_asked() {
     let mut harness = session_harness();
     let mut script = pending_script("execution");
     script.call_id = String::from("call");
-    harness.app.state.pending_script = Some(script);
-    harness.app.state.script_phase = ScriptPhase::AwaitingApproval;
+    harness.app.state.turn.pending_script = Some(script);
+    harness.app.state.turn.script_phase = ScriptPhase::AwaitingApproval;
     assert_eq!(
         harness.app.state.script_card("call", false),
         ScriptCard::AwaitingApproval
@@ -120,11 +122,11 @@ fn the_clock_redraws_the_chat_only_when_a_card_would_change() {
     let (mut harness, start) = clocked_harness();
     let at = |millis: u64| start + Duration::from_millis(millis);
 
-    let epoch = harness.app.state.cards_epoch;
+    let epoch = harness.app.state.chat.cards_epoch;
     assert!(!harness.app.advance_script_clock(at(499)));
-    assert_eq!(harness.app.state.cards_epoch, epoch);
+    assert_eq!(harness.app.state.chat.cards_epoch, epoch);
     assert!(harness.app.advance_script_clock(at(1700)));
-    assert_ne!(harness.app.state.cards_epoch, epoch);
+    assert_ne!(harness.app.state.chat.cards_epoch, epoch);
     assert_eq!(
         harness.app.state.script_card("call", false),
         running(Duration::from_millis(1700), &[])
@@ -139,11 +141,11 @@ fn the_clock_redraws_the_chat_only_when_a_card_would_change() {
         })
     );
 
-    let epoch = harness.app.state.cards_epoch;
+    let epoch = harness.app.state.chat.cards_epoch;
     assert!(!harness.app.advance_script_clock(at(1999)));
-    assert_eq!(harness.app.state.cards_epoch, epoch);
+    assert_eq!(harness.app.state.chat.cards_epoch, epoch);
     assert!(harness.app.advance_script_clock(at(2000)));
-    assert_ne!(harness.app.state.cards_epoch, epoch);
+    assert_ne!(harness.app.state.chat.cards_epoch, epoch);
 }
 
 #[test]
@@ -153,15 +155,15 @@ fn the_clock_redraws_a_fading_dot_once_a_frame_and_only_when_its_colour_moves() 
     harness.app.state.palette.muted = muted;
     let at = |millis: u64| start + Duration::from_millis(millis);
 
-    let epoch = harness.app.state.cards_epoch;
+    let epoch = harness.app.state.chat.cards_epoch;
     for millis in [16, 49] {
         assert!(!harness.app.advance_script_clock(at(millis)), "{millis}");
     }
-    assert_eq!(harness.app.state.cards_epoch, epoch);
-    assert_eq!(harness.app.state.script_clock, Some(start));
+    assert_eq!(harness.app.state.chat.cards_epoch, epoch);
+    assert_eq!(harness.app.state.turn.script_clock, Some(start));
 
     assert!(harness.app.advance_script_clock(at(800)));
-    assert_ne!(harness.app.state.cards_epoch, epoch);
+    assert_ne!(harness.app.state.chat.cards_epoch, epoch);
     assert_eq!(
         harness.app.state.script_card("call", false),
         running_on(Duration::from_millis(800), &[], muted)
@@ -199,33 +201,33 @@ fn a_result_a_finished_turn_or_another_session_ends_the_running_card() {
             exit_code: Some(0),
         },
     });
-    assert!(harness.app.state.running_scripts.is_empty());
+    assert!(harness.app.state.turn.running_scripts.is_empty());
     assert!(!harness.app.advance_script_clock(Instant::now()));
-    assert_eq!(harness.app.state.script_clock, None);
+    assert_eq!(harness.app.state.turn.script_clock, None);
 
     started(&mut harness, "session", "call");
     harness.app.handle_runtime_event(Event::TurnCompleted {
         session_id: SessionId::new("session"),
     });
-    assert!(harness.app.state.running_scripts.is_empty());
+    assert!(harness.app.state.turn.running_scripts.is_empty());
 
     started(&mut harness, "session", "call");
     harness
         .app
         .reset_session_state(Some(SessionId::new("another")));
-    assert!(harness.app.state.running_scripts.is_empty());
+    assert!(harness.app.state.turn.running_scripts.is_empty());
 }
 
 #[test]
 fn a_finished_turn_redraws_the_cards_it_stops() {
     let mut harness = session_harness();
     started(&mut harness, "session", "call");
-    let epoch = harness.app.state.cards_epoch;
+    let epoch = harness.app.state.chat.cards_epoch;
     harness.app.handle_runtime_event(Event::TurnCompleted {
         session_id: SessionId::new("session"),
     });
-    assert!(harness.app.state.running_scripts.is_empty());
-    assert_ne!(harness.app.state.cards_epoch, epoch);
+    assert!(harness.app.state.turn.running_scripts.is_empty());
+    assert_ne!(harness.app.state.chat.cards_epoch, epoch);
 }
 
 #[test]
@@ -246,7 +248,7 @@ fn a_snapshot_that_runs_no_script_drops_the_running_cards() {
                 result: Box::new(Ok(snapshot)),
             });
         assert_eq!(
-            harness.app.state.running_scripts.contains_key("call"),
+            harness.app.state.turn.running_scripts.contains_key("call"),
             keeps,
             "{activity:?}"
         );

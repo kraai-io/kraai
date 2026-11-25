@@ -151,7 +151,6 @@ async fn tool_free_summaries_stream_text_and_usage_through_authenticated_request
             .generate_reply_stream(
                 &ModelId::new("summary-model"),
                 ProviderRequest {
-                    cacheable_messages: None,
                     options: reasoning("low"),
                     messages: vec![
                         ConversationItem::System {
@@ -266,11 +265,9 @@ async fn discovery_drives_requests_and_reports_refresh_failures() {
     assert_eq!(models.len(), 1);
     let model = models.first().expect("no discovered model");
     assert_eq!(model.id.as_str(), "brand-new-codex");
-    assert!(provider.cache_warming_policy(&model.id).is_some());
     assert_eq!(model.name, "Brand New");
     assert_eq!(model.max_context, Some(234567));
     let request = ProviderRequest {
-        cacheable_messages: None,
         options: reasoning("high"),
         messages: vec![],
         script_tool: Some(ScriptToolDefinition {
@@ -369,7 +366,6 @@ async fn rejected_reasoning_retries_once_without_losing_visible_history() {
         let provider = provider(base_url);
         provider.refresh_model_list().await.unwrap();
         let request = ProviderRequest {
-            cacheable_messages: None,
             options: reasoning("low"),
             script_tool: None,
             messages: vec![
@@ -493,7 +489,6 @@ async fn native_compaction_sends_trigger_and_replays_encrypted_checkpoint() {
             name: "kraai_nushell".into(),
             description: "Run script".into(),
         }),
-        cacheable_messages: None,
         options: reasoning("low"),
     };
     let events = provider
@@ -596,7 +591,6 @@ async fn native_compaction_records_rejected_reasoning_without_retrying_the_faile
             }],
         }],
         script_tool: None,
-        cacheable_messages: None,
         options: reasoning("low"),
     };
     assert!(
@@ -678,7 +672,6 @@ async fn discovered_processing_tiers_preserve_model_and_reasoning_for_generation
                     ProviderRequest {
                         messages: Vec::new(),
                         script_tool: None,
-                        cacheable_messages: None,
                         options,
                     },
                     &ProviderRequestContext::default(),
@@ -708,7 +701,6 @@ async fn discovered_processing_tiers_preserve_model_and_reasoning_for_generation
                         messages: vec![ConversationItem::User {
                             content: "Hello".into(),
                         }],
-                        cacheable_messages: None,
                         script_tool: None,
                         options,
                     },
@@ -774,7 +766,6 @@ async fn configured_custom_models_send_their_settings_without_native_discovery_e
             ProviderRequest {
                 messages: Vec::new(),
                 script_tool: None,
-                cacheable_messages: None,
                 options: kraai_types::ModelOptionValues::from([(
                     "priority-processing".into(),
                     kraai_types::ModelOptionValue::Boolean(true),

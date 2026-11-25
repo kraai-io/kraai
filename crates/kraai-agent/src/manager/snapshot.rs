@@ -30,10 +30,6 @@ pub struct SessionSnapshotData {
 }
 
 impl AgentManager {
-    pub fn request_usage_store(&self) -> Arc<dyn kraai_persistence::RequestUsageStore> {
-        self.usage_store.clone()
-    }
-
     pub async fn capture_session_snapshot(
         &self,
         session_id: &SessionId,
@@ -189,15 +185,16 @@ impl SessionSnapshotReader {
 }
 
 pub(super) fn message_context_usage(message: &Message) -> Option<SessionContextUsage> {
-    (message.role() == ChatRole::Assistant && message.status == MessageStatus::Complete)
-        .then_some(message.generation.as_ref())
-        .flatten()
-        .and_then(|generation| {
-            generation.usage.as_ref().map(|usage| SessionContextUsage {
-                provider_id: generation.provider_id.clone(),
-                model_id: generation.model_id.clone(),
-                max_context: generation.max_context,
-                usage: usage.clone(),
-            })
+    (message.role() == ChatRole::Assistant
+        && !matches!(message.status, MessageStatus::Streaming { .. }))
+    .then_some(message.generation.as_ref())
+    .flatten()
+    .and_then(|generation| {
+        generation.usage.as_ref().map(|usage| SessionContextUsage {
+            provider_id: generation.provider_id.clone(),
+            model_id: generation.model_id.clone(),
+            max_context: generation.max_context,
+            usage: usage.clone(),
         })
+    })
 }

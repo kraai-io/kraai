@@ -12,7 +12,7 @@ pub(crate) async fn replay(
     runtime: &RuntimeHandle,
     snapshot: &SessionSnapshot,
     connection: &crate::transport::Connection,
-) -> Result<()> {
+) -> Result<Vec<kraai_types::Message>> {
     let mut tip = snapshot
         .session
         .tip_id
@@ -35,20 +35,21 @@ pub(crate) async fn replay(
             return Err(error::internal("Conversation history contains a cycle"));
         }
         let message = history
-            .get(&id)
+            .remove(&id)
             .ok_or_else(|| error::internal("Conversation history is incomplete"))?;
-        messages.push(message);
         tip = message.parent_id.clone();
+        messages.push(message);
     }
+    messages.reverse();
     let session_id = acp::SessionId::new(snapshot.session.id.to_string());
-    for message in messages.into_iter().rev() {
+    for message in &messages {
         for update in updates(runtime, message).await? {
             connection
                 .send_notification_wait(acp::SessionNotification::new(session_id.clone(), update))
                 .await?;
         }
     }
-    Ok(())
+    Ok(messages)
 }
 
 async fn updates(

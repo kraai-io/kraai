@@ -73,6 +73,7 @@ pub enum MessageStatus {
     Complete,
     Streaming { stream_id: StreamId },
     Cancelled,
+    Failed,
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

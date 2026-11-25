@@ -1,4 +1,4 @@
-use super::{CrosstermEvent, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyModifiers};
 
 #[derive(Default)]
 pub(super) struct TerminalReply {

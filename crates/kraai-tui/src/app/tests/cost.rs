@@ -15,7 +15,7 @@ fn pending_request(id: &str) -> kraai_types::RequestUsage {
 #[test]
 fn launch_costs_require_usage_prices_and_all_attempts() {
     let mut harness = test_harness();
-    harness.app.state.launched_at = 100;
+    harness.app.state.usage.launched_at = 100;
     let mut request = pending_request("cache-warming-timeout");
     request.subscription = true;
     let update = |harness: &mut TestHarness, request: &kraai_types::RequestUsage| {
@@ -59,7 +59,7 @@ fn launch_costs_require_usage_prices_and_all_attempts() {
 #[test]
 fn lag_recovery_restores_costs_from_background_sessions() {
     let mut harness = test_harness();
-    harness.app.state.launched_at = 100;
+    harness.app.state.usage.launched_at = 100;
     harness
         .app
         .reset_chat_session(Some(SessionId::new("session")));
@@ -92,10 +92,15 @@ fn lag_recovery_restores_costs_from_background_sessions() {
             result: Box::new(Ok(background)),
         });
     assert_eq!(
-        harness.app.state.launch_requests.get(&request.message_id),
+        harness
+            .app
+            .state
+            .usage
+            .launch_requests
+            .get(&request.message_id),
         Some(&request)
     );
-    assert_eq!(harness.app.state.session_cost.unknown, 0);
+    assert_eq!(harness.app.state.usage.session_cost.unknown, 0);
     assert!(
         harness
             .app
@@ -106,7 +111,7 @@ fn lag_recovery_restores_costs_from_background_sessions() {
     harness
         .app
         .reset_chat_session(Some(SessionId::new("background")));
-    assert_eq!(harness.app.state.session_cost.unknown, 0);
+    assert_eq!(harness.app.state.usage.session_cost.unknown, 0);
 }
 
 #[test]
@@ -155,7 +160,7 @@ fn successful_snapshots_clear_incomplete_costs_after_lag() {
 #[test]
 fn usage_events_include_inflight_and_background_requests_before_exit() {
     let mut harness = test_harness();
-    harness.app.state.launched_at = 100;
+    harness.app.state.usage.launched_at = 100;
     harness
         .app
         .reset_chat_session(Some(SessionId::new("session")));
@@ -167,8 +172,8 @@ fn usage_events_include_inflight_and_background_requests_before_exit() {
                 request: Box::new(pending_request(session)),
             });
     }
-    assert_eq!(harness.app.state.session_cost.unknown, 0);
-    assert_eq!(harness.app.state.launch_requests.len(), 2);
+    assert_eq!(harness.app.state.usage.session_cost.unknown, 0);
+    assert_eq!(harness.app.state.usage.launch_requests.len(), 2);
     harness.app.handle_ctrl_c();
     harness.app.handle_ctrl_c();
     assert!(harness.app.state.exit);
@@ -181,13 +186,13 @@ fn usage_events_include_inflight_and_background_requests_before_exit() {
     harness
         .app
         .reset_chat_session(Some(SessionId::new("background")));
-    assert_eq!(harness.app.state.session_cost.unknown, 0);
+    assert_eq!(harness.app.state.usage.session_cost.unknown, 0);
 }
 
 #[test]
 fn stale_and_duplicate_snapshots_do_not_erase_live_costs() {
     let mut harness = test_harness();
-    harness.app.state.launched_at = 100;
+    harness.app.state.usage.launched_at = 100;
     harness
         .app
         .reset_chat_session(Some(SessionId::new("session")));
@@ -219,23 +224,28 @@ fn stale_and_duplicate_snapshots_do_not_erase_live_costs() {
     harness
         .app
         .update_costs(&SessionId::new("session"), Default::default());
-    assert_eq!(harness.app.state.launch_requests.len(), 1);
+    assert_eq!(harness.app.state.usage.launch_requests.len(), 1);
     assert_eq!(
-        harness.app.state.launch_requests.get(&completed.message_id),
+        harness
+            .app
+            .state
+            .usage
+            .launch_requests
+            .get(&completed.message_id),
         Some(&completed)
     );
     assert_eq!(
-        harness.app.state.session_cost.amount,
+        harness.app.state.usage.session_cost.amount,
         kraai_types::Usd(12_300_000)
     );
-    assert_eq!(harness.app.state.session_cost.unknown, 1);
+    assert_eq!(harness.app.state.usage.session_cost.unknown, 1);
 }
 
 #[test]
 fn costs_replace_unknown_records_without_double_counting_and_restore_session_totals() {
     let mut harness = test_harness();
     harness.app.state.current_session_id = Some(SessionId::new("session"));
-    harness.app.state.launched_at = 100;
+    harness.app.state.usage.launched_at = 100;
     let mut request = kraai_types::RequestUsage {
         message_id: MessageId::new("request"),
         provider_id: kraai_types::ProviderId::new("provider"),
@@ -251,7 +261,7 @@ fn costs_replace_unknown_records_without_double_counting_and_restore_session_tot
     harness
         .app
         .update_costs(&SessionId::new("session"), records(&request));
-    assert_eq!(harness.app.state.session_cost.unknown, 0);
+    assert_eq!(harness.app.state.usage.session_cost.unknown, 0);
     request.usage = Some(kraai_types::TokenUsage {
         cost: Some(kraai_types::RequestCost {
             amount: kraai_types::Usd(12_300_000),
@@ -268,8 +278,8 @@ fn costs_replace_unknown_records_without_double_counting_and_restore_session_tot
     harness
         .app
         .update_costs(&SessionId::new("session"), records(&request));
-    assert_eq!(harness.app.state.session_cost.to_string(), "$0.0123");
-    assert_eq!(harness.app.state.launch_requests.len(), 1);
+    assert_eq!(harness.app.state.usage.session_cost.to_string(), "$0.0123");
+    assert_eq!(harness.app.state.usage.launch_requests.len(), 1);
     assert!(
         harness
             .app
@@ -281,12 +291,12 @@ fn costs_replace_unknown_records_without_double_counting_and_restore_session_tot
     harness
         .app
         .update_costs(&SessionId::new("other"), records(&request));
-    assert_eq!(harness.app.state.launch_requests.len(), 1);
+    assert_eq!(harness.app.state.usage.launch_requests.len(), 1);
     harness.app.state.current_session_id = Some(SessionId::new("other"));
     harness
         .app
         .update_costs(&SessionId::new("other"), records(&request));
-    assert_eq!(harness.app.state.session_cost.to_string(), "$0.0123");
+    assert_eq!(harness.app.state.usage.session_cost.to_string(), "$0.0123");
 }
 
 #[test]
@@ -300,16 +310,16 @@ fn session_cost_waits_for_usage_but_preserves_unpriced_usage_and_attempts() {
     harness
         .app
         .update_costs(&SessionId::new("session"), records(&request));
-    assert_eq!(harness.app.state.session_cost.to_string(), "$0.0000");
+    assert_eq!(harness.app.state.usage.session_cost.to_string(), "$0.0000");
     request.usage = Some(kraai_types::TokenUsage::default());
     harness
         .app
         .update_costs(&SessionId::new("session"), records(&request));
-    assert_eq!(harness.app.state.session_cost.to_string(), "$unknown");
+    assert_eq!(harness.app.state.usage.session_cost.to_string(), "$unknown");
     let mut retry = pending_request("retry");
     retry.unpriced_attempts = 1;
     harness
         .app
         .update_costs(&SessionId::new("session"), records(&retry));
-    assert_eq!(harness.app.state.session_cost.unknown, 2);
+    assert_eq!(harness.app.state.usage.session_cost.unknown, 2);
 }

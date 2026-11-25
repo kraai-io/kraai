@@ -64,6 +64,15 @@ pub enum ScriptOutputStream {
     Stderr,
 }
 
+/// A sandbox rule that no capability besides `no-sandbox` lifts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxHint {
+    ProtectedEntry,
+    ProtectedEntryUndone,
+    HostSocket,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptRewrites {
     #[serde(default, rename = "rewrites")]

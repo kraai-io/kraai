@@ -41,10 +41,6 @@ pub trait Provider: Send + Sync {
 
     async fn register_model(&mut self, model: ModelConfig) -> Result<()>;
 
-    fn cache_warming_policy(&self, _model_id: &ModelId) -> Option<crate::CacheWarmingPolicy> {
-        None
-    }
-
     fn supports_native_compaction(&self, _model_id: &ModelId) -> bool {
         false
     }
@@ -87,7 +83,6 @@ impl ScriptToolDefinition {
 pub struct ProviderRequest {
     pub messages: Vec<ConversationItem>,
     pub script_tool: Option<ScriptToolDefinition>,
-    pub cacheable_messages: Option<usize>,
     pub options: kraai_types::ModelOptionValues,
 }
 

@@ -617,3 +617,6 @@ mod edit_examples;
 
 #[cfg(unix)]
 mod exit_status;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod sandbox_hints;

@@ -10,16 +10,34 @@ struct ControlledSaves {
     release: Notify,
 }
 
-#[async_trait::async_trait]
-impl MessageStore for ControlledSaves {
-    async fn save(&self, message: &Message) -> Result<()> {
+impl ControlledSaves {
+    async fn gate(&self) -> Result<()> {
         if self.block.swap(false, Ordering::SeqCst) {
             self.release.notified().await;
         }
         if self.fail.swap(false, Ordering::SeqCst) {
             return Err(eyre!("injected snapshot save failure"));
         }
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl MessageStore for ControlledSaves {
+    async fn save(&self, message: &Message) -> Result<()> {
+        self.gate().await?;
         self.inner.save(message).await
+    }
+    async fn append_stream_deltas(
+        &self,
+        message_id: &MessageId,
+        first_sequence: u64,
+        deltas: &[kraai_persistence::StreamDelta],
+    ) -> Result<()> {
+        self.gate().await?;
+        self.inner
+            .append_stream_deltas(message_id, first_sequence, deltas)
+            .await
     }
     async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
         self.inner.get(id).await
@@ -94,7 +112,7 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() {
         tokio::pin!(finishing);
         assert!(futures::poll!(&mut finishing).is_pending());
         store.release.notify_one();
-        publication.await.unwrap();
+        assert!(publication.await.is_empty());
         assert!(
             !manager.streaming_messages.read().await[&request.message_id]
                 .pending_deltas
@@ -106,7 +124,12 @@ async fn slow_snapshots_allow_chunks_and_precede_terminal_saves() {
             assert!(saved.is_none());
         } else {
             let saved = saved.expect("terminal message");
-            assert_eq!(saved.status, MessageStatus::Complete);
+            let expected = if terminal == "complete" {
+                MessageStatus::Complete
+            } else {
+                MessageStatus::Cancelled
+            };
+            assert_eq!(saved.status, expected);
             assert_eq!(saved.display_text(), "new chunk");
         }
         cleanup_dir(data_dir).await;
@@ -147,13 +170,13 @@ async fn failed_or_cancelled_snapshot_saves_remain_retryable() {
         tokio::pin!(publication);
         assert!(futures::poll!(&mut publication).is_pending());
     }
-    assert!(manager.publish_streaming_snapshots().await.is_err());
+    assert_eq!(manager.publish_streaming_snapshots().await.len(), 1);
     assert!(
         !manager.streaming_messages.read().await[&request.message_id]
             .pending_deltas
             .is_empty()
     );
-    manager.publish_streaming_snapshots().await.unwrap();
+    assert!(manager.publish_streaming_snapshots().await.is_empty());
     assert!(
         manager.streaming_messages.read().await[&request.message_id]
             .pending_deltas
@@ -188,7 +211,7 @@ async fn usage_only_updates_reach_observers_and_reopened_storage() {
             "response",
         )
         .await;
-    manager.publish_streaming_snapshots().await.unwrap();
+    assert!(manager.publish_streaming_snapshots().await.is_empty());
     let observer = AgentManager::new(
         manager.cloned_provider_manager(),
         data_dir.clone(),
@@ -225,7 +248,7 @@ async fn usage_only_updates_reach_observers_and_reopened_storage() {
     );
     assert!(before.context_usage.is_none());
 
-    manager.publish_streaming_snapshots().await.unwrap();
+    assert!(manager.publish_streaming_snapshots().await.is_empty());
     let published = observer
         .capture_session_snapshot(&session)
         .await
@@ -273,5 +296,101 @@ async fn usage_only_updates_reach_observers_and_reopened_storage() {
         Some(usage)
     );
     drop((manager, observer));
+    cleanup_dir(data_dir).await;
+}
+
+struct FailingDeltas {
+    inner: Arc<dyn MessageStore>,
+    failing: MessageId,
+}
+
+#[async_trait::async_trait]
+impl MessageStore for FailingDeltas {
+    async fn save(&self, message: &Message) -> Result<()> {
+        self.inner.save(message).await
+    }
+    async fn append_stream_deltas(
+        &self,
+        message_id: &MessageId,
+        first_sequence: u64,
+        deltas: &[kraai_persistence::StreamDelta],
+    ) -> Result<()> {
+        if *message_id == self.failing {
+            return Err(eyre!("injected delta failure"));
+        }
+        self.inner
+            .append_stream_deltas(message_id, first_sequence, deltas)
+            .await
+    }
+    async fn get(&self, id: &MessageId) -> Result<Option<Message>> {
+        self.inner.get(id).await
+    }
+    async fn delete(&self, id: &MessageId) -> Result<()> {
+        self.inner.delete(id).await
+    }
+    async fn exists(&self, id: &MessageId) -> Result<bool> {
+        self.inner.exists(id).await
+    }
+    async fn list_ids(&self) -> Result<HashSet<MessageId>> {
+        self.inner.list_ids().await
+    }
+}
+
+#[tokio::test]
+async fn a_failing_session_does_not_stop_other_sessions_from_persisting() {
+    let (mut manager, data_dir) = test_manager().await;
+    let mut requests = Vec::new();
+    for _ in 0..2 {
+        let session = manager.create_session().await.unwrap();
+        let request = manager
+            .prepare_start_stream(
+                &session,
+                "start".into(),
+                ModelId::new("mock-model"),
+                ProviderId::new("mock"),
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        requests.push((session, request.message_id));
+    }
+    let [(failing_session, failing), (healthy_session, healthy)] = requests.as_slice() else {
+        unreachable!();
+    };
+    manager.message_store = Arc::new(FailingDeltas {
+        inner: manager.message_store.clone(),
+        failing: failing.clone(),
+    });
+    for round in 0..2 {
+        for (_, message) in &requests {
+            manager
+                .append_text_chunk(message, "text", AssistantPhase::FinalAnswer, "chunk")
+                .await;
+        }
+        let failures: Vec<_> = manager
+            .publish_streaming_snapshots()
+            .await
+            .into_iter()
+            .map(|(session, _)| session)
+            .collect();
+        let expected = if round == 0 {
+            vec![failing_session.clone()]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(failures, expected);
+        let streaming = manager.streaming_messages.read().await;
+        assert!(streaming[healthy].pending_deltas.is_empty());
+        assert!(!streaming[failing].pending_deltas.is_empty());
+        drop(streaming);
+    }
+    let reopened = open_persistence(&data_dir).await;
+    let saved = reopened
+        .messages()
+        .read_conversation(healthy_session)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.history[healthy].display_text(), "chunkchunk");
     cleanup_dir(data_dir).await;
 }

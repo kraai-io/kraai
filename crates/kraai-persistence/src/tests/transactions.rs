@@ -402,6 +402,7 @@ async fn failed_execution_finish_preserves_both_output_streams_and_running_phase
                     status: ScriptExecutionStatus::Completed,
                     exit_code: Some(0),
                     sandbox_denied: false,
+                    sandbox_hint: None,
                     error: None,
                     stdout: b"replacement".to_vec(),
                     stderr: Vec::new(),

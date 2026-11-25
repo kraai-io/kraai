@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use kraai_execution_types::{NushellStartup, SandboxCapabilities, ScriptExecutionId};
+use kraai_execution_types::{NushellStartup, SandboxCapabilities, SandboxHint, ScriptExecutionId};
 use kraai_sandbox::{ExecutionOutput, LaunchPlan, OutputEvent, PrivateTempConfig};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -16,6 +16,7 @@ use crate::host_calls::{HostServices, serve};
 use crate::images::{ImageAttachmentHandler, RejectImageAttachments};
 use crate::rendering::Marker;
 use crate::request::{HOST_PROTOCOL_VERSION, HostRequest};
+use crate::sandbox_hints::HintContext;
 use crate::transport;
 use crate::wire::write_request;
 
@@ -31,6 +32,7 @@ pub struct ScriptExecutionPlan {
     pub workspace_root: PathBuf,
     pub environment: BTreeMap<String, String>,
     pub runtime_roots: Vec<PathBuf>,
+    pub denied_paths: Vec<PathBuf>,
     pub capabilities: SandboxCapabilities,
     pub timeout: Duration,
     pub startup_timeout: Duration,
@@ -62,6 +64,7 @@ impl ScriptExecutionPlan {
             workspace_root,
             environment: BTreeMap::new(),
             runtime_roots: Vec::new(),
+            denied_paths: Vec::new(),
             capabilities,
             timeout,
             startup_timeout: Duration::from_secs(5),
@@ -82,6 +85,7 @@ impl ScriptExecutionPlan {
 pub struct ScriptExecutionResult {
     pub execution_id: ScriptExecutionId,
     pub output: ExecutionOutput,
+    pub sandbox_hint: Option<SandboxHint>,
 }
 
 pub async fn execute(
@@ -103,6 +107,11 @@ pub async fn execute(
         .map_err(RuntimeError::Startup)?;
     let startup_restriction =
         crate::request::StartupRestriction::for_capabilities(&plan.capabilities);
+    let hints = (!plan.capabilities.is_unsandboxed()).then(|| HintContext {
+        workspace_roots: vec![plan.workspace_root.clone(), workspace_root.clone()],
+        #[cfg(unix)]
+        agent_socket: plan.environment.get("SSH_AUTH_SOCK").map(PathBuf::from),
+    });
     let host_request = HostRequest {
         protocol_version: HOST_PROTOCOL_VERSION,
         execution_id: execution_id.clone(),
@@ -139,6 +148,7 @@ pub async fn execute(
         .map(|(name, value)| (OsString::from(name), OsString::from(value)))
         .collect();
     launch.runtime_roots = plan.runtime_roots;
+    launch.denied_paths = plan.denied_paths;
     #[cfg(target_os = "linux")]
     {
         launch.restricts_host_ipc =
@@ -287,9 +297,19 @@ pub async fn execute(
             } else if output.termination != kraai_sandbox::Termination::TimedOut {
                 channel?;
             }
+            let (output, sandbox_hint) = match hints {
+                Some(hints) => tokio::task::spawn_blocking(move || {
+                    let hint = hints.hint(&output);
+                    (output, hint)
+                })
+                .await
+                .map_err(|error| RuntimeError::ChannelTask(error.to_string()))?,
+                None => (output, None),
+            };
             Ok(ScriptExecutionResult {
                 execution_id,
                 output,
+                sandbox_hint,
             })
         }
         Err(error) => {

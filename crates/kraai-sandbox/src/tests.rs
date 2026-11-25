@@ -44,6 +44,9 @@ mod dns;
 #[cfg(target_os = "linux")]
 mod runtime_mounts;
 
+#[cfg(target_os = "linux")]
+mod denied_paths;
+
 fn temp_dir(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "kraai-sandbox-test-{name}-{}-{}",

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use color_eyre::Result;
-use futures::{StreamExt, future::join_all, stream::BoxStream};
+use futures::{future::join_all, stream::BoxStream};
 use kraai_types::{ModelId, ProviderId};
 
 use crate::config::{ModelConfig, ProviderManagerConfig};
@@ -17,7 +17,6 @@ use crate::stream::ProviderStreamEvent;
 pub struct ProviderManager {
     providers: Arc<BTreeMap<ProviderId, Arc<dyn Provider>>>,
     pricing: crate::pricing::Pricing,
-    pub(crate) cache_warming: crate::cache_warming::CacheWarming,
     cooldowns: Arc<std::sync::Mutex<HashMap<ProviderId, Arc<crate::http_retry::ProviderCooldown>>>>,
 }
 
@@ -39,7 +38,6 @@ impl ProviderManager {
     pub fn register_provider(&mut self, id: ProviderId, mut provider: Box<dyn Provider>) {
         provider.set_model_catalog(self.pricing.catalog.clone());
         Arc::make_mut(&mut self.providers).insert(id, Arc::from(provider));
-        self.cache_warming = Default::default();
     }
 
     fn cooldown(&self, id: &ProviderId) -> Arc<crate::http_retry::ProviderCooldown> {
@@ -169,7 +167,6 @@ impl ProviderManager {
         self.pricing = pricing;
         self.pricing.start().await;
         self.providers = providers;
-        self.cache_warming = Default::default();
         Ok(())
     }
 
@@ -223,34 +220,11 @@ impl ProviderManager {
             .providers
             .get(&provider_id)
             .ok_or_else(|| ProviderError::ProviderNotFound(provider_id.clone()))?;
-        let cache_observer = match self.cache_usage_observer(
-            &provider_id,
-            model_id,
-            &request,
-            &request_context,
-        ) {
-            Ok(observer) => observer,
-            Err(error) => {
-                tracing::warn!(error = %format!("{error:#}"), "Cache feedback unavailable; continuing with the conversation");
-                None
-            }
-        };
         let request_context = request_context.with_cooldown(self.cooldown(&provider_id));
         let stream = provider
             .generate_reply_stream(model_id, request, &request_context)
             .await?;
-        let priced = self.pricing.apply(&provider_id, model_id, stream).await;
-        Ok(priced
-            .map(move |event| {
-                if let (Some(observer), Ok(ProviderStreamEvent::Usage(usage))) =
-                    (&cache_observer, &event)
-                    && let Err(error) = observer.observe(usage)
-                {
-                    tracing::warn!(error = %error, "Unable to update cache warming feedback");
-                }
-                event
-            })
-            .boxed())
+        Ok(self.pricing.apply(&provider_id, model_id, stream).await)
     }
 }
 

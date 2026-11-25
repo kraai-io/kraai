@@ -100,6 +100,37 @@ impl SqliteSessionStore {
         self.database.run(|_, _| Ok(())).await
     }
 
+    pub async fn recent_user_inputs(&self, limit: usize) -> Result<Vec<String>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.database
+            .read(move |connection, _| {
+                let mut statement = connection.prepare_cached(
+                    "SELECT json_extract(data, '$.content.content')
+                        FROM records INDEXED BY records_user_messages
+                        WHERE kind = 'message' AND json_valid(data)
+                        AND json_extract(data, '$.content.type') = 'user'
+                        ORDER BY id DESC",
+                )?;
+                let mut rows = statement.query([])?;
+                let mut inputs = Vec::new();
+                while inputs.len() < limit
+                    && let Some(row) = rows.next()?
+                {
+                    let content: kraai_types::MessageContent =
+                        serde_json::from_str(&row.get::<_, String>(0)?)?;
+                    let text = content.text_only();
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        inputs.push(text.to_owned());
+                    }
+                }
+                Ok(inputs)
+            })
+            .await
+    }
+
     async fn update(
         &self,
         session: &SessionMeta,

@@ -10,11 +10,13 @@ use std::fs::{File, OpenOptions};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
+use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ,
+    FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 
+use super::denied::Denials;
 use super::identity::Sid;
 use crate::SandboxError;
 
@@ -129,6 +131,41 @@ pub(super) fn grant_persistent(path: &Path, sid: &Sid, access: Access) -> Result
         .map_err(|error| failure(path, &error.to_string()))
 }
 
+/// Removes the allow entries of every SID in `token` from the denied trees, except the entries
+/// of the grants each object keeps. The removal is permanent: these paths are always denied,
+/// and files Kraai creates there later inherit from the stripped directories. No handles stay
+/// open, so Kraai can still replace and delete its own files there while a script runs.
+pub(super) fn strip(
+    denials: &Denials,
+    token: &[Sid],
+    grants: &[Vec<Sid>],
+) -> Result<(), SandboxError> {
+    let _lock = super::mutation_lock::Lock::acquire()?;
+    for root in denials.roots() {
+        walk(
+            root,
+            MAX_ACL_ENTRIES,
+            true,
+            |path| denials.prunes(path),
+            |path, file| {
+                let Some(kept) = denials.kept(path) else {
+                    return Ok(());
+                };
+                let stripped = token
+                    .iter()
+                    .filter(|sid| {
+                        !kept
+                            .iter()
+                            .any(|&index| grants.get(index).is_some_and(|sids| sids.contains(sid)))
+                    })
+                    .collect::<Vec<_>>();
+                mutation::strip(&file, &stripped).map_err(|error| failure(path, &error.to_string()))
+            },
+        )?;
+    }
+    Ok(())
+}
+
 fn visit_tree(
     root: &Path,
     visit: impl FnMut(File) -> Result<(), SandboxError>,
@@ -141,10 +178,23 @@ fn visit_tree_with_limit(
     limit: usize,
     mut visit: impl FnMut(File) -> Result<(), SandboxError>,
 ) -> Result<(), SandboxError> {
+    walk(root, limit, false, |_| false, |_, file| visit(file))
+}
+
+fn walk(
+    root: &Path,
+    limit: usize,
+    reparse_points: bool,
+    prune: impl Fn(&Path) -> bool,
+    mut visit: impl FnMut(&Path, File) -> Result<(), SandboxError>,
+) -> Result<(), SandboxError> {
     let mut pins = pin_ancestors(root)?;
     let mut pending = vec![(root.to_path_buf(), true)];
     let mut entries = 0;
     while let Some((path, is_root)) = pending.pop() {
+        if !is_root && prune(&path) {
+            continue;
+        }
         if entries >= limit {
             return Err(entry_limit(root, limit));
         }
@@ -154,6 +204,11 @@ fn visit_tree_with_limit(
             if is_root {
                 return Err(failure(&path, "reparse points cannot be sandbox roots"));
             }
+            if reparse_points {
+                let file =
+                    handle::open_by_id(&pin).map_err(|error| failure(&path, &error.to_string()))?;
+                visit(&path, file)?;
+            }
             continue;
         }
         let directory = pin
@@ -161,7 +216,7 @@ fn visit_tree_with_limit(
             .map_err(|error| failure(&path, &error.to_string()))?
             .is_dir();
         let file = handle::open_by_id(&pin).map_err(|error| failure(&path, &error.to_string()))?;
-        visit(file)?;
+        visit(&path, file)?;
         if directory {
             pins.push(pin);
             for entry in
@@ -197,14 +252,17 @@ fn pin_ancestors(path: &Path) -> Result<Vec<File>, SandboxError> {
 fn open(path: &Path) -> Result<File, SandboxError> {
     let mut options = OpenOptions::new();
     options
-        .share_mode(FILE_SHARE_READ)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
     match options
         .access_mode(FILE_READ_ATTRIBUTES | FILE_READ_DATA)
         .open(path)
     {
         Ok(file) => Ok(file),
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+        Err(error)
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                || error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) =>
+        {
             let file = options
                 .access_mode(FILE_READ_ATTRIBUTES)
                 .open(path)

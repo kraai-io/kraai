@@ -1,8 +1,9 @@
+use super::types::UiMode;
 use std::time::{Duration, Instant};
 
 use ratatui::{Terminal, backend::Backend, layout::Position};
 
-use super::{AppState, UiMode};
+use super::AppState;
 
 pub(super) struct CursorBlink {
     epoch: Instant,
@@ -48,7 +49,7 @@ impl CursorBlink {
 
 impl AppState {
     pub(super) fn composer_cursor_enabled(&self) -> bool {
-        !(self.error_open && self.last_error.is_some())
+        !(self.errors.open && self.errors.last.is_some())
             && match self.mode {
                 UiMode::Chat => !self.has_local_script_approval(),
                 UiMode::Agent
