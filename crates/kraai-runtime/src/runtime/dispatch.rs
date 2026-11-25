@@ -358,7 +358,7 @@ impl RuntimeCore {
             } => {
                 if let Some(observation) = self.session_store.observe(&session_id).await? {
                     let mut watched = self.observed_sessions.lock().await;
-                    watched.clear();
+                    watched.retain(|session, _| self.event_tx.has_session_subscribers(session));
                     watched.insert(session_id.clone(), observation);
                 }
                 let loaded = self.agent_manager.prepare_session(&session_id).await;
