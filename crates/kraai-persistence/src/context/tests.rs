@@ -355,3 +355,29 @@ fn reverting_messages_restores_earlier_pins_and_keeps_only_their_snapshots() {
             .eq([Path::new("a")])
     );
 }
+
+#[test]
+fn reverting_messages_drops_folded_pins_they_opened() {
+    let mut document = ContextStateDocument::default();
+    document.push_event(event("e1", Some("first"), pin("a", PinnedFileScope::Host)));
+    document.push_event(event("e2", None, pin("b", PinnedFileScope::Host)));
+    document.push_event(event("e3", Some("second"), pin("c", PinnedFileScope::Host)));
+    assert!(document.fold(&HashSet::new()));
+    assert!(document.events.is_empty());
+    let revision = document.revision.clone();
+    assert!(document.revert(&HashSet::from([MessageId::new("second")])));
+    assert_ne!(document.revision, revision);
+    assert_eq!(
+        pinned(&document),
+        vec![
+            ("a".into(), PinnedFileScope::Host, "e1".into()),
+            ("b".into(), PinnedFileScope::Host, "e2".into()),
+        ]
+    );
+    assert!(document.revert(&HashSet::from([MessageId::new("first")])));
+    assert_eq!(
+        pinned(&document),
+        vec![("b".into(), PinnedFileScope::Host, "e2".into())]
+    );
+    assert!(!document.revert(&HashSet::from([MessageId::new("first")])));
+}

@@ -28,15 +28,15 @@ pub struct PinnedFile {
     pub path: PathBuf,
     pub scope: PinnedFileScope,
     pub opened_event: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<MessageId>,
 }
 
 impl ContextStateDocument {
     pub fn pinned_files(&self) -> Vec<PinnedFile> {
         let mut pinned = self.pinned.clone();
         for event in &self.events {
-            for mutation in &event.mutations {
-                apply(&mut pinned, &event.id, mutation);
-            }
+            apply(&mut pinned, event);
         }
         pinned
     }
@@ -70,22 +70,21 @@ impl ContextStateDocument {
             })
             .count();
         for event in self.events.drain(..folded) {
-            for mutation in &event.mutations {
-                apply(&mut self.pinned, &event.id, mutation);
-            }
+            apply(&mut self.pinned, &event);
         }
         folded > 0
     }
 
     fn revert(&mut self, messages: &HashSet<MessageId>) -> bool {
-        let before = self.events.len();
-        self.events.retain(|event| {
-            event
-                .message_id
+        let kept = |message: &Option<MessageId>| {
+            message
                 .as_ref()
                 .is_none_or(|message| !messages.contains(message))
-        });
-        if self.events.len() == before {
+        };
+        let before = (self.events.len(), self.pinned.len());
+        self.events.retain(|event| kept(&event.message_id));
+        self.pinned.retain(|file| kept(&file.message_id));
+        if (self.events.len(), self.pinned.len()) == before {
             return false;
         }
         let pinned: HashSet<_> = self
@@ -101,21 +100,24 @@ impl ContextStateDocument {
     }
 }
 
-fn apply(pinned: &mut Vec<PinnedFile>, event_id: &str, mutation: &ContextStateMutation) {
-    match mutation {
-        ContextStateMutation::PinFile { path, scope } => {
-            if let Some(existing) = pinned.iter_mut().find(|existing| &existing.path == path) {
-                existing.scope = scope.clone();
-            } else {
-                pinned.push(PinnedFile {
-                    path: path.clone(),
-                    scope: scope.clone(),
-                    opened_event: event_id.into(),
-                });
+fn apply(pinned: &mut Vec<PinnedFile>, event: &ContextStateEvent) {
+    for mutation in &event.mutations {
+        match mutation {
+            ContextStateMutation::PinFile { path, scope } => {
+                if let Some(existing) = pinned.iter_mut().find(|existing| &existing.path == path) {
+                    existing.scope = scope.clone();
+                } else {
+                    pinned.push(PinnedFile {
+                        path: path.clone(),
+                        scope: scope.clone(),
+                        opened_event: event.id.clone(),
+                        message_id: event.message_id.clone(),
+                    });
+                }
             }
-        }
-        ContextStateMutation::UnpinFile { path, .. } => {
-            pinned.retain(|existing| &existing.path != path);
+            ContextStateMutation::UnpinFile { path, .. } => {
+                pinned.retain(|existing| &existing.path != path);
+            }
         }
     }
 }

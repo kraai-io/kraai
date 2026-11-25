@@ -451,3 +451,71 @@ async fn undo_drops_files_opened_by_the_undone_turn() {
     assert!(!after.contains("undone contents"));
     cleanup_dir(root).await;
 }
+
+#[tokio::test]
+async fn undo_past_compaction_drops_files_opened_by_the_compacted_turn() {
+    let (manager, root) = test_manager().await;
+    let session = manager.create_session().await.unwrap();
+    let path = root.join("compacted.txt");
+    tokio::fs::write(&path, "compacted contents\n")
+        .await
+        .unwrap();
+    manager
+        .add_message(&session, ChatRole::User, "first".into(), None)
+        .await
+        .unwrap();
+    let reply = manager
+        .add_message(&session, ChatRole::Assistant, "opening".into(), None)
+        .await
+        .unwrap();
+    open_from_script(&manager, &session, &reply, &path).await;
+    SqliteCompactionStore::new(&root)
+        .save(&CompactionCheckpoint {
+            covered_through: reply.clone(),
+            superseded_usage: vec![],
+            previous_boundary: None,
+            replacement: vec![ConversationItem::Compaction {
+                provider_id: ProviderId::new("mock"),
+                payload: serde_json::json!({"type":"compaction", "encrypted_content":"opaque"}),
+            }],
+            provider_id: ProviderId::new("mock"),
+            model_id: ModelId::new("mock-model"),
+            prompt_version: 1,
+            usage: None,
+        })
+        .await
+        .unwrap();
+    manager
+        .add_message(&session, ChatRole::User, "second".into(), None)
+        .await
+        .unwrap();
+    assert!(
+        texts(&request(&manager, &session).await)
+            .join("\n")
+            .contains("compacted contents")
+    );
+    let document = manager.context_state_store.load(&session).await.unwrap();
+    assert!(document.events.is_empty());
+    assert_eq!(document.pinned.len(), 1);
+    manager.undo_last_user_message(&session).await.unwrap();
+    manager.undo_last_user_message(&session).await.unwrap();
+    assert!(
+        manager
+            .context_state_store
+            .load(&session)
+            .await
+            .unwrap()
+            .pinned_files()
+            .is_empty()
+    );
+    manager
+        .add_message(&session, ChatRole::User, "again".into(), None)
+        .await
+        .unwrap();
+    assert!(
+        !texts(&request(&manager, &session).await)
+            .join("\n")
+            .contains("compacted contents")
+    );
+    cleanup_dir(root).await;
+}
