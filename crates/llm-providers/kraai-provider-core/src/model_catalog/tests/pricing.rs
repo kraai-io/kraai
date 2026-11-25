@@ -6,8 +6,8 @@ use crate::{
 use futures::StreamExt;
 use kraai_types::{ModelId, ProviderId, RequestCost};
 
-fn snapshot() -> Snapshot {
-    serde_json::from_value(serde_json::json!({
+fn snapshot() -> Value {
+    serde_json::json!({
         "fetched_at": 123,
         "providers": {
             "manufacturer": {"models": {"model": {
@@ -23,7 +23,7 @@ fn snapshot() -> Snapshot {
                 "broken": {"canonical_model_id": "missing/model", "cost": {"input": 1, "output": 2}}
             }}
         }
-    })).unwrap()
+    })
 }
 
 #[tokio::test]
@@ -88,7 +88,7 @@ async fn pricing_prefers_manufacturer_without_replacing_serving_limits() {
                 config.insert(key.into(), DynamicValue::from(value));
             }
         }
-        let pricing = Pricing::new(
+        let mut pricing = Pricing::new(
             &ProviderManagerConfig {
                 providers: vec![ProviderConfig {
                     id: provider.clone(),
@@ -114,7 +114,7 @@ async fn pricing_prefers_manufacturer_without_replacing_serving_limits() {
             |_| ProviderPricingPolicy::default(),
         )
         .unwrap();
-        *pricing.catalog.snapshot.write().await = snapshot();
+        pricing.catalog = std::sync::Arc::new(catalog_from(snapshot()).await);
         let quote = pricing
             .quote(&provider, &model)
             .await
@@ -159,7 +159,7 @@ async fn pricing_prefers_manufacturer_without_replacing_serving_limits() {
 async fn reported_charges_including_zero_override_catalog_estimates() {
     let provider = ProviderId::new("custom");
     let model = ModelId::new("model");
-    let pricing = Pricing::new(
+    let mut pricing = Pricing::new(
         &ProviderManagerConfig {
             providers: vec![ProviderConfig {
                 id: provider.clone(),
@@ -174,7 +174,7 @@ async fn reported_charges_including_zero_override_catalog_estimates() {
         |_| ProviderPricingPolicy::default(),
     )
     .unwrap();
-    *pricing.catalog.snapshot.write().await = snapshot();
+    pricing.catalog = std::sync::Arc::new(catalog_from(snapshot()).await);
     let reported = [Usd(0), Usd(123_456)].map(|amount| RequestCost {
         amount,
         source: "openrouter".into(),
@@ -202,8 +202,7 @@ async fn reported_charges_including_zero_override_catalog_estimates() {
 
 #[tokio::test]
 async fn missing_canonical_identity_retains_provenance_but_broken_identity_is_unknown() {
-    let catalog = ModelCatalog::default();
-    *catalog.snapshot.write().await = snapshot();
+    let catalog = catalog_from(snapshot()).await;
     assert_eq!(
         catalog
             .lookup(

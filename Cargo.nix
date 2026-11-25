@@ -11223,6 +11223,11 @@ rec {
             features = [ "json" "stream" ];
           }
           {
+            name = "rusqlite";
+            packageId = "rusqlite";
+            features = [ "bundled" ];
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -11260,6 +11265,10 @@ rec {
           {
             name = "kraai-test-support";
             packageId = "kraai-test-support";
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
           }
           {
             name = "tokio";

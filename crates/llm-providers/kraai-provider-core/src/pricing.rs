@@ -156,7 +156,7 @@ impl Pricing {
 pub enum PriceQuote {
     Configured(TokenRates),
     Catalog {
-        cost: serde_json::Value,
+        cost: crate::CatalogCost,
         source: String,
         timestamp: u64,
     },

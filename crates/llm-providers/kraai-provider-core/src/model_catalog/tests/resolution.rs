@@ -2,8 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn proxy_models_resolve_canonical_metadata_and_rates() {
-    let catalog = ModelCatalog::default();
-    *catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
+    let catalog = catalog_from(serde_json::json!({
         "fetched_at": 123,
         "providers": {
             "openai": {"models": {"gpt-6.1-sol": {
@@ -22,7 +21,7 @@ async fn proxy_models_resolve_canonical_metadata_and_rates() {
             }}
         }
     }))
-    .unwrap();
+    .await;
     for (model, context, source, input) in [
         ("gpt-6.1-sol", 400000, "openai/gpt-6.1-sol", 2),
         ("openai/gpt-6.1-sol", 400000, "openai/gpt-6.1-sol", 2),
@@ -44,7 +43,7 @@ async fn proxy_models_resolve_canonical_metadata_and_rates() {
             )
             .await;
         assert!(result.is_some_and(|(cost, actual_source, timestamp)| {
-            cost.get("input") == Some(&serde_json::json!(input))
+            base_input(&cost) == Usd::from_dollars(f64::from(input))
                 && actual_source == format!("models.dev/{source}")
                 && timestamp == 123
         }));
@@ -65,7 +64,7 @@ async fn proxy_models_resolve_canonical_metadata_and_rates() {
                 .lookup(provider, api, "gpt-6.1-sol", CatalogPricingSource::Provider)
                 .await
                 .is_some_and(
-                    |(cost, source, _)| cost.get("input") == Some(&serde_json::json!(99))
+                    |(cost, source, _)| base_input(&cost) == Usd::from_dollars(99.0)
                         && source == "models.dev/reseller/gpt-6.1-sol"
                 )
         );
@@ -89,9 +88,9 @@ async fn proxy_models_resolve_canonical_metadata_and_rates() {
     }
 }
 
-#[test]
-fn inference_rejects_conflicting_or_unresolved_canonical_models() {
-    let snapshot: Snapshot = serde_json::from_value(serde_json::json!({
+#[tokio::test]
+async fn inference_rejects_conflicting_or_unresolved_canonical_models() {
+    let catalog = catalog_from(serde_json::json!({
         "fetched_at": 123,
         "providers": {
             "one": {"api": "https://shared.test/v1", "models": {
@@ -108,49 +107,63 @@ fn inference_rejects_conflicting_or_unresolved_canonical_models() {
             }}
         }
     }))
-    .unwrap();
+    .await;
     for model in ["conflict", "unresolved", "indirect", "mixed", "unknown"] {
         assert!(
-            snapshot
-                .model(None, Some("https://proxy.test/v1"), model)
+            resolve(&catalog, None, Some("https://proxy.test/v1"), model)
+                .await
                 .is_none()
         );
     }
-    assert!(snapshot.model(None, None, "unique").is_some());
+    assert!(resolve(&catalog, None, None, "unique").await.is_some());
     assert!(
-        snapshot
-            .model(None, Some("https://shared.test/v1"), "unique")
+        resolve(&catalog, None, Some("https://shared.test/v1"), "unique")
+            .await
             .is_none()
     );
-    assert!(snapshot.model(Some("missing"), None, "unique").is_none());
-    assert!(snapshot.model(Some("two"), None, "unique").is_none());
     assert!(
-        snapshot
-            .model(None, Some("https://api.groq.com/openai/v1"), "unique")
+        resolve(&catalog, Some("missing"), None, "unique")
+            .await
             .is_none()
+    );
+    assert!(
+        resolve(&catalog, Some("two"), None, "unique")
+            .await
+            .is_none()
+    );
+    assert!(
+        resolve(
+            &catalog,
+            None,
+            Some("https://api.groq.com/openai/v1"),
+            "unique"
+        )
+        .await
+        .is_none()
     );
 }
 
-#[test]
-fn old_cache_retains_data_but_requires_refresh() {
-    let mut snapshot: Snapshot = serde_json::from_value(serde_json::json!({
+#[tokio::test]
+async fn stale_catalogs_keep_their_data_but_require_a_refresh() {
+    let catalog = catalog_from(serde_json::json!({
         "fetched_at": 100,
         "providers": {"provider": {"models": {"model": {"cost": {"input": 2, "output": 3}}}}}
     }))
-    .unwrap();
-    assert!(!snapshot.is_fresh(101));
-    assert!(snapshot.model(Some("provider"), None, "model").is_some());
-    snapshot.version = CACHE_VERSION;
-    assert!(snapshot.is_fresh(101));
-    assert!(!snapshot.is_fresh(100 + MAX_AGE));
-    assert!(!snapshot.is_fresh(99));
+    .await;
+    assert!(
+        resolve(&catalog, Some("provider"), None, "model")
+            .await
+            .is_some()
+    );
+    assert!(is_fresh(100, 101));
+    assert!(!is_fresh(100, 100 + MAX_AGE));
+    assert!(!is_fresh(100, 99));
 }
 
 #[tokio::test]
 async fn native_effort_overrides_catalog_values_and_inherits_the_merged_toggle_gate() {
-    let catalog = ModelCatalog::default();
-    *catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
-        "version":CACHE_VERSION,"fetched_at":123,"providers":{
+    let catalog = catalog_from(serde_json::json!({
+        "fetched_at":123,"providers":{
             "router":{"api":"https://router.test/v1","models":{"model":{
                 "reasoning_options":[
                     {"type":"toggle"},
@@ -160,7 +173,7 @@ async fn native_effort_overrides_catalog_values_and_inherits_the_merged_toggle_g
             }}}
         }
     }))
-    .unwrap();
+    .await;
     let (mut metadata, catalog_options) = catalog
         .metadata_with_discovery(None, Some("https://router.test/v1"), "model", None)
         .await
@@ -217,9 +230,7 @@ async fn native_effort_overrides_catalog_values_and_inherits_the_merged_toggle_g
 
 #[tokio::test]
 async fn reasoning_options_and_modes_follow_the_serving_provider_without_manufacturer_fallback() {
-    let catalog = ModelCatalog::default();
-    *catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
-        "version": CACHE_VERSION,
+    let catalog = catalog_from(serde_json::json!({
         "fetched_at": 123,
         "providers": {
             "manufacturer":{"models":{"model":{
@@ -234,7 +245,8 @@ async fn reasoning_options_and_modes_follow_the_serving_provider_without_manufac
                 "experimental":{"modes":{"host-mode":{"provider":{"body":{"speed":"host"},"headers":{"x-mode":"host"}}}}}
             }}}
         }
-    })).unwrap();
+    }))
+    .await;
     let unknown = catalog
         .metadata_for_protocol(
             None,
@@ -279,15 +291,21 @@ async fn reasoning_options_and_modes_follow_the_serving_provider_without_manufac
         serde_json::json!({"reasoning_effort":"host-effort","speed":"host"})
     );
     assert_eq!(headers.get("x-mode").map(String::as_str), Some("host"));
-    let encoded = serde_json::to_value(&*catalog.snapshot.read().await).unwrap();
+    let (_, discovery) = catalog
+        .metadata_with_discovery(None, Some("https://reseller.test/v1"), "model", None)
+        .await
+        .expect("missing stored host options");
+    let stored = serde_json::to_value(discovery).unwrap();
     assert_eq!(
-        encoded.pointer("/providers/reseller/models/model/reasoning_options/0/values"),
+        stored.pointer("/reasoning_options/0/values"),
         Some(&serde_json::json!([null, "host-effort"]))
     );
     assert_eq!(
-        encoded.pointer(
-            "/providers/reseller/models/model/experimental/modes/host-mode/provider/body/speed"
-        ),
+        stored.pointer("/experimental/modes/host-mode/provider/body/speed"),
         Some(&serde_json::json!("host"))
     );
+}
+
+fn base_input(cost: &CatalogCost) -> Option<Usd> {
+    cost.base.as_ref().map(|rates| rates.input)
 }

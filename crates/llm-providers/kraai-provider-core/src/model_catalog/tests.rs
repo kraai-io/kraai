@@ -1,16 +1,18 @@
+use kraai_types::{TokenUsage, Usd};
+use serde_json::Value;
+
 use super::*;
 
 #[tokio::test]
 async fn groq_endpoint_resolves_the_same_catalog_for_capabilities_and_pricing() {
-    let catalog = ModelCatalog::default();
-    *catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
+    let catalog = catalog_from(serde_json::json!({
         "fetched_at": 123,
         "providers": {"groq": {"models": {"vision": {
             "modalities": {"input": ["text", "image"]},
             "cost": {"input": 1, "output": 2}
         }}}}
     }))
-    .unwrap();
+    .await;
     for endpoint in [
         "https://api.groq.com/openai/v1",
         "https://api.groq.com/openai/v1/",
@@ -66,51 +68,16 @@ async fn groq_endpoint_resolves_the_same_catalog_for_capabilities_and_pricing() 
     );
 }
 
-#[test]
-fn cached_snapshot_preserves_payload_and_rejects_invalid_data() {
-    let value = serde_json::json!({
-        "version": CACHE_VERSION,
-        "fetched_at": 123,
-        "providers": {
-            "fixture": {
-                "api": "https://fixture.test/v1",
-                "models": {"model": {"canonical_model_id":"fixture/model","cost": {"input": 2, "output": 8}}}
-            }
-        }
-    });
-    let encoded = serde_json::to_vec(&value).unwrap();
-    let snapshot = read_cached_snapshot(encoded.as_slice()).expect("valid snapshot was rejected");
-    assert_eq!(serde_json::to_value(snapshot).unwrap(), value);
-    assert!(read_cached_snapshot(b"{\"fetched_at\":".as_slice()).is_none());
-    assert!(read_cached_snapshot(b"not json".as_slice()).is_none());
-}
-
-#[test]
-fn cached_snapshot_accepts_the_limit_and_bounds_larger_reads() {
-    let prefix = br#"{"fetched_at":123,"providers":{}}"#;
-    let at_limit = prefix
-        .as_slice()
-        .chain(std::io::repeat(b' '))
-        .take(MAX_BYTES as u64);
-    assert!(read_cached_snapshot(at_limit).is_some());
-    let mut growing = prefix
-        .as_slice()
-        .chain(std::io::repeat(b' '))
-        .take(MAX_BYTES as u64 * 2);
-    assert!(read_cached_snapshot(&mut growing).is_none());
-    assert_eq!(growing.limit(), MAX_BYTES as u64 - 1);
-}
-
 #[tokio::test]
 async fn matches_serving_endpoint_and_context_tier() {
-    let catalog = ModelCatalog::default();
-    *catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
+    let catalog = catalog_from(serde_json::json!({
         "fetched_at": 123,
         "providers": {
             "direct": {"api":"https://direct.test/v1", "models":{"model":{"cost":{"input":2,"output":8,"cache_read":0.5,"tiers":[{"tier":{"size":200000},"input":4,"output":12,"cache_read":1}]}}}},
             "reseller": {"api":"https://reseller.test/v1", "models":{"model":{"cost":{"input":1,"output":3}}}}
         }
-    })).unwrap();
+    }))
+    .await;
     let usage = TokenUsage {
         input_tokens: 200_000,
         cache_read_tokens: 1,
@@ -163,7 +130,7 @@ async fn catalog_rates_price_every_token_category_and_context_tier() {
     use kraai_types::{ModelId, ProviderId};
 
     let provider = ProviderId::new("subscription");
-    let pricing = crate::pricing::Pricing::new(
+    let mut pricing = crate::pricing::Pricing::new(
         &ProviderManagerConfig {
             providers: vec![ProviderConfig {
                 id: provider.clone(),
@@ -181,17 +148,19 @@ async fn catalog_rates_price_every_token_category_and_context_tier() {
         },
     )
     .unwrap();
-    *pricing.catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
-        "fetched_at": 123,
-        "providers": {
-            "openai": {"models": {"gpt-6-astra": {"cost": {
-                "input": 10, "output": 50, "cache_read": 1, "cache_write": 12.5,
-                "tiers": [{"tier": {"type": "context", "size": 272000},
-                    "input": 20, "output": 75, "cache_read": 2, "cache_write": 25}]
-            }}}}
-        }
-    }))
-    .unwrap();
+    pricing.catalog = std::sync::Arc::new(
+        catalog_from(serde_json::json!({
+            "fetched_at": 123,
+            "providers": {
+                "openai": {"models": {"gpt-6-astra": {"cost": {
+                    "input": 10, "output": 50, "cache_read": 1, "cache_write": 12.5,
+                    "tiers": [{"tier": {"type": "context", "size": 272000},
+                        "input": 20, "output": 75, "cache_read": 2, "cache_write": 25}]
+                }}}}
+            }
+        }))
+        .await,
+    );
     for (input_tokens, expected) in [(100, Usd(9_025_000)), (272001, Usd(5_452_320_000))] {
         let source = futures::stream::iter([Ok(ProviderStreamEvent::Usage(TokenUsage {
             input_tokens,
@@ -219,13 +188,12 @@ async fn catalog_rates_price_every_token_category_and_context_tier() {
 #[test]
 fn unknown_pricing_conditions_are_not_silently_ignored() {
     let cost = serde_json::json!({"input":1,"output":2,"tiers":[{}]});
-    assert!(parse_rates(&cost, &TokenUsage::default()).is_none());
+    assert!(CatalogCost::from_models_dev(&cost).is_none());
 }
 
 #[tokio::test]
 async fn capabilities_are_scoped_to_the_serving_provider_and_preserve_unknowns() {
-    let catalog = ModelCatalog::default();
-    *catalog.snapshot.write().await = serde_json::from_value(serde_json::json!({
+    let catalog = catalog_from(serde_json::json!({
         "fetched_at": 123,
         "providers": {
             "vision": {"api":"https://vision.test/v1", "models":{
@@ -236,7 +204,8 @@ async fn capabilities_are_scoped_to_the_serving_provider_and_preserve_unknowns()
             "text": {"api":"https://text.test/v1", "models":{"shared":{"modalities":{"input":["text"]}}}},
             "ambiguous": {"api":"https://text.test/v1", "models":{"shared":{"modalities":{"input":["text","image"]}}}}
         }
-    })).unwrap();
+    }))
+    .await;
     assert_eq!(
         catalog
             .metadata(None, Some("https://vision.test/v1/"), "shared")
@@ -296,3 +265,38 @@ mod pricing;
 mod owner;
 
 mod refresh;
+
+mod equivalence;
+
+mod store;
+
+async fn catalog_from(snapshot: Value) -> ModelCatalog {
+    let catalog = ModelCatalog::new(None);
+    install(&catalog, snapshot).await;
+    catalog
+}
+
+async fn install(catalog: &ModelCatalog, snapshot: Value) {
+    catalog
+        .install(
+            serde_json::to_vec(&snapshot["providers"]).unwrap(),
+            snapshot["fetched_at"].as_u64().unwrap(),
+        )
+        .await
+        .unwrap();
+}
+
+async fn resolve(
+    catalog: &ModelCatalog,
+    provider: Option<&str>,
+    api: Option<&str>,
+    model: &str,
+) -> Option<(String, String)> {
+    let view = catalog.view().await;
+    let resolved = view.state.reader.as_ref().and_then(|connection| {
+        let serving = super::resolution::serving_provider(connection, provider, api).unwrap();
+        super::resolution::model(connection, &serving, model).unwrap()
+    });
+    drop(view);
+    resolved.map(|entry| (entry.provider, entry.model))
+}

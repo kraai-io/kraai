@@ -1,60 +1,19 @@
-use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::PathBuf;
 
-use kraai_types::{TokenRates, TokenUsage, Usd};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use tokio::sync::{RwLock, RwLockReadGuard, watch};
+use rusqlite::Connection;
+use tokio::sync::{Mutex, MutexGuard, watch};
+
+mod cost;
+mod resolution;
+mod source;
+mod store;
+
+pub use cost::CatalogCost;
+pub(crate) use cost::parse_rates;
+use resolution::Entry;
 
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 const MAX_AGE: u64 = 24 * 60 * 60;
-const CACHE_VERSION: u32 = 4;
-
-mod resolution;
-
-#[derive(Default, Serialize, Deserialize)]
-struct Snapshot {
-    #[serde(default)]
-    version: u32,
-    fetched_at: u64,
-    providers: BTreeMap<String, CatalogProvider>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct CatalogProvider {
-    api: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    models: BTreeMap<String, CatalogModel>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct CatalogModel {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    canonical_model_id: Option<String>,
-    cost: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    modalities: Option<Modalities>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    limit: Option<Limits>,
-    #[serde(flatten)]
-    options: crate::DiscoveredModelOptions,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Modalities {
-    input: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Limits {
-    context: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    output: Option<usize>,
-}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CatalogModelMetadata {
@@ -71,28 +30,40 @@ pub(crate) enum CatalogPricingSource {
     Provider,
 }
 
+#[derive(Default)]
+struct State {
+    reader: Option<Connection>,
+    meta: Option<store::Meta>,
+}
+
 pub struct ModelCatalog {
-    snapshot: RwLock<Snapshot>,
+    path: Option<PathBuf>,
+    state: Mutex<State>,
     initialized: tokio::sync::OnceCell<()>,
     revision: watch::Sender<u64>,
 }
 
 impl Default for ModelCatalog {
     fn default() -> Self {
-        Self {
-            snapshot: RwLock::default(),
-            initialized: tokio::sync::OnceCell::default(),
-            revision: watch::channel(0).0,
-        }
+        Self::new(store::cache_path())
     }
 }
 
 pub struct ModelCatalogView<'a> {
-    snapshot: RwLockReadGuard<'a, Snapshot>,
+    state: MutexGuard<'a, State>,
     revision: u64,
 }
 
 impl ModelCatalog {
+    pub(crate) fn new(path: Option<PathBuf>) -> Self {
+        Self {
+            path,
+            state: Mutex::default(),
+            initialized: tokio::sync::OnceCell::default(),
+            revision: watch::channel(0).0,
+        }
+    }
+
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.revision.subscribe()
     }
@@ -102,40 +73,72 @@ impl ModelCatalog {
     }
 
     pub async fn view(&self) -> ModelCatalogView<'_> {
-        let snapshot = self.snapshot.read().await;
+        let mut state = self.state.lock().await;
+        let snapshot = state.reader.as_ref().map(|reader| {
+            reader.execute_batch("BEGIN")?;
+            store::meta(reader)
+        });
+        match snapshot {
+            Some(Ok(Some(meta))) => self.record(&mut state, Some(meta)),
+            Some(Err(error)) => tracing::debug!(%error, "Could not start a model catalog read"),
+            Some(Ok(None)) | None => {}
+        }
         ModelCatalogView {
-            snapshot,
+            state,
             revision: self.revision(),
         }
     }
 
     pub async fn initialize(&self) {
-        self.initialized.get_or_init(|| self.load()).await;
-    }
-
-    async fn load(&self) {
-        let Some(path) = cache_path() else { return };
-        if let Ok(Some(snapshot)) = tokio::task::spawn_blocking(move || {
-            let file =
-                kraai_io::fs::open_regular_file(&path, kraai_io::fs::FinalSymlinkPolicy::Follow)
-                    .ok()?;
-            if file.metadata().ok()?.len() > MAX_BYTES as u64 {
-                return None;
-            }
-            read_cached_snapshot(file)
-        })
-        .await
-        {
-            self.replace_snapshot(snapshot).await;
-        }
+        self.initialized
+            .get_or_init(|| async {
+                self.observe().await;
+            })
+            .await;
     }
 
     pub async fn refresh(&self) -> bool {
-        let fresh = self.snapshot.read().await.is_fresh(crate::pricing::now());
-        if !fresh && let Err(error) = self.fetch().await {
+        let fresh = |meta: Option<store::Meta>| {
+            meta.is_some_and(|meta| is_fresh(meta.fetched_at, crate::pricing::now()))
+        };
+        if fresh(self.observe().await) {
+            return true;
+        }
+        if let Err(error) = self.fetch().await {
             tracing::debug!(%error, "Could not refresh model catalog; retaining cached metadata");
         }
-        self.snapshot.read().await.is_fresh(crate::pricing::now())
+        fresh(self.state.lock().await.meta)
+    }
+
+    async fn observe(&self) -> Option<store::Meta> {
+        let mut state = self.state.lock().await;
+        let meta = match state.reader.as_ref().map(store::meta) {
+            Some(Ok(Some(meta))) => Some(meta),
+            Some(Ok(None) | Err(_)) | None => {
+                let path = self.path.clone();
+                let opened =
+                    tokio::task::spawn_blocking(move || path.as_deref().and_then(store::open))
+                        .await
+                        .ok()
+                        .flatten();
+                let (reader, meta) = opened.unzip();
+                state.reader = reader;
+                meta
+            }
+        };
+        self.record(&mut state, meta);
+        drop(state);
+        meta
+    }
+
+    fn record(&self, state: &mut State, meta: Option<store::Meta>) {
+        if let Some(meta) = meta
+            && state.meta.map(|known| known.generation) != Some(meta.generation)
+        {
+            self.revision
+                .send_modify(|revision| *revision = revision.wrapping_add(1));
+        }
+        state.meta = meta;
     }
 
     async fn fetch(&self) -> color_eyre::Result<()> {
@@ -154,41 +157,20 @@ impl ModelCatalog {
                 }
                 kraai_io::http::BodyReadError::Transport(error) => error.into(),
             })?;
-        let (snapshot, bytes) = tokio::task::spawn_blocking(move || {
-            let providers: BTreeMap<String, CatalogProvider> = serde_json::from_slice(&bytes)?;
-            if providers.is_empty() {
-                return Err(color_eyre::eyre::eyre!("Model catalog is empty"));
-            }
-            let snapshot = Snapshot {
-                version: CACHE_VERSION,
-                fetched_at: crate::pricing::now(),
-                providers,
-            };
-            let encoded = serde_json::to_vec(&snapshot)?;
-            Ok((snapshot, encoded))
-        })
-        .await??;
-        self.replace_snapshot(snapshot).await;
-        if let Some(path) = cache_path() {
-            tokio::task::spawn_blocking(move || -> color_eyre::Result<()> {
-                if let Some(directory) = path.parent() {
-                    kraai_io::fs::create_dir_all(directory)?;
-                }
-                kraai_io::fs::atomic_replace(&path, &bytes)?.into_result()?;
-                Ok(())
-            })
-            .await??;
-        }
-        Ok(())
+        self.install(bytes, crate::pricing::now()).await
     }
 
-    async fn replace_snapshot(&self, snapshot: Snapshot) {
-        let mut current = self.snapshot.write().await;
-        let previous = std::mem::replace(&mut *current, snapshot);
-        self.revision
-            .send_modify(|revision| *revision = revision.wrapping_add(1));
-        drop(current);
+    async fn install(&self, bytes: Vec<u8>, fetched_at: u64) -> color_eyre::Result<()> {
+        let path = self.path.clone();
+        let (reader, meta) =
+            tokio::task::spawn_blocking(move || store::write(path.as_deref(), &bytes, fetched_at))
+                .await??;
+        let mut state = self.state.lock().await;
+        let previous = state.reader.replace(reader);
+        self.record(&mut state, Some(meta));
+        drop(state);
         drop(previous);
+        Ok(())
     }
 
     pub(crate) async fn lookup(
@@ -197,31 +179,10 @@ impl ModelCatalog {
         api: Option<&str>,
         model: &str,
         source: CatalogPricingSource,
-    ) -> Option<(Value, String, u64)> {
-        let snapshot = self.snapshot.read().await;
-        let resolved = snapshot.model(provider, api, model)?;
-        let (provider_id, model_id, model) = match (source, &resolved.2.canonical_model_id) {
-            (CatalogPricingSource::Manufacturer, Some(canonical)) => {
-                snapshot.canonical_model(canonical)?
-            }
-            _ => resolved,
-        };
-        let cost = model.cost.as_ref()?;
-        Some((
-            cost.clone(),
-            format!("models.dev/{provider_id}/{model_id}"),
-            snapshot.fetched_at,
-        ))
+    ) -> Option<(CatalogCost, String, u64)> {
+        self.view().await.lookup(provider, api, model, source)
     }
-}
 
-impl Snapshot {
-    fn is_fresh(&self, now: u64) -> bool {
-        self.version == CACHE_VERSION && self.fetched_at <= now && now - self.fetched_at < MAX_AGE
-    }
-}
-
-impl ModelCatalog {
     pub async fn metadata(
         &self,
         provider: Option<&str>,
@@ -277,6 +238,17 @@ impl ModelCatalogView<'_> {
         self.revision
     }
 
+    fn lookup(
+        &self,
+        provider: Option<&str>,
+        api: Option<&str>,
+        model: &str,
+        source: CatalogPricingSource,
+    ) -> Option<(CatalogCost, String, u64)> {
+        let connection = self.state.reader.as_ref()?;
+        reported(lookup(connection, provider, api, model, source))
+    }
+
     pub fn metadata_with_discovery(
         &self,
         provider: Option<&str>,
@@ -284,114 +256,112 @@ impl ModelCatalogView<'_> {
         model: &str,
         owner: Option<&str>,
     ) -> Option<(CatalogModelMetadata, crate::DiscoveredModelOptions)> {
-        let snapshot = &*self.snapshot;
-        let serving = snapshot.serving_model(provider, api, model);
-        let owned = snapshot.owned_model(provider, api, model, owner);
-        let discovery = serving
-            .map(|(_, _, model)| model.options.clone())
-            .or_else(|| owned.map(|(_, _, model)| model.options.reasoning_only()))
-            .unwrap_or_default();
-        let (_, _, model) = serving
-            .or(owned)
-            .or_else(|| snapshot.model(provider, api, model))?;
-        let limit = |field: fn(&Limits) -> Option<usize>| {
-            model
-                .limit
-                .as_ref()
-                .and_then(field)
-                .filter(|limit| *limit > 0)
-        };
-        let metadata = CatalogModelMetadata {
-            name: model.name.clone(),
-            max_context: limit(|limits| limits.context),
-            max_output: limit(|limits| limits.output),
-            supports_images: model
-                .modalities
-                .as_ref()
-                .map(|modalities| modalities.input.iter().any(|input| input == "image")),
-            options: Vec::new(),
-        };
-        Some((metadata, discovery))
+        let connection = self.state.reader.as_ref()?;
+        reported(metadata_with_discovery(
+            connection, provider, api, model, owner,
+        ))
     }
 }
 
-fn read_cached_snapshot(reader: impl Read) -> Option<Snapshot> {
-    let bytes = kraai_io::read::read_bounded(reader, MAX_BYTES as u64).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-fn cache_path() -> Option<PathBuf> {
-    directories::BaseDirs::new().map(|dirs| dirs.cache_dir().join("kraai/models.json"))
-}
-
-pub(crate) fn parse_rates(cost: &Value, usage: &TokenUsage) -> Option<TokenRates> {
-    let object = cost.as_object()?;
-    if object.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "input"
-                | "output"
-                | "cache_read"
-                | "cache_write"
-                | "reasoning"
-                | "input_audio"
-                | "output_audio"
-                | "tiers"
-                | "context_over_200k"
-        )
-    }) {
-        return None;
-    }
-    let prompt = usage
-        .input_tokens
-        .saturating_add(usage.cache_read_tokens)
-        .saturating_add(usage.cache_write_tokens) as u64;
-    let mut selected = cost;
-    let mut selected_threshold = 0;
-    if let Some(tiers) = cost.get("tiers") {
-        for entry in tiers.as_array()? {
-            let tier = entry.get("tier")?.as_object()?;
-            if tier
-                .keys()
-                .any(|key| !matches!(key.as_str(), "type" | "size"))
-                || tier
-                    .get("type")
-                    .is_some_and(|value| value.as_str() != Some("context"))
-            {
-                return None;
-            }
-            let threshold = tier.get("size")?.as_u64()?;
-            if prompt > threshold && threshold >= selected_threshold {
-                selected = entry;
-                selected_threshold = threshold;
-            }
-        }
-    } else if prompt > 200_000
-        && let Some(tier) = cost.get("context_over_200k")
-    {
-        selected = tier;
-    }
-    for key in ["input", "output", "cache_read", "cache_write", "reasoning"] {
-        if selected
-            .get(key)
-            .is_some_and(|value| value.as_f64().and_then(Usd::from_dollars).is_none())
+impl Drop for ModelCatalogView<'_> {
+    fn drop(&mut self) {
+        if let Some(reader) = &self.state.reader
+            && !reader.is_autocommit()
+            && let Err(error) = reader
+                .execute_batch("COMMIT")
+                .or_else(|_| reader.execute_batch("ROLLBACK"))
         {
-            return None;
+            tracing::debug!(%error, "Could not finish a model catalog read");
         }
     }
-    let rate = |key| {
-        selected
-            .get(key)
-            .and_then(Value::as_f64)
-            .and_then(Usd::from_dollars)
+}
+
+fn is_fresh(fetched_at: u64, now: u64) -> bool {
+    fetched_at <= now && now - fetched_at < MAX_AGE
+}
+
+fn reported<T>(result: rusqlite::Result<Option<T>>) -> Option<T> {
+    result
+        .inspect_err(|error| tracing::debug!(%error, "Could not read model catalog"))
+        .ok()
+        .flatten()
+}
+
+fn metadata_with_discovery(
+    connection: &Connection,
+    provider: Option<&str>,
+    api: Option<&str>,
+    model: &str,
+    owner: Option<&str>,
+) -> rusqlite::Result<Option<(CatalogModelMetadata, crate::DiscoveredModelOptions)>> {
+    let serving = resolution::serving_provider(connection, provider, api)?;
+    let served = resolution::serving_model(connection, &serving, model)?;
+    let owned = match served {
+        Some(_) => None,
+        None => resolution::owned_model(connection, &serving, model, owner)?,
     };
-    Some(TokenRates {
-        input: rate("input")?,
-        output: rate("output")?,
-        cache_read: rate("cache_read"),
-        cache_write: rate("cache_write"),
-        reasoning: rate("reasoning"),
-    })
+    let discovery = match (&served, &owned) {
+        (Some(entry), _) => entry.options(),
+        (None, Some(entry)) => entry.options().reasoning_only(),
+        (None, None) => crate::DiscoveredModelOptions::default(),
+    };
+    let entry = match served.or(owned) {
+        Some(entry) => entry,
+        None => match resolution::model(connection, &serving, model)? {
+            Some(entry) => entry,
+            None => return Ok(None),
+        },
+    };
+    let Entry {
+        name,
+        max_context,
+        max_output,
+        supports_images,
+        ..
+    } = entry;
+    let metadata = CatalogModelMetadata {
+        name,
+        max_context,
+        max_output,
+        supports_images,
+        options: Vec::new(),
+    };
+    Ok(Some((metadata, discovery)))
+}
+
+fn lookup(
+    connection: &Connection,
+    provider: Option<&str>,
+    api: Option<&str>,
+    model: &str,
+    source: CatalogPricingSource,
+) -> rusqlite::Result<Option<(CatalogCost, String, u64)>> {
+    let serving = resolution::serving_provider(connection, provider, api)?;
+    let Some(resolved) = resolution::model(connection, &serving, model)? else {
+        return Ok(None);
+    };
+    let entry = match (source, &resolved.canonical_model_id) {
+        (CatalogPricingSource::Manufacturer, Some(canonical)) => {
+            match resolution::canonical_model(connection, canonical)? {
+                Some(entry) => entry,
+                None => return Ok(None),
+            }
+        }
+        (CatalogPricingSource::Manufacturer, None) | (CatalogPricingSource::Provider, _) => {
+            resolved
+        }
+    };
+    let (Some(cost), Some(fetched_at)) = (
+        entry.cost(connection)?,
+        store::meta(connection)?.map(|meta| meta.fetched_at),
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some((
+        cost,
+        format!("models.dev/{}/{}", entry.provider, entry.model),
+        fetched_at,
+    )))
 }
 
 #[cfg(test)]
