@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
+
+const UNSETTLED_FOR_SESSION: &str = "SELECT data FROM records
+    WHERE kind = 'execution' AND session_id = ?1 AND json_valid(data)
+    AND json_extract(data, '$.settled') IS NOT 1 ORDER BY id";
+
 #[derive(Debug, Clone)]
 pub struct NewScriptExecution {
     pub id: ScriptExecutionId,
@@ -278,10 +283,7 @@ impl ScriptExecutionStore for SqliteScriptExecutionStore {
         let session = session_id.clone();
         self.database
             .read(move |connection, _| {
-                let mut statement = connection.prepare_cached(
-                    "SELECT data FROM records WHERE kind = 'execution' AND session_id = ?1
-                     AND json_extract(data, '$.settled') IS NOT 1 ORDER BY id",
-                )?;
+                let mut statement = connection.prepare_cached(UNSETTLED_FOR_SESSION)?;
                 let rows =
                     statement.query_map([session.as_str()], |row| row.get::<_, String>(0))?;
                 rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()

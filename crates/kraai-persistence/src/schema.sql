@@ -21,6 +21,8 @@ CREATE INDEX IF NOT EXISTS records_message_parent ON records(json_extract(data, 
     WHERE kind = 'message' AND json_valid(data);
 CREATE INDEX IF NOT EXISTS records_user_messages ON records(id)
     WHERE kind = 'message' AND json_valid(data) AND json_extract(data, '$.content.type') = 'user';
+CREATE INDEX IF NOT EXISTS records_unsettled_executions ON records(session_id, id)
+    WHERE kind = 'execution' AND json_valid(data) AND json_extract(data, '$.settled') IS NOT 1;
 CREATE INDEX IF NOT EXISTS sessions_tip ON sessions(tip_id);
 CREATE TABLE IF NOT EXISTS execution_sources (
     execution_id TEXT PRIMARY KEY,

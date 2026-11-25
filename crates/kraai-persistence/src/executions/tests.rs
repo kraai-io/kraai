@@ -270,3 +270,29 @@ async fn settled_executions_leave_the_recovery_list_without_changing_their_timin
     assert_eq!(reopened.updated_at_millis, created.updated_at_millis);
     fs::remove_dir_all(data_dir).await.unwrap();
 }
+
+#[tokio::test]
+async fn recovery_finds_unsettled_executions_through_their_index() {
+    let data_dir = test_dir("unsettled-index");
+    let store = SqliteScriptExecutionStore::new(&data_dir);
+    store
+        .create(execution(&ScriptExecutionId::new(Ulid::generate())))
+        .await
+        .unwrap();
+    let connection = rusqlite::Connection::open(data_dir.join("kraai.sqlite3")).unwrap();
+    let mut statement = connection
+        .prepare(&format!("EXPLAIN QUERY PLAN {UNSETTLED_FOR_SESSION}"))
+        .unwrap();
+    let plan = statement
+        .query_map(["session"], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        plan,
+        ["SEARCH records USING INDEX records_unsettled_executions (session_id=?)"]
+    );
+    drop(statement);
+    drop(connection);
+    fs::remove_dir_all(data_dir).await.unwrap();
+}
