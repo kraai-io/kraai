@@ -159,7 +159,8 @@ async fn generate_reply_stream_forwards_retry_observer_to_http_retry_layer() {
         auth: ApiKeyAuth::resolve(&BTreeMap::from([(
             String::from("api_key"),
             DynamicValue::from("test-key"),
-        )])),
+        )]))
+        .unwrap(),
         only_listed_models: false,
         cache_hints: CacheHints::default(),
         cached_models: ModelMetadataCache::default(),
@@ -218,7 +219,8 @@ async fn successful_http_status_does_not_hide_a_streamed_provider_failure() {
         auth: ApiKeyAuth::resolve(&BTreeMap::from([(
             String::from("api_key"),
             DynamicValue::from("test-key"),
-        )])),
+        )]))
+        .unwrap(),
         only_listed_models: false,
         cache_hints: CacheHints::default(),
         cached_models: ModelMetadataCache::default(),
@@ -296,7 +298,8 @@ async fn model_cache_replacement_preserves_selection_metadata_and_failed_refresh
             auth: ApiKeyAuth::resolve(&BTreeMap::from([(
                 String::from("api_key"),
                 DynamicValue::from("fixture-key"),
-            )])),
+            )]))
+            .unwrap(),
             only_listed_models,
             cache_hints: CacheHints::default(),
             cached_models,

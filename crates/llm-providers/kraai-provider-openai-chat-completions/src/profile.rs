@@ -70,7 +70,9 @@ pub trait ChatCompletionsProfile: Send + Sync + 'static {
                     value_kind: FieldValueKind::String,
                     required: false,
                     secret: false,
-                    help_text: Some(String::from("Environment variable that stores the API key")),
+                    help_text: Some(String::from(
+                        "Environment variable that stores the API key. Clear it for servers that need no auth",
+                    )),
                     default_value: Some(DynamicValue::from("OPENAI_API_KEY")),
                 },
                 FieldDefinition {

@@ -279,7 +279,7 @@ where
     P: ChatCompletionsProfile,
 {
     let base_url = P::base_url(&config)?;
-    let auth = ApiKeyAuth::resolve(&config);
+    let auth = ApiKeyAuth::resolve(&config)?;
     let only_listed_models = config
         .get("only_listed_models")
         .and_then(DynamicValue::as_bool)
