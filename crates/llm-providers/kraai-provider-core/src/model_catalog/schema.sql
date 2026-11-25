@@ -1,5 +1,6 @@
 CREATE TABLE meta (
     id INTEGER PRIMARY KEY CHECK (id = 0),
+    generation INTEGER NOT NULL,
     fetched_at INTEGER NOT NULL
 );
 

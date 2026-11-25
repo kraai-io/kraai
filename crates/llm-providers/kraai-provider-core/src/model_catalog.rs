@@ -33,7 +33,7 @@ pub(crate) enum CatalogPricingSource {
 #[derive(Default)]
 struct State {
     reader: Option<Connection>,
-    fetched_at: Option<u64>,
+    meta: Option<store::Meta>,
 }
 
 pub struct ModelCatalog {
@@ -73,11 +73,15 @@ impl ModelCatalog {
     }
 
     pub async fn view(&self) -> ModelCatalogView<'_> {
-        let state = self.state.lock().await;
-        if let Some(reader) = &state.reader
-            && let Err(error) = reader.execute_batch("BEGIN")
-        {
-            tracing::debug!(%error, "Could not start a model catalog read");
+        let mut state = self.state.lock().await;
+        let snapshot = state.reader.as_ref().map(|reader| {
+            reader.execute_batch("BEGIN")?;
+            store::meta(reader)
+        });
+        match snapshot {
+            Some(Ok(Some(meta))) => self.record(&mut state, Some(meta)),
+            Some(Err(error)) => tracing::debug!(%error, "Could not start a model catalog read"),
+            Some(Ok(None)) | None => {}
         }
         ModelCatalogView {
             state,
@@ -94,8 +98,8 @@ impl ModelCatalog {
     }
 
     pub async fn refresh(&self) -> bool {
-        let fresh = |fetched_at: Option<u64>| {
-            fetched_at.is_some_and(|fetched_at| is_fresh(fetched_at, crate::pricing::now()))
+        let fresh = |meta: Option<store::Meta>| {
+            meta.is_some_and(|meta| is_fresh(meta.fetched_at, crate::pricing::now()))
         };
         if fresh(self.observe().await) {
             return true;
@@ -103,35 +107,38 @@ impl ModelCatalog {
         if let Err(error) = self.fetch().await {
             tracing::debug!(%error, "Could not refresh model catalog; retaining cached metadata");
         }
-        fresh(self.state.lock().await.fetched_at)
+        fresh(self.state.lock().await.meta)
     }
 
-    async fn observe(&self) -> Option<u64> {
+    async fn observe(&self) -> Option<store::Meta> {
         let mut state = self.state.lock().await;
-        let reader = state.reader.take();
-        let path = self.path.clone();
-        let (reader, fetched_at) = tokio::task::spawn_blocking(move || {
-            if let Some(reader) = reader
-                && let Ok(Some(fetched_at)) = store::fetched_at(&reader)
-            {
-                return (Some(reader), Some(fetched_at));
+        let meta = match state.reader.as_ref().map(store::meta) {
+            Some(Ok(Some(meta))) => Some(meta),
+            Some(Ok(None) | Err(_)) | None => {
+                let path = self.path.clone();
+                let opened =
+                    tokio::task::spawn_blocking(move || path.as_deref().and_then(store::open))
+                        .await
+                        .ok()
+                        .flatten();
+                let (reader, meta) = opened.unzip();
+                state.reader = reader;
+                meta
             }
-            path.as_deref()
-                .and_then(store::open)
-                .map_or((None, None), |(reader, fetched_at)| {
-                    (Some(reader), Some(fetched_at))
-                })
-        })
-        .await
-        .unwrap_or_default();
-        state.reader = reader;
-        if fetched_at.is_some() && state.fetched_at != fetched_at {
+        };
+        self.record(&mut state, meta);
+        drop(state);
+        meta
+    }
+
+    fn record(&self, state: &mut State, meta: Option<store::Meta>) {
+        if let Some(meta) = meta
+            && state.meta.map(|known| known.generation) != Some(meta.generation)
+        {
             self.revision
                 .send_modify(|revision| *revision = revision.wrapping_add(1));
         }
-        state.fetched_at = fetched_at;
-        drop(state);
-        fetched_at
+        state.meta = meta;
     }
 
     async fn fetch(&self) -> color_eyre::Result<()> {
@@ -155,14 +162,12 @@ impl ModelCatalog {
 
     async fn install(&self, bytes: Vec<u8>, fetched_at: u64) -> color_eyre::Result<()> {
         let path = self.path.clone();
-        let reader =
+        let (reader, meta) =
             tokio::task::spawn_blocking(move || store::write(path.as_deref(), &bytes, fetched_at))
                 .await??;
         let mut state = self.state.lock().await;
         let previous = state.reader.replace(reader);
-        state.fetched_at = Some(fetched_at);
-        self.revision
-            .send_modify(|revision| *revision = revision.wrapping_add(1));
+        self.record(&mut state, Some(meta));
         drop(state);
         drop(previous);
         Ok(())
@@ -346,8 +351,10 @@ fn lookup(
             resolved
         }
     };
-    let (Some(cost), Some(fetched_at)) = (entry.cost(connection)?, store::fetched_at(connection)?)
-    else {
+    let (Some(cost), Some(fetched_at)) = (
+        entry.cost(connection)?,
+        store::meta(connection)?.map(|meta| meta.fetched_at),
+    ) else {
         return Ok(None);
     };
     Ok(Some((
