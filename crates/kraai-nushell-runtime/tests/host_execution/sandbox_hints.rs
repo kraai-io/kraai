@@ -67,7 +67,10 @@ async fn external_write_to_the_kraai_directory_gets_the_protected_entry_hint() {
     let Some(result) = sandboxed(
         "^sh -c 'echo x > .kraai/other.toml'",
         &workspace,
-        &[SandboxCapability::WorkspaceWrite],
+        &[
+            SandboxCapability::HostRead,
+            SandboxCapability::WorkspaceWrite,
+        ],
     )
     .await
     else {
