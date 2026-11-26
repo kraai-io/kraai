@@ -65,8 +65,7 @@ hidden grader:
 These are selected examples, not an average: each agent made one attempt per
 task. Kraai cost 6% more on one of the three. Token totals include cached input,
 and costs are API-equivalent estimates. The
-[run notes](docs/benchmark-homepage-examples.md) and
-[raw comparisons](docs/benchmark-evidence) have the per-task numbers.
+[run notes](docs/coding-tasks.md) have the per-task numbers.
 
 ---
 

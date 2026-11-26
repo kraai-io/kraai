@@ -1,13 +1,7 @@
-"""Draws the README benchmark charts as light and dark SVGs.
+"""The coding-task numbers come from docs/coding-tasks.json; the others live only
+in this file. After a new run, edit them, update any README prose that quotes
+them, then run `python3 assets/readme/charts.py` from the repository root.
 
-The coding-task numbers come from docs/benchmark-homepage-examples.json; the
-others live only in this file. After a new run, edit them, update any README
-prose that quotes them, then run `python3 assets/readme/charts.py` from the
-repository root.
-
-Each chart is a row of panels: one large headline number, a short caption, and
-a bar per agent, labelled with the agent's logo. The charts are monochrome like
-the Kraai brand: Kraai's bar is a bright silver gradient, the others stay grey.
 The Codex and Claude logos in logos/ come from LobeHub's icon set (MIT).
 """
 
@@ -19,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = Path(__file__).parent
-CODING_DATA = ROOT / "docs" / "benchmark-homepage-examples.json"
+CODING_DATA = ROOT / "docs" / "coding-tasks.json"
 LOGOS = {
     "kraai": ROOT / "assets" / "brand" / "svg" / "kraai-symbol-currentColor.svg",
     "codex": OUTPUT / "logos" / "codex.svg",
@@ -98,7 +92,6 @@ def text(x, y, body, size, fill, weight=400, spacing=0.0):
 
 
 def pill_bar(x, y, length):
-    """A bar rounded at both ends, so short bars still read as bars."""
     length = max(length, BAR)
     r = BAR / 2
     return f'x="{x:.1f}" y="{y:.1f}" width="{length:.1f}" height="{BAR}" rx="{r}"'
