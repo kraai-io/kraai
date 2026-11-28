@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "left": {
+    "suite_id": "01M3PTB2PSKWJHEV40P9RDG7J6",
+    "harness_name": "kraai-compare16",
+    "runner_version": "sha256:f0aaa64253960d89dfd7526e60d0d735620bd1959f525141beae232df2b0d359",
+    "model_label": "gpt-5.6-sol-low"
+  },
+  "right": {
+    "suite_id": "01M3PTESEJYBQB3DMP9DTFZ6EY",
+    "harness_name": "codex-compare16",
+    "runner_version": "sha256:038534b037b02cbfb8669279a538ec8c970833d54ae255dc0871a0036e189c5f",
+    "model_label": "gpt-5.6-sol-low"
+  },
+  "paired_runs": 1,
+  "evaluated_pairs": 1,
+  "invalid_pairs": 0,
+  "left_passed": 1,
+  "right_passed": 1,
+  "left_success_rate": 1.0,
+  "right_success_rate": 1.0,
+  "left_wins": 0,
+  "right_wins": 0,
+  "ties": 1,
+  "wall_time_ms": {
+    "samples": 1,
+    "left_total": 98199,
+    "right_total": 73647,
+    "left_mean": 98199.0,
+    "right_mean": 73647.0
+  },
+  "runner_time_ms": {
+    "samples": 1,
+    "left_total": 97461,
+    "right_total": 73005,
+    "left_mean": 97461.0,
+    "right_mean": 73005.0
+  },
+  "total_tokens": {
+    "samples": 1,
+    "left_total": 49335,
+    "right_total": 105110,
+    "left_mean": 49335.0,
+    "right_mean": 105110.0
+  },
+  "usage": {
+    "uncached_input_tokens": {
+      "samples": 1,
+      "left_total": 19728,
+      "right_total": 19796,
+      "left_mean": 19728.0,
+      "right_mean": 19796.0
+    },
+    "cache_read_tokens": {
+      "samples": 1,
+      "left_total": 25344,
+      "right_total": 82688,
+      "left_mean": 25344.0,
+      "right_mean": 82688.0
+    },
+    "output_tokens": {
+      "samples": 1,
+      "left_total": 3948,
+      "right_total": 2249,
+      "left_mean": 3948.0,
+      "right_mean": 2249.0
+    },
+    "reasoning_tokens": {
+      "samples": 1,
+      "left_total": 315,
+      "right_total": 377,
+      "left_mean": 315.0,
+      "right_mean": 377.0
+    },
+    "proxy_requests": {
+      "samples": 1,
+      "left_total": 9,
+      "right_total": 9,
+      "left_mean": 9.0,
+      "right_mean": 9.0
+    }
+  },
+  "request_metrics": {
+    "estimated_cost_nanousd": {
+      "samples": 1,
+      "left_total": 174309600,
+      "right_total": 164779200,
+      "left_mean": 174309600.0,
+      "right_mean": 164779200.0
+    },
+    "cost_basis_mismatches": 0,
+    "peak_context_tokens": {
+      "samples": 1,
+      "left_total": 8494,
+      "right_total": 14357,
+      "left_mean": 8494.0,
+      "right_mean": 14357.0
+    },
+    "last_context_tokens": {
+      "samples": 1,
+      "left_total": 8494,
+      "right_total": 14357,
+      "left_mean": 8494.0,
+      "right_mean": 14357.0
+    },
+    "context_paired_runs": 1,
+    "left_input_tokens": 45072,
+    "right_input_tokens": 102484,
+    "left_context_requests": 8,
+    "right_context_requests": 9,
+    "left_mean_context_tokens": 5634.0,
+    "right_mean_context_tokens": 11387.111111111111
+  },
+  "both_passed": 1,
+  "both_passed_efficiency": {
+    "wall_time_ms": {
+      "samples": 1,
+      "left_total": 98199,
+      "right_total": 73647,
+      "left_mean": 98199.0,
+      "right_mean": 73647.0
+    },
+    "runner_time_ms": {
+      "samples": 1,
+      "left_total": 97461,
+      "right_total": 73005,
+      "left_mean": 97461.0,
+      "right_mean": 73005.0
+    },
+    "total_tokens": {
+      "samples": 1,
+      "left_total": 49335,
+      "right_total": 105110,
+      "left_mean": 49335.0,
+      "right_mean": 105110.0
+    },
+    "usage": {
+      "uncached_input_tokens": {
+        "samples": 1,
+        "left_total": 19728,
+        "right_total": 19796,
+        "left_mean": 19728.0,
+        "right_mean": 19796.0
+      },
+      "cache_read_tokens": {
+        "samples": 1,
+        "left_total": 25344,
+        "right_total": 82688,
+        "left_mean": 25344.0,
+        "right_mean": 82688.0
+      },
+      "output_tokens": {
+        "samples": 1,
+        "left_total": 3948,
+        "right_total": 2249,
+        "left_mean": 3948.0,
+        "right_mean": 2249.0
+      },
+      "reasoning_tokens": {
+        "samples": 1,
+        "left_total": 315,
+        "right_total": 377,
+        "left_mean": 315.0,
+        "right_mean": 377.0
+      },
+      "proxy_requests": {
+        "samples": 1,
+        "left_total": 9,
+        "right_total": 9,
+        "left_mean": 9.0,
+        "right_mean": 9.0
+      }
+    },
+    "request_metrics": {
+      "estimated_cost_nanousd": {
+        "samples": 1,
+        "left_total": 174309600,
+        "right_total": 164779200,
+        "left_mean": 174309600.0,
+        "right_mean": 164779200.0
+      },
+      "cost_basis_mismatches": 0,
+      "peak_context_tokens": {
+        "samples": 1,
+        "left_total": 8494,
+        "right_total": 14357,
+        "left_mean": 8494.0,
+        "right_mean": 14357.0
+      },
+      "last_context_tokens": {
+        "samples": 1,
+        "left_total": 8494,
+        "right_total": 14357,
+        "left_mean": 8494.0,
+        "right_mean": 14357.0
+      },
+      "context_paired_runs": 1,
+      "left_input_tokens": 45072,
+      "right_input_tokens": 102484,
+      "left_context_requests": 8,
+      "right_context_requests": 9,
+      "left_mean_context_tokens": 5634.0,
+      "right_mean_context_tokens": 11387.111111111111
+    }
+  },
+  "runs": [
+    {
+      "task_id": "dependency-waves",
+      "attempt": 0,
+      "left_status": "passed",
+      "right_status": "passed",
+      "outcome": "tie"
+    }
+  ]
+}
